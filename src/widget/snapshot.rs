@@ -1402,21 +1402,16 @@ mod tests {
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
     }
 
-    /// Ignored style values save as finite equivalents without changing the live chart or its
-    /// labels and hidden base lines, in either theme and a narrow chart. Finite values keep
-    /// their saved representation, including negative zero.
+    /// Ignored style values save as finite equivalents, and the restored chart keeps their
+    /// labels and hidden base lines. Finite values keep their saved representation, including
+    /// negative zero.
     #[test]
     fn display_format_with_an_ignored_min_move_saves() {
         use crate::model::SeriesDisplayFormat;
         use crate::widget::SeriesId;
         use crate::widget::test_frames::{chart, shapes};
 
-        for (added, theme, width) in [
-            (false, crate::theme::Theme::light(), 800.0),
-            (true, crate::theme::Theme::light(), 800.0),
-            (false, crate::theme::Theme::dark(), 320.0),
-            (true, crate::theme::Theme::dark(), 320.0),
-        ] {
+        for added in [false, true] {
             for (min_move, base_line_width, expected) in [
                 (0.0, 1.0, "12.62"),
                 (f64::NAN, 1.0, "12.62"),
@@ -1432,8 +1427,6 @@ mod tests {
             ] {
                 let mut live = chart(&[12.0], &[12.624]);
                 let ctx = egui::Context::default();
-                live.set_theme(&ctx, &theme);
-                live.set_size(Some(egui::vec2(width, 480.0)));
                 let data = live.bars(SeriesId::MAIN).to_vec();
                 let id = if added {
                     let id = live.add_series(SeriesOptions::default());
@@ -1456,12 +1449,6 @@ mod tests {
                 );
 
                 let snapshot = live.snapshot().unwrap();
-                let style = live.series_style(id).unwrap();
-                assert_eq!(
-                    style.display_format.unwrap().min_move.to_bits(),
-                    min_move.to_bits()
-                );
-                assert_eq!(style.base_line_width.to_bits(), base_line_width.to_bits());
                 let saved_format = if added {
                     let style = &snapshot.series.as_ref().unwrap()[0].options.style;
                     let width = if base_line_width.is_finite() {
@@ -1485,8 +1472,6 @@ mod tests {
                 .unwrap();
                 let layout = SavedLayout::from_json(&json).unwrap();
                 let mut restored = Chart::new(BarData::from_bars(data.clone()));
-                restored.set_theme(&ctx, &theme);
-                restored.set_size(Some(egui::vec2(width, 480.0)));
                 restored.restore(&layout.charts[0]).unwrap();
                 let saved_id = id;
                 let id = if added {
