@@ -125,6 +125,10 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+fn attr_escape(text: &str) -> String {
+    escape(text).replace('"', "&quot;")
+}
+
 impl Svg {
     fn id(&mut self) -> usize {
         self.ids += 1;
@@ -341,7 +345,7 @@ impl Svg {
                         r#"<text x="{}" y="{}" font-family="{}" font-size="{}" fill="{}" fill-opacity="{}" xml:space="preserve">{}</text>"#,
                         xs.join(" "),
                         run.y,
-                        run.family,
+                        attr_escape(&run.family),
                         run.size,
                         run.rgb,
                         run.opacity,
@@ -371,7 +375,10 @@ impl Svg {
                 let family = match &format.font_id.family {
                     egui::FontFamily::Proportional => "sans-serif".to_owned(),
                     egui::FontFamily::Monospace => "monospace".to_owned(),
-                    egui::FontFamily::Name(name) => format!("'{name}', sans-serif"),
+                    egui::FontFamily::Name(name) => format!(
+                        "'{}', sans-serif",
+                        name.replace('\\', "\\\\").replace('\'', "\\'")
+                    ),
                 };
                 let x = origin.x + glyph.pos.x;
                 let y = origin.y + glyph.pos.y;
