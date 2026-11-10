@@ -786,6 +786,7 @@ impl Chart {
                 .filter(|_| self.main_series_present)
                 .map(|index| shown[index].clone()),
             previous_close: bar_at
+                .filter(|_| self.main_series_present)
                 .and_then(|index| crate::model::last_with_value(&shown[..index]))
                 .map(|bar| bar.close),
             series_bars: self
@@ -2409,5 +2410,38 @@ mod tests {
                 ChartEvent::VisibleLogicalRangeChanged(None),
             ]
         );
+    }
+    #[test]
+    fn removed_main_series_reports_no_previous_close() {
+        for removed in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            let series = chart.add_series(Default::default());
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            if removed {
+                chart.remove_series(SeriesId::MAIN);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let time = chart.bars(series)[50].time;
+            frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .expect("move");
+            assert_eq!(pointer.time, Some(time));
+            assert_eq!(pointer.bar.is_none(), removed);
+            assert_eq!(pointer.previous_close, (!removed).then_some(120.0));
+            assert!(
+                pointer
+                    .series_bars
+                    .iter()
+                    .any(|(id, bar)| *id == series && bar.time == time)
+            );
+        }
     }
 }
