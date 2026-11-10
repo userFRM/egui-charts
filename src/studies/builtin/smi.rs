@@ -140,6 +140,27 @@ impl Indicator for StochasticMomentumIndex {
         false
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: None,
+            levels: vec![
+                (40.0, palette::MUTED, "Upper guide"),
+                (0.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+                (-40.0, palette::MUTED, "Lower guide"),
+            ],
+            fill_between_levels: true,
+        }
+    }
+
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 2])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::LIGHT_BLUE.gamma_multiply_u8(26)
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }

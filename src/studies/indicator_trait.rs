@@ -202,6 +202,12 @@ pub trait Indicator: Send {
         1.0
     }
 
+    /// Whether a pane guide also draws a dotted value line. Off by default, independent of
+    /// plot value tags and the guide's stroke. A hidden guide draws neither stroke.
+    fn level_price_line(&self, _index: usize) -> bool {
+        false
+    }
+
     /// Pattern and width for a level by its position in the pane's levels. The value is the
     /// drawn value, including a host's zone override. Defaults to the value-based methods.
     fn level_stroke(&self, _index: usize, value: f64) -> (crate::model::LineStyle, f32) {

@@ -161,6 +161,9 @@ pub struct LevelStyle {
     pub width: f32,
     /// Whether the line is drawn. A hidden boundary still bounds the fill.
     pub visible: bool,
+    /// Draw a dotted value line in addition to the guide's own stroke. Off in older settings.
+    #[serde(default)]
+    pub price_line: bool,
 }
 
 fn default_level_width() -> f32 {
@@ -184,6 +187,7 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
                 pattern,
                 width,
                 visible: true,
+                price_line: study.level_price_line(index),
             }
         })
         .collect();
@@ -1418,6 +1422,12 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
         self.study.level_fill_indices()
+    }
+    fn level_price_line(&self, index: usize) -> bool {
+        self.settings
+            .levels
+            .get(index)
+            .is_some_and(|style| style.price_line)
     }
     fn level_stroke(&self, index: usize, value: f64) -> (LineStyle, f32) {
         self.settings
