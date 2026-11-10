@@ -979,8 +979,8 @@ pub struct PositionStyle {
     pub line_color: Option<[u8; 4]>,
     /// Width of the entry line, the trade's path and the zone border, in points.
     pub line_width: f32,
-    /// Colour of the label text; `None` is white, or the theme's secondary text on a label
-    /// without a result.
+    /// Colour of the label text; `None` is white on a plate and the level or result colour
+    /// without one, or the theme's secondary text on a label without a result.
     pub text_color: Option<[u8; 4]>,
     /// Size of the label text, in points.
     pub font_size: f32,

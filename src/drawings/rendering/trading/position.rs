@@ -48,7 +48,17 @@ impl Drawing {
                 )
             })
         };
-        let text_color = style.text_color.map_or(Color32::WHITE, rgba);
+        // Unset text is white on a plate and takes the plate's colour without one.
+        let text_color = |color: Color32| {
+            style.text_color.map_or(
+                if style.label_background {
+                    Color32::WHITE
+                } else {
+                    color
+                },
+                rgba,
+            )
+        };
         let muted = theme.chart.axis_text_secondary;
         let entry_color = style
             .line_color
@@ -214,7 +224,7 @@ impl Drawing {
                 } else {
                     loss_color
                 };
-                (summary, label_color(fill), text_color)
+                (summary, label_color(fill), text_color(fill))
             }
             None => (
                 l10n::format_text(
@@ -327,7 +337,7 @@ impl Drawing {
             painter,
             target_label,
             label_color(profit_color),
-            text_color,
+            text_color(profit_color),
             font_size,
             Pos2::new(center_x, target.y),
             target.y > entry.y,
@@ -336,7 +346,7 @@ impl Drawing {
             painter,
             stop_label,
             label_color(loss_color),
-            text_color,
+            text_color(loss_color),
             font_size,
             Pos2::new(center_x, stop_edge),
             stop_below,
@@ -804,7 +814,6 @@ mod tests {
                         let mut style = crate::drawings::PositionStyle {
                             line_color: Some([10, 20, 30, 255]),
                             line_width: 3.0,
-                            text_color: Some([200, 0, 200, 255]),
                             font_size: 20.0,
                             label_color: Some([1, 2, 3, 255]),
                             border: true,
@@ -814,6 +823,13 @@ mod tests {
                         for shown in [true, false] {
                             style.label_background = shown;
                             style.fill = shown;
+                            // Unset text without a plate takes its level's colour.
+                            style.text_color = shown.then_some([200, 0, 200, 255]);
+                            let text = if shown {
+                                Color32::from_rgb(200, 0, 200)
+                            } else {
+                                Color32::from_rgb(40, 100, 220)
+                            };
                             chart
                                 .set_position_style(
                                     1,
@@ -833,8 +849,7 @@ mod tests {
                             assert!(shapes().any(|s| matches!(s, egui::Shape::Text(t)
                                 if t.galley.text().starts_with("Target:")
                                     && t.galley.job.sections[0].format.font_id.size == 20.0
-                                    && t.galley.job.sections[0].format.color
-                                        == Color32::from_rgb(200, 0, 200))));
+                                    && t.galley.job.sections[0].format.color == text)));
                             assert_eq!(
                                 shapes().any(|s| matches!(s,
                                     egui::Shape::Rect(r) if r.fill == plate)),
