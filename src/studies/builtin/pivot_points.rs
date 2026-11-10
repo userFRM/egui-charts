@@ -691,7 +691,6 @@ impl Indicator for PivotPoints {
             period => {
                 let years = match (period, self.timeframe) {
                     (Some(AnchorPeriod::Decade), _) => 10,
-                    (Some(AnchorPeriod::Century), _) => 100,
                     (None, PivotTimeframe::TwoYears) => 2,
                     (None, PivotTimeframe::ThreeYears) => 3,
                     (None, PivotTimeframe::FiveYears) => 5,

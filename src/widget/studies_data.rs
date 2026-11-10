@@ -1847,7 +1847,7 @@ pub(super) mod tests {
                     .unwrap();
                 chart.add_indicator(Box::new(average));
             }
-            let pages = page_daily(&mut chart, &daily, 250, None);
+            let pages = page_daily(&mut chart, &daily, None);
             let study = chart
                 .indicators()
                 .find(|(candidate, _)| *candidate == id)
@@ -1862,10 +1862,10 @@ pub(super) mod tests {
         }
     }
 
-    /// Pumps `chart` against a feed holding `daily` that answers at most `cap` bars a page, the
+    /// Pumps `chart` against a feed holding `daily` that answers at most 250 bars a page, the
     /// newest before the request, and reports `live` once on each new subscription. Returns the
     /// history pages the chart asked for.
-    fn page_daily(chart: &mut Chart, daily: &[Bar], cap: usize, live: Option<FeedError>) -> usize {
+    fn page_daily(chart: &mut Chart, daily: &[Bar], live: Option<FeedError>) -> usize {
         let feed = Arc::new(RetryFeed::default());
         let ctx = egui::Context::default();
         let (mut pages, mut reported) = (0, 0);
@@ -1892,8 +1892,8 @@ pub(super) mod tests {
                 daily.partition_point(|bar| request.before.is_none_or(|before| bar.time < before));
             pages += 1;
             reply.send(Ok(HistoryPage::new(
-                daily[end.saturating_sub(cap)..end].to_vec(),
-                end <= cap,
+                daily[end.saturating_sub(250)..end].to_vec(),
+                end <= 250,
             )));
         }
         chart.recalculate_studies();
@@ -1956,7 +1956,7 @@ pub(super) mod tests {
                 Bar::new(day, 100.0, high, low, 100.0, 1.0)
             });
             let id = chart.add_indicator(study);
-            let pages = page_daily(&mut chart, &daily, 250, None);
+            let pages = page_daily(&mut chart, &daily, None);
             let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
             let levels: Vec<_> = (0..3).map(|line| study.values().value(line, 389)).collect();
             observed.push((study.name().to_owned(), levels, pages));
@@ -1980,7 +1980,7 @@ pub(super) mod tests {
         let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
         let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
         let error = FeedError::Network("stream dropped".into());
-        let pages = page_daily(&mut chart, &daily, 250, Some(error.clone()));
+        let pages = page_daily(&mut chart, &daily, Some(error.clone()));
         let request = chart.study_data_requests().pop().unwrap();
         assert_eq!(chart.study_data_error(&request), Some(&error));
         let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
@@ -2005,7 +2005,7 @@ pub(super) mod tests {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
             chart.set_chart_type(chart_type);
             let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
-            let pages = page_daily(&mut chart, &daily, 250, None);
+            let pages = page_daily(&mut chart, &daily, None);
             let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
             let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
             // 100 * (100 - 50) / 50 = 100 for every period, from two pages.
