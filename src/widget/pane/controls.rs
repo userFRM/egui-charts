@@ -392,11 +392,11 @@ impl Chart {
             .or_else(|| self.series_pane(SeriesId::MAIN));
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
-        let members = self.pane_series(id);
-        let editable = members.iter().all(|member| {
-            !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member)
-        });
         child.menu_button("...", |ui| {
+            let members = self.pane_series(id);
+            let editable = members.iter().all(|member| {
+                !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member)
+            });
             for (label, enabled, command) in [
                 ("Move pane up", above.is_some(), 0),
                 ("Move pane down", below.is_some(), 1),
