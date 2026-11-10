@@ -33,7 +33,12 @@ pub(crate) struct AxisFontScope {
 
 impl AxisFontScope {
     pub(crate) fn new(ctx: &egui::Context, family: &FontFamily) -> Self {
-        let font = FontId::new(ctx.active_theme().text.label, family.clone());
+        let family = if ctx.fonts(|fonts| fonts.definitions().families.contains_key(family)) {
+            family.clone()
+        } else {
+            FontFamily::Proportional
+        };
+        let font = FontId::new(ctx.active_theme().text.label, family);
         let previous = ctx.data_mut(|data| {
             data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id())
                 .replace(font)
@@ -891,9 +896,25 @@ mod tests {
     use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
     use egui::{Context, RawInput, Shape};
 
+    fn texts<'a>(shape: &'a Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+            Shape::Text(text) => out.push(text),
+            _ => {}
+        }
+    }
+
     #[test]
     fn axis_font_scope_restores_nested_fonts_after_unwinding() {
         let ctx = Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            FontFamily::Name("Nested".into()),
+            fonts.families[&FontFamily::Proportional].clone(),
+        );
+        ctx.set_fonts(fonts);
+        ctx.run_ui(RawInput::default(), |_| {})
+            .drop_without_applying_deltas();
         let other = Context::default();
         let default = axis_font(&ctx);
         for size in [18.0, 24.0] {
@@ -919,6 +940,74 @@ mod tests {
                 assert_eq!(axis_font(&ctx), FontId::monospace(size));
             }
             assert_eq!(axis_font(&ctx), default);
+        }
+    }
+
+    #[test]
+    fn axis_labels_fall_back_from_an_uninstalled_family() {
+        use crate::widget::test_frames::chart;
+        use egui_kittest::Harness;
+
+        let family = FontFamily::Name("Not Installed".into());
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config_mut().axis_font_family = family.clone();
+        chart.config_mut().show_volume = false;
+        let time = chart.state.shown()[90].time;
+        chart.set_crosshair_position(Some((time, 105.0)));
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 600.0))
+            .build_ui_state(
+                |ui, chart: &mut crate::widget::Chart| {
+                    chart.show(ui);
+                },
+                chart,
+            );
+        for installed in [false, true] {
+            if installed {
+                let mut fonts = egui::FontDefinitions::default();
+                fonts.families.insert(
+                    family.clone(),
+                    fonts.families[&FontFamily::Monospace].clone(),
+                );
+                harness.ctx.set_fonts(fonts);
+            }
+            harness.step();
+            let expected = if installed {
+                &family
+            } else {
+                &FontFamily::Proportional
+            };
+            let plot = harness.state().get_rendered_price_rect();
+            let mut counts = [0; 2];
+            let mut painted = Vec::new();
+            for shape in &harness.output().shapes {
+                texts(&shape.shape, &mut painted);
+            }
+            for text in painted {
+                let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                let time = text.pos.y >= plot.bottom()
+                    && text.pos.y < plot.bottom() + 35.0
+                    && plot.x_range().contains(text.pos.x);
+                if price || time {
+                    counts[usize::from(time)] += 1;
+                    for section in &text.galley.job.sections {
+                        assert_eq!(&section.format.font_id.family, expected);
+                    }
+                }
+            }
+            assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+            assert_eq!(harness.state().config().axis_font_family, family);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                harness
+                    .state()
+                    .snapshot()
+                    .unwrap()
+                    .config
+                    .unwrap()
+                    .axis_font_family,
+                family
+            );
         }
     }
 
@@ -964,13 +1053,6 @@ mod tests {
                     ui.label("Host after");
                 },
             );
-            fn texts<'a>(shape: &'a Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
-                match shape {
-                    Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
-                    Shape::Text(text) => out.push(text),
-                    _ => {}
-                }
-            }
             let mut painted = Vec::new();
             for shape in &output.shapes {
                 texts(&shape.shape, &mut painted);
