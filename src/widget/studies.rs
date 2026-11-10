@@ -190,6 +190,7 @@ impl Chart {
     }
 
     /// Enable or disable user editing, retaining the choice in study snapshots and saved state.
+    /// User undo and redo retain the host's latest permission.
     /// Host APIs can still update the study. Returns false for an unknown id or rejected settings.
     pub fn set_indicator_user_edit_enabled(&mut self, id: SeriesId, enabled: bool) -> bool {
         let Some(study) = self.indicator_mut(id) else {
@@ -1212,6 +1213,41 @@ mod tests {
         chart.set_study_limit(None);
         assert!(chart.try_add_indicator(Box::new(SMA::new(8))).is_ok());
     }
+    /// History restores user settings while retaining the host's latest edit permission.
+    #[test]
+    fn undo_keeps_host_study_lock() {
+        for enabled in [false, true] {
+            let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart.add_indicator(Box::new(SMA::new(1)));
+            assert!(chart.set_indicator_user_edit_enabled(id, !enabled));
+            let before = chart.indicators().next().unwrap().1.settings();
+            let mut edited = before.clone();
+            edited.precision = Some(4);
+            edited.show_legend_values = false;
+            edited.plots[0].width = 3.0;
+            chart.user_action(|chart| {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .apply_settings(&[], edited.clone())
+                    .unwrap();
+            });
+            assert!(chart.set_indicator_user_edit_enabled(id, enabled));
+            for (redo, expected) in [(false, &before), (true, &edited)] {
+                assert!(if redo { chart.redo() } else { chart.undo() });
+                assert_eq!(
+                    chart.indicator_user_edit_enabled(id),
+                    enabled,
+                    "redo={redo}"
+                );
+                let restored = chart.indicators().next().unwrap().1.settings();
+                assert_eq!(restored.precision, expected.precision);
+                assert_eq!(restored.show_legend_values, expected.show_legend_values);
+                assert_eq!(restored.plots, expected.plots);
+            }
+        }
+    }
+
     /// Saved study presentation hides only legend values and keeps edit permissions across history.
     #[test]
     fn study_metadata_keeps_values_and_blocks_user_settings() {

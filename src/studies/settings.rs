@@ -344,7 +344,7 @@ fn enabled_by_default() -> bool {
 #[derive(Clone)]
 pub struct StudySettingsSnapshot {
     inputs: Vec<(String, InputValue)>,
-    settings: StudySettings,
+    pub(crate) settings: StudySettings,
     timeframe: Option<Timeframe>,
     colors: Vec<Color32>,
     visible: bool,

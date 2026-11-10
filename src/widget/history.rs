@@ -891,7 +891,10 @@ impl Chart {
                             .find_map(|change| change.before.as_ref()?.indicator.as_deref())
                     })?;
                 let mut indicator = original.clone_box();
-                indicator.restore_settings(&study.settings).ok()?;
+                let mut settings = study.settings.clone();
+                // Editing permission belongs to the host, independently of user history.
+                settings.settings.user_edit_enabled = original.settings().user_edit_enabled;
+                indicator.restore_settings(&settings).ok()?;
                 Some((
                     id,
                     study.index,
