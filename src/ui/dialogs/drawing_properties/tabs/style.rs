@@ -29,14 +29,15 @@ impl StyleTab {
             ui.label(l10n::text(ui.ctx(), "Color"));
             if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
             {
-                props.color = keep_opacity(color, props.color, color_picker.custom_mode);
                 let rgba = if color_picker.custom_mode {
+                    props.color = color;
                     props.color_rgba()
                 } else {
                     // Keep the palette's RGB before translucent paint premultiplies it.
                     let [r, g, b, _] = color.to_srgba_unmultiplied();
                     [r, g, b, props.color.a()]
                 };
+                props.color = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
                 if let Some(template) = &mut props.tool_settings {
                     template.settings.color = rgba;
                 }
@@ -337,13 +338,14 @@ mod tests {
         let swatch = MAIN_COLORS[3];
         let [r, g, b, _] = swatch.to_srgba_unmultiplied();
         let mut observed = Vec::new();
-        for opened in [1, 2] {
+        for (opened, alpha) in [(1, 51), (2, 51), (1, 0), (2, 0)] {
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut chart = Chart::new(BarData::new());
-            let highlighter = Drawing::new(1, DrawingToolType::Highlighter);
+            let mut highlighter = Drawing::new(1, DrawingToolType::Highlighter);
             let line = Drawing::new(2, DrawingToolType::TrendLine);
             assert_eq!((highlighter.color[3], line.color[3]), (51, 255));
+            highlighter.color[3] = alpha;
             chart.drawings_mut().drawings = vec![highlighter, line];
             chart.drawings_mut().select_drawings([1, 2]);
             let target = chart.drawings().drawings[opened - 1].clone();
@@ -392,14 +394,15 @@ mod tests {
                     &mut chart,
                 )
                 .unwrap();
-            observed.push(
+            observed.push((
                 chart
                     .drawings()
                     .drawings
                     .iter()
                     .map(|d| d.color)
                     .collect::<Vec<_>>(),
-            );
+                vec![[r, g, b, alpha], [r, g, b, 255]],
+            ));
             let mut custom =
                 DrawingProps::from_drawing(&chart.drawings().drawings[opened - 1], &chart);
             custom.color = Color32::from_rgba_unmultiplied(255, 255, 255, 128);
@@ -418,7 +421,9 @@ mod tests {
                 "an edited opacity applies to the entire selection"
             );
         }
-        let expected = vec![[r, g, b, 51], [r, g, b, 255]];
-        assert_eq!(observed, vec![expected.clone(), expected]);
+        assert!(
+            observed.iter().all(|(got, want)| got == want),
+            "{observed:?}"
+        );
     }
 }
