@@ -345,6 +345,9 @@ pub struct Chart {
     /// The id each study a snapshot saved has since [`Chart::restore`] added it again.
     #[cfg(feature = "drawings")]
     restored_studies: std::collections::HashMap<usize, usize>,
+    /// Original column ids of restored studies, retained for snapshots from earlier restores.
+    #[cfg(feature = "drawings")]
+    study_column_ids: std::collections::HashMap<usize, usize>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)
@@ -439,6 +442,8 @@ pub struct Chart {
     /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
     /// whose symbol and interval are no change for the layout to send to linked charts.
     pub(crate) layout_identity: u64,
+    /// Host period, price and target, retained while a linked pointer takes precedence.
+    host_crosshair: Option<(sync::CrosshairPeriod, Option<f64>, Option<SeriesId>)>,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.

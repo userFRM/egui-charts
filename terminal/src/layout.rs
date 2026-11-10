@@ -25,6 +25,17 @@ impl Terminal {
     /// it did not perform: intercepted ones, host entries (`Host` variants, host widgets) and any
     /// it has no default for, in emission order.
     pub fn show(&mut self, ui: &mut egui::Ui) -> Vec<Action> {
+        self.show_with(ui, |ui, _, chart| chart.show(ui))
+    }
+
+    /// Like [`Self::show`], with a host-selected renderer for each visible chart slot.
+    /// The callback runs every frame and must not block. It has the same contract as
+    /// [`egui_charts::widget::ChartLayout::show_with`], including detached viewports.
+    pub fn show_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        mut render: impl FnMut(&mut egui::Ui, usize, &mut egui_charts::Chart) -> egui::Response,
+    ) -> Vec<Action> {
         let ctx = ui.ctx().clone();
         if self.ctx.is_none() {
             self.first_frame(&ctx);
@@ -75,7 +86,7 @@ impl Terminal {
             .frame(panel_frame(panel_bg))
             .show(ui, |ui| {
                 let mut slots: Vec<_> = self.charts.iter_mut().collect();
-                self.layout.show(ui, &mut slots);
+                self.layout.show_with(ui, &mut slots, &mut render);
             });
         if self.layout.active() != self.active {
             self.activate_slot(self.layout.active());

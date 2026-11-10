@@ -998,24 +998,24 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
-        let fixed_footprint = self
-            .feed_link
-            .as_ref()
-            .and_then(|link| link.footprint.as_ref())
-            .filter(|_| {
-                self.main_series_visible
-                    && footprint.is_none()
-                    && self.replay.is_none()
-                    && self.chart_type == ChartType::VolumeFootprint
-                    && self.chart_type_params.footprint_row_ticks > 0
-            });
+        // Automatic grouping sizes rows by zoom, so only fixed rows fit their edges.
+        let fixed_footprint = match footprint {
+            Some((flow, config)) => config
+                .auto_row_height
+                .is_none()
+                .then_some((flow, config.row_ticks)),
+            None => self
+                .feed_link
+                .as_ref()
+                .and_then(|link| link.footprint.as_ref())
+                .filter(|_| self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint)
+                .map(|flow| (flow, self.chart_type_params.footprint_row_ticks)),
+        }
+        .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
         let footprint_prices = fixed_footprint
             .into_iter()
-            .flat_map(|flow| {
-                let group = crate::chart::overlays::fixed_row_group(
-                    flow,
-                    self.chart_type_params.footprint_row_ticks,
-                );
+            .flat_map(|(flow, row_ticks)| {
+                let group = crate::chart::overlays::fixed_row_group(flow, row_ticks);
                 let step = flow.price_step() * group as f64;
                 self.state.shown()[start_idx..end_idx]
                     .iter()
