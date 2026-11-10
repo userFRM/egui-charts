@@ -4,6 +4,111 @@ use crate::ui::context_menu::ChartMenus;
 use crate::widget::test_frames::chart;
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
+#[cfg(feature = "drawings")]
+#[test]
+fn position_tags_in_a_series_pane_follow_its_display_format() {
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::model::{SeriesDisplayFormat, SeriesFormat};
+    use crate::scales::CustomPriceFormatter;
+    use crate::widget::test_frames::{frame, shapes};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use std::sync::Arc;
+
+    for (theme, width) in [
+        (crate::theme::Theme::light(), 760.0),
+        (crate::theme::Theme::dark(), 320.0),
+    ] {
+        for host in ["empty", "none", "series", "chart"] {
+            let ctx = Context::default();
+            let mut chart = chart(&[90.0], &[90.0, 110.0]);
+            chart.set_theme(&ctx, &theme);
+            chart.set_size(Some(Vec2::new(width, 580.0)));
+            let id = chart.add_series(SeriesOptions::default());
+            chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+            chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+                kind: SeriesFormat::Price,
+                precision: 2,
+                min_move: 0.25,
+            });
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+            if host != "none" {
+                let formatter = Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("host {value:.2}")
+                }));
+                if host == "series" {
+                    chart.set_series_formatter(id, Some(formatter));
+                } else {
+                    chart.set_price_formatter(Some(formatter));
+                }
+            }
+            if host == "empty" {
+                chart.set_preserve_empty_pane(pane, true);
+                chart.remove_series(id);
+                let mut options = chart.pane_axis_options(pane).unwrap();
+                options.hide_unused = false;
+                chart.set_pane_axis_options(pane, options);
+                let scale = chart.pane_price_scale_mut(pane, crate::model::SeriesScale::Right);
+                scale.set_range(90.0, 110.0);
+            }
+            let mut drawing = Drawing::new(1, DrawingToolType::LongPos);
+            drawing.chart_points = vec![ChartPoint::new(30.0, 100.1), ChartPoint::new(60.0, 106.0)];
+            drawing.completed = true;
+            drawing.pane = Some(pane.0);
+            chart.drawings_mut().drawings.push(drawing);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let panel = chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == pane)
+                .unwrap()
+                .rect;
+            let tag_texts = |painted: &[egui::Shape]| -> Vec<String> {
+                painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text.pos.x >= plot.right()
+                                && panel.y_range().contains(text.pos.y)
+                                && painted.iter().any(|shape| {
+                                    matches!(shape,
+                                        egui::Shape::Rect(tag) if tag.rect.contains(text.pos)
+                                            && tag.rect.right() > plot.right()
+                                            && tag.rect.height() <= text.galley.size().y * 2.0
+                                    )
+                                }) =>
+                        {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let visible = tag_texts(&painted);
+            chart.drawings_mut().drawings[0].price_axis_label = false;
+            let hidden = tag_texts(&shapes(&ctx, &mut chart, 0.2, vec![]));
+            for (price, expected) in [(100.1, "100.00"), (106.0, "106.00"), (94.2, "94.25")] {
+                let expected = if host != "none" {
+                    format!("host {price:.2}")
+                } else {
+                    expected.into()
+                };
+                assert!(
+                    visible.contains(&expected),
+                    "{host}: {expected}: {visible:?}"
+                );
+                assert!(
+                    !hidden.contains(&expected),
+                    "disabled tag {expected}: {hidden:?}"
+                );
+            }
+        }
+    }
+}
+
 fn pointer(
     ctx: &Context,
     chart: &mut crate::widget::Chart,
