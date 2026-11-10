@@ -1321,12 +1321,15 @@ impl Chart {
                     let label_rect = super::super::series::axis_label_rect(chart_rect, axis);
                     let map = drawing_map;
                     let axis_tags = scale_tags.entry(drawing_key).or_default();
-                    let formatter = members.first().and_then(|id| {
-                        self.series_label_formatter(
-                            self.series_axis_owner(*id),
-                            map.transform().mode,
-                        )
-                    });
+                    let formatter = members.first().map_or_else(
+                        || self.price_formatter.clone(),
+                        |id| {
+                            self.series_label_formatter(
+                                self.series_axis_owner(*id),
+                                map.transform().mode,
+                            )
+                        },
+                    );
                     for (value, fill) in self
                         .drawings
                         .drawings

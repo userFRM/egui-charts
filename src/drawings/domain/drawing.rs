@@ -195,8 +195,8 @@ pub struct Drawing {
     pub arrow_end_style: ArrowStyle,
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
-    /// Whether a horizontal line, horizontal ray or cross line shows its price as a tag on the
-    /// price axis. Other tools ignore it. Drawings saved without it show the tag.
+    /// Whether a horizontal line, horizontal ray, cross line or position shows its prices as
+    /// tags on the price axis. Other drawings ignore it. Saved drawings without it show tags.
     #[serde(default = "enabled")]
     pub price_axis_label: bool,
     /// Whether a vertical line or cross line shows its time as a tag on the time axis. Other
@@ -974,12 +974,12 @@ impl Drawing {
     }
 
     /// Whether drawings of `tool` can tag their price on the price axis and their time on the
-    /// time axis: horizontal lines and rays their price, vertical lines their time, cross
-    /// lines both.
+    /// time axis: horizontal lines, rays and positions their prices, vertical lines their time,
+    /// cross lines both.
     pub(crate) fn axis_labels_of(tool: DrawingToolType) -> (bool, bool) {
         use DrawingToolType as T;
         match tool {
-            T::HorizontalLine | T::HorizontalRay => (true, false),
+            T::HorizontalLine | T::HorizontalRay | T::LongPos | T::ShortPos => (true, false),
             T::VerticalLine => (false, true),
             T::CrossLine => (true, true),
             _ => (false, false),

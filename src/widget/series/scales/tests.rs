@@ -724,63 +724,70 @@ fn tick_list_axis_width_includes_edge_ticks() {
             Box::new(self.clone())
         }
     }
-    for inverted in [false, true] {
-        let ctx = egui::Context::default();
-        let data = bars(&[100.0, 200.0]);
-        let mut chart = Chart::new(BarData::from_bars(data.clone()));
-        chart.config.show_volume = false;
-        chart.config.show_symbol_last_val = false;
-        chart.config.price_axis.edge_ticks_visible = true;
-        chart.set_price_formatter(Some(std::sync::Arc::new(Quarters)));
-        let id = chart.add_series(SeriesOptions {
-            scale: SeriesScale::Left,
-            ..Default::default()
-        });
-        chart.set_data(id, data);
-        for id in [SeriesId::MAIN, id] {
-            chart
-                .series_price_scale_mut(id)
-                .unwrap()
-                .options_mut()
-                .invert_scale = inverted;
-        }
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
-        for id in [SeriesId::MAIN, id] {
-            let map = chart.series_price_map(id).unwrap();
-            let plot = chart.get_rendered_price_rect();
-            let ticks: Vec<_> = painted
-                .iter()
-                .filter_map(|shape| match shape {
-                    egui::Shape::Text(text)
-                        if text
-                            .galley
-                            .text()
-                            .split_once('.')
-                            .is_some_and(|(_, fraction)| fraction.len() == 10)
-                            && plot.y_range().contains(text.pos.y)
-                            && if id == SeriesId::MAIN {
-                                text.pos.x >= plot.right()
-                            } else {
-                                text.pos.x < plot.left()
-                            } =>
-                    {
-                        Some(text)
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert!(ticks.len() >= 3, "{id:?} inverted={inverted}: {ticks:?}");
-            for tick in ticks {
-                assert!(
-                    tick.galley.size().x + crate::chart::rendering::axes::PRICE_LABEL_GAP
-                        <= chart.measured_axis_width,
-                    "{id:?}: {}",
-                    tick.galley.text()
-                );
-                assert!(!tick.galley.elided);
+    for (theme, width) in [
+        (crate::theme::Theme::light(), 760.0),
+        (crate::theme::Theme::dark(), 320.0),
+    ] {
+        for inverted in [false, true] {
+            let ctx = egui::Context::default();
+            let data = bars(&[100.0, 200.0]);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.set_theme(&ctx, &theme);
+            chart.set_size(Some(egui::vec2(width, 580.0)));
+            chart.config.show_volume = false;
+            chart.config.show_symbol_last_val = false;
+            chart.config.price_axis.edge_ticks_visible = true;
+            chart.set_price_formatter(Some(std::sync::Arc::new(Quarters)));
+            let id = chart.add_series(SeriesOptions {
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            chart.set_data(id, data);
+            for id in [SeriesId::MAIN, id] {
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .options_mut()
+                    .invert_scale = inverted;
             }
-            assert!(map.marks().len() >= 3);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+            for id in [SeriesId::MAIN, id] {
+                let map = chart.series_price_map(id).unwrap();
+                let plot = chart.get_rendered_price_rect();
+                let ticks: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text
+                                .galley
+                                .text()
+                                .split_once('.')
+                                .is_some_and(|(_, fraction)| fraction.len() == 10)
+                                && plot.y_range().contains(text.pos.y)
+                                && if id == SeriesId::MAIN {
+                                    text.pos.x >= plot.right()
+                                } else {
+                                    text.pos.x < plot.left()
+                                } =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(ticks.len() >= 3, "{id:?} inverted={inverted}: {ticks:?}");
+                for tick in ticks {
+                    assert!(
+                        tick.galley.size().x + crate::chart::rendering::axes::PRICE_LABEL_GAP
+                            <= chart.measured_axis_width,
+                        "{id:?}: {}",
+                        tick.galley.text()
+                    );
+                    assert!(!tick.galley.elided);
+                }
+                assert!(map.marks().len() >= 3);
+            }
         }
     }
 }
