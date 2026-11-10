@@ -3,7 +3,9 @@
 
 use super::{Chart, ChartLayoutMode, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
-use crate::model::{ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, Timeframe};
+use crate::model::{
+    ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, SeriesStyle, Timeframe,
+};
 use crate::studies::{IndicatorFactory, StudyTemplate};
 use crate::widget::settings::{ChartSettingsState, WatermarkMode};
 use serde::{Deserialize, Serialize};
@@ -241,7 +243,11 @@ impl Chart {
             .iter()
             .map(|item| SavedSeries {
                 id: item.id.0,
-                options: item.options.clone(),
+                options: {
+                    let mut options = item.options.clone();
+                    options.style = saved_style(options.style);
+                    options
+                },
                 visible: item.visible,
                 fed: self.is_fed(item.id),
                 price_scale: self.series_price_scale(item.id).cloned(),
@@ -263,7 +269,7 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
-            main_series_display_format: self.main_series_style.display_format,
+            main_series_display_format: saved_style(self.main_series_style.clone()).display_format,
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
@@ -663,6 +669,19 @@ impl Chart {
             .copied()
             .map(super::SeriesId)
     }
+}
+
+/// Finite equivalents of ignored values, without changing the live series' style.
+fn saved_style(mut style: SeriesStyle) -> SeriesStyle {
+    if let Some(format) = &mut style.display_format
+        && !format.min_move.is_finite()
+    {
+        format.min_move = 0.0;
+    }
+    if !style.base_line_width.is_finite() {
+        style.base_line_width = 0.0;
+    }
+    style
 }
 
 /// The studies of a checked snapshot, built in order, and its drawings document.
@@ -1381,6 +1400,132 @@ mod tests {
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// Ignored style values save as finite equivalents, and the restored chart keeps their
+    /// labels and hidden base lines. Finite values keep their saved representation, including
+    /// negative zero.
+    #[test]
+    fn display_format_with_an_ignored_min_move_saves() {
+        use crate::model::SeriesDisplayFormat;
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::{chart, shapes};
+
+        for added in [false, true] {
+            for (min_move, base_line_width, expected) in [
+                (0.0, 1.0, "12.62"),
+                (f64::NAN, 1.0, "12.62"),
+                (f64::INFINITY, 1.0, "12.62"),
+                (f64::NEG_INFINITY, 1.0, "12.62"),
+                (f64::NAN, f32::NAN, "12.62"),
+                (0.0, f32::NAN, "12.62"),
+                (0.0, f32::INFINITY, "12.62"),
+                (0.0, f32::NEG_INFINITY, "12.62"),
+                (-0.0, -0.0, "12.62"),
+                (-0.25, -1.0, "12.62"),
+                (0.25, 2.0, "12.50"),
+            ] {
+                let mut live = chart(&[12.0], &[12.624]);
+                let ctx = egui::Context::default();
+                let data = live.bars(SeriesId::MAIN).to_vec();
+                let id = if added {
+                    let id = live.add_series(SeriesOptions::default());
+                    live.set_data(id, data.clone());
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                let style = live.series_style_mut(id).unwrap();
+                style.display_format = Some(SeriesDisplayFormat {
+                    min_move,
+                    ..Default::default()
+                });
+                style.base_line_width = base_line_width;
+                style.base_line_color = egui::Color32::MAGENTA;
+                shapes(&ctx, &mut live, 0.0, vec![]);
+                assert_eq!(
+                    live.format_series_price(id, 12.624).as_deref(),
+                    Some(expected)
+                );
+
+                let snapshot = live.snapshot().unwrap();
+                let saved_format = if added {
+                    let style = &snapshot.series.as_ref().unwrap()[0].options.style;
+                    let width = if base_line_width.is_finite() {
+                        base_line_width
+                    } else {
+                        0.0
+                    };
+                    assert_eq!(style.base_line_width.to_bits(), width.to_bits());
+                    style.display_format.unwrap()
+                } else {
+                    snapshot.main_series_display_format.unwrap()
+                };
+                let step = if min_move.is_finite() { min_move } else { 0.0 };
+                assert_eq!(saved_format.min_move.to_bits(), step.to_bits());
+
+                let json = SavedLayout {
+                    mode: ChartLayoutMode::Single,
+                    charts: vec![snapshot],
+                }
+                .to_json()
+                .unwrap();
+                let layout = SavedLayout::from_json(&json).unwrap();
+                let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored.restore(&layout.charts[0]).unwrap();
+                let saved_id = id;
+                let id = if added {
+                    restored.restored_series_id(id.0).unwrap()
+                } else {
+                    id
+                };
+                restored.set_data(id, data);
+                let painted = shapes(&ctx, &mut restored, 1.0, vec![]);
+                if !min_move.is_finite() || (added && !base_line_width.is_finite()) {
+                    let mut invalid = layout.charts[0].clone();
+                    if added {
+                        let style = &mut invalid.series.as_mut().unwrap()[0].options.style;
+                        style.display_format.as_mut().unwrap().min_move = min_move;
+                        style.base_line_width = base_line_width;
+                    } else {
+                        invalid
+                            .main_series_display_format
+                            .as_mut()
+                            .unwrap()
+                            .min_move = min_move;
+                    }
+                    assert!(matches!(
+                        restored.restore(&invalid),
+                        Err(RestoreError::Layout("Layout values must be finite"))
+                    ));
+                }
+                assert_eq!(
+                    restored.format_series_price(id, 12.624).as_deref(),
+                    Some(expected)
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == expected
+                    )),
+                    "added {added}, step {min_move}, width {base_line_width}"
+                );
+                if added {
+                    for (chart, id) in [(&mut live, saved_id), (&mut restored, id)] {
+                        chart.series_price_scale_mut(id).unwrap().options_mut().mode =
+                            crate::scales::PriceScaleMode::IndexedTo100;
+                        let painted = shapes(&ctx, chart, 2.0, vec![]);
+                        assert_eq!(
+                            painted.iter().any(|shape| matches!(shape,
+                                egui::Shape::LineSegment { stroke, .. }
+                                    if stroke.color == egui::Color32::MAGENTA
+                            )),
+                            base_line_width.is_finite() && base_line_width > 0.0,
+                            "base line width {base_line_width}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A layout that does not record the main series' assignment keeps the chart's, and series
