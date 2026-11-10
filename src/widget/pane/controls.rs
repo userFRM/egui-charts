@@ -569,81 +569,98 @@ mod tests {
         use crate::studies::{RSI, SMA};
         use egui_kittest::{Harness, kittest::Queryable};
 
-        for enabled in [false, true] {
-            for command in [
-                "Remove pane",
-                "Merge with pane above",
-                "Merge with pane below",
-                "Move to main pane",
-                "Move to new pane",
-                "price member",
-            ] {
-                let mut chart = crate::widget::test_frames::chart(&[100.0; 20], &[110.0; 20]);
-                chart.add_indicator(Box::new(RSI::new(7)));
-                let study = chart.add_indicator(Box::new(RSI::new(14)));
-                let pane = chart.series_pane(study).unwrap();
-                let below = chart.add_indicator(Box::new(RSI::new(21)));
-                let below_pane = chart.series_pane(below).unwrap();
-                let peer = chart.add_indicator(Box::new(SMA::new(1)));
-                chart.move_series_to_pane(peer, pane);
-                chart.set_indicator_user_edit_enabled(study, enabled);
-                if command == "price member" {
-                    chart.move_series_to_pane(study, PaneId::MAIN);
-                    chart.move_series_to_pane(peer, PaneId::MAIN);
-                }
-                let original = chart.series_pane(study);
-                let mut harness = Harness::builder()
-                    .with_size(egui::vec2(800.0, 600.0))
-                    .build_ui_state(
-                        |ui, chart: &mut Chart| {
-                            let rect = ui.max_rect();
+        for (theme, size) in [
+            (crate::theme::Theme::light(), egui::vec2(320.0, 450.0)),
+            (crate::theme::Theme::dark(), egui::vec2(320.0, 450.0)),
+            (crate::theme::Theme::light(), egui::vec2(800.0, 600.0)),
+            (crate::theme::Theme::dark(), egui::vec2(800.0, 600.0)),
+        ] {
+            for enabled in [false, true] {
+                for command in [
+                    "Remove pane",
+                    "Merge with pane above",
+                    "Merge with pane below",
+                    "Move to main pane",
+                    "Move to new pane",
+                    "price member",
+                ] {
+                    let mut chart = crate::widget::test_frames::chart(&[100.0; 20], &[110.0; 20]);
+                    chart.add_indicator(Box::new(RSI::new(7)));
+                    let study = chart.add_indicator(Box::new(RSI::new(14)));
+                    let pane = chart.series_pane(study).unwrap();
+                    let below = chart.add_indicator(Box::new(RSI::new(21)));
+                    let below_pane = chart.series_pane(below).unwrap();
+                    let peer = chart.add_indicator(Box::new(SMA::new(1)));
+                    chart.move_series_to_pane(peer, pane);
+                    chart.set_indicator_user_edit_enabled(study, enabled);
+                    if command == "price member" {
+                        chart.move_series_to_pane(study, PaneId::MAIN);
+                        chart.move_series_to_pane(peer, PaneId::MAIN);
+                    }
+                    let original = chart.series_pane(study);
+                    let setup_theme = theme.clone();
+                    let mut harness = Harness::builder()
+                        .with_context_setup(move |ctx| {
+                            crate::theme::apply_to_egui(ctx, &setup_theme);
+                        })
+                        .with_size(size)
+                        .build_ui_state(
+                            |ui, chart: &mut Chart| {
+                                let rect = ui.max_rect();
+                                if command == "price member" {
+                                    chart.main_pane_actions(ui, rect, rect);
+                                } else if let Some(at) =
+                                    chart.pane_layout.panes.iter().position(|p| p.id == pane)
+                                {
+                                    chart.pane_actions(ui, at, pane, rect, rect, false);
+                                }
+                            },
+                            chart,
+                        );
+                    harness.hover_at((size / 2.0).to_pos2());
+                    harness.run();
+                    harness.get_by_label("...").click();
+                    harness.run();
+                    if command == "price member" && !enabled {
+                        assert!(harness.query_by_label("RSI").is_none());
+                        assert!(harness.query_by_label("SMA").is_some());
+                    } else {
+                        let action = if command.starts_with("Move to") || command == "price member"
+                        {
+                            harness.get_by_label("RSI").click();
+                            harness.run();
                             if command == "price member" {
-                                chart.main_pane_actions(ui, rect, rect);
-                            } else if let Some(at) =
-                                chart.pane_layout.panes.iter().position(|p| p.id == pane)
-                            {
-                                chart.pane_actions(ui, at, pane, rect, rect, false);
+                                "Move to new pane"
+                            } else {
+                                command
                             }
-                        },
-                        chart,
-                    );
-                harness.hover_at(egui::pos2(400.0, 300.0));
-                harness.run();
-                harness.get_by_label("...").click();
-                harness.run();
-                if command == "price member" && !enabled {
-                    assert!(harness.query_by_label("RSI").is_none());
-                    assert!(harness.query_by_label("SMA").is_some());
-                } else {
-                    let action = if command.starts_with("Move to") || command == "price member" {
-                        harness.get_by_label("RSI").click();
-                        harness.run();
-                        if command == "price member" {
-                            "Move to new pane"
                         } else {
                             command
-                        }
+                        };
+                        assert!(
+                            Rect::from_min_size(Pos2::ZERO, size)
+                                .contains_rect(harness.get_by_label(action).rect()),
+                            "{command} at {size:?}"
+                        );
+                        harness.get_by_label(action).click();
+                        harness.run();
+                    }
+                    let chart = harness.state();
+                    if enabled {
+                        assert_ne!(chart.series_pane(study), original, "{command}");
                     } else {
-                        command
-                    };
-                    harness.get_by_label(action).click();
-                    harness.run();
-                }
-                let chart = harness.state();
-                if enabled {
-                    assert_ne!(chart.series_pane(study), original, "{command}");
-                } else {
-                    assert_eq!(chart.series_pane(study), original, "{command}");
-                    assert!(
-                        chart.indicators().any(|(id, _)| id == peer),
-                        "no partial removal"
-                    );
-                    let chart = harness.state_mut();
-                    assert!(chart.move_series_to_pane(study, below_pane));
-                    assert!(chart.move_to_new_pane(study));
-                    let pane = chart.series_pane(study).unwrap();
-                    assert!(chart.remove_pane(pane));
-                    assert!(chart.indicators().all(|(id, _)| id != study));
+                        assert_eq!(chart.series_pane(study), original, "{command}");
+                        assert!(
+                            chart.indicators().any(|(id, _)| id == peer),
+                            "no partial removal"
+                        );
+                        let chart = harness.state_mut();
+                        assert!(chart.move_series_to_pane(study, below_pane));
+                        assert!(chart.move_to_new_pane(study));
+                        let pane = chart.series_pane(study).unwrap();
+                        assert!(chart.remove_pane(pane));
+                        assert!(chart.indicators().all(|(id, _)| id != study));
+                    }
                 }
             }
         }
