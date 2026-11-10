@@ -1241,82 +1241,99 @@ mod tests {
     fn baseline_takeover_starts_from_series() {
         use super::super::tests::{ui_click, ui_frame};
         use egui_charts::model::BaselineStyle;
-        let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.handle_comparison(CompareAction::AddSymbol(
-            "MSFT".into(),
-            ComparePlacement::NewPriceScale,
-        ));
-        let id = app.comparisons[0].1;
-        super::super::tests::settle(&mut app, &ctx);
-        let mut options = app
-            .chart
-            .series()
-            .find(|(series, _)| *series == id)
-            .unwrap()
-            .1
-            .clone();
-        options.chart_type = ChartType::Baseline;
-        options.up_color = egui::Color32::from_rgb(200, 10, 10);
-        options.down_color = egui::Color32::from_rgb(10, 10, 200);
-        options.width = 3.0;
-        app.chart.set_series_options(id, options);
-        app.open_indicator_settings(id);
-        let size = egui::vec2(1440.0, 900.0);
-        for label in ["Markers and baseline", "Independent baseline style", "Ok"] {
-            if label == "Independent baseline style" {
-                ui_frame(
-                    &ctx,
-                    size,
-                    vec![
-                        egui::Event::PointerMoved(egui::pos2(720.0, 450.0)),
-                        egui::Event::MouseWheel {
-                            unit: egui::MouseWheelUnit::Point,
-                            delta: egui::vec2(0.0, -240.0),
-                            phase: egui::TouchPhase::Move,
-                            source: egui::MouseWheelSource::Unknown,
-                            modifiers: egui::Modifiers::NONE,
+        for theme in [
+            egui_charts::theme::Theme::light(),
+            egui_charts::theme::Theme::dark(),
+        ] {
+            for size in [egui::vec2(1440.0, 900.0), egui::vec2(320.0, 450.0)] {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.theme = theme.clone();
+                app.chart.set_theme(&ctx, &theme);
+                app.handle_comparison(CompareAction::AddSymbol(
+                    "MSFT".into(),
+                    ComparePlacement::NewPriceScale,
+                ));
+                let id = app.comparisons[0].1;
+                super::super::tests::settle(&mut app, &ctx);
+                let mut options = app
+                    .chart
+                    .series()
+                    .find(|(series, _)| *series == id)
+                    .unwrap()
+                    .1
+                    .clone();
+                options.chart_type = ChartType::Baseline;
+                options.up_color = egui::Color32::from_rgb(200, 10, 10);
+                options.down_color = egui::Color32::from_rgb(10, 10, 200);
+                options.width = 3.0;
+                app.chart.set_series_options(id, options);
+                app.open_indicator_settings(id);
+                for label in ["Markers and baseline", "Independent baseline style", "Ok"] {
+                    let mut point = None;
+                    for _ in 0..16 {
+                        let mut texts = Vec::new();
+                        for _ in 0..10 {
+                            texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+                        }
+                        let footer = texts.iter().find(|(text, _)| text == "Ok").unwrap().1;
+                        point = texts.iter().find_map(|(text, rect)| {
+                            let point = rect.left_center() + egui::vec2(4.0, 0.0);
+                            (text == label
+                                && egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                                    .contains(point)
+                                && (label == "Ok" || point.y < footer.top() - 24.0))
+                                .then_some(point)
+                        });
+                        if point.is_some() {
+                            break;
+                        }
+                        ui_frame(
+                            &ctx,
+                            size,
+                            vec![
+                                egui::Event::PointerMoved((size * 0.5).to_pos2()),
+                                egui::Event::MouseWheel {
+                                    unit: egui::MouseWheelUnit::Point,
+                                    delta: egui::vec2(0.0, -80.0),
+                                    phase: egui::TouchPhase::Move,
+                                    source: egui::MouseWheelSource::Unknown,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                            |ui| app.show_dialogs(ui.ctx()),
+                        );
+                    }
+                    let point =
+                        point.unwrap_or_else(|| panic!("{size:?}: no baseline control {label}"));
+                    ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
+                }
+                let options = app
+                    .chart
+                    .series()
+                    .find(|(series, _)| *series == id)
+                    .unwrap()
+                    .1;
+                assert_eq!(
+                    options.baseline_style,
+                    Some(BaselineStyle {
+                        above: LinePlotStyle {
+                            color: egui::Color32::from_rgb(200, 10, 10),
+                            width: 3.0,
+                            ..Default::default()
                         },
-                    ],
-                    |ui| app.show_dialogs(ui.ctx()),
+                        below: LinePlotStyle {
+                            color: egui::Color32::from_rgb(10, 10, 200),
+                            width: 3.0,
+                            ..Default::default()
+                        },
+                        above_fill: egui::Color32::from_rgba_unmultiplied(200, 10, 10, 30),
+                        below_fill: egui::Color32::from_rgba_unmultiplied(10, 10, 200, 30),
+                        ..Default::default()
+                    })
                 );
             }
-            let mut texts = Vec::new();
-            for _ in 0..10 {
-                texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
-            }
-            let point = texts
-                .iter()
-                .find(|(text, _)| text == label)
-                .unwrap_or_else(|| panic!("no baseline control {label}"))
-                .1
-                .center();
-            ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
         }
-        let options = app
-            .chart
-            .series()
-            .find(|(series, _)| *series == id)
-            .unwrap()
-            .1;
-        assert_eq!(
-            options.baseline_style,
-            Some(BaselineStyle {
-                above: LinePlotStyle {
-                    color: egui::Color32::from_rgb(200, 10, 10),
-                    width: 3.0,
-                    ..Default::default()
-                },
-                below: LinePlotStyle {
-                    color: egui::Color32::from_rgb(10, 10, 200),
-                    width: 3.0,
-                    ..Default::default()
-                },
-                above_fill: egui::Color32::from_rgba_unmultiplied(200, 10, 10, 30),
-                below_fill: egui::Color32::from_rgba_unmultiplied(10, 10, 200, 30),
-                ..Default::default()
-            })
-        );
     }
 
     /// Both settings routes retain the selected bar series; cancel, accept and undo stay local.
