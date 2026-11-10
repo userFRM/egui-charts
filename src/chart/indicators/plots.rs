@@ -2,6 +2,22 @@
 
 use crate::studies::{StudyCandle, StudyZone};
 
+/// Per-bar colour at a displayed value, excluding a fully transparent connecting segment.
+/// With no displayed bar (a latest output displaced before the history), read the latest source.
+pub(crate) fn plot_value_color(
+    study: &dyn crate::studies::Indicator,
+    line: usize,
+    bar: Option<usize>,
+) -> Option<egui::Color32> {
+    let source = match bar {
+        Some(bar) => bar.checked_add_signed(study.plot_offset(line).checked_neg()?)?,
+        None => study.values().len().checked_sub(1)?,
+    };
+    study
+        .plot_color(line, source)
+        .filter(|color| color.a() != 0)
+}
+
 /// Horizontal line at each enabled output's latest value, across the clip rect. A missing latest
 /// value, a hidden output or a bar-colouring plot draws none.
 pub(crate) fn paint_price_lines(
@@ -39,7 +55,8 @@ pub(crate) fn paint_price_lines(
         if !y.is_finite() || !rect.y_range().contains(y) {
             continue;
         }
-        let color = study.plot_color(line, bar).unwrap_or(style.color);
+        let color = plot_value_color(study, line, bar.checked_add_signed(study.plot_offset(line)))
+            .unwrap_or(style.color);
         crate::painting::dashed_line::draw_dashed_line(
             painter,
             egui::pos2(rect.left(), y),
@@ -331,19 +348,104 @@ pub(crate) fn paint_drawings(
     }
 }
 
-#[cfg(all(test, feature = "studies", feature = "timezones"))]
+#[cfg(all(test, feature = "studies"))]
 mod tests {
     use super::*;
+    #[cfg(feature = "timezones")]
     use crate::chart::coords::ChartMapping;
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
-    use crate::studies::{Indicator, TradingSessions};
+    use crate::studies::Indicator;
     use egui::{Pos2, Rect};
+
+    /// Period boundaries hide the connecting segment, never an enabled latest-value line.
+    #[test]
+    fn pivot_price_line_shows_on_the_first_bar_of_a_period() {
+        use crate::studies::{ConfiguredStudy, IntradayPivotPoints, PivotPoints, PivotTimeframe};
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..49)
+            .map(|i| {
+                let close = 100.0 + (i / 4) as f64 * 2.0;
+                crate::model::Bar::new(
+                    start + chrono::TimeDelta::hours(i),
+                    close,
+                    close + 1.0,
+                    close - 1.0,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(80.0, 140.0),
+            0.0,
+            120.0,
+            false,
+        );
+        // Daily P = (111 + 99 + 110) / 3, then (123 + 111 + 122) / 3.
+        // Four-hour P = (113 + 111 + 112) / 3, then (115 + 113 + 114) / 3.
+        let cases: [(Box<dyn Indicator>, usize, f64, bool); 4] = [
+            (
+                Box::new(PivotPoints::new().with_timeframe(PivotTimeframe::Daily)),
+                48,
+                320.0 / 3.0,
+                false,
+            ),
+            (
+                Box::new(PivotPoints::new().with_timeframe(PivotTimeframe::Daily)),
+                49,
+                356.0 / 3.0,
+                true,
+            ),
+            (Box::new(IntradayPivotPoints::new(240)), 32, 112.0, false),
+            (Box::new(IntradayPivotPoints::new(240)), 33, 114.0, true),
+        ];
+        for (study, count, expected, boundary) in cases {
+            let mut study = ConfiguredStudy::new(study);
+            study.set_timeframe(crate::model::Timeframe::Hour1);
+            let mut settings = study.settings();
+            settings.price_line_plots = vec![0];
+            study.apply_settings(&[], settings).unwrap();
+            study.calculate(&bars[..count]);
+            assert!((study.values().value(0, count - 1).unwrap() - expected).abs() < 1e-10);
+            assert_eq!(
+                study.plot_color(0, count - 1),
+                boundary.then_some(egui::Color32::TRANSPARENT),
+            );
+            let color = study.plot_style(0).color;
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                paint_price_lines(&ui.painter().with_clip_rect(rect), &study, &price);
+            });
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh)
+                        if !mesh.vertices.is_empty()
+                            && mesh.vertices.iter().all(|vertex| vertex.color == color) =>
+                    {
+                        let bounds = mesh.calc_bounds();
+                        (bounds.width() >= 200.0 && bounds.height() <= 1.0)
+                            .then_some(bounds.center().y)
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(lines.len(), 1, "count={count}: {lines:?}");
+            // y = 120 - (P - 80) / 60 * 120; the one-pixel dots round to pixels.
+            let expected_y = (120.0 - (expected - 80.0) * 2.0) as f32;
+            assert!((lines[0] - expected_y).abs() <= 0.5, "{lines:?}");
+        }
+    }
 
     /// On six 4-hour bars of 2024-07-15 from 00:00 UTC, the default New York session holds only
     /// the bar of 16:00, and its box covers that bar from edge to edge, as the Tokyo and London
     /// boxes cover their two bars. At 100 pixels a bar, bar `i` spans `100 * i - 1` to
     /// `100 * i + 99`.
     #[test]
+    #[cfg(feature = "timezones")]
     fn session_boxes_cover_their_bars_from_edge_to_edge() {
         let start: chrono::DateTime<chrono::Utc> = "2024-07-15T00:00:00Z".parse().unwrap();
         let bars: Vec<_> = (0..6)
@@ -352,7 +454,7 @@ mod tests {
                 crate::model::Bar::new(time, 10.0, 11.0, 9.0, 10.0, 1.0)
             })
             .collect();
-        let mut sessions = TradingSessions::new();
+        let mut sessions = crate::studies::TradingSessions::new();
         sessions.calculate(&bars);
         let price = PriceMap::new(
             PriceTransform::default(),

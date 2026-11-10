@@ -770,18 +770,15 @@ impl<'a> Legend<'a> {
                         } else {
                             "∅".to_owned()
                         };
-                        // The value comes from a source bar, and a transparent colour there hides
-                        // only the segment into it. A plot colour that is itself fully transparent
-                        // holds no RGB, so it has no opaque form.
-                        let color = study
-                            .plot_offset(index)
-                            .checked_neg()
-                            .and_then(|back| self.bar_index.checked_add_signed(back))
-                            .and_then(|source| study.plot_color(index, source))
-                            .filter(|color| color.a() != 0)
-                            .or_else(|| study_colors.get(index).copied())
-                            .filter(|color| color.a() != 0)
-                            .map_or(colors.text, |color| color.to_opaque());
+                        // A fully transparent plot colour holds no RGB, so it has no opaque form.
+                        let color = crate::chart::indicators::plots::plot_value_color(
+                            study.as_ref(),
+                            index,
+                            Some(self.bar_index),
+                        )
+                        .or_else(|| study_colors.get(index).copied())
+                        .filter(|color| color.a() != 0)
+                        .map_or(colors.text, |color| color.to_opaque());
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
