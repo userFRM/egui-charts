@@ -771,6 +771,42 @@ mod tests {
             .collect()
     }
 
+    /// A symbol-wide deletion stays one edit when a clone replaces its layout.
+    #[test]
+    fn drawing_deletion_before_a_layout_clone_reverses_on_every_chart() {
+        for slot in [0, 1] {
+            let mut charts = [bars(60), bars(60)];
+            for chart in &mut charts {
+                chart.set_symbol("AAA");
+                chart.drawings_mut().add_drawing(line("Line")).unwrap();
+            }
+            let mut layout = ChartLayout {
+                mode: super::super::ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            assert!(layout.delete_symbol_drawings(&mut charts.each_mut(), "AAA"));
+            layout = layout.clone();
+            for redo in [false, true] {
+                assert!(if redo {
+                    charts[slot].redo()
+                } else {
+                    charts[slot].undo()
+                });
+                egui::Context::default()
+                    .run_ui(egui::RawInput::default(), |ui| {
+                        layout.show(ui, &mut charts.each_mut());
+                    })
+                    .drop_without_applying_deltas();
+                assert_eq!(
+                    charts
+                        .each_ref()
+                        .map(|chart| chart.drawings().drawings.len()),
+                    if redo { [0, 0] } else { [1, 1] }
+                );
+            }
+        }
+    }
+
     /// Through the layout, without storage: a drawing and its copy on a chart of another
     /// interval are listed once, also once neither chart shows them, and deleting a symbol
     /// leaves the others, takes locked drawings along and comes back in one undo. With a storage

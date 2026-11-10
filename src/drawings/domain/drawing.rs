@@ -11,8 +11,8 @@
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
     FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
-    VwapConfig,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, RegressionTrendConfig,
+    TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -195,8 +195,8 @@ pub struct Drawing {
     pub arrow_end_style: ArrowStyle,
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
-    /// Whether a horizontal line, horizontal ray or cross line shows its price as a tag on the
-    /// price axis. Other tools ignore it. Drawings saved without it show the tag.
+    /// Whether a horizontal line, horizontal ray, cross line or position shows its prices as
+    /// tags on the price axis. Other drawings ignore it. Saved drawings without it show tags.
     #[serde(default = "enabled")]
     pub price_axis_label: bool,
     /// Whether a vertical line or cross line shows its time as a tag on the time axis. Other
@@ -206,8 +206,8 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, and the text placement of a horizontal line or ray. Other tools
-    /// ignore these settings.
+    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
+    /// line, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
@@ -215,6 +215,9 @@ pub struct Drawing {
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
     pub position_sizing: PositionSizing,
+    /// Statistics, account currency and quantity precision of position tools.
+    #[serde(default = "PositionReadout::legacy")]
+    pub position_readout: PositionReadout,
     /// Target zone and level colour of position tools; `None` keeps the default green.
     #[serde(default)]
     pub position_target_color: Option<[u8; 4]>,
@@ -504,7 +507,8 @@ impl Drawing {
                 | DrawingToolType::ExtendedLine
                 | DrawingToolType::InfoLine
                 | DrawingToolType::HorizontalLine
-                | DrawingToolType::HorizontalRay => Some(BLUE),
+                | DrawingToolType::HorizontalRay
+                | DrawingToolType::VerticalLine => Some(BLUE),
                 _ => None,
             },
             background: !plain_text,
@@ -528,6 +532,7 @@ impl Drawing {
             line_measurements: LineMeasurements::for_tool(tool_type),
             position_size: None,
             position_sizing: PositionSizing::default(),
+            position_readout: PositionReadout::default(),
             position_target_color: None,
             position_stop_color: None,
             fib_config: matches!(
@@ -579,18 +584,30 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; a fill tinted from the tool's default
-    /// line colour takes the same tint of `color`.
+    /// Create a new drawing with a specific line colour; fills and pitchfork levels sharing the
+    /// tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
-        // A fill tinted from the tool's line colour follows the new one; other fills stay.
-        if let Some(fill) = &mut drawing.fill_color
-            && fill[..3] == drawing.color[..3]
+        drawing.set_line_color(color);
+        drawing
+    }
+
+    /// Set the line colour and retint fills and pitchfork levels sharing its current RGB,
+    /// keeping each one's opacity. Independently coloured fills and levels keep their colours.
+    pub fn set_line_color(&mut self, color: [u8; 4]) {
+        if let Some(fill) = &mut self.fill_color
+            && fill[..3] == self.color[..3]
         {
             fill[..3].copy_from_slice(&color[..3]);
         }
-        drawing.color = color;
-        drawing
+        if let Some(config) = &mut self.pitchfork {
+            for level in &mut config.levels {
+                if level.color[..3] == self.color[..3] {
+                    level.color[..3].copy_from_slice(&color[..3]);
+                }
+            }
+        }
+        self.color = color;
     }
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
@@ -961,16 +978,21 @@ impl Drawing {
     }
 
     /// Whether drawings of `tool` can tag their price on the price axis and their time on the
-    /// time axis: horizontal lines and rays their price, vertical lines their time, cross
-    /// lines both.
+    /// time axis: horizontal lines, rays and positions their prices, vertical lines their time,
+    /// cross lines both.
     pub(crate) fn axis_labels_of(tool: DrawingToolType) -> (bool, bool) {
         use DrawingToolType as T;
         match tool {
-            T::HorizontalLine | T::HorizontalRay => (true, false),
+            T::HorizontalLine | T::HorizontalRay | T::LongPos | T::ShortPos => (true, false),
             T::VerticalLine => (false, true),
             T::CrossLine => (true, true),
             _ => (false, false),
         }
+    }
+
+    /// Whether the drawing also paints its line in the chart's other panes.
+    pub(crate) fn reaches_other_panes(&self) -> bool {
+        self.tool_type == DrawingToolType::VerticalLine && self.line_measurements.across_panes
     }
 
     /// Get the z-order of this drawing

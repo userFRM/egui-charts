@@ -86,8 +86,9 @@ pub struct IndicatorPane {
     pub(super) pane_controls: bool,
     pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
-    /// The primitive tags of this member's scale, for all of the pane's members on it. Painted
-    /// before the crosshair tag and the scale labels, which leave out the labels under them.
+    pub(super) fixed_axis_tags: Vec<Option<Rect>>,
+    /// The primitive tags of this member's scale, for all of the pane's members on it.
+    /// Fixed tags and the crosshair tag are deferred until the pane's value tags have drawn.
     pub(super) primitive_axis_labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
     pub(super) axis_options: crate::config::PriceAxisOptions,
     pub(super) legend_backdrop: f32,
@@ -112,6 +113,7 @@ impl IndicatorPane {
             pane_controls: false,
             axis_rect: None,
             axis_tags: Vec::new(),
+            fixed_axis_tags: Vec::new(),
             primitive_axis_labels: Vec::new(),
             axis_options,
             legend_backdrop: 0.6,
@@ -323,6 +325,7 @@ impl IndicatorPane {
         _visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
+        let mut axis_foregrounds = Vec::new();
         let interaction = self.show_aligned_interactive_in(
             ui,
             indicator,
@@ -334,8 +337,10 @@ impl IndicatorPane {
             None,
             &[],
             false,
+            &mut axis_foregrounds,
             |_, _| {},
         )?;
+        crate::widget::primitives::paint_backgrounds(ui.painter(), axis_foregrounds);
         if let Some(table) = indicator.table() {
             crate::studies::table::paint(
                 ui,
@@ -361,6 +366,7 @@ impl IndicatorPane {
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
         primitives: &[&crate::widget::primitives::Attached],
         bar_series: bool,
+        axis_foregrounds: &mut Vec<egui::epaint::ClippedShape>,
         mut draw_primitives: impl FnMut(&egui::Painter, crate::chart::primitives::PrimitivePass),
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
@@ -545,25 +551,40 @@ impl IndicatorPane {
                     std::mem::take(&mut self.primitive_axis_labels)
                         .into_iter()
                         .partition(|(label, _)| label.fixed_coordinate.is_some());
-                for (painter, labels) in [(painter, automatic), (&axis_painter, fixed)] {
-                    crate::chart::rendering::axes::render_primitive_price_labels(
-                        painter,
-                        label_rect,
-                        axis_edge,
-                        labels,
-                        &mut self.axis_tags,
-                        self.axis_options.allow_label_overlap,
-                    );
-                }
+                crate::chart::rendering::axes::render_primitive_price_labels(
+                    painter,
+                    label_rect,
+                    axis_edge,
+                    automatic,
+                    &mut self.axis_tags,
+                    self.axis_options.allow_label_overlap,
+                );
+                let start = painter
+                    .ctx()
+                    .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
+                crate::chart::rendering::axes::render_primitive_price_labels(
+                    &axis_painter,
+                    label_rect,
+                    axis_edge,
+                    fixed,
+                    &mut self.fixed_axis_tags,
+                    self.axis_options.allow_label_overlap,
+                );
+                axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
             }
             let context = crate::chart::rendering::RenderContext::new(painter, chart_rect);
-            let tag = crosshair.and_then(|(pos, options)| {
+            if let Some((pos, options)) = crosshair {
                 crate::chart::rendering::render_crosshair_lines(
                     &context,
                     pos,
                     &options,
                     chart_rect.bottom(),
                 );
+            }
+            let start = painter
+                .ctx()
+                .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
+            let tag = crosshair.and_then(|(pos, options)| {
                 axis?;
                 if indicator.scale() == crate::studies::StudyScale::None {
                     return None;
@@ -596,6 +617,7 @@ impl IndicatorPane {
                     }),
                 )
             });
+            axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
             // Draw y-axis labels
             self.measured_axis_width = self.draw_y_axis_labels(
                 painter, rect, chart_rect, y_min, y_max, indicator, axis, tag,
@@ -665,13 +687,23 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
+        self.value_range(indicator, visible_range)
+            .unwrap_or((0.0, 100.0))
+    }
+
+    /// The study's fitted range, without the empty-pane drawing fallback.
+    pub(in crate::widget) fn value_range(
+        &self,
+        indicator: &dyn Indicator,
+        visible_range: &Range<usize>,
+    ) -> Option<(f64, f64)> {
         if indicator.is_volume()
             && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
         {
-            return crate::widget::volume::range(indicator, visible_range, None);
+            return Some(crate::widget::volume::range(indicator, visible_range, None));
         }
         if let Some((min, max)) = self.config.y_range {
-            return (min, max);
+            return Some((min, max));
         }
 
         // Auto-scale based on visible indicator values
@@ -692,6 +724,11 @@ impl IndicatorPane {
                     max_val = max_val.max(value);
                 }
             }
+        }
+
+        for price in crate::studies::plots::gradient_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
         }
 
         for candle in indicator.candles().iter().filter(|candle| {
@@ -744,6 +781,16 @@ impl IndicatorPane {
                 max_val = max_val.max(*level);
             }
         }
+        for (index, (value, ..)) in indicator.pane().levels.into_iter().enumerate() {
+            if value.is_finite()
+                && indicator
+                    .level_price_line(index)
+                    .is_some_and(|color| color != egui::Color32::TRANSPARENT)
+            {
+                min_val = min_val.min(value);
+                max_val = max_val.max(value);
+            }
+        }
 
         if min_val != f64::MAX
             && (0..indicator.line_count()).any(|line| {
@@ -762,11 +809,11 @@ impl IndicatorPane {
         }
 
         if min_val == f64::MAX {
-            (0.0, 100.0) // Default fallback
+            None
         } else {
             // Add 10% padding
             let padding = crate::scales::auto_scale_span(min_val, max_val) * 0.1;
-            (min_val - padding, max_val + padding)
+            Some((min_val - padding, max_val + padding))
         }
     }
 }
@@ -808,7 +855,7 @@ mod tests {
     }
 
     /// A fitted pane keeps a study's levels in view when its values lie between them, and a
-    /// hidden level no longer holds the scale open.
+    /// hidden level holds the scale open only when its value line is visible.
     #[test]
     fn fitted_panes_keep_visible_levels_in_view() {
         let bars: Vec<_> = [(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]
@@ -832,8 +879,17 @@ mod tests {
 
         let mut settings = study.settings();
         settings.levels[0].visible = false;
-        study.apply_settings(&[], settings).unwrap();
-        let (low, high) = fit(&study);
-        assert!(low < 38.2 && high < 61.8, "{low}..{high}");
+        for (enabled, color, shown) in [
+            (false, egui::Color32::RED, false),
+            (true, egui::Color32::RED, true),
+            (true, egui::Color32::TRANSPARENT, false),
+        ] {
+            settings.levels[0].price_line = enabled;
+            settings.levels[0].color = color;
+            study.apply_settings(&[], settings.clone()).unwrap();
+            let (low, high) = fit(&study);
+            assert!(low < 38.2, "{low}..{high}");
+            assert_eq!(high > 61.8, shown, "{low}..{high}");
+        }
     }
 }

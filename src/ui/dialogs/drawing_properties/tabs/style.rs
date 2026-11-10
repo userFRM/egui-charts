@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::{ArrowStyle, Drawing, LineMeasurementPosition};
+use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -26,14 +26,19 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
-            ui.label(l10n::text(ui.ctx(), "Color"));
-            if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
-            {
-                props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+            if tool != Some(DrawingToolType::FibonacciChannel) {
+                ui.label(l10n::text(ui.ctx(), "Color"));
+                if let Some(color) =
+                    color_swatch(ui, color_picker, props.color, "drawing_props_color")
+                {
+                    props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+                }
+                ui.end_row();
             }
-            ui.end_row();
 
-            if tool.is_none_or(|tool| tool.draws_line()) {
+            if tool
+                .is_none_or(|tool| tool.draws_line() && tool != DrawingToolType::FibonacciChannel)
+            {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
@@ -52,6 +57,68 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciExtension
+                        | DrawingToolType::FibonacciChannel
+                        | DrawingToolType::FibonacciWedge
+                ) {
+                    let mut config = settings.fibonacci_config().into_owned();
+                    let original = config.clone();
+                    ui.label(l10n::text(ui.ctx(), "All colours"));
+                    if let Some(color) =
+                        color_swatch(ui, fill_picker, props.color, "fibonacci_color")
+                    {
+                        props.color = keep_opacity(color, props.color, fill_picker.custom_mode);
+                        for level in &mut config.levels {
+                            let [r, g, b, a] = color.to_srgba_unmultiplied();
+                            let opacity = if fill_picker.custom_mode {
+                                a
+                            } else {
+                                level.color[3]
+                            };
+                            level.color = [r, g, b, opacity];
+                        }
+                        if let Some(fill) = props.fill_color {
+                            let [r, g, b, _] = props.color.to_srgba_unmultiplied();
+                            props.fill_color =
+                                Some(Color32::from_rgba_unmultiplied(r, g, b, fill.a()));
+                        }
+                    }
+                    ui.end_row();
+                    if settings.tool_type != DrawingToolType::FibonacciChannel {
+                        ui.label(l10n::text(ui.ctx(), "Trend line"));
+                        ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
+                            .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
+                        ui.end_row();
+                    }
+                    ui.label(l10n::text(ui.ctx(), "Level width"));
+                    line_width_row(ui, &mut config.level_width);
+                    ui.end_row();
+                    if config != original {
+                        settings.fib_config = Some(config);
+                    }
+                }
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::LongPos | DrawingToolType::ShortPos
+                ) {
+                    for (label, value) in [
+                        (
+                            "Keep position statistics visible",
+                            &mut settings.position_readout.persistent,
+                        ),
+                        (
+                            "Condensed statistics",
+                            &mut settings.position_readout.condensed,
+                        ),
+                    ] {
+                        ui.label("");
+                        ui.checkbox(value, l10n::text(ui.ctx(), label));
+                        ui.end_row();
+                    }
+                }
                 if settings.tool_type.supports_line_ends() {
                     for (label, style) in [
                         ("Line start", &mut settings.arrow_start_style),
@@ -87,6 +154,15 @@ impl StyleTab {
                     ui.checkbox(
                         &mut settings.channel_midline,
                         l10n::text(ui.ctx(), "Show middle line"),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                }
+                if settings.tool_type == DrawingToolType::VerticalLine {
+                    let label = ui.label(l10n::text(ui.ctx(), "Extend"));
+                    ui.checkbox(
+                        &mut settings.line_measurements.across_panes,
+                        l10n::text(ui.ctx(), "Through all panes"),
                     )
                     .labelled_by(label.id);
                     ui.end_row();
@@ -282,7 +358,6 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
 mod tests {
     use super::*;
     use crate::Chart;
-    use crate::drawings::DrawingToolType;
     use crate::model::BarData;
     use crate::ui_kit::color_picker::MAIN_COLORS;
     use egui::{Context, Event, Modifiers, PointerButton, Pos2, Rect, Shape};
@@ -319,51 +394,100 @@ mod tests {
         }
     }
 
-    /// A palette swatch recolours a highlighter without making its stroke opaque.
+    /// Palette swatches retain each line's opacity, including shown and spare Fibonacci levels.
     #[test]
     fn palette_colours_keep_the_line_opacity() {
-        let ctx = Context::default();
-        ctx.global_style_mut(|style| style.animation_time = 0.0);
-        let chart = Chart::new(BarData::new());
-        let drawing = Drawing::new(0, DrawingToolType::Highlighter);
-        let mut props = DrawingProps::from_drawing(&drawing, &chart);
-        let mut pickers: [ColorPickerState; 2] = Default::default();
-        pickers[0].is_open = true;
-        let swatch = MAIN_COLORS[3];
-        let mut frame = |events| {
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                    events,
-                    ..Default::default()
+        for (tool, picker, alpha, fill) in [
+            (DrawingToolType::Highlighter, 0, 51, None),
+            (DrawingToolType::FibonacciRetracement, 1, 255, None),
+            (DrawingToolType::FibonacciChannel, 1, 255, None),
+            (DrawingToolType::FibonacciWedge, 1, 255, None),
+            (
+                DrawingToolType::FibonacciRetracement,
+                1,
+                255,
+                Some([10, 20, 30, 51]),
+            ),
+        ] {
+            let ctx = Context::default();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let chart = Chart::new(BarData::new());
+            let mut drawing = Drawing::new(0, tool);
+            drawing.fill_color = fill;
+            if let Some(config) = &mut drawing.fib_config {
+                for (i, level) in config.levels.iter_mut().enumerate() {
+                    level.color[3] = if i % 2 == 0 { 51 } else { 153 };
+                }
+            }
+            let mut props = DrawingProps::from_drawing(&drawing, &chart);
+            let mut pickers: [ColorPickerState; 2] = Default::default();
+            pickers[picker].is_open = true;
+            let swatch = MAIN_COLORS[3];
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| StyleTab::show(ui, &mut props, &mut pickers),
+                );
+                let well = output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                well
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).expect("the palette shows the swatch");
+            frame(vec![
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
                 },
-                |ui| StyleTab::show(ui, &mut props, &mut pickers),
-            );
-            let well = output.shapes.iter().find_map(|s| match &s.shape {
-                Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
-                _ => None,
-            });
-            output.drop_without_applying_deltas();
-            well
-        };
-        frame(vec![]);
-        let pos = frame(vec![]).expect("the palette shows the swatch");
-        frame(vec![
-            Event::PointerMoved(pos),
-            Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed: true,
-                modifiers: Modifiers::NONE,
-            },
-            Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed: false,
-                modifiers: Modifiers::NONE,
-            },
-        ]);
-        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
-        assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, 51));
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+            let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+            assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, alpha));
+
+            if matches!(
+                tool,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciWedge
+            ) {
+                assert_eq!(
+                    props.fill_color,
+                    fill.map(|color| Color32::from_rgba_unmultiplied(r, g, b, color[3]))
+                );
+                assert!(
+                    props
+                        .tool_settings
+                        .as_ref()
+                        .unwrap()
+                        .settings
+                        .fib_config
+                        .as_ref()
+                        .unwrap()
+                        .levels
+                        .iter()
+                        .enumerate()
+                        .all(|(i, level)| level.color
+                            == [r, g, b, if i % 2 == 0 { 51 } else { 153 }])
+                );
+            }
+        }
     }
 }

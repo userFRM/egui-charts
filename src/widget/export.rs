@@ -73,10 +73,10 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
-/// A column of a [`DataTable`] across symbol changes and restores of the chart's saved state: the
-/// title of its study with the study's place among those of that title, `None` for the main
-/// series, then its plot or main series column.
-pub(crate) type ColumnId = (Option<(String, usize)>, usize);
+/// A column of a [`DataTable`]: the original id and title of its study, `None` for the main
+/// series, then its plot or main series column. The title keeps a choice off a study of another
+/// title that a restore adds under the id the choice was made for.
+pub(crate) type ColumnId = (Option<(usize, String)>, usize);
 
 /// The loaded bars and visible study plots as text, aligned by chart time: what
 /// `Chart::export_csv` (with `csv`) writes and the chart data table lists.
@@ -316,12 +316,10 @@ impl Chart {
         let column_ids = (0..6)
             .map(|column| (None, column))
             .chain(columns.iter().map(|&(study, line, _)| {
-                let title = studies[study].name();
-                let occurrence = studies[..study]
-                    .iter()
-                    .filter(|earlier| earlier.name() == title)
-                    .count();
-                (Some((title.to_owned(), occurrence)), line)
+                let id = self.study_ids[study].0;
+                #[cfg(feature = "drawings")]
+                let id = self.study_column_ids.get(&id).copied().unwrap_or(id);
+                (Some((id, studies[study].name().to_owned())), line)
             }))
             .collect();
         (
@@ -1130,6 +1128,70 @@ mod tests {
         #[cfg(feature = "csv")]
         assert_eq!(table.csv(&[0, 2]).unwrap(), "time,SMA: 5\nt0,\nt1,2.00\n");
         assert_eq!(table.tsv(&[2, 1]), "SMA: 5\tclose\n\t1.50\n2.00\t2.50");
+    }
+
+    #[test]
+    #[cfg(feature = "ui")]
+    fn svg_escapes_a_restored_axis_font_family() {
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames};
+        use egui::FontFamily;
+
+        for (name, escaped) in [
+            (
+                r#"R&D "Mono" <x> it's \ here"#,
+                r#"R&amp;D &quot;Mono&quot; &lt;x&gt; it\'s \\ here"#,
+            ),
+            ("Line\nfeed\rreturn\ttab", r"Line\a feed\d return\9 tab"),
+            ("Control\0\u{1}\u{b}\u{c}\u{1f}", r"Control\0 \1 \b \c \1f "),
+            ("Unicode\u{fffe}\u{ffff}", r"Unicode\fffe \ffff "),
+        ] {
+            let ctx = egui::Context::default();
+            let family = FontFamily::Name(name.into());
+            let control = FontFamily::Name("Host Mono".into());
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.families.insert(
+                family.clone(),
+                fonts.families[&FontFamily::Monospace].clone(),
+            );
+            fonts
+                .families
+                .insert(control.clone(), fonts.families[&family].clone());
+            ctx.set_fonts(fonts);
+            let mut chart = test_frames::chart(&[100.0], &[110.0]);
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let options = ImageExportOptions {
+                size: [480, 320],
+                include_title: false,
+                include_timestamp: false,
+                include_watermark: false,
+                ..Default::default()
+            };
+            chart.config_mut().axis_font_family = family.clone();
+            let json = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+            }
+            .to_json()
+            .unwrap();
+            let saved = SavedLayout::from_json(&json).unwrap();
+            chart.config_mut().axis_font_family = FontFamily::Proportional;
+            chart.restore(&saved.charts[0]).unwrap();
+            assert_eq!(chart.config().axis_font_family, family);
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+
+            chart.config_mut().axis_font_family = control;
+            let text_count = chart
+                .export_svg(&ctx, &options)
+                .unwrap()
+                .matches("<text ")
+                .count();
+            assert!(text_count > 0);
+            chart.config_mut().axis_font_family = family;
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            resvg::usvg::Tree::from_str(&svg, &Default::default()).unwrap();
+            assert!(svg.contains(&format!("font-family=\"'{escaped}', sans-serif\"")));
+            assert_eq!(svg.matches("<text ").count(), text_count);
+        }
     }
 
     #[test]

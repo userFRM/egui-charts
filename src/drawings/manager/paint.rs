@@ -150,6 +150,7 @@ impl DrawingManager {
                         .pane_clips
                         .get(&d.pane)
                         .is_some_and(|rect| rect.contains(point))
+                    || self.reaches_pane_at(d, point)
             })
             .find(|drawing| {
                 if let Some(id) = &drawing.custom_tool {
@@ -161,7 +162,9 @@ impl DrawingManager {
                 let paint = painted
                     .iter()
                     .find(|p| p.id == drawing.id && p.points == drawing.points);
-                if paint.is_some_and(|p| !p.shapes.iter().any(|s| s.clip_rect.contains(point))) {
+                if paint.is_some_and(|p| !p.shapes.iter().any(|s| s.clip_rect.contains(point)))
+                    && !self.reaches_pane_at(drawing, point)
+                {
                     return false;
                 }
                 paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
@@ -171,6 +174,12 @@ impl DrawingManager {
                             .is_some())
             })
             .map(|d| d.id)
+    }
+
+    /// Whether `drawing` runs through some pane at `point`. Its paint belongs to its own pane, so
+    /// another pane's line is hit on its outline.
+    fn reaches_pane_at(&self, drawing: &Drawing, point: Pos2) -> bool {
+        drawing.reaches_other_panes() && self.pane_clips.values().any(|rect| rect.contains(point))
     }
 
     /// Position and layout of the first upright text shape painting exactly `text` for `id`.
@@ -308,6 +317,11 @@ impl DrawingManager {
                     shapes,
                     tessellated,
                 });
+            } else if !self.owns_pane(drawing)
+                && drawing.reaches_other_panes()
+                && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            {
+                drawing.render_line_from_other_pane(painter, price_rect);
             }
         }
 
@@ -360,9 +374,10 @@ pub(crate) enum DrawingAxisTag {
 
 impl DrawingManager {
     /// The axis tags of visible drawings of the pane last handled, in drawing order: enabled
-    /// price and time labels of horizontal, vertical and cross lines reaching `plot`, and
-    /// position levels, whose entry takes `entry_color`. Call after the pane handles input so
-    /// tags follow a drag in the same frame. Line tags use opaque RGB so their text stays legible.
+    /// price and time labels of horizontal, vertical and cross lines reaching `plot`, position
+    /// levels, whose entry takes `entry_color`, and the time of a vertical line reaching that pane
+    /// from another. Call after the pane handles input so tags follow a drag in the same frame.
+    /// Line tags use opaque RGB so their text stays legible.
     pub(crate) fn axis_tags(
         &self,
         plot: Rect,
@@ -371,12 +386,18 @@ impl DrawingManager {
         self.drawings
             .iter()
             .filter(|drawing| {
-                self.owns_pane(drawing) && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                (self.owns_pane(drawing) || drawing.reaches_other_panes())
+                    && drawing.is_visible_on_timeframe(&self.curr_timeframe)
             })
             .flat_map(move |drawing| {
                 let (price, time) = Drawing::axis_labels_of(drawing.tool_type);
                 let (price, time) = (
-                    price && drawing.price_axis_label,
+                    price
+                        && drawing.price_axis_label
+                        && !matches!(
+                            drawing.tool_type,
+                            DrawingToolType::LongPos | DrawingToolType::ShortPos
+                        ),
                     time && drawing.time_axis_label,
                 );
                 let [r, g, b, _] = drawing.color;

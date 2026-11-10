@@ -801,6 +801,14 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
+            let theme = ui.active_theme();
+            self.settings.scales_appearance.text_color = theme.chart.axis_text;
+            self.settings.grid_lines.horizontal_color = theme.chart.grid_line;
+            self.settings.grid_lines.vertical_color = theme.chart.grid_line;
+            self.settings.crosshair.color = theme.chart.crosshair_line;
+            self.settings.watermark.color = crate::config::ChartConfig::default()
+                .with_theme(&theme)
+                .watermark_color;
             if matches!(
                 self.settings.chart_type,
                 crate::model::ChartType::Heikin
@@ -830,6 +838,128 @@ impl SettingsDialog {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn reset_colours_match_a_new_chart_under_each_theme() {
+        for (preset, theme) in [
+            ("light", Theme::light()),
+            ("dark", Theme::dark()),
+            ("high contrast", Theme::high_contrast()),
+        ] {
+            for (templates_visible, size) in [
+                (true, Vec2::new(1440.0, 900.0)),
+                (false, Vec2::new(1440.0, 900.0)),
+                (true, Vec2::new(320.0, 450.0)),
+                (false, Vec2::new(320.0, 450.0)),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
+                let expected = ChartSettingsState::from_chart(&chart);
+                let crosshair = chart.chart_options().crosshair.resolved(&ctx);
+                let mut settings = expected.clone();
+                settings.scales_appearance.text_color = Color32::RED;
+                settings.grid_lines.horizontal_color = Color32::GREEN;
+                settings.grid_lines.vertical_color = Color32::BLUE;
+                settings.crosshair.color = Color32::YELLOW;
+                settings.watermark.color = Color32::RED;
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(Control::Templates, templates_visible);
+                dialog.open(settings);
+                let mut frame = |events, label: &str| {
+                    let mut action = SettingsAction::None;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| action = dialog.show(ui.ctx(), &theme),
+                    );
+                    let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    (action, pos)
+                };
+                let mut action = SettingsAction::None;
+                let buttons: &[&str] = if templates_visible {
+                    &["Template", "Reset to defaults", "Ok"]
+                } else {
+                    &["Reset to defaults", "Ok"]
+                };
+                for label in buttons {
+                    frame(vec![], label);
+                    let pos = frame(vec![], label).1.expect(label);
+                    assert!(
+                        Rect::from_min_size(Pos2::ZERO, size).contains(pos),
+                        "{label} at {size:?}"
+                    );
+                    frame(vec![egui::Event::PointerMoved(pos)], label);
+                    for pressed in [true, false] {
+                        action = frame(
+                            vec![egui::Event::PointerButton {
+                                pos,
+                                pressed,
+                                button: egui::PointerButton::Primary,
+                                modifiers: Default::default(),
+                            }],
+                            label,
+                        )
+                        .0;
+                    }
+                }
+                let SettingsAction::Apply(settings) = action else {
+                    panic!("Ok must apply the reset settings");
+                };
+                assert!(!dialog.is_open);
+                settings.apply_to_chart(&mut chart).unwrap();
+                let actual = ChartSettingsState::from_chart(&chart);
+                let mismatches: Vec<_> = [
+                    (
+                        "axis text",
+                        actual.scales_appearance.text_color,
+                        expected.scales_appearance.text_color,
+                    ),
+                    (
+                        "horizontal grid",
+                        actual.grid_lines.horizontal_color,
+                        expected.grid_lines.horizontal_color,
+                    ),
+                    (
+                        "vertical grid",
+                        actual.grid_lines.vertical_color,
+                        expected.grid_lines.vertical_color,
+                    ),
+                    (
+                        "horizontal crosshair",
+                        chart.chart_options().crosshair.horz_line_color,
+                        crosshair.horz_line_color,
+                    ),
+                    (
+                        "vertical crosshair",
+                        chart.chart_options().crosshair.vert_line_color,
+                        crosshair.vert_line_color,
+                    ),
+                    (
+                        "watermark",
+                        actual.watermark.color,
+                        expected.watermark.color,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(_, actual, expected)| actual != expected)
+                .collect();
+                assert!(
+                    mismatches.is_empty(),
+                    "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn enabled_sound_controls_offer_a_preview_without_applying_settings() {

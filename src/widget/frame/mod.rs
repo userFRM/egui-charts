@@ -209,6 +209,7 @@ impl Chart {
     ) -> Response {
         self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
+        self.host_events.touch_position = None;
         self.host_events.target = None;
         self.host_events.primitive_hit = None;
         self.cover_annotation_hit();
@@ -642,8 +643,9 @@ impl Chart {
         let show_price_button =
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
-        let axis_interaction = cfg!(feature = "icons")
+        let price_button_interaction = cfg!(feature = "icons")
             && (show_right_axis || show_left_axis)
+            && show_price_button
             && ui.input(|input| {
                 (input.pointer.any_down() || input.pointer.any_released())
                     && input
@@ -651,14 +653,23 @@ impl Chart {
                         .press_origin()
                         .or(input.pointer.hover_pos())
                         .is_some_and(|pos| {
-                            (show_axis_settings && axis_corner.contains(pos))
-                                || (show_price_button
-                                    && self.axis_hover.is_some_and(|(_, tag)| {
-                                        rendering::axes::crosshair_price_button_rect(tag)
-                                            .contains(pos)
-                                    }))
+                            self.axis_hover.is_some_and(|(_, tag)| {
+                                rendering::axes::crosshair_price_button_rect(tag).contains(pos)
+                            })
                         })
             });
+        let axis_interaction = cfg!(feature = "icons")
+            && (show_right_axis || show_left_axis)
+            && (price_button_interaction
+                || (show_axis_settings
+                    && ui.input(|input| {
+                        (input.pointer.any_down() || input.pointer.any_released())
+                            && input
+                                .pointer
+                                .press_origin()
+                                .or(input.pointer.hover_pos())
+                                .is_some_and(|pos| axis_corner.contains(pos))
+                    })));
         let hover_rect = shared_plot.map_or_else(
             || {
                 Rect::from_min_max(
@@ -679,25 +690,39 @@ impl Chart {
             ui,
             shown.id,
             hover_rect,
+            price_button_interaction,
             is_drawing_interaction
                 || eraser_mode
                 || navigation_interaction
                 || realtime_interaction
-                || axis_interaction
+                || (axis_interaction && !price_button_interaction)
                 || self.menu_open
                 || egui::Popup::is_any_open(ui.ctx())
                 || self.state.data().is_empty(),
         );
         let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
+        if touch_readout.touch_input
+            && self.chart_options.tooltip.enabled
+            && self.chart_options.tooltip.on_long_press
+        {
+            self.host_events.touch_position = Some(None);
+        }
+        let mut readout_flags = egui::response::Flags::empty();
         if self.chart_options.tooltip.on_long_press
             && self.chart_options.tooltip.enabled
             && touch_readout.touch_input
             && !is_drawing_interaction
             && !eraser_mode
         {
-            // The readout owns a touch hold, including when its delay differs from egui's.
-            response.flags.remove(egui::response::Flags::LONG_TOUCHED);
-            shown.flags.remove(egui::response::Flags::LONG_TOUCHED);
+            // A contact that activated the readout owns its release as well as its moves.
+            readout_flags |= egui::response::Flags::LONG_TOUCHED;
+            if touch_readout.owns_gesture {
+                readout_flags |= egui::response::Flags::CLICKED
+                    | egui::response::Flags::DRAGGED
+                    | egui::response::Flags::DRAG_STARTED;
+            }
+            response.flags.remove(readout_flags);
+            shown.flags.remove(readout_flags);
         }
         if navigation_interaction || realtime_interaction || axis_interaction {
             response = ui.interact(
@@ -711,6 +736,7 @@ impl Chart {
         // The visible pane drives time navigation even while the price pane has no height.
         let mut time_response =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
+        time_response.flags.remove(readout_flags);
         // Handle tracking mode
         self.handle_tracking_mode(ui, &time_response);
 
@@ -998,24 +1024,24 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
-        let fixed_footprint = self
-            .feed_link
-            .as_ref()
-            .and_then(|link| link.footprint.as_ref())
-            .filter(|_| {
-                self.main_series_visible
-                    && footprint.is_none()
-                    && self.replay.is_none()
-                    && self.chart_type == ChartType::VolumeFootprint
-                    && self.chart_type_params.footprint_row_ticks > 0
-            });
+        // Automatic grouping sizes rows by zoom, so only fixed rows fit their edges.
+        let fixed_footprint = match footprint {
+            Some((flow, config)) => config
+                .auto_row_height
+                .is_none()
+                .then_some((flow, config.row_ticks)),
+            None => self
+                .feed_link
+                .as_ref()
+                .and_then(|link| link.footprint.as_ref())
+                .filter(|_| self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint)
+                .map(|flow| (flow, self.chart_type_params.footprint_row_ticks)),
+        }
+        .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
         let footprint_prices = fixed_footprint
             .into_iter()
-            .flat_map(|flow| {
-                let group = crate::chart::overlays::fixed_row_group(
-                    flow,
-                    self.chart_type_params.footprint_row_ticks,
-                );
+            .flat_map(|(flow, row_ticks)| {
+                let group = crate::chart::overlays::fixed_row_group(flow, row_ticks);
                 let step = flow.price_step() * group as f64;
                 self.state.shown()[start_idx..end_idx]
                     .iter()
@@ -1069,11 +1095,11 @@ impl Chart {
                 && !self.config.scale_price_chart_only
                 && study.scale() == crate::studies::StudyScale::Main
                 && !self.is_custom_data(self.study_ids[*idx])
-            {
-                let range = super::IndicatorPane::with_config(
+                && let Some(range) = super::IndicatorPane::with_config(
                     super::IndicatorPaneConfig::from_study(study.as_ref()),
                 )
-                .calculate_y_range(study.as_ref(), &(start_idx..end_idx));
+                .value_range(study.as_ref(), &(start_idx..end_idx))
+            {
                 primitive_prices.extend([range.0, range.1]);
             }
         }
@@ -1785,26 +1811,6 @@ impl Chart {
                 )
             }
         });
-        let renderer_hit = pointer.and_then(|pos| {
-            if grouped_primitives {
-                primitives::primitive_at(
-                    self.main_pass_primitives(&coords)
-                        .filter(|(item, _)| item.replaces),
-                    pos,
-                )
-            } else {
-                order.iter().rev().fold(None, |best, id| {
-                    primitives::best_hit(
-                        best,
-                        primitives::primitive_at(
-                            self.main_primitives(&coords)
-                                .filter(|(item, _)| item.replaces && item.series == *id),
-                            pos,
-                        ),
-                    )
-                })
-            }
-        });
         let rendered: Vec<_> = self
             .study_ids
             .iter()
@@ -1836,17 +1842,7 @@ impl Chart {
                 )
             })
         });
-        let element_at = |pos: Pos2| {
-            let renderer = renderer_hit
-                .as_ref()
-                .filter(|_| Some(pos) == pointer)
-                .and_then(|hit| {
-                    if let super::PointerTarget::Element(id) = hit.target {
-                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
-                    } else {
-                        None
-                    }
-                });
+        let builtin_at = |pos: Pos2| {
             let hit = hit_test_main_chart(
                 pos,
                 studies,
@@ -1869,19 +1865,54 @@ impl Chart {
                 .iter()
                 .flatten()
                 .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
-            if grouped_primitives && renderer.is_some() {
-                return renderer;
+            hit.into_iter().chain(secondary).max_by_key(|(element, _)| {
+                let id = match element {
+                    super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id) => id,
+                };
+                order.iter().position(|member| member == id)
+            })
+        };
+        let renderer_hit = pointer.and_then(|pos| {
+            if grouped_primitives {
+                primitives::primitive_at(
+                    self.main_pass_primitives(&coords)
+                        .filter(|(item, _)| item.replaces),
+                    pos,
+                )
+            } else {
+                let builtin = builtin_at(pos).and_then(|(element, _)| {
+                    let (super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id)) =
+                        element;
+                    order.iter().position(|member| *member == id)
+                });
+                order
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(at, _)| builtin.is_none_or(|builtin| *at > builtin))
+                    .fold(None, |best, (_, id)| {
+                        primitives::best_hit(
+                            best,
+                            primitives::primitive_at(
+                                self.main_pass_primitives(&coords)
+                                    .filter(|(item, _)| item.replaces && item.series == *id),
+                                pos,
+                            ),
+                        )
+                    })
             }
-            hit.into_iter()
-                .chain(secondary)
-                .chain(renderer)
-                .max_by_key(|(element, _)| {
-                    let id = match element {
-                        super::ChartElementId::Indicator(id)
-                        | super::ChartElementId::Series(id) => id,
-                    };
-                    order.iter().position(|member| member == id)
+        });
+        let element_at = |pos: Pos2| {
+            renderer_hit
+                .as_ref()
+                .filter(|_| Some(pos) == pointer)
+                .and_then(|hit| match hit.target {
+                    super::PointerTarget::Element(id) => {
+                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
+                    }
+                    _ => None,
                 })
+                .or_else(|| builtin_at(pos))
         };
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
@@ -2553,16 +2584,19 @@ impl Chart {
                     .as_ref()
                     .filter(|_| show_price_axis && self.config.show_extended_session_price)
                     .map(|quote| (quote, self.config.extended_session_price_color)),
-                (show_volume && show_price_axis && !cfg!(feature = "studies")).then_some((
-                    original_last.unwrap_or(last).volume,
-                    // The tag takes the colour of the bar's direction in the applied theme, as
-                    // its volume bar does.
-                    if original_last.unwrap_or(last).is_bullish() {
-                        ui.active_theme().chart.candle_up
-                    } else {
-                        ui.active_theme().chart.candle_down
-                    },
-                )),
+                (show_volume && show_price_axis && !cfg!(feature = "studies")).then_some({
+                    let tagged = original_last.unwrap_or(last);
+                    (
+                        tagged.volume,
+                        // The tag takes the colour of the bar's direction in the applied theme,
+                        // as its volume bar does.
+                        if tagged.close >= tagged.open {
+                            ui.active_theme().chart.candle_up
+                        } else {
+                            ui.active_theme().chart.candle_down
+                        },
+                    )
+                }),
                 axis_edge,
                 countdown.as_deref(),
                 self.instrument()
@@ -3097,8 +3131,16 @@ impl Chart {
                         hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
                     })
                 })
+        };
+        if touch_readout.touch_input
+            && self.chart_options.tooltip.enabled
+            && self.chart_options.tooltip.on_long_press
+        {
+            self.host_events.touch_position = Some(hover_pos);
         }
-        .and_then(|pos| self.crosshair_position(pos, &coords));
+        let hover_pos = hover_pos.and_then(|pos| self.crosshair_position(pos, &coords));
+        let crosshair_point = hover_pos.and_then(|pos| self.pointer_time(pos));
+        let crosshair_time = crosshair_point.and_then(|(time, _)| time);
         let mut study_action = None;
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
@@ -3129,7 +3171,8 @@ impl Chart {
                         background: *background,
                     })
                     .collect();
-                legend.formatters = self.value_formatters();
+                let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
+                legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.instrument = self.instrument();
                 legend.badge = self.legend_badge.clone();
@@ -3331,9 +3374,9 @@ impl Chart {
         }
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
-            self.last_hover_bar_idx = coords
-                .local_idx_at_x(hover_pos.x, visible_data.len())
-                .map(|local| (start_idx + local) as f64);
+            self.last_hover_bar_idx = crosshair_point
+                .filter(|(time, _)| time.is_some())
+                .map(|(_, index)| index);
 
             if !menu_open {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
@@ -3356,7 +3399,8 @@ impl Chart {
                 }
                 let index = coords
                     .local_idx_at_x(hover_pos.x, visible_data.len())
-                    .map(|local| start_idx + local);
+                    .map(|local| start_idx + local)
+                    .filter(|index| Some(self.state.shown()[*index].time) == crosshair_time);
                 let snapped = if price_rect.contains(hover_pos) {
                     index.map_or(hover_pos, |index| {
                         self.snap_crosshair(hover_pos, &price_map, index)
@@ -3364,12 +3408,9 @@ impl Chart {
                 } else {
                     hover_pos
                 };
-                self.last_crosshair = index.map(|index| {
+                self.last_crosshair = crosshair_time.map(|time| {
                     let main = price_rect.contains(hover_pos) && !volume_rect.contains(hover_pos);
-                    (
-                        self.state.shown()[index].time,
-                        main.then(|| price_map.y_to_price(snapped.y)),
-                    )
+                    (time, main.then(|| price_map.y_to_price(snapped.y)))
                 });
                 self.last_crosshair_series = None;
                 crosshair_options.mode = crate::config::CrosshairMode::Normal;
@@ -3381,12 +3422,11 @@ impl Chart {
                         main_options.style = crate::config::CrosshairStyle::Arrow;
                     }
                 }
-                crosshair_tags = rendering::render_crosshair_with_options(
+                crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
-                    visible_data,
+                    crosshair_time,
                     &price_map,
-                    &coords,
                     &main_options,
                     time_axis_top,
                     axis_edge,
@@ -3471,6 +3511,7 @@ impl Chart {
                     && !eraser_mode
                     && !drawing_interaction_active
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
+                    && Some(visible_data[local_idx].time) == crosshair_time
                     && !visible_data[local_idx].is_whitespace()
                 {
                     let candle = &visible_data[local_idx];
@@ -3541,7 +3582,10 @@ impl Chart {
                             .map(|(_, row)| row)
                             .collect::<Vec<_>>(),
                         self.instrument().or(heading.as_ref()),
-                        self.value_formatters(),
+                        self.value_formatters(
+                            self.series_price_formatter(super::SeriesId::MAIN)
+                                .as_deref(),
+                        ),
                     );
                 }
             }
@@ -3556,10 +3600,6 @@ impl Chart {
             {
                 if !menu_open
                     && let Some(bar_idx) = self.synced_crosshair_bar_idx.and_then(|index| {
-                        let options = &self.chart_options.time_scale;
-                        if !options.ignore_whitespace_indices && !options.ignore_hidden_indices {
-                            return Some(index);
-                        }
                         self.crosshair_position(
                             Pos2::new(coords.index_to_x(index), price_rect.center().y),
                             &coords,
@@ -3568,7 +3608,7 @@ impl Chart {
                     })
                 {
                     // Convert bar index to screen x coordinate
-                    let x = coords.idx_to_x(bar_idx.round() as usize);
+                    let x = coords.index_to_x(bar_idx);
                     if coords.is_x_visible(x) {
                         // At the host's price, or a synthetic position at the centre of the
                         // price range for a time alone
@@ -3595,10 +3635,31 @@ impl Chart {
                             }
                             None => price_rect.center().y,
                         };
-                        if let Some(bar) = self.state.shown().get(bar_idx.round() as usize) {
-                            self.last_crosshair = Some((bar.time, self.synced_crosshair_price));
-                            self.last_crosshair_series = target;
-                        }
+                        let time = self
+                            .pointer_time(Pos2::new(x, y))
+                            .and_then(|(time, _)| time);
+                        let y = if self.synced_crosshair_price.is_none() && options.mode.snaps() {
+                            self.state
+                                .shown()
+                                .get(bar_idx.round() as usize)
+                                .filter(|bar| Some(bar.time) == time && !bar.is_whitespace())
+                                .and_then(|bar| {
+                                    let prices = [bar.open, bar.high, bar.low, bar.close];
+                                    let values = if options.mode
+                                        == crate::config::CrosshairMode::MagnetClose
+                                    {
+                                        &prices[3..]
+                                    } else {
+                                        &prices[..]
+                                    };
+                                    rendering::snap_to_values(y, &map, values.iter().copied())
+                                })
+                                .map_or(y, |price| map.price_to_y(price))
+                        } else {
+                            y
+                        };
+                        self.last_crosshair = time.map(|time| (time, self.synced_crosshair_price));
+                        self.last_crosshair_series = target;
                         let target_axis = target.and_then(|id| {
                             let key = self.series_scale(id)?;
                             if key == self.main_series_scale {
@@ -3617,12 +3678,11 @@ impl Chart {
                         if target.is_some() && target_axis.is_none() {
                             main_options.horz_label_visible = false;
                         }
-                        crosshair_tags = rendering::render_crosshair_with_options(
+                        crosshair_tags = rendering::render_crosshair_at_time(
                             &price_ctx,
                             Pos2::new(x, y),
-                            visible_data,
+                            time,
                             &map,
-                            &coords,
                             &main_options,
                             time_axis_top,
                             target_axis.unwrap_or(axis_edge),
@@ -3647,7 +3707,9 @@ impl Chart {
                 show_price_button && price_rect.contains(*pos) && !volume_rect.contains(*pos)
             }) {
                 let price = if self.chart_options.crosshair.mode.snaps()
-                    && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
+                    && let Some(index) = coords
+                        .local_idx_at_x(pos.x, visible_data.len())
+                        .filter(|index| Some(visible_data[*index].time) == crosshair_time)
                 {
                     price_map.y_to_price(self.snap_crosshair(pos, &price_map, start_idx + index).y)
                 } else {
@@ -3685,11 +3747,15 @@ impl Chart {
                     price_formatter.as_deref(),
                 )
             });
-        self.measured_axis_width = rendering::axes::price_axis_width(
+        self.measured_axis_width = rendering::axes::price_axis_width_with_edges(
             &painter,
             &price_map,
             &current_price.as_deref().into_iter().collect::<Vec<_>>(),
             price_formatter.as_deref(),
+            self.config
+                .price_axis
+                .edge_ticks_visible
+                .then_some(price_rect),
         );
         if cfg!(feature = "icons")
             && show_left_axis

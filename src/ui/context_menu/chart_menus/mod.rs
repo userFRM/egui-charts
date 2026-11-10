@@ -383,7 +383,11 @@ impl ChartMenus {
                 if let Some(ChartContextAction::Drawing(action)) = &picked
                     && let RightClickTarget::Drawing { drawing_id, .. } = context.target
                 {
-                    action.apply_interval_visibility(chart, drawing_id);
+                    if *action == crate::ui::dialogs::DrawingContextMenuAction::ReversePosition {
+                        let _ = chart.reverse_position_drawing(drawing_id);
+                    } else {
+                        action.apply_interval_visibility(chart, drawing_id);
+                    }
                 }
                 if let Some(ChartContextAction::Study { id, action }) = &picked {
                     chart.user_action(|chart| study_context_menu::apply(chart, *id, action));
