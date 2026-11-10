@@ -883,9 +883,8 @@ impl Chart {
                 && clock.bar_open(new.time) == clock.bar_open(old.time)
         });
         let options = &self.chart_options.time_scale;
-        let shift_for_whitespace = whitespace_replaced
-            && !appended
-            && options.allow_shift_visible_range_on_whitespace_replacement;
+        let shift_for_whitespace =
+            whitespace_replaced && options.allow_shift_visible_range_on_whitespace_replacement;
         let follow = options.shift_visible_range_on_new_bar
             && before.near_live
             && (appended || shift_for_whitespace);

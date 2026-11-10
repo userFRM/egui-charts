@@ -439,12 +439,12 @@ fn bar_updates_obey_live_edge_policies() {
     }
 }
 
-/// Removing a whitespace tail keeps the offset and pending start, while filling its slot
-/// still follows when both shift options are enabled near the live edge.
+/// Removing a whitespace tail through either data API or replay keeps the offset and pending
+/// start, even when both shift options are enabled near the live edge.
 #[test]
 fn removed_whitespace_tail_keeps_the_view() {
     let mut got = Vec::new();
-    for operation in ["pop_bars", "set_data", "fill"] {
+    for operation in ["pop_bars", "set_data", "replay"] {
         let options = crate::config::ChartOptions {
             time_scale: crate::config::TimeScaleOptions {
                 right_offset: 20.0,
@@ -467,7 +467,7 @@ fn removed_whitespace_tail_keeps_the_view() {
                 bars.pop();
                 chart.set_data(SeriesId::MAIN, bars);
             }
-            "fill" => chart.update(SeriesId::MAIN, bar(99 * 60, 11.0)),
+            "replay" => chart.set_replay_time(Some(bars[99].time)),
             _ => unreachable!(),
         }
         got.push((
@@ -481,7 +481,7 @@ fn removed_whitespace_tail_keeps_the_view() {
         [
             ("pop_bars", 19.0, Some(40)),
             ("set_data", 19.0, Some(40)),
-            ("fill", 20.0, None),
+            ("replay", 19.0, Some(40)),
         ]
     );
 }
