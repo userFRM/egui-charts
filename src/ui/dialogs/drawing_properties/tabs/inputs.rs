@@ -1395,6 +1395,12 @@ mod tests {
                     for label in ["Label position", "Label height"] {
                         h.get_by_role_and_label(Role::ComboBox, label);
                     }
+                    if tool == Tool::FibonacciRetracement {
+                        h.get_by_role_and_label(Role::CheckBox, "Show level text");
+                        for label in ["Text position", "Text height"] {
+                            h.get_by_role_and_label(Role::ComboBox, label);
+                        }
+                    }
                 }
                 h.state_mut().1.active_tab = PropertiesTab::Style;
                 h.run();
