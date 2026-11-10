@@ -25,6 +25,19 @@ pub fn render_alert_levels<'a>(
     format: impl Fn(f64) -> String,
 ) -> Option<Alert> {
     let mut changed = None;
+    // The drag was cancelled before widgets could consume Escape, even with a release this frame.
+    let escape = ui.input(|input| {
+        input.raw.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                }
+            )
+        })
+    });
     let painter = ui.painter().with_clip_rect(mapping.rect);
     let now = Utc::now();
     for alert in alerts
@@ -162,7 +175,7 @@ pub fn render_alert_levels<'a>(
                 }
                 if response.drag_stopped() {
                     ui.ctx().data_mut(|data| data.remove::<f64>(key));
-                    if !response.drag_stopped_by(egui::PointerButton::Primary) {
+                    if escape || !response.drag_stopped_by(egui::PointerButton::Primary) {
                         value = level;
                     } else if value.is_finite() && value != level {
                         let mut updated = alert.clone();
@@ -502,7 +515,12 @@ mod tests {
                 false,
             ),
         );
-        for touch in [false, true] {
+        for (touch, release_with_escape, consumed) in [
+            (false, false, false),
+            (false, true, false),
+            (false, true, true),
+            (true, false, false),
+        ] {
             for x in [408.0, 100.0] {
                 let ctx = egui::Context::default();
                 let mut alert = Alert::new("SYM", AlertCondition::Above(100.0));
@@ -531,7 +549,7 @@ mod tests {
                     moved.push(contact(end, egui::TouchPhase::Move));
                     released.push(contact(end, egui::TouchPhase::End));
                 }
-                let cancel = if touch {
+                let mut cancel = if touch {
                     vec![]
                 } else {
                     vec![egui::Event::Key {
@@ -542,6 +560,9 @@ mod tests {
                         modifiers: Default::default(),
                     }]
                 };
+                if release_with_escape {
+                    cancel.push(button(end, false));
+                }
                 let steps = [
                     (0.0, vec![egui::Event::PointerMoved(start)]),
                     (0.05, pressed),
@@ -563,6 +584,11 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
+                            if consumed {
+                                ui.input_mut(|input| {
+                                    input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                                });
+                            }
                             changed = render_alert_levels(
                                 ui,
                                 &mapping,
@@ -578,7 +604,7 @@ mod tests {
                     output.drop_without_applying_deltas();
                     assert!(
                         changed.is_none(),
-                        "cancelled drag must not save, touch={touch}, step={step}"
+                        "cancelled drag must not save, touch={touch}, release={release_with_escape}, consumed={consumed}, step={step}"
                     );
                     if step >= 3 {
                         // y = 20 + (110 - price) * 200 / 20: 100 -> 120 and 105 -> 70.
