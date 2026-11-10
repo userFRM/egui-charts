@@ -70,8 +70,8 @@ pub(crate) fn paint_price_lines(
             .unwrap_or(style.color);
         paint(value, color);
     }
-    for (index, (value, color, _)) in study.pane().levels.into_iter().enumerate() {
-        if study.level_price_line(index) {
+    for (index, (value, ..)) in study.pane().levels.into_iter().enumerate() {
+        if let Some(color) = study.level_price_line(index) {
             paint(value, color);
         }
     }

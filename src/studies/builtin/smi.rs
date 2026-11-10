@@ -146,15 +146,15 @@ impl Indicator for StochasticMomentumIndex {
             range: None,
             levels: vec![
                 (40.0, palette::MUTED, "Upper guide"),
-                (0.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
                 (-40.0, palette::MUTED, "Lower guide"),
+                (0.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
             ],
             fill_between_levels: true,
         }
     }
 
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
-        Some([0, 2])
+        Some([0, 1])
     }
 
     fn level_fill_color(&self) -> Color32 {

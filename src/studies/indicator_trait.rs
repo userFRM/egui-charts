@@ -202,10 +202,10 @@ pub trait Indicator: Send {
         1.0
     }
 
-    /// Whether a pane guide also draws a dotted value line. Off by default, independent of
-    /// plot value tags and the guide's stroke. A hidden guide draws neither stroke.
-    fn level_price_line(&self, _index: usize) -> bool {
-        false
+    /// Colour of an enabled dotted value line at a pane guide. Off by default, independent of
+    /// plot value tags and guide visibility. Hidden guides retain their value-line colour.
+    fn level_price_line(&self, _index: usize) -> Option<Color32> {
+        None
     }
 
     /// Pattern and width for a level by its position in the pane's levels. The value is the

@@ -565,25 +565,34 @@ mod tests {
                 .iter()
                 .map(|level| level.0)
                 .collect::<Vec<_>>(),
-            [40.0, 0.0, -40.0]
+            [40.0, -40.0, 0.0]
         );
+        assert_eq!(study.level_fill_indices(), Some([0, 1]));
         let mut dialog = IndicatorSettingsDialog::default();
-        for action in ["Cancel", "Apply"] {
+        for (action, theme, size) in [
+            ("Cancel", Theme::dark(), egui::vec2(360.0, 640.0)),
+            ("Cancel", Theme::light(), egui::vec2(360.0, 640.0)),
+            ("Apply", Theme::light(), egui::vec2(1440.0, 900.0)),
+        ] {
             dialog.open(SeriesId(2), &study, Some(Timeframe::Min1));
             dialog.tab = Tab::Style;
             let mut applied = None;
+            let setup_theme = theme.clone();
             let mut harness = Harness::builder()
-                .with_context_setup(egui_extras::install_image_loaders)
-                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &setup_theme);
+                })
+                .with_size(size)
                 .build_ui(|ui| {
-                    if let Some(edit) = dialog.show(ui.ctx(), &Theme::dark()) {
+                    if let Some(edit) = dialog.show(ui.ctx(), &theme) {
                         applied = Some(edit);
                     }
                 });
             harness.run();
             assert_eq!(harness.query_all_by_label("Latest value line").count(), 5);
             // Main, signal, upper and lower. The middle guide keeps its default.
-            for index in [0, 1, 2, 4] {
+            for index in [0, 1, 2, 3] {
                 harness
                     .query_all_by_label("Latest value line")
                     .nth(index)
@@ -591,6 +600,10 @@ mod tests {
                     .click();
                 harness.run();
             }
+            assert!(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                    .contains_rect(harness.get_by_label(action).rect())
+            );
             harness.get_by_label(action).click();
             harness.run();
             drop(harness);
@@ -606,7 +619,7 @@ mod tests {
         let edited = study.settings();
         let json = serde_json::to_value(&edited).unwrap();
         assert_eq!(json["price_line_plots"], serde_json::json!([0, 1]));
-        for (index, enabled) in [(0, true), (1, false), (2, true)] {
+        for (index, enabled) in [(0, true), (1, true), (2, false)] {
             assert_eq!(json["levels"][index]["price_line"], enabled);
             assert_eq!(edited.levels[index].visible, defaults.levels[index].visible);
         }
@@ -661,23 +674,23 @@ mod tests {
             (vec![0], vec![], vec![475.0 / 9.0]),
             (vec![1], vec![], vec![575.0 / 9.0]),
             (vec![], vec![0], vec![40.0]),
-            (vec![], vec![2], vec![-40.0]),
+            (vec![], vec![1], vec![-40.0]),
             (
                 vec![0, 1],
-                vec![0, 2],
+                vec![0, 1],
                 vec![475.0 / 9.0, 575.0 / 9.0, 40.0, -40.0],
             ),
         ] {
-            for inverted in [false, true] {
-                let mut settings = serde_json::to_value(&edited).unwrap();
-                settings["price_line_plots"] = serde_json::json!(plots);
-                settings["untagged_plots"] = serde_json::json!([0, 1]);
-                for index in 0..3 {
-                    settings["levels"][index]["price_line"] = guides.contains(&index).into();
+            for (inverted, visible) in [(false, true), (true, true), (false, false), (true, false)]
+            {
+                let mut settings = edited.clone();
+                settings.price_line_plots = plots.clone();
+                settings.untagged_plots = vec![0, 1];
+                for (index, level) in settings.levels.iter_mut().enumerate() {
+                    level.price_line = guides.contains(&index);
+                    level.visible = visible;
                 }
-                study
-                    .apply_settings(&[], serde_json::from_value(settings).unwrap())
-                    .unwrap();
+                study.apply_settings(&[], settings).unwrap();
                 let price = PriceMap::new(
                     PriceTransform::default(),
                     PriceRange::new(-100.0, 100.0),
@@ -720,7 +733,7 @@ mod tests {
                 assert_eq!(
                     rows.len(),
                     wanted.len(),
-                    "plots={plots:?}, guides={guides:?}"
+                    "plots={plots:?}, guides={guides:?}, visible={visible}"
                 );
                 for (got, want) in rows.iter().zip(wanted) {
                     assert!(
