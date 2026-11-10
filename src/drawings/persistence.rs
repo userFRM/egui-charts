@@ -324,10 +324,10 @@ impl Default for StorageMetadata {
 impl DrawingStorage {
     /// Current storage format version. Version 8 extends a trend line past the anchor its Left or
     /// Right names; those saved before that change load with the reach they were drawn with.
-    /// Version 7 does the same for an info line or trend angle. Version 6 draws arrow marks in
-    /// their own colour; earlier versions load in the colour they were drawn in. Version 5 gives
-    /// Elliott double and triple
-    /// combinations an unlabelled start point; earlier versions load with a start point on their
+    /// Version 7 does the same for rays, extended lines, info lines and trend angles.
+    /// Version 6 draws arrow marks in their own colour; earlier versions load in the colour they
+    /// were drawn in. Version 5 gives Elliott double and triple combinations an unlabelled start
+    /// point; earlier versions load with a start point on their
     /// first anchor.
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
@@ -617,6 +617,23 @@ impl DrawingStorage {
                                     settings.extend_right = false;
                                 }
                                 std::cmp::Ordering::Less => {}
+                            }
+                        }
+                        if (3..7).contains(&version)
+                            && matches!(tool, T::Ray | T::ExtendedLine)
+                            && let [a, b, ..] = drawing.points.as_slice()
+                        {
+                            // Versions 3 to 6 used pane sides for sloping lines and the upper
+                            // anchor for vertical extended lines. Later version 6 records have
+                            // no marker for the changed rule; versions 1 and 2 migrate above.
+                            let (first, second) = ((a.ts_ms, a.subms_ns), (b.ts_ms, b.subms_ns));
+                            let bottom_up = tool == T::ExtendedLine && a.price < b.price;
+                            if first > second || (first == second && bottom_up) {
+                                let settings = &mut drawing.drawing;
+                                std::mem::swap(
+                                    &mut settings.extend_left,
+                                    &mut settings.extend_right,
+                                );
                             }
                         }
                         match (tool, drawing.points.as_slice()) {
@@ -2039,6 +2056,159 @@ mod tests {
             matches!(&error, LoadError::UnsupportedVersion { found: 9, supported } if *supported == (1..=8)),
             "{error}"
         );
+    }
+
+    /// Saves `tool` with `anchors` as (bar, price) and Extend (Left, Right) set to `flags` in
+    /// each shape of record a build wrote, loads it, saves and loads it again, and returns each
+    /// load whose painted segment differs from the one that build painted: `old` in versions 3
+    /// to 6, `new` from version 7. The pane is 0..1000 square; bar b sits at x = 100 + 8b and
+    /// price p at y = 500 - 2p.
+    fn reach_changes(
+        tool: DrawingToolType,
+        anchors: [(f32, f64); 2],
+        flags: (bool, bool),
+        old: [(f32, f32); 2],
+        new: [(f32, f32); 2],
+    ) -> Vec<String> {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 1000.0));
+        let near =
+            |p: egui::Pos2, (x, y): (f32, f32)| (p.x - x).abs() < 1e-2 && (p.y - y).abs() < 1e-2;
+        let mut drawing = Drawing::new(1, tool);
+        drawing.chart_points = anchors
+            .iter()
+            .map(|&(bar, price)| ChartPoint::new(bar, price))
+            .collect();
+        (drawing.extend_left, drawing.extend_right) = flags;
+        drawing.completed = true;
+        let mut storage = DrawingStorage::new("AAPL");
+        storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
+        let current: serde_json::Value = serde_json::from_str(&storage.to_json().unwrap()).unwrap();
+        let mut failures = Vec::new();
+        // Versions 3 to 5 wrote no `line_measurements` (None). Version 6 wrote none, then one
+        // without the price label and text alignment keys (Some(false)), then every key
+        // (Some(true)), as version 7 does.
+        for (version, keys) in [
+            (3, None),
+            (4, None),
+            (5, None),
+            (6, None),
+            (6, Some(false)),
+            (6, Some(true)),
+            (7, Some(true)),
+            (8, Some(true)),
+        ] {
+            let mut saved = current.clone();
+            saved["version"] = version.into();
+            let settings = saved["drawings"][0]["drawing"].as_object_mut().unwrap();
+            match keys {
+                None => {
+                    settings.remove("line_measurements");
+                }
+                Some(false) => {
+                    let measurements = settings["line_measurements"].as_object_mut().unwrap();
+                    for key in [
+                        "price_labels",
+                        "text_horizontal_align",
+                        "text_vertical_align",
+                    ] {
+                        measurements.remove(key);
+                    }
+                }
+                Some(true) => {}
+            }
+            let want = if version < 7 { old } else { new };
+            let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            let (twice, _) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            for (load, loaded) in [(1, &once), (2, &twice)] {
+                let restored = restore(&loaded.drawings[0], 1);
+                let (a, b) = restored.trend_line_ends(rect).unwrap();
+                let painted = (near(a, want[0]) && near(b, want[1]))
+                    || (near(a, want[1]) && near(b, want[0]));
+                if !painted {
+                    failures.push(format!(
+                        "v{version} {keys:?} load {load}: painted {a:?}..{b:?}, want {want:?}"
+                    ));
+                }
+            }
+        }
+        failures
+    }
+
+    /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
+    /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
+    /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
+    /// (180, 300) and (124, 280); the line through them has slope 20 / 56 and meets x = 0 at
+    /// y = 235.714 and x = 1000 at y = 592.857. A ray drawn left to right and a vertical ray,
+    /// which already extended past the anchor each side names, are controls.
+    #[test]
+    fn ray_saved_right_to_left_keeps_its_reach() {
+        const LEFT: (bool, bool) = (true, false);
+        const RIGHT: (bool, bool) = (false, true);
+        let (to_left, to_right) = (
+            [(0.0, 235.714), (180.0, 300.0)],
+            [(124.0, 280.0), (1000.0, 592.857)],
+        );
+        let (up, down) = (
+            [(140.0, 0.0), (140.0, 300.0)],
+            [(140.0, 280.0), (140.0, 1000.0)],
+        );
+        let (reversed, forward) = ([(10.0, 100.0), (3.0, 110.0)], [(3.0, 110.0), (10.0, 100.0)]);
+        let vertical = [(5.0, 100.0), (5.0, 110.0)];
+        let mut failures = Vec::new();
+        for (anchors, flags, old, new) in [
+            (reversed, RIGHT, to_right, to_left),
+            (reversed, LEFT, to_left, to_right),
+            (forward, RIGHT, to_right, to_right),
+            (forward, LEFT, to_left, to_left),
+            (vertical, RIGHT, up, up),
+            (vertical, LEFT, down, down),
+        ] {
+            for failure in reach_changes(DrawingToolType::Ray, anchors, flags, old, new) {
+                failures.push(format!("{anchors:?} {flags:?}, {failure}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Builds that wrote versions 3 to 6 drew a sloping extended line with one side extended by
+    /// the rays' rule above, and a vertical one from its upper anchor: Left ran up past it to
+    /// the top, Right down past the lower anchor to the bottom. Drawn bottom up, from bar 5,
+    /// price 100 at y = 300 to bar 5, price 110 at y = 280, Right painted (140, 280) to
+    /// (140, 1000) and Left (140, 0) to (140, 300), the other way round from the current rule.
+    /// Drawn top down or left to right, or with both sides extended, both rules paint the same.
+    #[test]
+    fn extended_line_saved_right_to_left_or_bottom_up_keeps_its_reach() {
+        const LEFT: (bool, bool) = (true, false);
+        const RIGHT: (bool, bool) = (false, true);
+        let (to_left, to_right, across) = (
+            [(0.0, 235.714), (180.0, 300.0)],
+            [(124.0, 280.0), (1000.0, 592.857)],
+            [(0.0, 235.714), (1000.0, 592.857)],
+        );
+        let (up, down) = (
+            [(140.0, 0.0), (140.0, 300.0)],
+            [(140.0, 280.0), (140.0, 1000.0)],
+        );
+        let (reversed, forward) = ([(10.0, 100.0), (3.0, 110.0)], [(3.0, 110.0), (10.0, 100.0)]);
+        let (bottom_up, top_down) = ([(5.0, 100.0), (5.0, 110.0)], [(5.0, 110.0), (5.0, 100.0)]);
+        let mut failures = Vec::new();
+        for (anchors, flags, old, new) in [
+            (reversed, RIGHT, to_right, to_left),
+            (reversed, LEFT, to_left, to_right),
+            (reversed, (true, true), across, across),
+            (forward, RIGHT, to_right, to_right),
+            (forward, LEFT, to_left, to_left),
+            (bottom_up, RIGHT, down, up),
+            (bottom_up, LEFT, up, down),
+            (top_down, RIGHT, down, down),
+            (top_down, LEFT, up, up),
+        ] {
+            for failure in reach_changes(DrawingToolType::ExtendedLine, anchors, flags, old, new) {
+                failures.push(format!("{anchors:?} {flags:?}, {failure}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]
