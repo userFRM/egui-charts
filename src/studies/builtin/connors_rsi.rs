@@ -11,6 +11,9 @@ use egui::Color32;
 /// 2. Up/Down Streak Length RSI
 /// 3. Percent Rank of Rate of Change
 ///
+/// The pane starts with guides at 70, 50 and 30 and a light blue fill between the outer guides.
+/// Applied study settings edit each guide and the fill independently.
+///
 /// Developed by Larry Connors
 #[derive(Clone)]
 pub struct ConnorsRSI {
@@ -189,6 +192,27 @@ impl Indicator for ConnorsRSI {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 2])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::LIGHT_BLUE.gamma_multiply_u8(26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (70.0, palette::MUTED, "Upper guide"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+                (30.0, palette::MUTED, "Lower guide"),
+            ],
+            fill_between_levels: true,
         }
     }
 

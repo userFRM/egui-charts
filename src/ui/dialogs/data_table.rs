@@ -66,8 +66,7 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
-    /// The columns turned off on each chart. Studies are known by title, so the choices last
-    /// through symbol changes and through a restore, which gives the studies new ids.
+    /// The columns turned off on each chart, identified across study removal and restores.
     hidden: HashMap<u64, BTreeSet<ColumnId>>,
     cached: Option<(Source, DataTable)>,
     column_ids: Vec<ColumnId>,
@@ -196,7 +195,7 @@ impl DataTableDialog {
         let shown: Vec<usize> = (0..table.headers.len())
             .filter(|&column| !hidden.contains(&columns[column]))
             .collect();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.menu_button(l10n::text(ui.ctx(), "Columns"), |ui| {
                 // The time column keys the rows, so it stays.
                 for (header, column) in table.headers.iter().zip(columns).skip(1) {
@@ -630,13 +629,14 @@ mod tests {
         first.add_indicator(Box::new(crate::studies::SMA::new(3)));
         second.add_indicator(Box::new(crate::studies::RSI::new(14)));
         let ctx = Context::default();
+        let size = std::cell::Cell::new(vec2(1440.0, 900.0));
         let mut dialog = DataTableDialog::new();
         dialog.open();
         let frame = |dialog: &mut DataTableDialog, chart: &Chart, events| {
             let mut action = DataTableAction::None;
             let output = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size.get())),
                     events,
                     ..Default::default()
                 },
@@ -710,9 +710,39 @@ mod tests {
         assert!(matches!(action, DataTableAction::Export(csv) if csv.contains("RSI: RSI(14)")));
 
         assert_eq!(headers(&mut dialog, &first), without_sma);
-        first.restore(&first.snapshot().unwrap()).unwrap();
-        assert_eq!(first.data_table().headers.len(), 7);
+        let saved = first.snapshot().unwrap();
+        for _ in 0..2 {
+            first.restore(&saved).unwrap();
+            assert_eq!(first.data_table().headers.len(), 7);
+            assert_eq!(headers(&mut dialog, &first), without_sma);
+        }
+        dialog.close();
+        for _ in 0..2 {
+            first.restore(&first.snapshot().unwrap()).unwrap();
+        }
+        dialog.open();
         assert_eq!(headers(&mut dialog, &first), without_sma);
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            first.set_theme(&ctx, &theme);
+            for dimensions in [vec2(320.0, 450.0), vec2(1440.0, 900.0)] {
+                size.set(dimensions);
+                for _ in 0..3 {
+                    frame(&mut dialog, &first, vec![]);
+                }
+                let rect = ctx.memory(|m| {
+                    let layer = m.areas().top_layer_id(egui::Order::Middle).unwrap();
+                    m.area_rect(layer.id).unwrap()
+                });
+                assert!(
+                    rect.left() >= 23.0 && rect.right() <= dimensions.x - 23.0,
+                    "{rect:?}"
+                );
+                assert!(
+                    rect.top() >= 23.0 && rect.bottom() <= dimensions.y - 23.0,
+                    "{rect:?}"
+                );
+            }
+        }
     }
 
     /// Frames over an unchanged chart reuse its table while an edge bar is whitespace, whose NaN
@@ -838,5 +868,78 @@ mod tests {
         assert!(other.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 50.0)));
         frames(&mut other, 3..6);
         assert_eq!(shown_rows(&ctx, &mut dialog, &other), built);
+    }
+
+    /// A column turned off for one study stays with that study when a study of its title before
+    /// it is removed, and moves to no study of another title that a restored layout adds under
+    /// the id it was made for.
+    #[test]
+    fn column_choice_follows_its_study_after_an_earlier_one_is_removed() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..300)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        // The layout of another chart whose second study, with the id of the SMA(50) below, is
+        // an RSI.
+        let mut other = Chart::new(BarData::from_bars(bars.clone()));
+        other.add_indicator(Box::new(crate::studies::SMA::new(5)));
+        let rsi = other.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        let layout = other.snapshot().unwrap();
+        let cases = [
+            (
+                "the first SMA removed and another added",
+                false,
+                &["SMA: SMA(200)"][..],
+            ),
+            (
+                "the layout of another chart restored",
+                true,
+                &["SMA: SMA(5)", "RSI: RSI(14)"][..],
+            ),
+        ];
+        let ctx = Context::default();
+        let shown = |dialog: &mut DataTableDialog, chart: &Chart| {
+            shown_rows(&ctx, dialog, chart);
+            let headers = &dialog.cached.as_ref().unwrap().1.headers;
+            let hidden = &dialog.hidden[&chart.data_table_identity()];
+            headers
+                .iter()
+                .zip(&dialog.column_ids)
+                .skip(6)
+                .filter(|(_, column)| !hidden.contains(*column))
+                .map(|(header, _)| header.clone())
+                .collect::<Vec<_>>()
+        };
+        for (case, restore, expected) in cases {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            let first = chart.add_indicator(Box::new(crate::studies::SMA::new(10)));
+            let second = chart.add_indicator(Box::new(crate::studies::SMA::new(50)));
+            assert_eq!(
+                second, rsi,
+                "{case}: the layout's RSI has the id of the SMA(50)"
+            );
+            let mut dialog = DataTableDialog::new();
+            dialog.open();
+            assert_eq!(
+                shown(&mut dialog, &chart),
+                ["SMA: SMA(10)", "SMA: SMA(50)"],
+                "{case}"
+            );
+            // Turn off the SMA(50) column, as its box in the Columns menu does.
+            let headers = &dialog.cached.as_ref().unwrap().1.headers;
+            let at = headers.iter().position(|h| h == "SMA: SMA(50)").unwrap();
+            let column = dialog.column_ids[at].clone();
+            let hidden = dialog.hidden.get_mut(&chart.data_table_identity()).unwrap();
+            hidden.insert(column);
+            assert_eq!(shown(&mut dialog, &chart), ["SMA: SMA(10)"], "{case}");
+
+            if restore {
+                chart.restore(&layout).unwrap();
+            } else {
+                chart.remove_series(first);
+                chart.add_indicator(Box::new(crate::studies::SMA::new(200)));
+            }
+            assert_eq!(shown(&mut dialog, &chart), expected, "{case}");
+        }
     }
 }

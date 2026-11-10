@@ -156,6 +156,8 @@ impl Chart {
             drawing_store: None,
             #[cfg(feature = "drawings")]
             restored_studies: Default::default(),
+            #[cfg(feature = "drawings")]
+            study_column_ids: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane::PaneLayout::default(),
             pane_options: Default::default(),
