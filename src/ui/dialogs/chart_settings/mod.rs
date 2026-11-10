@@ -846,7 +846,12 @@ mod tests {
             ("dark", Theme::dark()),
             ("high contrast", Theme::high_contrast()),
         ] {
-            for templates_visible in [true, false] {
+            for (templates_visible, size) in [
+                (true, Vec2::new(1440.0, 900.0)),
+                (false, Vec2::new(1440.0, 900.0)),
+                (true, Vec2::new(320.0, 450.0)),
+                (false, Vec2::new(320.0, 450.0)),
+            ] {
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
@@ -865,10 +870,7 @@ mod tests {
                     let mut action = SettingsAction::None;
                     let output = ctx.run_ui(
                         egui::RawInput {
-                            screen_rect: Some(Rect::from_min_size(
-                                Pos2::ZERO,
-                                Vec2::new(1440.0, 900.0),
-                            )),
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                             events,
                             ..Default::default()
                         },
@@ -892,6 +894,10 @@ mod tests {
                 for label in buttons {
                     frame(vec![], label);
                     let pos = frame(vec![], label).1.expect(label);
+                    assert!(
+                        Rect::from_min_size(Pos2::ZERO, size).contains(pos),
+                        "{label} at {size:?}"
+                    );
                     frame(vec![egui::Event::PointerMoved(pos)], label);
                     for pressed in [true, false] {
                         action = frame(
@@ -949,7 +955,7 @@ mod tests {
                 .collect();
                 assert!(
                     mismatches.is_empty(),
-                    "{preset}, templates visible: {templates_visible}: {mismatches:?}"
+                    "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
                 );
             }
         }
