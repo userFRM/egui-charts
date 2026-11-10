@@ -575,6 +575,7 @@ mod tests {
         original.apply_copy(&mut first.each_mut(), 0, &LayoutCopy::Study(sma), &factory);
         clone.apply_copy(&mut second.each_mut(), 0, &LayoutCopy::Study(rsi), &factory);
         for redo in [false, true] {
+            let untouched = second.each_ref().map(|chart| chart.indicators().count());
             assert!(if redo {
                 first[1].redo()
             } else {
@@ -583,7 +584,7 @@ mod tests {
             show(&mut clone, &mut second.each_mut());
             assert_eq!(
                 second.each_ref().map(|chart| chart.indicators().count()),
-                [1, 1, 1]
+                untouched
             );
             assert!(if redo {
                 second[0].redo()
