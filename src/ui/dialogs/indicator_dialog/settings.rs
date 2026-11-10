@@ -216,7 +216,16 @@ impl IndicatorSettingsDialog {
                 .apply_settings(&pending.inputs, pending.settings.clone())
                 .is_ok()
         {
+            // Inputs can change the number of plots and the declared guide values.
+            pending.settings = study.settings();
+            self.edit.as_mut()?.settings = pending.settings.clone();
             self.line_names = study.line_names();
+            self.levels = study
+                .pane()
+                .levels
+                .into_iter()
+                .map(|(value, _, caption)| (value, caption))
+                .collect();
             self.previewed = Some(pending);
             ctx.request_repaint();
         }
@@ -657,7 +666,11 @@ mod tests {
             edited.plots[0].plot_type = PlotType::StepLine;
             edited.price_line_plots = vec![1];
             let mut dialog = IndicatorSettingsDialog::default();
-            for action in ["Cancel", "Apply"] {
+            for (action, theme, size) in [
+                ("Cancel", Theme::light(), egui::vec2(320.0, 450.0)),
+                ("Cancel", Theme::dark(), egui::vec2(320.0, 450.0)),
+                ("Apply", Theme::dark(), egui::vec2(1440.0, 900.0)),
+            ] {
                 assert!(dialog.open_for_chart(&chart, id));
                 dialog.tab = Tab::Style;
                 dialog.edit.as_mut().unwrap().settings = edited.clone();
@@ -673,13 +686,17 @@ mod tests {
                     }
                 }
                 let mut applied = None;
+                let setup_theme = theme.clone();
                 let mut harness = Harness::builder()
-                    .with_context_setup(egui_extras::install_image_loaders)
-                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .with_size(size)
                     .build_ui(|ui| {
                         chart.show(ui);
                         if let Some(edit) =
-                            dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
                         {
                             applied = Some(edit);
                         }
@@ -698,12 +715,16 @@ mod tests {
                     );
                 }
                 assert!(!chart.undo(), "preview must not enter history");
+                let setup_theme = theme.clone();
                 let mut harness = Harness::builder()
-                    .with_context_setup(egui_extras::install_image_loaders)
-                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .with_size(size)
                     .build_ui(|ui| {
                         if let Some(edit) =
-                            dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
                         {
                             applied = Some(edit);
                         }
@@ -721,6 +742,10 @@ mod tests {
                         "{name}: {caption}"
                     );
                 }
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                        .contains_rect(harness.get_by_label(action).rect())
+                );
                 harness.get_by_label(action).click();
                 harness.run();
                 drop(harness);
@@ -1178,10 +1203,9 @@ mod tests {
         }
     }
 
-    /// The smoothing length and band deviation hide when the chosen type does not use them and
-    /// keep their values, which an edit still carries.
+    /// Previewed smoothing keeps hidden inputs and follows the plots its type adds or removes.
     #[test]
-    fn smoothing_inputs_hide_when_they_do_not_apply() {
+    fn smoothing_preview_keeps_inputs_and_updates_plot_styles() {
         use crate::studies::RSI;
         use egui_kittest::{Harness, kittest::Queryable};
 
@@ -1190,11 +1214,15 @@ mod tests {
             .set_input("smoothing_deviation", InputValue::Number(3.0))
             .unwrap();
         let mut dialog = IndicatorSettingsDialog::default();
-        dialog.open(
-            SeriesId(2),
-            &ConfiguredStudy::new(Box::new(study)),
-            Some(Timeframe::Min1),
-        );
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(study));
+        let before = chart
+            .indicators()
+            .find(|(i, _)| *i == id)
+            .unwrap()
+            .1
+            .snapshot_settings();
+        assert!(dialog.open_for_chart(&chart, id));
         let at = |id| {
             dialog
                 .inputs
@@ -1203,18 +1231,19 @@ mod tests {
                 .unwrap()
         };
         let (smoothing, deviation) = (at("smoothing"), at("smoothing_deviation"));
-        for (choice, length_shown, deviation_shown) in [
-            (0, false, false),
-            (1, true, false),
-            (2, true, true),
-            (6, true, false),
+        for (choice, length_shown, deviation_shown, plots) in [
+            (0, false, false, 1),
+            (1, true, false, 2),
+            (2, true, true, 4),
+            (6, true, false, 2),
+            (2, true, true, 4),
         ] {
             dialog.inputs[smoothing].value = InputValue::Choice(choice);
             let mut harness = Harness::builder()
                 .with_context_setup(egui_extras::install_image_loaders)
                 .with_size(egui::Vec2::new(1440.0, 900.0))
                 .build_ui(|ui| {
-                    dialog.show(ui.ctx(), &Theme::dark());
+                    dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
                 });
             harness.run();
             for (label, shown) in [
@@ -1226,7 +1255,45 @@ mod tests {
             }
             drop(harness);
             assert_eq!(dialog.inputs[deviation].value, InputValue::Number(3.0));
+            let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+            assert_eq!(study.line_count(), plots);
+            assert_eq!(dialog.edit.as_ref().unwrap().settings, study.settings());
+            assert_eq!(dialog.line_names.len(), plots);
         }
+        let mut applied = None;
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui(|ui| {
+                if let Some(edit) =
+                    dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                {
+                    applied = Some(edit);
+                }
+            });
+        harness.run();
+        harness.get_by_label("Apply").click();
+        harness.run();
+        drop(harness);
+        let study = chart.indicator_mut(id).unwrap();
+        assert!(study.snapshot_settings() == before);
+        let edit = applied.unwrap();
+        study.apply_settings(&edit.inputs, edit.settings).unwrap();
+        assert_eq!(study.line_count(), 4);
+
+        let id = chart.add_indicator(Box::new(crate::studies::AdxBreakout::default()));
+        assert!(dialog.open_for_chart(&chart, id));
+        dialog
+            .inputs
+            .iter_mut()
+            .find(|input| input.id == "threshold")
+            .unwrap()
+            .value = InputValue::Length(25);
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(dialog.levels[0].0, 25.0);
     }
 
     #[test]
