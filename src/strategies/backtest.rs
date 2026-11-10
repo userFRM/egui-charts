@@ -474,8 +474,9 @@ struct Working {
     delay: u32,
     /// The stop-limit request this order came from, once its stop has triggered.
     triggered: Option<Kind>,
-    /// Tick where the order starts working after its stop triggered or it waited out an equal
-    /// point. A limit already reached there never traded through its threshold while working.
+    /// Tick where the order starts working after its stop triggered or after it waited, already
+    /// reached, at the point it was placed or its delay ended. A limit already reached there
+    /// never traded through its threshold while working.
     active: Option<u64>,
 }
 
@@ -1187,12 +1188,10 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Trigger price and how the execution is priced. Stop-limit triggers are not executions.
-    fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<(f64, Pricing)> {
-        if order.delay > 0 {
-            return None;
-        }
-        let reached = match order.kind {
+    /// First point an order reaches on the segment and how an execution there is priced, before
+    /// any wait for a later point. Stop-limit triggers are not executions.
+    fn reach(&self, order: &Working, start: f64, end: f64) -> Option<(f64, Pricing)> {
+        match order.kind {
             Kind::RelativeExit(profit, loss, side) => {
                 let quantity = self.position();
                 if quantity * sign(side) <= 0.0 {
@@ -1207,12 +1206,12 @@ impl<'a> Run<'a> {
                         Some(average - sign(side) * loss),
                         exit_side(quantity),
                     ),
-                    deferred: order.deferred,
+                    deferred: None,
                     delay: 0,
                     triggered: None,
-                    active: order.active,
+                    active: None,
                 };
-                return self.fill_price(&exit, start, end);
+                self.reach(&exit, start, end)
             }
             Kind::Entry(side, order_type) => (match order_type {
                 OrderType::Limit(limit) => self.limit_trigger(side, limit, start, end),
@@ -1249,7 +1248,15 @@ impl<'a> Run<'a> {
                     .min_by(|(a, _), (b, _)| (a - start).abs().total_cmp(&(b - start).abs()))
                 }
             }
-        }?;
+        }
+    }
+
+    /// Trigger price and how the execution is priced. Stop-limit triggers are not executions.
+    fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<(f64, Pricing)> {
+        if order.delay > 0 {
+            return None;
+        }
+        let reached = self.reach(order, start, end)?;
         // A limit that first becomes fillable at a point never traded through its threshold.
         let first_fillable = |(price, pricing): (f64, Pricing)| {
             let market = pricing == Pricing::Verified;
@@ -1261,16 +1268,7 @@ impl<'a> Run<'a> {
             if start == end {
                 return None;
             }
-            let next = Working {
-                id: String::new(),
-                quantity: order.quantity,
-                kind: order.kind,
-                deferred: None,
-                delay: 0,
-                triggered: None,
-                active: None,
-            };
-            self.fill_price(&next, end, end).map(first_fillable)
+            self.reach(order, end, end).map(first_fillable)
         } else if order.active == Some(self.tick) && reached.0 == start {
             Some(first_fillable(reached))
         } else {
@@ -1353,6 +1351,25 @@ impl<'a> Run<'a> {
         self.pass_delays();
     }
 
+    /// Move to the next price point of a segment. An order still waiting at the point it leaves,
+    /// and reached there, starts working at the new point whatever executes there: a limit it
+    /// reaches at that point never traded through its threshold.
+    fn next_tick(&mut self, start: f64, end: f64) {
+        let waited = self.tick;
+        self.tick += 1;
+        for index in 0..self.orders.len() {
+            let order = &self.orders[index];
+            if order.delay == 0
+                && order.deferred == Some(waited)
+                && self
+                    .reach(order, start, end)
+                    .is_some_and(|(price, _)| price == start)
+            {
+                self.orders[index].active = Some(self.tick);
+            }
+        }
+    }
+
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
         let mut at_end = !advance;
         loop {
@@ -1376,7 +1393,7 @@ impl<'a> Run<'a> {
                 })
             {
                 if price != start {
-                    self.tick += 1;
+                    self.next_tick(start, end);
                     at_end = price == end;
                 }
                 start = price;
@@ -1403,15 +1420,7 @@ impl<'a> Run<'a> {
             let Some((index, price, pricing)) = next else {
                 if !at_end {
                     // Equal OHLC prices still denote successive points in the bar.
-                    let tick = self.tick;
-                    self.tick += 1;
-                    if start == end {
-                        for order in &mut self.orders {
-                            if order.deferred == Some(tick) {
-                                order.active = Some(self.tick);
-                            }
-                        }
-                    }
+                    self.next_tick(start, end);
                     start = end;
                     at_end = true;
                     continue;
@@ -1419,7 +1428,7 @@ impl<'a> Run<'a> {
                 return;
             };
             if price != start {
-                self.tick += 1;
+                self.next_tick(start, end);
                 at_end = price == end;
             }
             start = price;
@@ -2680,6 +2689,24 @@ mod tests {
                 context.exit("X", None, Some(110.0), None);
             }
         }
+        fn market_then_limit(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("M", Buy, 1.0, OrderType::Market);
+                context.entry("A", Buy, 2.0, OrderType::Limit(100.0));
+            }
+        }
+        fn limit_and_stop(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, 2.0, OrderType::Limit(100.0));
+                context.entry("S", Buy, 1.0, OrderType::Stop(99.75));
+            }
+        }
+        fn two_limits(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("L", Buy, 1.0, OrderType::Limit(100.0));
+                context.entry("A", Buy, 2.0, OrderType::Limit(100.0));
+            }
+        }
         fn short_limits(bar: usize, context: &mut StrategyContext<'_>) {
             if bar == 0 {
                 context.entry("A", Sell, None, OrderType::Limit(100.0));
@@ -3049,6 +3076,67 @@ mod tests {
                 vec![(100.0, 100.0, 100.0, 100.0), (101.0, 104.0, 99.5, 101.0)],
                 vec![trade(Buy, 2.0, 1, 100.0, None, "A")],
                 vec![1000.0, 1000.0, 1002.0],
+                0,
+            ),
+            (
+                "verified_limit_reaching_its_threshold_after_open_fills_there: market first",
+                market_then_limit,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    order_delay: 1,
+                    pyramiding: 2,
+                    ..terms.clone()
+                },
+                // Both delays end at the open of 99, where the limit is already marketable, and
+                // both orders first fill at the high of 99.75, the limit's threshold.
+                vec![(100.0, 100.0, 100.0, 100.0), (99.0, 99.75, 98.0, 98.5)],
+                vec![
+                    trade(Buy, 1.0, 1, 99.75, None, "M"),
+                    trade(Buy, 2.0, 1, 99.75, None, "A"),
+                ],
+                vec![1000.0, 1000.0, 996.25],
+                0,
+            ),
+            (
+                "verified_limit_reaching_its_threshold_after_open_fills_there: stop first",
+                limit_and_stop,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    order_delay: 1,
+                    pyramiding: 2,
+                    ..terms.clone()
+                },
+                // The limit is marketable when its delay ends at the open of 99 and cannot fill
+                // at the high of 100.5; the stop executes at 99.75 on the way up, the limit's
+                // first fillable point, which is its threshold.
+                vec![(100.0, 100.0, 100.0, 100.0), (99.0, 100.5, 97.0, 98.0)],
+                vec![
+                    trade(Buy, 1.0, 1, 99.75, None, "S"),
+                    trade(Buy, 2.0, 1, 99.75, None, "A"),
+                ],
+                vec![1000.0, 1000.0, 994.75],
+                0,
+            ),
+            (
+                "delayed limits crossed together after their delay ends fill at the limit",
+                two_limits,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    order_delay: 1,
+                    pyramiding: 2,
+                    ..terms.clone()
+                },
+                // Both delays end at the open of 101, outside the threshold, and both limits
+                // trade through 99.75 on the way down, where the first one executes.
+                vec![(100.0, 100.0, 100.0, 100.0), (101.0, 104.0, 99.5, 101.0)],
+                vec![
+                    trade(Buy, 1.0, 1, 100.0, None, "L"),
+                    trade(Buy, 2.0, 1, 100.0, None, "A"),
+                ],
+                vec![1000.0, 1000.0, 1003.0],
                 0,
             ),
             (

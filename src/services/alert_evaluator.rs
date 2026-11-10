@@ -11,7 +11,7 @@ use crate::model::{
     Alert, AlertId, AlertInputs, AlertSource, Bar, BarClock, Instrument, Timeframe,
 };
 use crate::studies::{
-    ConfiguredStudy, Indicator, IndicatorFactory, StudyData, StudyDataRequest, StudySource,
+    Indicator, IndicatorFactory, StudyData, StudyDataRequest, StudySource, StudyTemplate,
 };
 
 /// History, subscriptions and independent study state for the alert service. Both interactive
@@ -119,14 +119,17 @@ impl Evaluation {
                 let study = factory
                     .create_registered(&saved.name)
                     .ok_or_else(|| format!("Unknown alert study: {}", saved.name))?;
-                let mut study = ConfiguredStudy::new(study);
-                for (id, value) in &saved.inputs {
-                    study
-                        .set_input(id, value.clone())
-                        .map_err(|error| error.to_string())?;
+                let mut study = StudyTemplate {
+                    name: saved.name.clone(),
+                    inputs: saved.inputs.clone(),
+                    settings: study.settings(),
+                    visible: study.is_visible(),
+                    scale: None,
                 }
+                .create_with(factory)
+                .map_err(|error| error.to_string())?;
                 study.set_timeframe(timeframe);
-                Ok::<_, String>((id, Box::new(study) as Box<dyn Indicator>))
+                Ok::<_, String>((id, study))
             })();
             match restored {
                 Ok(study) => result.studies.push(study),
@@ -478,18 +481,20 @@ impl AlertEvaluator {
                 .iter()
                 .find_map(|(_, reader, _)| reader.instrument()?.exchange.as_deref());
             let value = |timeframe: Timeframe, source: &AlertSource, at: usize| {
-                let (run, reader, from) = contexts
+                let context = contexts
                     .iter()
                     .find(|(run, _, _)| run.timeframe == timeframe)?;
-                let bars = &reader.bars()[*from..];
                 match source {
-                    AlertSource::Study { id, output } => run
+                    AlertSource::Study { id, output } => context
+                        .0
                         .studies
                         .iter()
                         .find(|(key, _)| key.to_string() == *id)
                         .and_then(|(_, study)| study.plot_value(*output, at)),
                     #[cfg(feature = "ui")]
                     AlertSource::Drawing(_) => {
+                        let (run, reader, from) = context;
+                        let bars = &reader.bars()[*from..];
                         let scale = if run.inputs.logarithmic {
                             crate::scales::PriceScaleMode::Logarithmic
                         } else {
@@ -666,6 +671,44 @@ mod tests {
         let count = |timeframe| pages.iter().filter(|tf| **tf == timeframe).count();
         assert_eq!(count(Timeframe::Min5), 2, "the source chart's span");
         assert_eq!(count(Timeframe::Min1), 1, "only the initial bar count");
+    }
+
+    /// An RSI saved with EMA choice 2 under the earlier average ids restores a five-bar EMA,
+    /// now choice 3 of the shared smoothing inputs.
+    #[test]
+    fn rsi_alert_saved_with_earlier_average_ids_evaluates() {
+        use crate::model::InputValue;
+
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min5", "source":{"Study":{"id":"3","output":1}},
+            "condition":{"Above":70.0}
+        }))
+        .unwrap();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![crate::model::AlertStudy {
+                id: 3,
+                name: "RSI".into(),
+                inputs: vec![
+                    ("period".into(), InputValue::Length(14)),
+                    ("ma_type".into(), InputValue::Choice(2)),
+                    ("ma_length".into(), InputValue::Length(5)),
+                ],
+            }],
+            ..Default::default()
+        }));
+        let run = Evaluation::new(&alert, Timeframe::Min5, &IndicatorFactory::new());
+        assert_eq!(run.error, None);
+        let inputs = run.studies[0].1.inputs();
+        let value = |id: &str| {
+            inputs
+                .iter()
+                .find(|input| input.id == id)
+                .map(|input| input.value.clone())
+        };
+        assert_eq!(
+            (value("smoothing"), value("smoothing_length")),
+            (Some(InputValue::Choice(3)), Some(InputValue::Length(5)))
+        );
     }
 
     #[test]
@@ -1104,7 +1147,8 @@ mod tests {
             DateTime::from_timestamp(1000, 0).unwrap(),
         );
         assert!(!engine.alerts()[0].extend_line);
-        assert_eq!(built.load(Ordering::Relaxed), 1);
+        // One construction supplies settings; the template constructs the retained study.
+        assert_eq!(built.load(Ordering::Relaxed), 2);
     }
 
     #[test]

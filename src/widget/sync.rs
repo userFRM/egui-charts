@@ -6,6 +6,8 @@ use chrono::{DateTime, Utc};
 // Keep a short received span readable even when manual zoom has no configured maximum.
 const SYNC_MAX_BAR_SPACING: f64 = 50.0;
 
+pub(super) type CrosshairPeriod = (DateTime<Utc>, DateTime<Utc>);
+
 /// UTC timestamps at the left and right edges of a chart's plot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisibleTimeRange {
@@ -16,16 +18,19 @@ pub struct VisibleTimeRange {
 }
 
 impl Chart {
-    /// The time of the nearest hovered bar or price-based element, or `None` outside the data.
+    /// The time of the nearest eligible hovered point, or `None` outside the data.
     pub fn hover_time(&self) -> Option<DateTime<Utc>> {
         self.hover_period().map(|(open, _)| open)
     }
 
-    /// The hovered bar's period, from its open until the next bar of its interval opens.
+    /// The hovered bar's period, or an independently keyed point's exact timestamp as both bounds.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let index = self.last_hover_bar_idx?.round();
-        (index >= 0.0 && index < self.state.shown().len() as f64)
-            .then(|| self.bar_period(index as usize))
+        let index = self.last_hover_bar_idx?;
+        if index.fract() != 0.0 || index < 0.0 || index >= self.state.shown().len() as f64 {
+            let time = self.last_crosshair?.0;
+            return Some((time, time));
+        }
+        Some(self.bar_period(index as usize))
     }
 
     // Until the next bar opens if that comes sooner, as after a repeated element time.
@@ -55,8 +60,14 @@ impl Chart {
     /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
     /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
     /// against its own series, including after bars are evicted or older history is loaded.
+    /// An exact added or custom point between main bars keeps its fractional position.
+    /// Inside a [`super::ChartLayout`] the position stays until it is cleared or replaced, and
+    /// returns after a linked pointer leaves.
     pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
         self.set_synced_crosshair(time.map(|time| (time, time)), None);
+        self.host_crosshair = self
+            .synced_crosshair_period
+            .map(|period| (period, None, None));
     }
 
     /// Shows a crosshair at the local bar for `time`, as [`Self::set_synced_crosshair_time`]
@@ -69,6 +80,9 @@ impl Chart {
             position.map(|(time, _)| (time, time)),
             position.map(|(_, price)| price),
         );
+        self.host_crosshair = self
+            .synced_crosshair_period
+            .map(|period| (period, self.synced_crosshair_price, None));
         if self.synced_crosshair_bar_idx.is_none() && self.last_hover_bar_idx.is_none() {
             self.last_crosshair = None;
         }
@@ -92,6 +106,19 @@ impl Chart {
     ) {
         self.set_crosshair_position(position.filter(|_| self.series_scale(series).is_some()));
         self.synced_crosshair_series = self.synced_crosshair_bar_idx.map(|_| series);
+        self.host_crosshair = self
+            .host_crosshair
+            .map(|(period, price, _)| (period, price, self.synced_crosshair_series));
+    }
+
+    /// Restores the host's request after a linked pointer leaves, resolving its time again.
+    pub(crate) fn restore_host_crosshair(&mut self) {
+        let (period, price, series) = self
+            .host_crosshair
+            .map_or((None, None, None), |(period, price, series)| {
+                (Some(period), price, series)
+            });
+        self.set_synced_crosshair_for_series(series, period, price);
     }
 
     /// As [`Self::set_crosshair_position`] for a source bar's `period`: when no local bar's
@@ -125,6 +152,18 @@ impl Chart {
 
     fn synced_index(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Option<f64> {
         let bars = self.state.shown();
+        let added_point = self.price_series.iter().any(|item| {
+            item.bars
+                .binary_search_by_key(&from, |bar| bar.time)
+                .is_ok()
+        }) || self.custom_series().any(|item| {
+            item.shown(&item.keys())
+                .binary_search_by_key(&from, |key| key.time)
+                .is_ok()
+        });
+        if added_point && let Some(index) = crate::model::index_at(bars, from) {
+            return Some(index);
+        }
         let after = bars.partition_point(|bar| bar.time <= from);
         let index = if after > 0 && from < self.bar_period(after - 1).1 {
             after - 1
@@ -223,14 +262,15 @@ impl Chart {
     /// Sets a crosshair in local index coordinates, counting elements on price-based types.
     /// `None` clears it. Use [`Self::set_synced_crosshair_time`] between independent charts.
     pub fn set_synced_crosshair_bar_idx(&mut self, bar_idx: Option<f64>) {
+        self.host_crosshair = None;
         self.synced_crosshair_bar_idx = bar_idx;
         self.synced_crosshair_period = None;
         self.synced_crosshair_price = None;
         self.synced_crosshair_series = None;
     }
 
-    /// Returns the nearest hovered local index from the last frame, counting elements on
-    /// price-based types. Use [`Self::hover_time`] to exchange positions between charts.
+    /// Returns the selected local index, including fractional added or custom points, from the
+    /// last frame. Counts elements on price-based types. Use [`Self::hover_time`] between charts.
     pub fn get_hover_bar_idx(&self) -> Option<f64> {
         self.last_hover_bar_idx
     }

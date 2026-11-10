@@ -63,15 +63,20 @@ impl DrawingManager {
             .filter(|drawing| {
                 drawing.selectable
                     && drawing.is_visible_on_timeframe(&self.curr_timeframe)
-                    && self.owns_pane(drawing)
-                    && painted
-                        .iter()
-                        .find(|p| p.id == drawing.id && p.points == drawing.points)
-                        .is_some_and(|p| {
-                            crate::drawings::services::SelectionService::intersects_painted(
-                                ctx, &p.shapes, rect,
-                            )
-                        })
+                    && if self.owns_pane(drawing) {
+                        painted
+                            .iter()
+                            .find(|p| p.id == drawing.id && p.points == drawing.points)
+                            .is_some_and(|p| {
+                                crate::drawings::services::SelectionService::intersects_painted(
+                                    ctx, &p.shapes, rect,
+                                )
+                            })
+                    } else {
+                        drawing.reaches_other_panes()
+                            && (drawing.points.first())
+                                .is_some_and(|point| rect.x_range().contains(point.x))
+                    }
             })
             .map(|d| d.id)
             .collect();
@@ -299,13 +304,18 @@ impl DrawingManager {
         H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
-            // A fitted end can be rounded or clamped away from its stored anchor.
+            // A derived handle can be rounded, clamped or shifted away from its stored anchor.
             if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
-                && drawing.tool_type == DrawingToolType::RegressionTrend
-                && self
-                    .get_handles(drawing)
-                    .into_iter()
-                    .any(|(h, point)| h == handle && x_to_bar(new_pos.x) == x_to_bar(point.x))
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
+                )
+                && self.get_handles(drawing).into_iter().any(|(h, point)| {
+                    h == handle
+                        && x_to_bar(new_pos.x) == x_to_bar(point.x)
+                        && (drawing.tool_type == DrawingToolType::RegressionTrend
+                            || drawing.points.first().is_some_and(|p| p.x != point.x))
+                })
             {
                 return;
             }
@@ -401,6 +411,9 @@ impl DrawingManager {
                             ),
                     );
                     let skip = skip.max(old.first_moved_anchor());
+                    // A line moved from a pane it only reaches moves in time: that pane's price
+                    // scale is not its own.
+                    let keeps_price = !self.pane_members.contains(&drawing.pane);
                     for (point, before) in drawing
                         .chart_points
                         .iter_mut()
@@ -409,11 +422,21 @@ impl DrawingManager {
                     {
                         *point = ChartPoint::new(
                             before.bar_idx + bars,
-                            translate_price(before.price, origin.y, snapped.y),
+                            if keeps_price {
+                                before.price
+                            } else {
+                                translate_price(before.price, origin.y, snapped.y)
+                            },
                         );
                     }
+                    let moved = snapped - origin;
+                    let moved = if keeps_price {
+                        egui::vec2(moved.x, 0.0)
+                    } else {
+                        moved
+                    };
                     for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
-                        *point = *before + (snapped - origin);
+                        *point = *before + moved;
                     }
                 } else {
                     HandleService::update_handle(
