@@ -74,6 +74,7 @@ pub(super) fn begin_fibonacci_edit(
     for drawing in manager.drawings.iter().rev().filter(|drawing| {
         drawing.tool_type == DrawingToolType::FibonacciRetracement
             && hit.is_none_or(|id| id == drawing.id)
+            && drawing.selectable
             && !drawing.locked
             && manager.owns_pane(drawing)
             && drawing.is_visible_on_timeframe(&manager.curr_timeframe)
@@ -157,6 +158,7 @@ pub(super) fn show_editor(
                 .levels
                 .get(index)
                 .map(|level| level.text.clone())
+                .filter(|text| !text.trim().is_empty())
         } else {
             drawing.text.clone()
         };
@@ -385,15 +387,22 @@ mod tests {
 
     /// A click edits only the chosen level, even when two levels have the same text. Drafts
     /// cancel without history; confirmation is one undoable edit and retains spare levels.
+    /// Nonselectable drawings and unchanged empty fields never create an edit.
     #[test]
     fn retracement_text_click_edits_one_level() {
         use crate::drawings::{ChartPoint, Drawing};
-        for initial in ["", "Same"] {
+        for (initial, selectable, replacement) in [
+            ("", true, "Replacement"),
+            ("Same", true, "Replacement"),
+            ("Same", false, "Replacement"),
+            ("", true, ""),
+        ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0; 20], &[20.0; 20]);
             let mut drawing = Drawing::new(7, DrawingToolType::FibonacciRetracement);
             drawing.chart_points = vec![ChartPoint::new(2.0, 12.0), ChartPoint::new(12.0, 18.0)];
             drawing.completed = true;
+            drawing.selectable = selectable;
             let mut config = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
             config["levels"][3]["text"] = initial.into();
             config["levels"][4]["text"] = initial.into();
@@ -429,14 +438,21 @@ mod tests {
                     );
                 }
                 step(&mut chart, vec![]);
+                if !selectable {
+                    assert!(chart.drawings().text_editor.is_none());
+                    assert!(!chart.can_undo());
+                    break;
+                }
                 assert_eq!(chart.drawings().text_editor.as_ref().unwrap().id, 7);
-                step(
-                    &mut chart,
-                    vec![
-                        key(Key::A, Modifiers::COMMAND),
-                        Event::Text("Replacement".into()),
-                    ],
-                );
+                if replacement != initial {
+                    step(
+                        &mut chart,
+                        vec![
+                            key(Key::A, Modifiers::COMMAND),
+                            Event::Text(replacement.into()),
+                        ],
+                    );
+                }
                 let level_text = |chart: &crate::Chart, index: usize| {
                     serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
                         .unwrap()["levels"][index]["text"]
@@ -464,15 +480,17 @@ mod tests {
                     .levels;
                 assert_eq!(
                     level_text(&chart, 3),
-                    if confirm { "Replacement" } else { initial }
+                    if confirm { replacement } else { initial }
                 );
                 assert_eq!(level_text(&chart, 4), initial);
                 assert_eq!(levels.len(), 24);
-                if confirm {
+                if confirm && replacement != initial {
                     assert!(chart.undo());
                     assert_eq!(level_text(&chart, 3), initial);
                     assert!(!chart.can_undo());
                     assert!(chart.redo());
+                } else {
+                    assert!(!chart.can_undo());
                 }
             }
         }

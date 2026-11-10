@@ -63,6 +63,11 @@ impl StyleTab {
                         for level in &mut config.levels {
                             level.color = props.color.to_srgba_unmultiplied();
                         }
+                        if let Some(fill) = props.fill_color {
+                            let [r, g, b, _] = props.color.to_srgba_unmultiplied();
+                            props.fill_color =
+                                Some(Color32::from_rgba_unmultiplied(r, g, b, fill.a()));
+                        }
                     }
                     ui.end_row();
                     ui.label(l10n::text(ui.ctx(), "Trend line"));
@@ -374,14 +379,21 @@ mod tests {
     /// shown and spare levels, so its bands and construction line use the chosen colour.
     #[test]
     fn palette_colours_keep_the_line_opacity() {
-        for (tool, picker, alpha) in [
-            (DrawingToolType::Highlighter, 0, 51),
-            (DrawingToolType::FibonacciRetracement, 1, 255),
+        for (tool, picker, alpha, fill) in [
+            (DrawingToolType::Highlighter, 0, 51, None),
+            (DrawingToolType::FibonacciRetracement, 1, 255, None),
+            (
+                DrawingToolType::FibonacciRetracement,
+                1,
+                255,
+                Some([10, 20, 30, 51]),
+            ),
         ] {
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let chart = Chart::new(BarData::new());
-            let drawing = Drawing::new(0, tool);
+            let mut drawing = Drawing::new(0, tool);
+            drawing.fill_color = fill;
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
             let mut pickers: [ColorPickerState; 2] = Default::default();
             pickers[picker].is_open = true;
@@ -426,6 +438,10 @@ mod tests {
             assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, alpha));
 
             if tool == DrawingToolType::FibonacciRetracement {
+                assert_eq!(
+                    props.fill_color,
+                    fill.map(|color| Color32::from_rgba_unmultiplied(r, g, b, color[3]))
+                );
                 assert!(
                     props
                         .tool_settings
