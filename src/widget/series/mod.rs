@@ -877,8 +877,11 @@ impl Chart {
         // either, since the bar indices and the base index both grow by their count.
         let appended =
             tail.is_some_and(|(old, new)| clock.bar_open(new.time) > clock.bar_open(old.time));
-        let whitespace_replaced =
-            tail.is_some_and(|(old, new)| old.is_whitespace() && !new.is_whitespace());
+        let whitespace_replaced = tail.is_some_and(|(old, new)| {
+            old.is_whitespace()
+                && !new.is_whitespace()
+                && clock.bar_open(new.time) == clock.bar_open(old.time)
+        });
         let options = &self.chart_options.time_scale;
         let shift_for_whitespace = whitespace_replaced
             && !appended
