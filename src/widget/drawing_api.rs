@@ -143,8 +143,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a retracement's, channel's or wedge's levels, typography and construction visibility
-    /// as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    /// Replace a retracement's, extension's, channel's or wedge's levels, typography, text placement
+    /// and construction visibility as one undoable edit. Unknown ids, locked drawings and invalid
+    /// settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
@@ -162,11 +163,12 @@ impl Chart {
         if !matches!(
             drawing.tool_type,
             crate::drawings::DrawingToolType::FibonacciRetracement
+                | crate::drawings::DrawingToolType::FibonacciExtension
                 | crate::drawings::DrawingToolType::FibonacciChannel
                 | crate::drawings::DrawingToolType::FibonacciWedge
         ) {
             return Err(DrawingError::Invalid(
-                "Drawing is not a Fibonacci retracement, channel or wedge",
+                "Drawing is not a Fibonacci retracement, extension, channel or wedge",
             ));
         }
         if !config.is_valid() {
@@ -501,6 +503,87 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
     use crate::studies::{CustomIndicator, IndicatorValue};
+
+    /// Extension settings retain every level through templates, persistence and one undo step;
+    /// invalid fonts, locked drawings and wrong tools leave the drawing and history intact.
+    #[test]
+    fn fibonacci_extension_edits_preserve_levels_and_validate_atomically() {
+        use crate::drawings::{DrawingTemplate, DrawingToolType as T, FibonacciConfig};
+        let bars = (0..20)
+            .map(|i| {
+                Bar::new(
+                    DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                    100.0,
+                    220.0,
+                    90.0,
+                    150.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut drawing = Drawing::new(7, T::FibonacciExtension);
+        drawing.completed = true;
+        drawing.chart_points = [(0.0, 100.0), (5.0, 200.0), (10.0, 150.0)]
+            .map(|(x, y)| ChartPoint::new(x, y))
+            .to_vec();
+        let original = drawing.fib_config.clone();
+        let mut config = original.clone().unwrap();
+        assert_eq!(config.levels.len(), 24);
+        for (index, level) in config.levels.iter_mut().enumerate() {
+            level.text = format!("Target {index}");
+            level.width = Some(1.5 + index as f32);
+        }
+        config.label_size = 18.0;
+        config.trend_visible = false;
+        config.reverse = true;
+        config.logarithmic = true;
+        config.label_position = Some(crate::drawings::LineTextHorizontalAlign::Center);
+        chart.drawings_mut().drawings.push(drawing.clone());
+        chart.set_fibonacci_config(7, config.clone()).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].chart_points,
+            drawing.chart_points
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].fib_config, original);
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        let mut peer = Drawing::new(8, T::FibonacciExtension);
+        DrawingTemplate::from_drawing(&chart.drawings().drawings[0])
+            .apply_to(&mut peer)
+            .unwrap();
+        assert_eq!(peer.fib_config, Some(config.clone()));
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        chart.load_drawings(&saved).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].fib_config,
+            Some(config.clone())
+        );
+        // Repeated settings do not consume a history step.
+        chart
+            .set_fibonacci_config(chart.drawings().drawings[0].id, config.clone())
+            .unwrap();
+        let id = chart.drawings().drawings[0].id;
+        for size in [0.0, 257.0, f32::NAN, f32::INFINITY] {
+            let mut invalid = config.clone();
+            invalid.label_size = size;
+            assert!(chart.set_fibonacci_config(id, invalid).is_err());
+            assert_eq!(
+                chart.drawings().drawings[0].fib_config,
+                Some(config.clone())
+            );
+        }
+        chart.drawings_mut().drawings[0].locked = true;
+        assert_eq!(
+            chart.set_fibonacci_config(id, FibonacciConfig::extension_default()),
+            Err(DrawingError::Locked(id))
+        );
+        chart.drawings_mut().drawings[0].locked = false;
+        chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
+        assert!(chart.set_fibonacci_config(id, config).is_err());
+        assert!(!chart.can_undo());
+    }
 
     /// Host edits retain measurements in saved records and templates and undo in one step;
     /// old records keep every readout hidden. Rejected edits do not add history.

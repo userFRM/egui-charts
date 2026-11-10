@@ -63,6 +63,7 @@ impl TextTab {
                 tool,
                 DrawingToolType::TrendAngle
                     | DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
                     | DrawingToolType::FibonacciChannel
             )
     }
@@ -72,7 +73,9 @@ impl TextTab {
         if let Some(template) = &mut props.tool_settings
             && matches!(
                 template.settings.tool_type,
-                DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciChannel
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
             )
         {
             let mut config = template.settings.fibonacci_config().into_owned();

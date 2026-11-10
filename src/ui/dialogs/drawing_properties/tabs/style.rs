@@ -60,6 +60,7 @@ impl StyleTab {
                 if matches!(
                     settings.tool_type,
                     DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciExtension
                         | DrawingToolType::FibonacciChannel
                         | DrawingToolType::FibonacciWedge
                 ) {

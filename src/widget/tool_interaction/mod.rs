@@ -1604,16 +1604,35 @@ mod tests {
     /// selected, unless it is locked or Escape has turned the eraser off.
     #[test]
     fn an_eraser_click_deletes_the_drawing_unless_it_is_locked() {
-        for (selected, locked, escaped, kept) in [
-            (false, false, false, 0),
-            (true, false, false, 0),
-            (true, true, false, 1),
-            (false, false, true, 1),
+        for (tool, selected, locked, escaped, kept) in [
+            (DrawingToolType::HorizontalLine, false, false, false, 0),
+            (DrawingToolType::HorizontalLine, true, false, false, 0),
+            (DrawingToolType::HorizontalLine, true, true, false, 1),
+            (DrawingToolType::HorizontalLine, false, false, true, 1),
+            (DrawingToolType::FibonacciExtension, false, false, false, 0),
+            (DrawingToolType::FibonacciExtension, true, false, false, 0),
+            (DrawingToolType::FibonacciExtension, true, true, false, 1),
+            (DrawingToolType::FibonacciExtension, false, false, true, 1),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            let mut line = Drawing::new(1, DrawingToolType::HorizontalLine);
-            line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
+            let mut line = Drawing::new(1, tool);
+            line.chart_points = if tool == DrawingToolType::FibonacciExtension {
+                let config = line.fib_config.as_mut().unwrap();
+                for (index, level) in config.levels.iter_mut().enumerate() {
+                    level.visible = index == 0;
+                }
+                if !selected {
+                    config.levels[0].text = "Target".into();
+                }
+                vec![
+                    ChartPoint::new(20.0, 12.0),
+                    ChartPoint::new(50.0, 18.0),
+                    ChartPoint::new(80.0, 15.0),
+                ]
+            } else {
+                vec![ChartPoint::new(50.0, 15.0)]
+            };
             line.locked = locked;
             chart.drawings_mut().drawings.push(line);
             if selected {
@@ -1621,7 +1640,12 @@ mod tests {
             }
             chart.drawings_mut().set_eraser_mode(true);
             frame(&ctx, &mut chart, 0.0, vec![]);
-            let pos = chart.drawings().drawings[0].points[0];
+            let points = &chart.drawings().drawings[0].points;
+            let pos = if tool == DrawingToolType::FibonacciExtension {
+                egui::pos2((points[1].x + points[2].x) * 0.5, points[2].y)
+            } else {
+                points[0]
+            };
             let button = |pressed| Event::PointerButton {
                 pos,
                 button: PointerButton::Primary,
@@ -1647,7 +1671,7 @@ mod tests {
             let left = chart.drawings().drawings.len();
             assert_eq!(
                 left, kept,
-                "selected {selected}, locked {locked}, escaped {escaped}"
+                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}"
             );
         }
     }

@@ -282,6 +282,7 @@ impl DrawingProps {
                     if matches!(
                         drawing.tool_type,
                         crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciExtension
                             | crate::drawings::DrawingToolType::FibonacciChannel
                             | crate::drawings::DrawingToolType::FibonacciWedge
                     ) {
@@ -861,6 +862,38 @@ mod tests {
             let mut expected = drawings.clone();
             expected.iter_mut().for_each(change);
             assert_eq!(format!("{edits:?}"), format!("{expected:?}"), "{case}");
+        }
+        // Editing typography or one caption leaves every other saved level of a peer intact.
+        chart.drawings_mut().drawings = (0..2)
+            .map(|id| {
+                let mut drawing = Drawing::new(id, DrawingToolType::FibonacciExtension);
+                let config = drawing.fib_config.as_mut().unwrap();
+                config.levels[1].text = format!("Peer {id}");
+                config.levels[1].value = 0.25 + id as f32;
+                config.level_width = 2.0 + id as f32;
+                drawing
+            })
+            .collect();
+        chart.drawings_mut().select_drawings([0, 1]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let config = props
+            .tool_settings
+            .as_mut()
+            .unwrap()
+            .settings
+            .fib_config
+            .as_mut()
+            .unwrap();
+        config.label_size = 18.0;
+        config.levels[0].text = "Target".into();
+        let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+        for (index, drawing) in edits.iter().enumerate() {
+            let config = drawing.fib_config.as_ref().unwrap();
+            assert_eq!(config.label_size, 18.0);
+            assert_eq!(config.levels[0].text, "Target");
+            assert_eq!(config.levels[1].text, format!("Peer {index}"));
+            assert_eq!(config.levels[1].value, 0.25 + index as f32);
+            assert_eq!(config.level_width, 2.0 + index as f32);
         }
         // A rate belongs to an account currency; changing the currency also replaces its rate.
         for currency_changed in [false, true] {
