@@ -334,6 +334,9 @@ pub struct FibonacciLevel {
     /// Line width in points; absent inherits the drawing's level width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f32>,
+    /// Line pattern; absent inherits the drawing's level pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::model::LineStyle>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -352,6 +355,7 @@ impl FibonacciLevel {
             label: label.to_string(),
             text: String::new(),
             width: None,
+            style: None,
             color,
             visible: true,
             show_price: true,
@@ -386,10 +390,10 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
-    /// Width of every level line, in points.
+    /// Inherited line width in points for levels without an assigned width.
     #[serde(default = "fib_level_width")]
     pub level_width: f32,
-    /// Line pattern shared by every level.
+    /// Inherited line pattern for levels without an assigned pattern.
     #[serde(default)]
     pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
@@ -437,6 +441,12 @@ pub struct FibonacciConfig {
     /// Show the construction line between anchors, using the drawing's line style.
     #[serde(default = "percent_levels")]
     pub trend_visible: bool,
+    /// Complete resistance arcs into circles, including their shaded bands.
+    #[serde(default)]
+    pub close_arcs: bool,
+    /// Grow a spiral counterclockwise in screen space instead of clockwise.
+    #[serde(default)]
+    pub spiral_counterclockwise: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
@@ -503,6 +513,8 @@ impl FibonacciConfig {
             text_position: LineTextHorizontalAlign::Center,
             text_vertical: fib_vertical_align(),
             trend_visible: true,
+            close_arcs: false,
+            spiral_counterclockwise: false,
         }
     }
 
@@ -532,6 +544,7 @@ impl FibonacciConfig {
             BLUE, CYAN, DEEP_PURPLE, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL,
         };
         let levels: Vec<(f32, [u8; 4], bool)> = match tool {
+            T::FibonacciSpiral => Vec::new(),
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
                 .map(|value| (value, if value == 0.0 { GREY } else { BLUE }, true))
                 .to_vec(),
@@ -619,7 +632,7 @@ impl FibonacciConfig {
                     ..FibonacciLevel::new(value, "", color)
                 })
                 .collect(),
-            show_background: tool != T::FibonacciTimeZones,
+            show_background: !matches!(tool, T::FibonacciTimeZones | T::FibonacciSpiral),
             background_opacity: 51,
             show_levels: (tool == T::FibonacciWedge).then_some(true),
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
@@ -671,7 +684,9 @@ impl FibonacciConfig {
             show_text,
             text_position,
             text_vertical,
-            trend_visible
+            trend_visible,
+            close_arcs,
+            spiral_counterclockwise
         );
         if original.levels.len() == edited.levels.len() {
             for ((target, original), edited) in self
@@ -681,7 +696,8 @@ impl FibonacciConfig {
                 .zip(&edited.levels)
             {
                 fields!(
-                    target, original, edited, value, label, color, visible, show_price, text, width
+                    target, original, edited, value, label, color, visible, show_price, text,
+                    width, style
                 );
             }
         } else {

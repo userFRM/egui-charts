@@ -1205,6 +1205,7 @@ mod tests {
                 show_price: false,
                 text: String::new(),
                 width: None,
+                style: None,
             }],
             level_width: 3.5,
             level_style: LineStyle::Dashed,

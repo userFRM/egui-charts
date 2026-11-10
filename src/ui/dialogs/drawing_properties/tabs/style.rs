@@ -52,7 +52,12 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
-                if settings.tool_type == DrawingToolType::FibonacciRetracement {
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
+                ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
                     ui.label(l10n::text(ui.ctx(), "All colours"));
@@ -80,6 +85,20 @@ impl StyleTab {
                     if config != original {
                         settings.fib_config = Some(config);
                     }
+                }
+                if settings.tool_type == DrawingToolType::FibonacciSpiral {
+                    let mut config = settings.fibonacci_config().into_owned();
+                    ui.label("");
+                    if ui
+                        .checkbox(
+                            &mut config.spiral_counterclockwise,
+                            l10n::text(ui.ctx(), "Counterclockwise"),
+                        )
+                        .changed()
+                    {
+                        settings.fib_config = Some(config);
+                    }
+                    ui.end_row();
                 }
                 if matches!(
                     settings.tool_type,
