@@ -224,7 +224,13 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             let [r, g, b, a] = self.color_rgba();
-            if [r, g, b] != target.color[..3] {
+            let [tr, tg, tb, _] = target.color;
+            // Without tool settings no exact RGB is held: a colour that still paints as the
+            // target's at this opacity was not edited.
+            if [r, g, b] != [tr, tg, tb]
+                && (self.tool_settings.is_some()
+                    || Color32::from_rgba_unmultiplied(tr, tg, tb, a) != self.color)
+            {
                 drawing.color[..3].copy_from_slice(&[r, g, b]);
             }
             if a != target.color[3] {
@@ -905,6 +911,24 @@ mod tests {
                 assert_eq!(config.opacity, opacity.unwrap_or(original_opacity));
             }
         }
+        // Properties assembled without tool settings hold the colour premultiplied, which reads
+        // 76 back as 75 at alpha 51: an unedited colour leaves every hue as saved.
+        let mut highlighter = Drawing::new(1, DrawingToolType::Highlighter);
+        highlighter.color = [76, 175, 80, 51];
+        let drawings = vec![highlighter, Drawing::new(2, DrawingToolType::TrendLine)];
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = drawings.clone();
+        chart.drawings_mut().select_drawings([1, 2]);
+        let props = DrawingProps {
+            tool_settings: None,
+            font_size: 20.0,
+            ..DrawingProps::from_drawing(&drawings[0], &chart)
+        };
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        assert_eq!(
+            edits.iter().map(|d| d.color).collect::<Vec<_>>(),
+            drawings.iter().map(|d| d.color).collect::<Vec<_>>()
+        );
     }
 
     /// Two selected trend lines: the first shows its price change, the second its inclination on
