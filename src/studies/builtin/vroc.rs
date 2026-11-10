@@ -184,10 +184,10 @@ mod tests {
             assert!(matches!(vroc.values.to_rows()[i], IndicatorValue::None));
         }
 
-        // Check calculation at index 5: (1500 - 1000) / 1000 * 100 = 50%
-        let IndicatorValue::Single(v) = vroc.values.to_rows()[5] else {
-            panic!("no value: {:?}", vroc.values.to_rows()[5]);
-        };
-        assert!((v - 50.0).abs() < 0.01);
+        // Hand percentages: (1500-1000)/1000*100=50;
+        // (2200-1100)/1100*100=100.
+        for (bar, want) in [(5, 50.0), (6, 100.0)] {
+            assert_eq!(vroc.values().value(0, bar), Some(want));
+        }
     }
 }
