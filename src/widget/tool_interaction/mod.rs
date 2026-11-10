@@ -355,6 +355,8 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
+        let area_input =
+            drawing_manager.active_tool.is_none() && drawing_manager.box_selection_input(ui);
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
@@ -388,7 +390,7 @@ impl Chart {
                     active_tool,
                 );
             }
-        } else {
+        } else if !area_input {
             selection::handle_selection(
                 ui,
                 drawing_manager,
@@ -470,6 +472,26 @@ impl Chart {
             timeframe: self.drawing_timeframe(),
             finer: &finer,
         };
+        if area_input && owns_gesture && drawing_manager.text_editor.is_none() {
+            // Area input needs this frame's geometry, before the selected handles are painted.
+            let previous = ui
+                .ctx()
+                .graphics_mut(|g| std::mem::take(g.entry(painter.layer_id())));
+            drawing_manager.render_all(painter, price_rect, &view);
+            ui.ctx()
+                .graphics_mut(|g| *g.entry(painter.layer_id()) = previous);
+            selection::handle_selection(
+                ui,
+                drawing_manager,
+                cursor_modes,
+                response,
+                price_rect,
+                pane.map(|id| id.0),
+                &x_to_bar_edit,
+                &y_to_price,
+                &translate_price,
+            );
+        }
         drawing_manager.render_all(painter, price_rect, &view);
         if drawing_manager.text_editor.as_ref().is_some_and(|editor| {
             drawing_manager

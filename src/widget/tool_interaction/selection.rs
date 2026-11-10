@@ -1416,71 +1416,11 @@ mod tests {
         }
     }
 
-    /// Runs a Ctrl-drag area gesture on empty space, applies `change` while it is held, releases,
-    /// then clicks the line. Returns whether the pane moved, whether the gesture is still
-    /// active after the release, and the selection after the click.
-    fn area_gesture_with(
-        change: impl FnOnce(&mut crate::widget::Chart),
-    ) -> (bool, bool, Vec<usize>) {
-        use crate::widget::test_frames::frame;
-        use egui::{Modifiers, vec2};
-        let (ctx, mut chart) = area_chart();
-        let line = chart.drawings().drawings[0].points.clone();
-        let a = line[0] + vec2(0.0, -100.0);
-        let b = a + vec2(40.0, 30.0);
-        let pane = chart.get_rendered_price_rect();
-        let ctrl = Modifiers::CTRL;
-        frame(
-            &ctx,
-            &mut chart,
-            0.1,
-            vec![Event::ModifiersChanged(ctrl), Event::PointerMoved(a)],
-        );
-        frame(&ctx, &mut chart, 0.2, vec![button(a, true, ctrl)]);
-        frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(b)]);
-        assert!(
-            chart.drawings().selection_area().is_some(),
-            "the area gesture started"
-        );
-        change(&mut chart);
-        frame(
-            &ctx,
-            &mut chart,
-            0.4,
-            vec![Event::PointerMoved(b + vec2(1.0, 1.0))],
-        );
-        frame(
-            &ctx,
-            &mut chart,
-            0.5,
-            vec![Event::PointerMoved(b + vec2(2.0, 2.0))],
-        );
-        let moved = chart.get_rendered_price_rect() != pane;
-        frame(
-            &ctx,
-            &mut chart,
-            0.6,
-            vec![
-                button(b + vec2(2.0, 2.0), false, ctrl),
-                Event::ModifiersChanged(Modifiers::NONE),
-            ],
-        );
-        frame(&ctx, &mut chart, 0.7, vec![]);
-        frame(&ctx, &mut chart, 0.8, vec![]);
-        let stuck = chart.drawings().selection_area().is_some();
-        let line = chart.drawings().drawings[0].points.clone();
-        let mid = line[0] + (line[1] - line[0]) * 0.5;
-        let none = Modifiers::NONE;
-        frame(&ctx, &mut chart, 0.9, vec![Event::PointerMoved(mid)]);
-        frame(&ctx, &mut chart, 1.0, vec![button(mid, true, none)]);
-        frame(&ctx, &mut chart, 1.05, vec![button(mid, false, none)]);
-        frame(&ctx, &mut chart, 1.1, vec![]);
-        (moved, stuck, chart.drawings().selected_ids().collect())
-    }
-
     /// Both a wider live price axis and a new study pane must leave selection usable on release.
     #[test]
     fn area_gesture_ends_when_the_pane_resizes() {
+        use crate::widget::test_frames::frame;
+        use egui::{Modifiers, vec2};
         let changes: &[fn(&mut crate::widget::Chart)] = &[
             |chart| {
                 let t =
@@ -1496,12 +1436,77 @@ mod tests {
                 chart.add_indicator(Box::new(crate::studies::RSI::new(5)));
             },
         ];
-        let results: Vec<_> = changes.iter().map(area_gesture_with).collect();
-        assert_eq!(
-            results,
-            vec![(true, false, vec![7]); changes.len()],
-            "live axis and added pane: (pane moved, gesture still active, selection)"
-        );
+        for change in changes {
+            let (ctx, mut chart) = area_chart();
+            let line = chart.drawings().drawings[0].points.clone();
+            let a = line[0] + vec2(0.0, -100.0);
+            let b = a + vec2(40.0, 30.0);
+            let pane = chart.get_rendered_price_rect();
+            let ctrl = Modifiers::CTRL;
+            frame(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![Event::ModifiersChanged(ctrl), Event::PointerMoved(a)],
+            );
+            frame(&ctx, &mut chart, 0.2, vec![button(a, true, ctrl)]);
+            frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(b)]);
+            assert!(
+                chart.drawings().selection_area().is_some(),
+                "the area gesture started"
+            );
+            change(&mut chart);
+            frame(
+                &ctx,
+                &mut chart,
+                0.4,
+                vec![Event::PointerMoved(b + vec2(1.0, 1.0))],
+            );
+            frame(
+                &ctx,
+                &mut chart,
+                0.5,
+                vec![Event::PointerMoved(b + vec2(2.0, 2.0))],
+            );
+            assert_ne!(chart.get_rendered_price_rect(), pane);
+            frame(
+                &ctx,
+                &mut chart,
+                0.6,
+                vec![
+                    button(b + vec2(2.0, 2.0), false, ctrl),
+                    Event::ModifiersChanged(Modifiers::NONE),
+                ],
+            );
+            assert!(chart.drawings().selection_area().is_none());
+            let line = chart.drawings().drawings[0].points.clone();
+            let mid = line[0] + (line[1] - line[0]) * 0.5;
+            let none = Modifiers::NONE;
+            frame(&ctx, &mut chart, 0.9, vec![Event::PointerMoved(mid)]);
+            frame(&ctx, &mut chart, 1.0, vec![button(mid, true, none)]);
+            frame(&ctx, &mut chart, 1.05, vec![button(mid, false, none)]);
+            frame(&ctx, &mut chart, 1.1, vec![]);
+            assert_eq!(chart.drawings().selected_ids().collect::<Vec<_>>(), vec![7]);
+            let from = chart.get_rendered_price_rect().min + vec2(30.0, 30.0);
+            let to = from + vec2(40.0, 0.0);
+            let view = chart.get_time_scale_state();
+            for (step, events) in [
+                vec![Event::PointerMoved(from)],
+                vec![button(from, true, none)],
+                vec![Event::PointerMoved(to)],
+                vec![button(to, false, none)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 1.2 + step as f64 * 0.1, events);
+            }
+            assert_ne!(
+                chart.get_time_scale_state(),
+                view,
+                "plain dragging pans again"
+            );
+        }
     }
 
     /// A release frees input before the next press even when no pane handles that release.
@@ -1602,6 +1607,8 @@ mod tests {
             }
             if remove {
                 chart.remove_pane(pane);
+                frame(&ctx, &mut chart, 0.45, vec![]);
+                assert!(chart.drawings().selection_area().unwrap().cancelled);
             }
             frame(
                 &ctx,
@@ -1616,7 +1623,6 @@ mod tests {
                     "precondition: the restored pane keeps its geometry"
                 );
             }
-            frame(&ctx, &mut chart, 0.6, vec![]);
             assert!(
                 chart.drawings().selection_area().is_none(),
                 "removed {remove}"
@@ -1629,18 +1635,27 @@ mod tests {
         }
     }
 
-    /// A live bar with the same range arrives on the release frame, moving the line one bar
-    /// left but keeping it well inside the rectangle (20 points of slack on each side, 100
-    /// above and below). The line must stay selected.
+    /// A live bar moves the line within a large box; a smaller box misses it. Preview and
+    /// release must retain, add or remove the line according to the current pointer position.
     #[test]
     fn area_selection_survives_a_live_bar_on_release() {
         use crate::widget::test_frames::frame;
         use egui::{Modifiers, vec2};
-        for during_drag in [false, true] {
+        for (during_drag, before_inside, after_inside) in [
+            (false, true, true),
+            (true, true, true),
+            (false, false, true),
+            (false, true, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
             let (ctx, mut chart) = area_chart();
             let line = chart.drawings().drawings[0].points.clone();
             let from = line[0] + vec2(-20.0, -100.0);
             let to = line[1] + vec2(20.0, 100.0);
+            let near = from + vec2(10.0, 10.0);
+            let preview = if before_inside { to } else { near };
+            let release = if after_inside { to } else { near };
             let width = chart.measured_axis_width;
             let ctrl = Modifiers::CTRL;
             frame(
@@ -1650,18 +1665,13 @@ mod tests {
                 vec![Event::ModifiersChanged(ctrl), Event::PointerMoved(from)],
             );
             frame(&ctx, &mut chart, 0.2, vec![button(from, true, ctrl)]);
-            frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(to)]);
-            frame(
-                &ctx,
-                &mut chart,
-                0.4,
-                vec![Event::PointerMoved(to + vec2(-1.0, 0.0))],
-            );
+            frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(preview)]);
+            frame(&ctx, &mut chart, 0.4, vec![Event::PointerMoved(preview)]);
             let selected: Vec<_> = chart.drawings().selected_ids().collect();
             assert_eq!(
                 selected,
-                vec![7],
-                "precondition: the preview selects the line"
+                if before_inside { vec![7] } else { vec![] },
+                "precondition: membership before the live update"
             );
             if during_drag {
                 let t =
@@ -1671,10 +1681,11 @@ mod tests {
                     crate::widget::SeriesId::MAIN,
                     crate::model::Bar::new(t, 10.0, 20.0, 10.0, 20.0, 1.0),
                 );
-                frame(&ctx, &mut chart, 0.45, vec![Event::PointerMoved(to)]);
-                assert!(
+                frame(&ctx, &mut chart, 0.45, vec![Event::PointerMoved(release)]);
+                assert_eq!(
                     chart.drawings().is_selected(7),
-                    "the moving preview retains the line"
+                    after_inside,
+                    "the moving preview uses the current rectangle"
                 );
             }
             let index = if during_drag { 101 } else { 100 };
@@ -1689,14 +1700,15 @@ mod tests {
                 &ctx,
                 &mut chart,
                 0.5,
-                vec![button(to + vec2(-1.0, 0.0), false, ctrl)],
+                vec![Event::PointerMoved(release), button(release, false, ctrl)],
             );
             let moved = chart.drawings().drawings[0].points.clone();
             assert_ne!(moved, line, "precondition: the live bar moved the line");
-            let area = Rect::from_two_pos(from, to + vec2(-1.0, 0.0));
-            assert!(
+            let area = Rect::from_two_pos(from, release);
+            assert_eq!(
                 moved.iter().all(|point| area.contains(*point)),
-                "precondition: the current line remains inside the area"
+                after_inside,
+                "precondition: the current line meets only the larger area"
             );
             assert_eq!(
                 chart.measured_axis_width, width,
@@ -1705,8 +1717,8 @@ mod tests {
             let selected: Vec<_> = chart.drawings().selected_ids().collect();
             assert_eq!(
                 selected,
-                vec![7],
-                "the line inside the released rectangle stays selected"
+                if after_inside { vec![7] } else { vec![] },
+                "the release uses current geometry and pointer position"
             );
         }
     }
