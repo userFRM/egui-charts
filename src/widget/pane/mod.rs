@@ -47,9 +47,11 @@ fn upgraded_study(
         scale: None,
     }
     .upgraded(declared)?;
-    let takes = template.inputs.iter().all(|(id, _)| {
-        stored.iter().any(|(saved, _)| saved == id) || declared.iter().any(|input| input.id == *id)
-    });
+    // A listed input the study lacks fails the match as stored too, so only `declared` counts.
+    let takes = template
+        .inputs
+        .iter()
+        .all(|(id, _)| declared.iter().any(|input| input.id == *id));
     // Parsed from the stored text once already: another round trip could move a number by the
     // last bit.
     let inputs = template
