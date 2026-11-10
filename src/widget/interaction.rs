@@ -41,12 +41,17 @@ impl Chart {
         ui: &Ui,
         id: Id,
         plot: Rect,
+        price_button: bool,
         blocked: bool,
     ) -> bool {
         use crate::config::TouchTrackingExitMode;
 
         let options = &self.chart_options.tooltip;
         let mut state = touch_crosshair(ui, id);
+        if state.position.is_some_and(|pos| !plot.contains(pos)) {
+            state.position = None;
+            state.contact = None;
+        }
         let was_active = state.position.is_some();
         let owned_gesture = state
             .contact
@@ -77,11 +82,15 @@ impl Chart {
             if !options.enabled
                 || !options.on_long_press
                 || blocked
-                || !input.focused
+                || input.events.contains(&Event::WindowFocused(false))
                 || input.multi_touch().is_some()
             {
                 state.contact = None;
                 state.position = None;
+                return;
+            }
+            // Keep the latched tag registered until its button consumes the release.
+            if price_button && state.position.is_some() && state.contact.is_none() {
                 return;
             }
             if options.touch_exit_mode == TouchTrackingExitMode::OnTouchEnd

@@ -642,23 +642,28 @@ impl Chart {
         let show_price_button =
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
-        let axis_interaction = cfg!(feature = "icons")
-            && (show_right_axis || show_left_axis)
+        let price_button_interaction = cfg!(feature = "icons")
+            && show_price_button
             && ui.input(|input| {
                 (input.pointer.any_down() || input.pointer.any_released())
-                    && input
-                        .pointer
-                        .press_origin()
-                        .or(input.pointer.hover_pos())
-                        .is_some_and(|pos| {
-                            (show_axis_settings && axis_corner.contains(pos))
-                                || (show_price_button
-                                    && self.axis_hover.is_some_and(|(_, tag)| {
-                                        rendering::axes::crosshair_price_button_rect(tag)
-                                            .contains(pos)
-                                    }))
+                    && input.pointer.press_origin().is_some_and(|pos| {
+                        self.axis_hover.is_some_and(|(_, tag)| {
+                            rendering::axes::crosshair_price_button_rect(tag).contains(pos)
                         })
+                    })
             });
+        let axis_interaction = cfg!(feature = "icons")
+            && (show_right_axis || show_left_axis)
+            && (price_button_interaction
+                || (show_axis_settings
+                    && ui.input(|input| {
+                        (input.pointer.any_down() || input.pointer.any_released())
+                            && input
+                                .pointer
+                                .press_origin()
+                                .or(input.pointer.hover_pos())
+                                .is_some_and(|pos| axis_corner.contains(pos))
+                    })));
         let hover_rect = shared_plot.map_or_else(
             || {
                 Rect::from_min_max(
@@ -679,11 +684,12 @@ impl Chart {
             ui,
             shown.id,
             hover_rect,
+            price_button_interaction,
             is_drawing_interaction
                 || eraser_mode
                 || navigation_interaction
                 || realtime_interaction
-                || axis_interaction
+                || (axis_interaction && !price_button_interaction)
                 || self.menu_open
                 || egui::Popup::is_any_open(ui.ctx())
                 || self.state.data().is_empty(),
