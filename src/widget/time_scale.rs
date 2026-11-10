@@ -1335,21 +1335,31 @@ mod tests {
                         #[cfg(feature = "ui")]
                         if !added_only && step == 2 {
                             let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
-                            let mut restored =
-                                Chart::new(BarData::from_bars(chart.bars(series).to_vec()));
-                            restored.set_horizontal_scale(Some(scale.clone()));
-                            restored
-                                .restore(&serde_json::from_str(&saved).unwrap())
-                                .unwrap();
-                            frame(&ctx, &mut restored, 0.5, vec![]);
-                            let range = restored.visible_time_range().unwrap();
-                            assert!((range.from - before.from).abs() < Duration::microseconds(100));
-                            assert!((range.to - before.to).abs() < Duration::microseconds(100));
-                            assert_close(
-                                restored.time_to_x(key_time(60.0).unwrap()).unwrap().into(),
-                                x.into(),
-                                "restored key position",
-                            );
+                            for data_first in [false, true] {
+                                let mut restored = Chart::new(BarData::from_bars(if data_first {
+                                    chart.bars(series).to_vec()
+                                } else {
+                                    Vec::new()
+                                }));
+                                restored.set_horizontal_scale(Some(scale.clone()));
+                                restored
+                                    .restore(&serde_json::from_str(&saved).unwrap())
+                                    .unwrap();
+                                if !data_first {
+                                    restored.set_data(series, chart.bars(series).to_vec());
+                                }
+                                frame(&ctx, &mut restored, 0.5, vec![]);
+                                let range = restored.visible_time_range().unwrap();
+                                assert!(
+                                    (range.from - before.from).abs() < Duration::microseconds(100)
+                                );
+                                assert!((range.to - before.to).abs() < Duration::microseconds(100));
+                                assert_close(
+                                    restored.time_to_x(key_time(60.0).unwrap()).unwrap().into(),
+                                    x.into(),
+                                    "restored key position",
+                                );
+                            }
                         }
                     }
                     let mut options = chart.chart_options().clone();

@@ -275,7 +275,8 @@ impl TimeScale {
     }
 
     fn content_range(&self) -> (f64, f64) {
-        self.content_range.unwrap_or((0.0, self.base_idx() as f64))
+        self.content_range
+            .unwrap_or((self.position(0.0), self.base_idx() as f64))
     }
 
     /// Numeric sample positions used by this scale, or `None` for ordinal time charts.
