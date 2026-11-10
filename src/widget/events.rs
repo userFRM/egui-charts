@@ -35,7 +35,7 @@ pub struct ChartPointer {
     /// Added points between main-series slots round to the nearest slot. Negative or past
     /// the last bar in whitespace.
     pub index: isize,
-    /// Pointer position in UI points, the coordinates of the chart's `Response::rect`.
+    /// Pointer or active touch-readout position in UI points, in the chart's `Response::rect`.
     pub pos: Pos2,
     /// Pane counted from the top among the panes drawn, the price pane with its volume band
     /// included: `0` unless panes sit above the price pane.
@@ -68,7 +68,8 @@ pub struct ChartPointer {
     pub kind: PointerKind,
     /// Originating egui pointer or touch event, including button state or touch device, id,
     /// phase and pressure when supplied by the integration. A matching touch takes precedence
-    /// over its emulated pointer event, and `pos` and `modifiers` are those of that event.
+    /// over its emulated pointer event. Click coordinates retain the emulated release position
+    /// when the finger lifts elsewhere; touch-readout moves use the drawn readout position.
     /// `None` means the position was recomputed from chart state without originating input.
     pub origin: Option<egui::Event>,
 }
@@ -359,15 +360,36 @@ pub(super) struct HostEvents {
     kind: Option<PointerKind>,
     cursor_data_policy: CursorDataPolicy,
     click_frames: [Option<u64>; 3],
-    modifiers: Modifiers,
-    input_frame: Option<(u64, Modifiers)>,
+    input_frame: Option<u64>,
+    pointer_touch: Option<(egui::TouchDeviceId, egui::TouchId)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
     pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
     pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
+    /// Unsnapped touch readout position, including a readout still waiting for its hold.
+    pub(super) touch_position: Option<Option<Pos2>>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
+}
+
+/// Capture the viewport's carried keys before egui applies this frame's changes, even while
+/// no chart is shown. The resulting modifiers belong to the input, not to a chart instance.
+struct PointerInput;
+
+fn pointer_input_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::unique(("chart_pointer_input", viewport))
+}
+
+impl egui::Plugin for PointerInput {
+    fn debug_name(&self) -> &'static str {
+        "chart pointer input"
+    }
+
+    fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        let modifiers = ctx.input_for(input.viewport_id, |input| input.modifiers);
+        ctx.data_mut(|data| data.insert_temp(pointer_input_id(input.viewport_id), modifiers));
+    }
 }
 
 impl HostEvents {
@@ -486,7 +508,7 @@ impl Chart {
     }
 
     /// Selects from the same fractional positions used to paint added series.
-    fn pointer_time(&self, pos: Pos2) -> Option<(Option<DateTime<Utc>>, f64)> {
+    pub(super) fn pointer_time(&self, pos: Pos2) -> Option<(Option<DateTime<Utc>>, f64)> {
         let shown = self.state.shown();
         let coords = self.get_chart_mapping();
         let index = coords.x_to_idx_f64(pos.x);
@@ -494,7 +516,7 @@ impl Chart {
             return Some((None, index.round()));
         }
         let pointer_time = crate::model::time_at(shown, index)?;
-        let mut selected = self.crosshair_position(pos, &coords).map(|pos| {
+        let mut selected = self.main_crosshair_position(pos, &coords).map(|pos| {
             let index = coords.x_to_idx_f64(pos.x).round();
             let time =
                 (index >= 0.0 && index < shown.len() as f64).then(|| shown[index as usize].time);
@@ -557,9 +579,25 @@ impl Chart {
 
     fn prepare_pointer_input(&mut self, ui: &Ui) {
         let frame = ui.ctx().cumulative_frame_nr();
-        if self.host_events.input_frame.map(|(at, _)| at) != Some(frame) {
-            self.host_events.input_frame = Some((frame, self.host_events.modifiers));
-            self.host_events.modifiers = ui.input(|input| input.modifiers);
+        if self.host_events.input_frame != Some(frame) {
+            if ui.ctx().plugin_opt::<PointerInput>().is_none() {
+                ui.ctx().add_plugin(PointerInput);
+            }
+            self.host_events.input_frame = Some(frame);
+            ui.input(|input| {
+                if input.pointer.primary_pressed() {
+                    self.host_events.pointer_touch = input.raw.events.iter().find_map(|event| {
+                        let egui::Event::Touch { device_id, id, phase: egui::TouchPhase::Start, pos, .. } = event else {
+                            return None;
+                        };
+                        input.raw.events.iter().any(|event| matches!(event,
+                            egui::Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, .. } if point == pos
+                        )).then_some((*device_id, *id))
+                    });
+                } else if !input.pointer.primary_down() && !input.pointer.primary_released() {
+                    self.host_events.pointer_touch = None;
+                }
+            });
         }
     }
 
@@ -571,36 +609,30 @@ impl Chart {
     ) -> Option<(egui::Event, Modifiers)> {
         use egui::{Event, TouchPhase};
 
+        let viewport = ui.ctx().viewport_id();
+        let initial = ui
+            .ctx()
+            .data(|data| data.get_temp::<Modifiers>(pointer_input_id(viewport)));
         ui.input(|input| {
             let events = &input.raw.events;
-            let initial = if events
-                .iter()
-                .any(|event| matches!(event, Event::ModifiersChanged(_)))
-            {
-                self.host_events.input_frame?.1
-            } else {
-                input.modifiers
-            };
+            let initial = initial.unwrap_or(input.modifiers);
             let inputs = || {
                 events
                     .iter()
                     .enumerate()
                     .scan(initial, |modifiers, (at, event)| {
                         match event {
-                            Event::ModifiersChanged(keys)
-                            | Event::PointerButton {
-                                modifiers: keys, ..
-                            }
-                            | Event::Key {
-                                modifiers: keys, ..
-                            }
-                            | Event::MouseWheel {
-                                modifiers: keys, ..
-                            } => *modifiers = *keys,
+                            Event::ModifiersChanged(keys) => *modifiers = *keys,
                             Event::WindowFocused(false) => *modifiers = Modifiers::NONE,
                             _ => {}
                         }
-                        Some((at, event, *modifiers))
+                        let keys = match event {
+                            Event::PointerButton { modifiers, .. }
+                            | Event::Key { modifiers, .. }
+                            | Event::MouseWheel { modifiers, .. } => *modifiers,
+                            _ => *modifiers,
+                        };
+                        Some((at, event, keys))
                     })
             };
             let (at, event, modifiers) = inputs()
@@ -635,8 +667,10 @@ impl Chart {
             };
             let touch = inputs()
                 .filter(|(_, candidate, _)| {
-                    matches!(candidate, Event::Touch { pos: point, phase, .. }
-                        if *point == pos && phase_matches(*phase))
+                    matches!(candidate, Event::Touch { device_id, id, pos: point, phase, .. }
+                        if phase_matches(*phase) && (*point == pos
+                            || (matches!(event, Event::PointerButton { button: PointerButton::Primary, pressed: false, .. })
+                                && self.host_events.pointer_touch == Some((*device_id, *id)))))
                 })
                 .min_by_key(|(index, _, _)| index.abs_diff(at));
             let (_, event, modifiers) = touch.unwrap_or((at, event, modifiers));
@@ -784,6 +818,7 @@ impl Chart {
                 .filter(|_| self.main_series_present)
                 .map(|index| shown[index].clone()),
             previous_close: bar_at
+                .filter(|_| self.main_series_present)
                 .and_then(|index| crate::model::last_with_value(&shown[..index]))
                 .map(|bar| bar.close),
             series_bars: self
@@ -836,6 +871,7 @@ impl Chart {
             kind: self.host_events.kind.unwrap_or_else(|| match &origin {
                 Some((egui::Event::Touch { .. }, _)) => PointerKind::Touch,
                 Some(_) => PointerKind::Mouse,
+                None if self.host_events.touch_position.is_some() => PointerKind::Touch,
                 None => self
                     .host_events
                     .pointer
@@ -867,17 +903,25 @@ impl Chart {
             self.host_events.time_scale_size = size;
             self.host_events.push(ChartEvent::TimeScaleResized(size));
         }
-        let position = ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
-            ui.rect_contains_pointer(egui::Rect::from_min_max(
-                egui::pos2(self.last_rendered_price_rect.left(), ui.max_rect().top()),
-                egui::pos2(
-                    self.last_rendered_price_rect.right(),
-                    ui.max_rect().bottom(),
-                ),
-            ))
-            .then(|| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
-            .flatten()
-        });
+        let position = if let Some(position) = self.host_events.touch_position {
+            position.and_then(|pos| {
+                let origin = self.pointer_origin(ui, pos, None);
+                let pos = self.crosshair_position(pos, &self.get_chart_mapping())?;
+                self.pointer_at(ui, pos, origin)
+            })
+        } else {
+            ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
+                ui.rect_contains_pointer(egui::Rect::from_min_max(
+                    egui::pos2(self.last_rendered_price_rect.left(), ui.max_rect().top()),
+                    egui::pos2(
+                        self.last_rendered_price_rect.right(),
+                        ui.max_rect().bottom(),
+                    ),
+                ))
+                .then(|| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
+                .flatten()
+            })
+        };
         let unchanged = match (&position, &self.host_events.pointer) {
             (Some(position), Some(previous)) => {
                 // Button transitions alone do not move the cursor; changed touch details do.
@@ -2402,5 +2446,274 @@ mod tests {
                 ChartEvent::VisibleLogicalRangeChanged(None),
             ]
         );
+    }
+    #[test]
+    fn removed_main_series_reports_no_previous_close() {
+        for removed in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            let series = chart.add_series(Default::default());
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            if removed {
+                chart.remove_series(SeriesId::MAIN);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let time = chart.bars(series)[50].time;
+            frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .expect("move");
+            assert_eq!(pointer.time, Some(time));
+            assert_eq!(pointer.bar.is_none(), removed);
+            assert_eq!(pointer.previous_close, (!removed).then_some(120.0));
+            assert!(
+                pointer
+                    .series_bars
+                    .iter()
+                    .any(|(id, bar)| *id == series && bar.time == time)
+            );
+        }
+    }
+    #[test]
+    fn touch_tap_lifted_off_its_press_position_reports_touch() {
+        for touch_click in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let touch_pos = if touch_click {
+                pos
+            } else {
+                pos + egui::vec2(100.0, 0.0)
+            };
+            let touch = |phase| Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(3),
+                phase,
+                pos: touch_pos
+                    + if phase == egui::TouchPhase::End {
+                        egui::vec2(0.5, 0.25)
+                    } else {
+                        egui::Vec2::ZERO
+                    },
+                force: Some(0.6),
+            };
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::SHIFT,
+            };
+            frame(
+                &ctx,
+                &mut chart,
+                1.0,
+                vec![
+                    touch(egui::TouchPhase::Start),
+                    Event::PointerMoved(pos),
+                    button(true),
+                ],
+            );
+            let lift = touch(egui::TouchPhase::End);
+            let release = button(false);
+            frame(
+                &ctx,
+                &mut chart,
+                1.1,
+                vec![lift.clone(), release.clone(), Event::PointerGone],
+            );
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::Click { position, .. } => Some(position),
+                    _ => None,
+                })
+                .expect("tap");
+            assert_eq!(pointer.pos, pos);
+            assert_eq!(
+                pointer.kind,
+                if touch_click {
+                    PointerKind::Touch
+                } else {
+                    PointerKind::Mouse
+                }
+            );
+            assert_eq!(
+                pointer.origin,
+                Some(if touch_click { lift } else { release })
+            );
+            assert_eq!(pointer.index, 50);
+        }
+    }
+    #[test]
+    fn pointer_modifiers_precede_a_later_change_in_the_frame() {
+        for hidden in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            if hidden {
+                ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(1.0),
+                        events: vec![Event::ModifiersChanged(Modifiers::SHIFT)],
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+            } else {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    1.0,
+                    vec![Event::ModifiersChanged(Modifiers::SHIFT)],
+                );
+            }
+            chart.drain_events().for_each(drop);
+            let moved = Event::PointerMoved(pos);
+            frame(
+                &ctx,
+                &mut chart,
+                1.1,
+                vec![
+                    moved.clone(),
+                    if hidden {
+                        Event::ModifiersChanged(Modifiers::CTRL)
+                    } else {
+                        Event::WindowFocused(false)
+                    },
+                ],
+            );
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .expect("move");
+            assert_eq!(pointer.origin, Some(moved));
+            assert_eq!(pointer.modifiers, Modifiers::SHIFT, "hidden={hidden}");
+        }
+    }
+    #[test]
+    fn drawn_crosshair_time_matches_added_point_payload() {
+        use crate::widget::{CustomPoint, ImageExportOptions, Primitive, test_frames::shapes};
+        #[derive(Clone)]
+        struct Point(DateTime<Utc>);
+        impl CustomPoint for Point {
+            fn time(&self) -> DateTime<Utc> {
+                self.0
+            }
+            fn prices(&self) -> Vec<f64> {
+                vec![115.0]
+            }
+        }
+        struct Renderer;
+        impl Primitive for Renderer {}
+        let start = "2024-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        for pane in [false, true] {
+            for (whitespace, hidden) in [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let ctx = Context::default();
+                let mut chart = Chart::new(crate::model::BarData::from_bars(
+                    [0, 2, 10]
+                        .map(|m| Bar::from_value(start + chrono::TimeDelta::minutes(m), 100.0))
+                        .to_vec(),
+                ));
+                chart.set_timeframe(crate::model::Timeframe::Min1);
+                chart.config.show_volume = false;
+                chart.chart_options.tooltip.enabled = false;
+                chart.chart_options.time_scale.ignore_whitespace_indices = whitespace;
+                chart.chart_options.time_scale.ignore_hidden_indices = hidden;
+                chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+                chart.chart_options.crosshair.vert_line_style = crate::model::LineStyle::Solid;
+                let series = chart.add_series(Default::default());
+                chart.set_data(
+                    series,
+                    [1, 2, 3, 12]
+                        .map(|m| Bar::from_value(start + chrono::TimeDelta::minutes(m), 110.0))
+                        .to_vec(),
+                );
+                let custom = chart.add_custom_data_series::<Point>(
+                    "Points",
+                    |study| study.with_overlay(true),
+                    Renderer,
+                );
+                chart.set_custom_data(custom, vec![Point(start + chrono::TimeDelta::minutes(4))]);
+                if pane {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(series, pane));
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.apply_synced_time_scale(160.0, 1.0);
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                for (step, (minute, index)) in [(3, 1.125), (4, 1.25), (2, 1.0), (12, 3.0)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let map = chart.get_chart_mapping();
+                    let x = map.index_to_x(index);
+                    let y = if pane {
+                        chart.pane_layout.panes.last().unwrap().rect.center().y
+                    } else {
+                        map.rect.center().y
+                    };
+                    let pos = Pos2::new(x, y);
+                    let painted = shapes(
+                        &ctx,
+                        &mut chart,
+                        1.0 + step as f64,
+                        vec![Event::PointerMoved(pos)],
+                    );
+                    let expected = start + chrono::TimeDelta::minutes(minute);
+                    let pointer = chart
+                        .drain_events()
+                        .filter_map(|event| match event {
+                            ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                            _ => None,
+                        })
+                        .last()
+                        .expect("move");
+                    assert_eq!(pointer.time, Some(expected));
+                    assert_eq!(pointer.index, index.round() as isize);
+                    assert_eq!(chart.hover_time(), Some(expected));
+                    assert_eq!(
+                        chart.last_crosshair.map(|(time, _)| time),
+                        Some(expected),
+                        "pane={pane}, filters={whitespace},{hidden}"
+                    );
+                    let verticals = painted.iter().filter(|shape| matches!(shape, egui::Shape::LineSegment {points, stroke}
+                        if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x && (points[0].x-x).abs()<0.01)).count();
+                    assert!(
+                        verticals >= if pane { 2 } else { 1 },
+                        "pane={pane}, minute={minute}"
+                    );
+                    let label = chart.format_time(expected);
+                    assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text()==label)));
+                    let mut snapshot = chart.export_snapshot(
+                        &ctx,
+                        &ImageExportOptions {
+                            include_crosshair: true,
+                            ..Default::default()
+                        },
+                    );
+                    let exported = shapes(&Context::default(), &mut snapshot, 0.0, vec![]);
+                    assert_eq!(
+                        snapshot.last_crosshair.map(|(time, _)| time),
+                        Some(expected)
+                    );
+                    assert!(exported.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text()==label)));
+                }
+            }
+        }
     }
 }
