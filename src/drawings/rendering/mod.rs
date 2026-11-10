@@ -183,7 +183,7 @@ impl Drawing {
 
             // Fibonacci (10 tools)
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
-                self.render_fibonacci(painter, rect, view)
+                self.render_fibonacci(painter, rect, view, selected)
             }
             DrawingToolType::FibonacciSpeedResistanceArcs => self.render_fibonacci_arc(painter),
             DrawingToolType::FibonacciTimeZones => self.render_fibonacci_time_zones(painter, rect),

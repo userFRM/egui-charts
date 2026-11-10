@@ -132,6 +132,8 @@ pub(crate) struct TextEditState {
     pub placed: bool,
     /// Paint the draft on the drawing and put the editor over its text.
     pub inline: bool,
+    /// A retracement level whose custom text is being edited.
+    pub fib_level: Option<usize>,
 }
 
 impl TextEditState {
@@ -147,6 +149,14 @@ impl TextEditState {
     /// The drawing with its draft, or a neutral placeholder while it is empty.
     pub(crate) fn preview(&self, drawing: &Drawing, ctx: &egui::Context) -> Drawing {
         let mut shown = drawing.clone();
+        if let Some(index) = self.fib_level {
+            let mut config = drawing.fibonacci_config().into_owned();
+            if let Some(level) = config.levels.get_mut(index) {
+                level.text = self.shown_text(ctx);
+            }
+            shown.fib_config = Some(config);
+            return shown;
+        }
         if self.draft.is_empty() {
             shown.text_color = Some(
                 ctx.global_style()
