@@ -284,9 +284,10 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         self.refresh_cache();
-        // Held inputs can only apply once new data or a setting has rebuilt the cache. Lookups
-        // below can rebuild it too, so the flag is taken only while inputs are held.
-        while !self.waiting_inputs.borrow().is_empty()
+        // Held inputs can only apply once new data or a setting has rebuilt the cache. The flag is
+        // taken only while inputs are held, and a rebuild during this retry, from an applied input
+        // or a snapshot arriving meanwhile, leaves it set for the next lookup.
+        if !self.waiting_inputs.borrow().is_empty()
             && std::mem::take(&mut self.cache.borrow_mut().rebuilt)
         {
             let (awaiting_chain, supplied) = {
