@@ -948,66 +948,74 @@ mod tests {
         use crate::widget::test_frames::chart;
         use egui_kittest::Harness;
 
-        let family = FontFamily::Name("Not Installed".into());
-        let mut chart = chart(&[100.0], &[110.0]);
-        chart.config_mut().axis_font_family = family.clone();
-        chart.config_mut().show_volume = false;
-        let time = chart.state.shown()[90].time;
-        chart.set_crosshair_position(Some((time, 105.0)));
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(900.0, 600.0))
-            .build_ui_state(
-                |ui, chart: &mut crate::widget::Chart| {
-                    chart.show(ui);
-                },
-                chart,
-            );
-        for installed in [false, true] {
-            if installed {
-                let mut fonts = egui::FontDefinitions::default();
-                fonts.families.insert(
-                    family.clone(),
-                    fonts.families[&FontFamily::Monospace].clone(),
+        for (width, theme) in [
+            (320.0, crate::theme::Theme::light()),
+            (320.0, crate::theme::Theme::dark()),
+            (900.0, crate::theme::Theme::light()),
+            (900.0, crate::theme::Theme::dark()),
+        ] {
+            let family = FontFamily::Name("Not Installed".into());
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.set_theme_override(Some(theme));
+            chart.config_mut().axis_font_family = family.clone();
+            chart.config_mut().show_volume = false;
+            let time = chart.state.shown()[90].time;
+            chart.set_crosshair_position(Some((time, 105.0)));
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 600.0))
+                .build_ui_state(
+                    |ui, chart: &mut crate::widget::Chart| {
+                        chart.show(ui);
+                    },
+                    chart,
                 );
-                harness.ctx.set_fonts(fonts);
-            }
-            harness.step();
-            let expected = if installed {
-                &family
-            } else {
-                &FontFamily::Proportional
-            };
-            let plot = harness.state().get_rendered_price_rect();
-            let mut counts = [0; 2];
-            let mut painted = Vec::new();
-            for shape in &harness.output().shapes {
-                texts(&shape.shape, &mut painted);
-            }
-            for text in painted {
-                let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
-                let time = text.pos.y >= plot.bottom()
-                    && text.pos.y < plot.bottom() + 35.0
-                    && plot.x_range().contains(text.pos.x);
-                if price || time {
-                    counts[usize::from(time)] += 1;
-                    for section in &text.galley.job.sections {
-                        assert_eq!(&section.format.font_id.family, expected);
+            for installed in [false, true] {
+                if installed {
+                    let mut fonts = egui::FontDefinitions::default();
+                    fonts.families.insert(
+                        family.clone(),
+                        fonts.families[&FontFamily::Monospace].clone(),
+                    );
+                    harness.ctx.set_fonts(fonts);
+                }
+                harness.step();
+                let expected = if installed {
+                    &family
+                } else {
+                    &FontFamily::Proportional
+                };
+                let plot = harness.state().get_rendered_price_rect();
+                let mut counts = [0; 2];
+                let mut painted = Vec::new();
+                for shape in &harness.output().shapes {
+                    texts(&shape.shape, &mut painted);
+                }
+                for text in painted {
+                    let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                    let time = text.pos.y >= plot.bottom()
+                        && text.pos.y < plot.bottom() + 35.0
+                        && plot.x_range().contains(text.pos.x);
+                    if price || time {
+                        counts[usize::from(time)] += 1;
+                        for section in &text.galley.job.sections {
+                            assert_eq!(&section.format.font_id.family, expected);
+                        }
                     }
                 }
+                assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+                assert_eq!(harness.state().config().axis_font_family, family);
+                #[cfg(feature = "ui")]
+                assert_eq!(
+                    harness
+                        .state()
+                        .snapshot()
+                        .unwrap()
+                        .config
+                        .unwrap()
+                        .axis_font_family,
+                    family
+                );
             }
-            assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
-            assert_eq!(harness.state().config().axis_font_family, family);
-            #[cfg(feature = "ui")]
-            assert_eq!(
-                harness
-                    .state()
-                    .snapshot()
-                    .unwrap()
-                    .config
-                    .unwrap()
-                    .axis_font_family,
-                family
-            );
         }
     }
 
