@@ -337,17 +337,17 @@ impl Chart {
         if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
             return;
         }
-        if let Some(super::PointerTarget::Marker {
-            series,
-            id: Some(id),
-            time,
-        }) = &position.target
-        {
-            self.host_events.push(ChartEvent::MarkClick {
-                id: id.clone(),
-                series: *series,
-                time: *time,
-            });
+        if let Some(super::PointerTarget::Marker { series, id, time }) = &position.target {
+            self.selection.deselect();
+            #[cfg(feature = "drawings")]
+            self.drawings.deselect();
+            if let Some(id) = id {
+                self.host_events.push(ChartEvent::MarkClick {
+                    id: id.clone(),
+                    series: *series,
+                    time: *time,
+                });
+            }
         }
     }
 
@@ -1492,7 +1492,14 @@ mod tests {
             }
         }
         for secondary in [false, true] {
-            for cover in ["primitive", "drawing", "uncovered", "top", "eraser"] {
+            for cover in [
+                "primitive",
+                "drawing",
+                "uncovered",
+                "fresh",
+                "top",
+                "eraser",
+            ] {
                 if !cfg!(feature = "drawings") && matches!(cover, "drawing" | "top" | "eraser") {
                     continue;
                 }
@@ -1530,9 +1537,13 @@ mod tests {
                 chart.set_markers(
                     id,
                     vec![
-                        Marker::new(time)
-                            .at_price(100.0, MarkerPos::AtPriceMiddle)
-                            .with_id("under"),
+                        Marker::new(if cover == "fresh" {
+                            chart.bars(id)[60].time
+                        } else {
+                            time
+                        })
+                        .at_price(100.0, MarkerPos::AtPriceMiddle)
+                        .with_id("under"),
                     ],
                 );
                 let primitive =
@@ -1554,6 +1565,16 @@ mod tests {
                     chart.series_price_map(id).unwrap().price_to_y(100.0),
                 );
                 test_frames::frame(&ctx, &mut chart, 0.1, vec![egui::Event::PointerMoved(pos)]);
+                if cover == "fresh" {
+                    chart.set_markers(
+                        id,
+                        vec![
+                            Marker::new(time)
+                                .at_price(100.0, MarkerPos::AtPriceMiddle)
+                                .with_id("under"),
+                        ],
+                    );
+                }
                 chart.drain_events().for_each(drop);
                 let click = |pressed| egui::Event::PointerButton {
                     pos,
@@ -1590,7 +1611,15 @@ mod tests {
                     "secondary={secondary}, cover={cover}: {events:?}"
                 );
                 if cover != "eraser" {
-                    assert_eq!(chart.selected_element(), None);
+                    assert_eq!(
+                        chart.selected_element(),
+                        None,
+                        "secondary={secondary}, cover={cover}"
+                    );
+                }
+                #[cfg(feature = "drawings")]
+                if cover == "top" {
+                    assert_eq!(chart.drawings.selected_ids().count(), 0);
                 }
             }
         }

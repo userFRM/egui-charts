@@ -1542,9 +1542,6 @@ impl Chart {
                 }
             }
         }
-        for response in host_clicks {
-            self.record_host_click(ui, &response);
-        }
         let drawn: Vec<_> = panes
             .iter()
             .zip(&rects)
@@ -1571,6 +1568,10 @@ impl Chart {
                 Some(id) => self.selection.select(id, None),
                 None => self.selection.deselect(),
             }
+        }
+
+        for response in host_clicks {
+            self.record_host_click(ui, &response);
         }
 
         // The panes reflow on the next frame.
