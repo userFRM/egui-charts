@@ -585,7 +585,7 @@ mod tests {
                 let mut tags = [None; 2];
                 let x = coords.idx_to_x(10);
                 let output = ctx.run_ui(RawInput::default(), |ui| {
-                    tags = crate::chart::rendering::render_crosshair_with_options(
+                    tags = render_crosshair_with_options(
                         &RenderContext::new(ui.painter(), rect),
                         Pos2::new(x + 3.0, 100.0),
                         &bars,

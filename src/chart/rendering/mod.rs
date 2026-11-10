@@ -51,8 +51,7 @@ pub(crate) use markers::{
 };
 pub use markers::{render_event_band, render_markers};
 pub use overlays::{
-    StudyValue, ValueFormatters, render_crosshair_full, render_crosshair_with_options,
-    render_tooltip_with_options,
+    StudyValue, ValueFormatters, render_crosshair_full, render_tooltip_with_options,
 };
 pub(crate) use overlays::{
     realtime_button, realtime_button_rect, render_crosshair_at_time, render_crosshair_lines,

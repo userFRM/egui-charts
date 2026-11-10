@@ -1675,15 +1675,15 @@ fn touch_hold_released_before_the_click_limit_is_not_a_click() {
                 chart.config.show_volume = false;
                 chart.chart_options.tooltip.on_long_press = true;
                 chart.chart_options.tooltip.touch_exit_mode = mode;
-                let selected = pane
-                    .then(|| {
-                        let id = chart.add_series(Default::default());
-                        chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
-                        let pane = chart.add_pane();
-                        assert!(chart.move_series_to_pane(id, pane));
-                        ChartElementId::Indicator(id)
-                    })
-                    .unwrap_or(ChartElementId::Series(SeriesId::MAIN));
+                let selected = if pane {
+                    let id = chart.add_series(Default::default());
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                    ChartElementId::Indicator(id)
+                } else {
+                    ChartElementId::Series(SeriesId::MAIN)
+                };
                 chart.selection.select(selected, Some(50));
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 chart.apply_synced_time_scale(6.0, -10.0);
