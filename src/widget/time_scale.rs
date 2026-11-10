@@ -142,6 +142,15 @@ impl Chart {
         true
     }
 
+    /// The interval for calendar arithmetic; numeric and custom keys keep their own slots.
+    pub(super) fn calendar_timeframe(&self) -> Option<crate::model::Timeframe> {
+        if self.state.time_scale().numeric_positions().is_some() {
+            None
+        } else {
+            self.timeframe()
+        }
+    }
+
     /// Calendar zone behind the axis; `None` selects the system's local zone.
     pub(super) fn calendar_timezone(&self) -> Option<crate::model::TimezoneId> {
         let timezone = self.display_timezone();
@@ -161,13 +170,10 @@ impl Chart {
     /// calendar months in the display time zone when the edge bars fall at its midnight, and in
     /// UTC otherwise.
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
-        if self.state.time_scale().numeric_positions().is_some() {
-            return crate::model::time_at(self.state.shown(), index);
-        }
         crate::model::time_at_with_timeframe(
             self.state.shown(),
             index,
-            self.timeframe(),
+            self.calendar_timeframe(),
             self.calendar_timezone().as_ref(),
         )
     }
@@ -177,13 +183,10 @@ impl Chart {
     /// The inverse of [`Chart::index_to_time`]: a time between two bars lies between their
     /// indices, and a time outside the data is extrapolated into whitespace.
     pub fn time_to_index(&self, time: DateTime<Utc>) -> Option<f64> {
-        if self.state.time_scale().numeric_positions().is_some() {
-            return crate::model::index_at(self.state.shown(), time);
-        }
         crate::model::index_at_with_timeframe(
             self.state.shown(),
             time,
-            self.timeframe(),
+            self.calendar_timeframe(),
             self.calendar_timezone().as_ref(),
         )
     }
