@@ -180,19 +180,18 @@ mod tests {
 
     #[test]
     fn test_ultimate_momentum() {
-        let mut um = UltimateMomentum::new(3, 5, 10);
-
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
+        let mut um = UltimateMomentum::new(1, 2, 3);
+        let data: Vec<Bar> = [1.0, 2.0, 4.0, 8.0, 4.0]
+            .into_iter()
+            .map(make_bar)
+            .collect();
         um.calculate(&data);
-
-        assert_eq!(um.values.len(), 30);
-
-        // In uptrend, momentum should be positive
-        let rows = um.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", um.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 0.0, "Momentum should be positive in uptrend");
+        // Hand values for the custom 1:2:3 weighted ROC composite:
+        // bar 3: (100 + 2*300 + 3*700)/6 = 1400/3;
+        // bar 4: (-50 + 2*0 + 3*100)/6 = 125/3.
+        for (bar, want) in [(3, 1400.0 / 3.0), (4, 125.0 / 3.0)] {
+            let got = um.values().value(0, bar).unwrap();
+            assert_eq!(got, want, "bar {bar}");
+        }
     }
 }

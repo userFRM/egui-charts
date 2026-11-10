@@ -110,7 +110,7 @@ impl Chart {
                     pending_price_zoom = Some(delta_y);
                 } else {
                     // Integrate raw points multiplicatively, independently of frame batching.
-                    let zoom_scale = (-delta_y / 1000.0).min(80.0).exp_m1() * 10.0;
+                    let zoom_scale = (delta_y / 1000.0).min(80.0).exp_m1() * 10.0;
                     // Zoom around the pointer, or the right edge while the right bar stays on scroll
                     let zoom_point_x = self.zoom_anchor(hp.x - chart_rect_min_x, chart_width);
 
@@ -638,8 +638,9 @@ impl Chart {
     /// Apply deferred price-axis zoom from mouse wheel or price-axis drag.
     ///
     /// Called after all input processing to avoid mutable borrow conflicts. A
-    /// movement of `dy` points scales the range by `exp(dy / height)`, so a drag
-    /// zooms by the same amount however many frames it spans.
+    /// drag movement of `dy` points scales the range by `exp(dy / height)`, so a
+    /// drag zooms by the same amount however many frames it spans. Wheel input
+    /// uses the opposite sign so positive points narrow the price range.
     pub(crate) fn apply_price_zoom(
         &mut self,
         pending_price_zoom: Option<f32>,
@@ -647,7 +648,9 @@ impl Chart {
         price_rect: Rect,
         transform: PriceTransform,
     ) {
-        let wheel = pending_price_zoom.zip(response.hover_pos().map(|p| p.y));
+        let wheel = pending_price_zoom
+            .map(|dy| -dy)
+            .zip(response.hover_pos().map(|p| p.y));
         let drag = self.price_axis_drag.take().map(|(y, dy)| (dy, y));
         for (dy, anchor_y) in wheel.into_iter().chain(drag) {
             let scale = self.state.price_scale();
@@ -957,7 +960,7 @@ mod tests {
                             }
                         }
                         let (zoomed, moved) = chart.get_time_scale_state();
-                        let expected = spacing * (-total / 1000.0).exp();
+                        let expected = spacing * (total / 1000.0).exp();
                         assert!(
                             (zoomed - expected).abs() < 1e-5,
                             "{case}: spacing={zoomed}, expected={expected}"
@@ -1041,7 +1044,7 @@ mod tests {
             let expected_offset = before.1 + if fresh && shift { 30.0 / before.0 } else { 0.0 };
             let expected_span = (range.max - range.min)
                 * if fresh && price {
-                    (-30.0 / f64::from(rect.height())).exp()
+                    (30.0 / f64::from(rect.height())).exp()
                 } else {
                     1.0
                 };
@@ -1115,7 +1118,7 @@ mod tests {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn extreme_finite_wheel_zoom_reaches_spacing_limits() {
-        for (delta, expected) in [(-86_500.0, 50.0), (-f32::MAX, 50.0), (f32::MAX, 0.5)] {
+        for (delta, expected) in [(86_500.0, 50.0), (f32::MAX, 50.0), (-f32::MAX, 0.5)] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0], &[105.0]);
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -1276,65 +1279,140 @@ mod tests {
         (range.min, range.max)
     }
 
-    /// A wheel notch over the chart zooms the time axis, also with the zoom modifier (Ctrl, or
-    /// Cmd on macOS) held, which egui leaves out of its smoothed scroll delta.
-    /// While the right bar stays on scroll, the zoom keeps the right offset.
+    /// Positive wheel input zooms in on either axis, retaining its anchor and permissions.
+    /// Ctrl/Cmd wheel and point-based trackpad input follow the same direction.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn wheel_zooms_the_time_axis_with_and_without_the_zoom_modifier() {
-        for (modifiers, right_bar_stays, fraction, group_enabled) in [
-            (Modifiers::NONE, false, 0.25, true),
-            (Modifiers::NONE, false, 0.25, false),
-            (Modifiers::COMMAND, false, 0.75, true),
-            (Modifiers::COMMAND, false, 0.75, false),
-            (Modifiers::NONE, true, 0.25, true),
+    fn wheel_zooms_both_axes_with_and_without_the_zoom_modifier() {
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 800.0),
+            (crate::theme::Theme::dark(), 800.0),
+            (crate::theme::Theme::light(), 360.0),
+            (crate::theme::Theme::dark(), 360.0),
         ] {
             let ctx = egui::Context::default();
-            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-            chart.chart_options.handle_scale.enabled = group_enabled;
-            chart.chart_options.handle_scroll.enabled = !group_enabled;
-            chart.chart_options.time_scale.right_bar_stays_on_scroll = right_bar_stays;
-            frame(&ctx, &mut chart, 0.0, Vec::new());
-            let (spacing, offset) = chart.get_time_scale_state();
-            let rect = chart.last_rendered_price_rect;
-            let pointer = Pos2::new(rect.left() + rect.width() * fraction, rect.center().y);
-            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
-            let wheel = Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Line,
-                delta: egui::vec2(0.0, -1.0),
-                phase: egui::TouchPhase::Move,
-                source: egui::MouseWheelSource::Wheel,
-                modifiers,
+            let frame = |ctx: &egui::Context, chart: &mut Chart, time, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
             };
-            frame(&ctx, &mut chart, 0.04, vec![wheel]);
-            for i in 3..10 {
-                frame(&ctx, &mut chart, i as f64 * 0.02, Vec::new());
+            for (modifiers, right_bar_stays, fraction, group_enabled) in [
+                (Modifiers::NONE, false, 0.25, true),
+                (Modifiers::NONE, false, 0.25, false),
+                (Modifiers::CTRL, false, 0.75, true),
+                (Modifiers::COMMAND, false, 0.75, true),
+                (Modifiers::COMMAND, false, 0.75, false),
+                (Modifiers::NONE, true, 0.25, true),
+            ] {
+                for price in [false, true] {
+                    for delta in [-1.0_f32, 1.0] {
+                        for (unit, source) in [
+                            (egui::MouseWheelUnit::Line, egui::MouseWheelSource::Wheel),
+                            (
+                                egui::MouseWheelUnit::Point,
+                                egui::MouseWheelSource::Momentum,
+                            ),
+                        ] {
+                            let case = format!(
+                                "{modifiers:?}, price={price}, delta={delta}, unit={unit:?}, enabled={group_enabled}, width={width}"
+                            );
+                            let time = ctx.input(|input| input.time) + 1.0;
+                            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                            chart.set_theme(&ctx, &theme);
+                            chart.chart_options.handle_scale.enabled = group_enabled;
+                            chart.chart_options.handle_scroll.enabled = !group_enabled;
+                            chart.chart_options.time_scale.right_bar_stays_on_scroll =
+                                right_bar_stays;
+                            chart.state.price_scale_mut().set_range(90.0, 110.0);
+                            frame(&ctx, &mut chart, time, Vec::new());
+                            let (spacing, offset) = chart.get_time_scale_state();
+                            let rect = chart.last_rendered_price_rect;
+                            let pointer = Pos2::new(
+                                if price {
+                                    rect.right() + 10.0
+                                } else {
+                                    rect.left() + rect.width() * fraction
+                                },
+                                rect.top() + rect.height() * fraction,
+                            );
+                            frame(
+                                &ctx,
+                                &mut chart,
+                                time + 0.02,
+                                vec![Event::PointerMoved(pointer)],
+                            );
+                            let anchor_price =
+                                110.0 - 20.0 * f64::from((pointer.y - rect.top()) / rect.height());
+                            let wheel = Event::MouseWheel {
+                                unit,
+                                delta: egui::vec2(0.0, delta),
+                                phase: egui::TouchPhase::Move,
+                                source,
+                                modifiers,
+                            };
+                            frame(&ctx, &mut chart, time + 0.04, vec![wheel]);
+                            for i in 3..10 {
+                                frame(&ctx, &mut chart, time + i as f64 * 0.02, Vec::new());
+                            }
+                            let (zoomed, moved) = chart.get_time_scale_state();
+                            let range = chart.state.price_scale().range();
+                            if price && group_enabled {
+                                let span = range.max - range.min;
+                                assert_eq!(span < 20.0, delta > 0.0, "{case}: {range:?}");
+                                assert!((span - 20.0).abs() > 1e-6, "{case}");
+                                // Affine range scaling keeps the pointed value at its original fraction.
+                                let anchored = range.max
+                                    - span * f64::from((pointer.y - rect.top()) / rect.height());
+                                assert!(
+                                    (anchored - anchor_price).abs() < 1e-6,
+                                    "{case}: anchor {anchored}, expected {anchor_price}"
+                                );
+                                assert_eq!((zoomed, moved), (spacing, offset), "{case}");
+                            } else {
+                                assert_eq!((range.min, range.max), (90.0, 110.0), "{case}");
+                                if group_enabled {
+                                    assert_eq!(
+                                        zoomed > spacing,
+                                        delta > 0.0,
+                                        "{case}: spacing {spacing} -> {zoomed}"
+                                    );
+                                    assert_ne!(zoomed, spacing, "{case}");
+                                } else {
+                                    assert_eq!((zoomed, moved), (spacing, offset), "{case}");
+                                }
+                                assert_eq!(
+                                    moved == offset,
+                                    right_bar_stays || !group_enabled,
+                                    "{case}"
+                                );
+                                let anchor = if right_bar_stays {
+                                    rect.right() - 1.0
+                                } else {
+                                    pointer.x
+                                };
+                                let expected = offset
+                                    + (rect.right() - anchor - 1.0)
+                                        * (1.0 / zoomed - 1.0 / spacing);
+                                assert!((moved - expected).abs() < 1e-4, "{case}: anchor moved");
+                            }
+                        }
+                    }
+                }
             }
-            let (zoomed, moved) = chart.get_time_scale_state();
-            assert!(
-                if group_enabled {
-                    zoomed > spacing
-                } else {
-                    zoomed == spacing
-                },
-                "{modifiers:?}: spacing {spacing} -> {zoomed}"
-            );
-            // Zooming around the centre moves the right edge unless the right bar stays.
-            assert_eq!(
-                moved == offset,
-                right_bar_stays || !group_enabled,
-                "offset {offset} -> {moved}"
-            );
-            let anchor = if right_bar_stays {
-                rect.right() - 1.0
-            } else {
-                pointer.x
-            };
-            let expected = offset + (rect.right() - anchor - 1.0) * (1.0 / zoomed - 1.0 / spacing);
-            assert!(
-                (moved - expected).abs() < 1e-4,
-                "the logical bar at the zoom anchor must stay at the same pixel"
-            );
         }
     }
 
