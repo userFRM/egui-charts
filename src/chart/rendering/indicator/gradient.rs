@@ -123,7 +123,7 @@ mod tests {
     use crate::studies::{ConfiguredStudy, StochasticMomentumIndex};
 
     #[test]
-    fn smi_gradients_split_crossings_keep_colours_and_skip_gaps() {
+    fn smi_gradients_split_crossings_keep_colours_and_skip_empty_ranges() {
         let bars: Vec<_> = [110.0, 90.0, f64::NAN, 110.0]
             .into_iter()
             .map(|close| {
@@ -132,6 +132,14 @@ mod tests {
             .collect();
         let mut study = ConfiguredStudy::new(Box::new(StochasticMomentumIndex::new(1, 1, 1, 1)));
         study.calculate(&bars);
+        // A missing bar or a view beyond the data must not pull shared scales to zero.
+        for range in [2..3, 4..8] {
+            assert!(
+                crate::studies::plots::gradient_prices(&study, range)
+                    .next()
+                    .is_none()
+            );
+        }
         let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 200.0));
         for inverted in [false, true] {
             for visible in [false, true] {

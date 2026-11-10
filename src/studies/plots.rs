@@ -55,10 +55,10 @@ pub(crate) fn gradient_prices(
                 .any(|color| *color != Color32::TRANSPARENT)
         })
         .flat_map(move |fill| {
-            std::iter::once(fill.baseline).chain(
-                bars.clone()
-                    .filter_map(move |bar| study.plot_value(fill.plot, bar)),
-            )
+            bars.clone()
+                .filter_map(move |bar| study.plot_value(fill.plot, bar))
+                .filter(|value| value.is_finite())
+                .flat_map(move |value| [fill.baseline, value])
         })
         .filter(|value| value.is_finite())
 }
