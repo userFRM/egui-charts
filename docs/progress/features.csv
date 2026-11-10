@@ -5,7 +5,7 @@ Builder API,Broker API,Broker capability flags,unverified,host,src/model/trading
 Builder API,Broker API,Broker connection contract,unverified,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/view.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/history.rs,
 Builder API,Broker API,Broker host callbacks,unverified,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs,
 Builder API,Broker API,Buy and sell buttons on the chart,unverified,host,src/chart/rendering/legend/mod.rs;src/chart/rendering/legend/quotes.rs;src/widget/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs,
-Builder API,Broker API,Depth of market trading ladder,unverified,host,src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs,
+Builder API,Broker API,Depth of market trading ladder,incomplete,host,src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/ui/trading/mod.rs,236
 Builder API,Broker API,Executions shown on the chart,incomplete,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/executions.rs,
 Builder API,Broker API,Instrument trading info and formatters,incomplete,host,src/model/trading.rs;src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/format.rs;src/ui/trading/dom.rs,1125
 Builder API,Broker API,Order and position lines on the chart,incomplete,host,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
@@ -446,7 +446,7 @@ Order flow,Order flow,Delta split into trade-size ranges,incomplete,library,src/
 Order flow,Order flow,Depth ladder liquidity and execution columns sized to content,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs,
 Order flow,Order flow,"Depth ladder order entry, editing and brackets",incomplete,host,src/ui/trading/dom.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/mod.rs,236
 Order flow,Order flow,Depth ladder session and resettable profiles,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs,
-Order flow,Order flow,Depth ladder with configurable visible levels and negative-price scrolling,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs,2533
+Order flow,Order flow,Depth ladder with configurable visible levels and negative-price scrolling,incomplete,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs,236;1756;2533
 Order flow,Order flow,Developing POC line through the session,unverified,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Diagonal imbalance detection and highlighting,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Execution volume bubbles at trade prices and times,unverified,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/model/clock.rs;src/widget/frame/mod.rs,2301;2302;2426
@@ -956,7 +956,7 @@ Terminal,Trading panel,Account manager,unverified,host,src/ui/trading/mod.rs;src
 Terminal,Trading panel,Bottom trading panel container,unverified,library,src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;terminal/src/trading.rs;terminal/src/layout.rs,
 Terminal,Trading panel,Brackets: take-profit and stop-loss attached to an entry,incomplete,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/services/paper.rs,
 Terminal,Trading panel,Buy/Sell buttons on the chart,incomplete,host,src/ui/symbol_header.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;terminal/src/trading.rs,
-Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,incomplete,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs,
+Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,incomplete,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs,236
 Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",unverified,host,src/chart/rendering/trading_lines/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs,
 Terminal,Trading panel,Execution markers on the chart,unverified,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/executions.rs,
 Terminal,Trading panel,Order and position lines on the chart,incomplete,library,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
