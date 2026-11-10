@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::{ArrowStyle, Drawing, LineMeasurementPosition};
+use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -87,6 +87,15 @@ impl StyleTab {
                     ui.checkbox(
                         &mut settings.channel_midline,
                         l10n::text(ui.ctx(), "Show middle line"),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                }
+                if settings.tool_type == DrawingToolType::VerticalLine {
+                    let label = ui.label(l10n::text(ui.ctx(), "Extend"));
+                    ui.checkbox(
+                        &mut settings.line_measurements.across_panes,
+                        l10n::text(ui.ctx(), "Through all panes"),
                     )
                     .labelled_by(label.id);
                     ui.end_row();
@@ -282,7 +291,6 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
 mod tests {
     use super::*;
     use crate::Chart;
-    use crate::drawings::DrawingToolType;
     use crate::model::BarData;
     use crate::ui_kit::color_picker::MAIN_COLORS;
     use egui::{Context, Event, Modifiers, PointerButton, Pos2, Rect, Shape};

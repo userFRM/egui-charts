@@ -35,7 +35,7 @@ pub fn render_volume_bar(
         return;
     }
     let theme = context.painter.ctx().active_theme();
-    let color = if candle.is_bullish() {
+    let color = if candle.close >= candle.open {
         theme.chart.volume_up()
     } else {
         theme.chart.volume_down()

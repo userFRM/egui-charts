@@ -73,10 +73,10 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
-/// A column of a [`DataTable`] across symbol changes and restores of the chart's saved state: the
-/// title of its study with the study's place among those of that title, `None` for the main
-/// series, then its plot or main series column.
-pub(crate) type ColumnId = (Option<(String, usize)>, usize);
+/// A column of a [`DataTable`]: the original id and title of its study, `None` for the main
+/// series, then its plot or main series column. The title keeps a choice off a study of another
+/// title that a restore adds under the id the choice was made for.
+pub(crate) type ColumnId = (Option<(usize, String)>, usize);
 
 /// The loaded bars and visible study plots as text, aligned by chart time: what
 /// `Chart::export_csv` (with `csv`) writes and the chart data table lists.
@@ -316,12 +316,10 @@ impl Chart {
         let column_ids = (0..6)
             .map(|column| (None, column))
             .chain(columns.iter().map(|&(study, line, _)| {
-                let title = studies[study].name();
-                let occurrence = studies[..study]
-                    .iter()
-                    .filter(|earlier| earlier.name() == title)
-                    .count();
-                (Some((title.to_owned(), occurrence)), line)
+                let id = self.study_ids[study].0;
+                #[cfg(feature = "drawings")]
+                let id = self.study_column_ids.get(&id).copied().unwrap_or(id);
+                (Some((id, studies[study].name().to_owned())), line)
             }))
             .collect();
         (
