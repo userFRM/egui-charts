@@ -145,6 +145,16 @@ impl FillStyle {
     }
 }
 
+/// Independent colours and visibility of a declared vertical gradient.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct GradientStyle {
+    /// Colours at the two values in the declared ramp, including their opacity.
+    pub colors: [Color32; 2],
+    /// Whether the fill is drawn, independently of its plot and guides.
+    pub visible: bool,
+}
+
 /// Editable presentation of one reference level in a study's pane, such as 70 for RSI.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -224,6 +234,14 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     }
     // Saved band styles are kept whatever the study declares so far, since a study can declare
     // a band only once it has data. Bands beyond them start with the study's own style.
+    let gradients = study.gradients();
+    let saved = settings.gradients.len().min(gradients.len());
+    settings
+        .gradients
+        .extend(gradients[saved..].iter().map(|fill| GradientStyle {
+            colors: fill.colors,
+            visible: true,
+        }));
     let fills = study.fills();
     let saved = settings.fills.len().min(fills.len());
     settings
@@ -336,6 +354,10 @@ pub struct StudySettings {
     /// does not declare yet are kept for when it does.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
+    /// Independent styles for [`Indicator::gradients`], in declaration order.
+    /// Older settings inherit the study's declared ramps.
+    #[serde(default)]
+    pub gradients: Vec<GradientStyle>,
 }
 
 fn enabled_by_default() -> bool {
@@ -1078,6 +1100,23 @@ impl Indicator for ConfiguredStudy {
                     fill.inverted_color = style.inverted_color;
                 }
                 Some(fill)
+            })
+            .collect()
+    }
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        self.study
+            .gradients()
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut fill)| {
+                if let Some(style) = self.settings.gradients.get(index) {
+                    fill.colors = if style.visible {
+                        style.colors
+                    } else {
+                        [Color32::TRANSPARENT; 2]
+                    };
+                }
+                fill
             })
             .collect()
     }

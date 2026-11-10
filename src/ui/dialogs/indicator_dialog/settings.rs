@@ -36,6 +36,7 @@ pub struct IndicatorSettingsDialog {
     title: String,
     line_names: Vec<String>,
     levels: Vec<(f64, &'static str)>,
+    gradient_names: Vec<&'static str>,
     tab: Tab,
     current_interval: Option<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
@@ -94,6 +95,7 @@ impl IndicatorSettingsDialog {
         self.inputs = study.inputs();
         self.title = format!("{} settings", study.name());
         self.line_names = study.line_names();
+        self.gradient_names = study.gradients().iter().map(|fill| fill.name).collect();
         self.levels = study
             .pane()
             .levels
@@ -505,6 +507,34 @@ impl IndicatorSettingsDialog {
                                         if let Some(color) = &mut fill.inverted_color {
                                             ui.color_edit_button_srgba(color).accessible_name(
                                                 l10n::text(ui.ctx(), "Band colour below"),
+                                            );
+                                        }
+                                    });
+                                });
+                            }
+                            for (index, fill) in edit.settings.gradients.iter_mut().enumerate() {
+                                ui.push_id(("gradient", index), |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.checkbox(
+                                            &mut fill.visible,
+                                            l10n::text(
+                                                ui.ctx(),
+                                                self.gradient_names
+                                                    .get(index)
+                                                    .copied()
+                                                    .unwrap_or("Gradient"),
+                                            ),
+                                        );
+                                        for (end, color) in fill.colors.iter_mut().enumerate() {
+                                            ui.color_edit_button_srgba(color).accessible_name(
+                                                l10n::text(
+                                                    ui.ctx(),
+                                                    if end == 0 {
+                                                        "First colour"
+                                                    } else {
+                                                        "Second colour"
+                                                    },
+                                                ),
                                             );
                                         }
                                     });
@@ -1125,16 +1155,24 @@ mod tests {
         );
     }
 
-    /// Both oscillators preview real inputs and independent guide styles, then cancel or commit
-    /// as one undoable edit. Reference values use rational SMA and Wilder calculations.
+    /// Oscillators preview real inputs and independent guide styles, then cancel or commit
+    /// as one undoable edit. Reference values use rational EMA, SMA and Wilder calculations.
     #[test]
-    fn stochastic_preview_cancel_apply_and_stream_restore() {
+    fn smi_and_stochastic_preview_cancel_apply_and_stream_restore() {
         use crate::model::{Bar, BarData, PriceSource};
         use crate::studies::{IndicatorFactory, StudySource, StudyTemplate};
         use crate::widget::Chart;
         use egui_kittest::{Harness, kittest::Queryable};
 
         for (name, expected) in [
+            (
+                "SMI",
+                [
+                    [24300.0 / 4577.0, -90248918812.0 / 92919667995.0],
+                    [-72900.0 / 4253.0, -1376112074668.0 / 86342003055.0],
+                    [92300.0 / 4969.0, 9100832864927708.0 / 1287100239540885.0],
+                ],
+            ),
             (
                 "Stochastic",
                 [
@@ -1198,6 +1236,28 @@ mod tests {
             edited.levels[2].value = Some(120.0);
             edited.level_fill_color = egui::Color32::from_rgba_unmultiplied(20, 120, 80, 60);
             edited.plots[0].plot_type = PlotType::StepLine;
+            if name == "SMI" {
+                let mut json = serde_json::to_value(&edited).unwrap();
+                assert_eq!(json["gradients"].as_array().map(Vec::len), Some(2));
+                assert_eq!(
+                    chart
+                        .indicators()
+                        .find(|(i, _)| *i == id)
+                        .unwrap()
+                        .1
+                        .inputs()
+                        .iter()
+                        .filter(|i| matches!(i.value, InputValue::Length(_)))
+                        .count(),
+                    3
+                );
+                json["gradients"][0]["colors"] =
+                    serde_json::json!([[20, 40, 80, 100], [10, 20, 30, 50]]);
+                json["gradients"][1]["colors"] =
+                    serde_json::json!([[80, 20, 40, 120], [0, 0, 0, 0]]);
+                json["gradients"][1]["visible"] = false.into();
+                edited = serde_json::from_value(json).unwrap();
+            }
             edited.price_line_plots = vec![1];
             let mut dialog = IndicatorSettingsDialog::default();
             for (action, theme, size) in [
@@ -1211,7 +1271,7 @@ mod tests {
                 for input in &mut dialog.inputs {
                     if matches!(input.value, InputValue::Length(_)) {
                         input.value = InputValue::Length(
-                            if matches!(input.id.as_str(), "k_period" | "stoch_period") {
+                            if matches!(input.id.as_str(), "k_period" | "stoch_period" | "period") {
                                 3
                             } else {
                                 2
@@ -1265,12 +1325,32 @@ mod tests {
                     });
                 harness.run();
                 for caption in [
-                    "Overbought",
-                    "Oversold",
+                    if name == "SMI" {
+                        "Upper guide"
+                    } else {
+                        "Overbought"
+                    },
+                    if name == "SMI" {
+                        "Lower guide"
+                    } else {
+                        "Oversold"
+                    },
                     "Middle guide",
                     "Fill colour",
                     "Latest value line",
-                ] {
+                ]
+                .into_iter()
+                .chain(
+                    (name == "SMI")
+                        .then_some([
+                            "Upper shading",
+                            "Lower shading",
+                            "First colour",
+                            "Second colour",
+                        ])
+                        .into_iter()
+                        .flatten(),
+                ) {
                     assert!(
                         harness.query_all_by_label(caption).next().is_some(),
                         "{name}: {caption}"

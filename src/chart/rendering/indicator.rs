@@ -1,3 +1,5 @@
+mod gradient;
+
 use crate::chart::rendering::{ChartMapping, RenderContext};
 use crate::model::Bar;
 use crate::model::LineStyle;
@@ -349,6 +351,13 @@ impl IndicatorRenderer {
             .min(coords.x_to_idx(context.rect.left()).saturating_sub(1));
         let display_end = coords.x_to_idx(context.rect.right()).saturating_add(2);
         paint_fills(
+            &painter,
+            indicator,
+            display_start..display_end,
+            price_scale,
+            coords,
+        );
+        gradient::paint(
             &painter,
             indicator,
             display_start..display_end,
