@@ -1276,10 +1276,7 @@ impl Chart {
                 let painter = ui
                     .painter()
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
-                if !collapsed && let Some((mut pos, options)) = series_crosshair {
-                    if let Some(index) = hovered {
-                        pos.x = horizontal.idx_to_x(index);
-                    }
+                if !collapsed && let Some((pos, options)) = series_crosshair {
                     crate::chart::rendering::render_crosshair_lines(
                         &crate::chart::rendering::RenderContext::new(&painter, chart_rect),
                         pos,
