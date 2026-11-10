@@ -700,6 +700,12 @@ impl Chart {
                 || self.state.data().is_empty(),
         );
         let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
+        if touch_readout.touch_input
+            && self.chart_options.tooltip.enabled
+            && self.chart_options.tooltip.on_long_press
+        {
+            self.host_events.touch_position = Some(None);
+        }
         let mut readout_flags = egui::response::Flags::empty();
         if self.chart_options.tooltip.on_long_press
             && self.chart_options.tooltip.enabled

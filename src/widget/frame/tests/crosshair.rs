@@ -1943,4 +1943,20 @@ fn latched_touch_readout_is_the_reported_crosshair() {
             }
         }
     }
+    for on_long_press in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(Default::default());
+        chart.chart_options.tooltip.on_long_press = on_long_press;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let pos = chart.last_rendered_price_rect.center();
+        chart.drain_events().for_each(drop);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        assert_eq!(
+            chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(_)))),
+            !on_long_press,
+            "an empty plot has no held readout"
+        );
+    }
 }
