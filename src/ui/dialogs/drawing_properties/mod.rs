@@ -187,7 +187,8 @@ mod tests {
                 let narrow = egui::Context::default();
                 crate::theme::apply_to_egui(&narrow, &theme);
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 640.0));
-                let tabs = if tool == Tool::FibonacciRetracement {
+                let tabs = if matches!(tool, Tool::FibonacciRetracement | Tool::FibonacciExtension)
+                {
                     PropertiesTab::all().to_vec()
                 } else {
                     vec![PropertiesTab::Inputs]

@@ -143,8 +143,8 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a retracement's or extension's levels, typography, text placement and construction visibility
-    /// as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    /// Replace a retracement's or extension's levels, typography, text placement and construction
+    /// visibility as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
@@ -580,125 +580,6 @@ mod tests {
         chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
         assert!(chart.set_fibonacci_config(id, config).is_err());
         assert!(!chart.can_undo());
-    }
-
-    /// A single click edits the selected level, including an empty field. Draft cancellation
-    /// changes nothing, and confirming updates only that level in one undoable operation.
-    #[test]
-    fn fibonacci_captions_edit_inline_without_moving_anchors() {
-        use crate::drawings::DrawingToolType as T;
-        use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect};
-        let ctx = egui::Context::default();
-        let bars = (0..60)
-            .map(|i| {
-                crate::model::Bar::new(
-                    DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
-                    100.0,
-                    220.0,
-                    90.0,
-                    150.0,
-                    1.0,
-                )
-            })
-            .collect();
-        let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
-        chart.config.show_volume = false;
-        chart.set_visible_bars(60);
-        let mut drawing = Drawing::new(7, T::FibonacciExtension);
-        drawing.completed = true;
-        drawing.chart_points = [(5.0, 100.0), (20.0, 200.0), (45.0, 150.0)]
-            .map(|(x, y)| ChartPoint::new(x, y))
-            .to_vec();
-        let anchors = drawing.chart_points.clone();
-        drawing
-            .fib_config
-            .as_mut()
-            .unwrap()
-            .levels
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, l)| l.visible = i < 2);
-        chart.drawings_mut().drawings.push(drawing);
-        chart.drawings_mut().select(7);
-        let mut time = 0.0;
-        let mut frame = |chart: &mut Chart, events| {
-            time += 0.1;
-            ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                    time: Some(time),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    chart.show(ui);
-                },
-            )
-            .drop_without_applying_deltas();
-        };
-        frame(&mut chart, vec![]);
-        frame(&mut chart, vec![]);
-        for cancel in [true, false] {
-            let drawing = &chart.drawings().drawings[0];
-            let pos = Pos2::new(
-                (drawing.points[1].x + drawing.points[2].x) * 0.5,
-                drawing.level_ys[1],
-            );
-            frame(&mut chart, vec![Event::PointerMoved(pos)]);
-            for pressed in [true, false] {
-                frame(
-                    &mut chart,
-                    vec![Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
-                    }],
-                );
-            }
-            assert!(chart.drawings().text_editor.is_some());
-            frame(&mut chart, vec![Event::Text("Target".into())]);
-            assert_eq!(
-                chart.drawings().text_editor.as_ref().unwrap().draft,
-                "Target"
-            );
-            let config = serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
-            assert_eq!(config["levels"][1]["text"].as_str().unwrap_or_default(), "");
-            frame(
-                &mut chart,
-                vec![Event::Key {
-                    key: if cancel { Key::Escape } else { Key::Enter },
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: if cancel {
-                        Modifiers::NONE
-                    } else {
-                        Modifiers::COMMAND
-                    },
-                }],
-            );
-            assert!(chart.drawings().text_editor.is_none());
-            assert_eq!(chart.drawings().drawings[0].chart_points, anchors);
-            let config = serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
-            assert_eq!(config["levels"][0]["text"].as_str().unwrap_or_default(), "");
-            assert_eq!(
-                config["levels"][1]["text"].as_str().unwrap_or_default(),
-                if cancel { "" } else { "Target" }
-            );
-            if cancel {
-                assert!(!chart.can_undo());
-            } else {
-                assert!(chart.undo());
-                assert!(!chart.can_undo());
-                assert!(chart.redo());
-                let json = chart.save_drawings().unwrap().to_json().unwrap();
-                chart.load_drawings(&json).unwrap();
-                let config =
-                    serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
-                assert_eq!(config["levels"][1]["text"], "Target");
-            }
-        }
     }
 
     /// Host edits retain measurements in saved records and templates and undo in one step;

@@ -328,7 +328,7 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
-    /// Custom retracement text beside this level, independent of its numeric label.
+    /// Custom retracement or extension text beside this level, independent of its numeric label.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     /// Line width in points; absent inherits the drawing's level width.

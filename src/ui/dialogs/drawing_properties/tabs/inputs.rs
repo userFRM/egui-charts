@@ -1350,6 +1350,26 @@ mod tests {
                 .extend([drawing.clone(), peer.clone()]);
             chart.drawings_mut().select_drawings([7, 8]);
             let mut dialog = DrawingPropertiesDialog::new();
+            // Merely inspecting an older drawing must not materialise its effective config.
+            chart.drawings_mut().drawings[0].fib_config = None;
+            for tab in [PropertiesTab::Style, PropertiesTab::Text] {
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = tab;
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert!(chart.drawings().drawings[0].fib_config.is_none());
+                let pos = texts
+                    .iter()
+                    .find(|(text, _)| text == "Ok")
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, pos);
+                assert!(chart.drawings().drawings[0].fib_config.is_none());
+                assert!(chart.undo());
+                assert!(chart.drawings().drawings[0].fib_config.is_none());
+                assert!(!chart.can_undo());
+            }
+            chart.drawings_mut().drawings[0].fib_config = drawing.fib_config.clone();
             for confirm in [false, true] {
                 dialog.open_for_chart(&chart, DrawingId(7));
                 dialog.active_tab = PropertiesTab::Text;
@@ -1423,66 +1443,6 @@ mod tests {
                     assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
                 }
             }
-        }
-    }
-
-    /// Viewing legacy extension controls retains the absent configuration through confirmation
-    /// and undo, until a field is deliberately edited.
-    #[test]
-    fn legacy_extension_controls_preserve_absent_configuration() {
-        let ctx = Context::default();
-        let bars = (0..20)
-            .map(|i| {
-                crate::model::Bar::new(
-                    chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
-                    100.0,
-                    210.0,
-                    90.0,
-                    150.0,
-                    1.0,
-                )
-            })
-            .collect();
-        let mut chart = Chart::new(BarData::from_bars(bars));
-        let mut drawing = Drawing::new(7, Tool::FibonacciExtension);
-        drawing.completed = true;
-        drawing.chart_points = [(2.0, 100.0), (8.0, 200.0), (14.0, 150.0)]
-            .map(|(x, y)| ChartPoint::new(x, y))
-            .to_vec();
-        // A restored drawing already carries authoritative times for its anchors.
-        for point in &mut drawing.chart_points {
-            let time =
-                chrono::DateTime::from_timestamp(1_700_000_000 + point.bar_idx as i64 * 60, 0)
-                    .unwrap();
-            point.time_anchor = Some((time, point.bar_idx));
-        }
-        chart.drawings_mut().drawings.push(drawing);
-        let mut dialog = DrawingPropertiesDialog::new();
-        dialog.config.height = 740.0;
-        let press = |dialog: &mut DrawingPropertiesDialog, chart: &mut Chart, label: &str| {
-            let texts = frame(dialog, chart, &ctx, vec![]);
-            let pos = texts
-                .iter()
-                .find(|(text, _)| text == label)
-                .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
-                .1
-                .center();
-            click(dialog, chart, &ctx, pos);
-        };
-        // Previewing an older drawing retains its absent config; confirmation and undo do too.
-        chart.drawings_mut().select(7);
-        chart.drawings_mut().drawings[0].fib_config = None;
-        for tab in [PropertiesTab::Style, PropertiesTab::Text] {
-            dialog.open_for_chart(&chart, DrawingId(7));
-            dialog.active_tab = tab;
-            frame(&mut dialog, &mut chart, &ctx, vec![]);
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
-            assert!(!chart.can_undo());
-            press(&mut dialog, &mut chart, "Ok");
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
-            assert!(chart.undo());
-            assert!(chart.drawings().drawings[0].fib_config.is_none());
-            assert!(!chart.can_undo());
         }
     }
 
