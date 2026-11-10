@@ -537,7 +537,7 @@ impl Drawing {
                 H::Center => line[0].lerp(line[1], 0.5),
                 H::Right => line[1],
             };
-            if !point.is_finite() {
+            if !point.is_finite() || !chart_rect.y_range().contains(point.y) {
                 continue;
             }
             let price = (view.y_to_price)(point.y);
@@ -1811,7 +1811,13 @@ mod tests {
                     ),
                     (H::Right, 700.0, 225.0),
                 ] {
-                    for vertical in [V::Top, V::Middle, V::Bottom] {
+                    for (vertical, clip) in [
+                        (V::Top, rect),
+                        (V::Middle, rect),
+                        (V::Bottom, rect),
+                        (V::Middle, rect.translate(egui::vec2(0.0, -1000.0))),
+                        (V::Middle, rect.translate(egui::vec2(0.0, 1000.0))),
+                    ] {
                         let mut d = Drawing::new(0, Tool::FibonacciChannel);
                         // A half-channel translation takes 100 to 125; B is 200 on a linear
                         // scale or 180 on a log scale, giving 225 at the other endpoint.
@@ -1868,20 +1874,25 @@ mod tests {
                         let mut output =
                             egui::Context::default().run_ui(Default::default(), |ui| {
                                 d.render_fibonacci_channel(
-                                    &ui.painter().with_clip_rect(rect),
-                                    rect,
+                                    &ui.painter().with_clip_rect(clip),
+                                    clip,
                                     &view,
                                 );
                             });
                         output.textures_delta.clear();
-                        let text = output
-                            .shapes
-                            .iter()
-                            .find_map(|s| match &s.shape {
-                                egui::Shape::Text(t) => Some(t),
-                                _ => None,
-                            })
-                            .expect("channel price label");
+                        let text = output.shapes.iter().find_map(|s| match &s.shape {
+                            egui::Shape::Text(t) => Some(t),
+                            _ => None,
+                        });
+                        if !clip.y_range().contains(y(price)) {
+                            assert!(
+                                text.is_none(),
+                                "offscreen prices must not be pinned to the pane"
+                            );
+                            output.drop_without_applying_deltas();
+                            continue;
+                        }
+                        let text = text.expect("channel price label");
                         assert!((text.galley.text().parse::<f64>().unwrap() - price).abs() < 0.01);
                         let bounds = Rect::from_min_size(text.pos, text.galley.size());
                         let near = |a: f32, b: f32| {
@@ -2086,6 +2097,19 @@ mod tests {
                 } else {
                     price
                 };
+                // Channel endpoints are x=560 and x=880, rising 100 or doubling per 320 px.
+                let price = if tool == Tool::FibonacciChannel && extend {
+                    let distance = if left { -560.0 } else { 520.0 } / 320.0;
+                    if log {
+                        price * 2.0_f64.powf(distance)
+                    } else {
+                        price + 100.0 * distance
+                    }
+                } else {
+                    price
+                };
+                let in_view =
+                    in_view && (tool != Tool::FibonacciChannel || (10.0..=1000.0).contains(&price));
                 let formatted = if custom {
                     format!("host:{price:.5}")
                 } else {

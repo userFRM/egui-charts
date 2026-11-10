@@ -26,14 +26,19 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
-            ui.label(l10n::text(ui.ctx(), "Color"));
-            if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
-            {
-                props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+            if tool != Some(DrawingToolType::FibonacciChannel) {
+                ui.label(l10n::text(ui.ctx(), "Color"));
+                if let Some(color) =
+                    color_swatch(ui, color_picker, props.color, "drawing_props_color")
+                {
+                    props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+                }
+                ui.end_row();
             }
-            ui.end_row();
 
-            if tool.is_none_or(|tool| tool.draws_line()) {
+            if tool
+                .is_none_or(|tool| tool.draws_line() && tool != DrawingToolType::FibonacciChannel)
+            {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
@@ -66,7 +71,13 @@ impl StyleTab {
                     {
                         props.color = keep_opacity(color, props.color, fill_picker.custom_mode);
                         for level in &mut config.levels {
-                            level.color = props.color.to_srgba_unmultiplied();
+                            let [r, g, b, a] = color.to_srgba_unmultiplied();
+                            let opacity = if fill_picker.custom_mode {
+                                a
+                            } else {
+                                level.color[3]
+                            };
+                            level.color = [r, g, b, opacity];
                         }
                         if let Some(fill) = props.fill_color {
                             let [r, g, b, _] = props.color.to_srgba_unmultiplied();
@@ -382,8 +393,7 @@ mod tests {
         }
     }
 
-    /// Palette swatches retain line opacity; a retracement's group picker also colours all
-    /// shown and spare levels, so its bands and construction line use the chosen colour.
+    /// Palette swatches retain each line's opacity, including shown and spare Fibonacci levels.
     #[test]
     fn palette_colours_keep_the_line_opacity() {
         for (tool, picker, alpha, fill) in [
@@ -403,6 +413,11 @@ mod tests {
             let chart = Chart::new(BarData::new());
             let mut drawing = Drawing::new(0, tool);
             drawing.fill_color = fill;
+            if let Some(config) = &mut drawing.fib_config {
+                for (i, level) in config.levels.iter_mut().enumerate() {
+                    level.color[3] = if i % 2 == 0 { 51 } else { 153 };
+                }
+            }
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
             let mut pickers: [ColorPickerState; 2] = Default::default();
             pickers[picker].is_open = true;
@@ -467,7 +482,9 @@ mod tests {
                         .unwrap()
                         .levels
                         .iter()
-                        .all(|level| level.color == [r, g, b, alpha])
+                        .enumerate()
+                        .all(|(i, level)| level.color
+                            == [r, g, b, if i % 2 == 0 { 51 } else { 153 }])
                 );
             }
         }
