@@ -159,7 +159,7 @@ pub struct LevelStyle {
     /// Stroke width in logical pixels, from 0.5 to 10. Older settings use one pixel.
     #[serde(default = "default_level_width")]
     pub width: f32,
-    /// Whether the line is drawn. A hidden level still bounds the fill between the outer levels.
+    /// Whether the line is drawn. A hidden boundary still bounds the fill.
     pub visible: bool,
 }
 
@@ -175,12 +175,16 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
     let levels = pane
         .levels
         .iter()
-        .map(|&(value, color, _)| LevelStyle {
-            value: None,
-            color,
-            pattern: study.level_style(value),
-            width: study.level_width(value),
-            visible: true,
+        .enumerate()
+        .map(|(index, &(value, color, _))| {
+            let (pattern, width) = study.level_stroke(index, value);
+            LevelStyle {
+                value: None,
+                color,
+                pattern,
+                width,
+                visible: true,
+            }
         })
         .collect();
     (levels, pane.fill_between_levels, study.level_fill_color())
@@ -291,10 +295,11 @@ pub struct StudySettings {
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
-    /// Whether the band between the lowest and the highest level is filled.
+    /// Whether the band between the boundary levels is filled.
+    /// [`Indicator::level_fill_indices`] selects them; otherwise the outer levels are used.
     #[serde(default)]
     pub fill_between_levels: bool,
-    /// Colour of the band between the lowest and the highest level.
+    /// Colour of the band between the boundary levels.
     #[serde(default)]
     pub level_fill_color: Color32,
     /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
@@ -1410,6 +1415,24 @@ impl Indicator for ConfiguredStudy {
                 style.visible && style.value.unwrap_or(*declared) == value
             })
             .map_or_else(|| self.study.level_style(value), |(_, style)| style.pattern)
+    }
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        self.study.level_fill_indices()
+    }
+    fn level_stroke(&self, index: usize, value: f64) -> (LineStyle, f32) {
+        self.settings
+            .levels
+            .get(index)
+            .filter(|style| {
+                style
+                    .value
+                    .or_else(|| self.study.pane().levels.get(index).map(|level| level.0))
+                    == Some(value)
+            })
+            .map_or_else(
+                || (self.level_style(value), self.level_width(value)),
+                |style| (style.pattern, style.width),
+            )
     }
     fn level_fill_color(&self) -> Color32 {
         self.settings.level_fill_color
