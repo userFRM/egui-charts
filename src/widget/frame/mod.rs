@@ -998,24 +998,24 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
-        let fixed_footprint = self
-            .feed_link
-            .as_ref()
-            .and_then(|link| link.footprint.as_ref())
-            .filter(|_| {
-                self.main_series_visible
-                    && footprint.is_none()
-                    && self.replay.is_none()
-                    && self.chart_type == ChartType::VolumeFootprint
-                    && self.chart_type_params.footprint_row_ticks > 0
-            });
+        // Automatic grouping sizes rows by zoom, so only fixed rows fit their edges.
+        let fixed_footprint = match footprint {
+            Some((flow, config)) => config
+                .auto_row_height
+                .is_none()
+                .then_some((flow, config.row_ticks)),
+            None => self
+                .feed_link
+                .as_ref()
+                .and_then(|link| link.footprint.as_ref())
+                .filter(|_| self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint)
+                .map(|flow| (flow, self.chart_type_params.footprint_row_ticks)),
+        }
+        .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
         let footprint_prices = fixed_footprint
             .into_iter()
-            .flat_map(|flow| {
-                let group = crate::chart::overlays::fixed_row_group(
-                    flow,
-                    self.chart_type_params.footprint_row_ticks,
-                );
+            .flat_map(|(flow, row_ticks)| {
+                let group = crate::chart::overlays::fixed_row_group(flow, row_ticks);
                 let step = flow.price_step() * group as f64;
                 self.state.shown()[start_idx..end_idx]
                     .iter()
@@ -1785,26 +1785,6 @@ impl Chart {
                 )
             }
         });
-        let renderer_hit = pointer.and_then(|pos| {
-            if grouped_primitives {
-                primitives::primitive_at(
-                    self.main_pass_primitives(&coords)
-                        .filter(|(item, _)| item.replaces),
-                    pos,
-                )
-            } else {
-                order.iter().rev().fold(None, |best, id| {
-                    primitives::best_hit(
-                        best,
-                        primitives::primitive_at(
-                            self.main_primitives(&coords)
-                                .filter(|(item, _)| item.replaces && item.series == *id),
-                            pos,
-                        ),
-                    )
-                })
-            }
-        });
         let rendered: Vec<_> = self
             .study_ids
             .iter()
@@ -1836,17 +1816,7 @@ impl Chart {
                 )
             })
         });
-        let element_at = |pos: Pos2| {
-            let renderer = renderer_hit
-                .as_ref()
-                .filter(|_| Some(pos) == pointer)
-                .and_then(|hit| {
-                    if let super::PointerTarget::Element(id) = hit.target {
-                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
-                    } else {
-                        None
-                    }
-                });
+        let builtin_at = |pos: Pos2| {
             let hit = hit_test_main_chart(
                 pos,
                 studies,
@@ -1869,19 +1839,54 @@ impl Chart {
                 .iter()
                 .flatten()
                 .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
-            if grouped_primitives && renderer.is_some() {
-                return renderer;
+            hit.into_iter().chain(secondary).max_by_key(|(element, _)| {
+                let id = match element {
+                    super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id) => id,
+                };
+                order.iter().position(|member| member == id)
+            })
+        };
+        let renderer_hit = pointer.and_then(|pos| {
+            if grouped_primitives {
+                primitives::primitive_at(
+                    self.main_pass_primitives(&coords)
+                        .filter(|(item, _)| item.replaces),
+                    pos,
+                )
+            } else {
+                let builtin = builtin_at(pos).and_then(|(element, _)| {
+                    let (super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id)) =
+                        element;
+                    order.iter().position(|member| *member == id)
+                });
+                order
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(at, _)| builtin.is_none_or(|builtin| *at > builtin))
+                    .fold(None, |best, (_, id)| {
+                        primitives::best_hit(
+                            best,
+                            primitives::primitive_at(
+                                self.main_pass_primitives(&coords)
+                                    .filter(|(item, _)| item.replaces && item.series == *id),
+                                pos,
+                            ),
+                        )
+                    })
             }
-            hit.into_iter()
-                .chain(secondary)
-                .chain(renderer)
-                .max_by_key(|(element, _)| {
-                    let id = match element {
-                        super::ChartElementId::Indicator(id)
-                        | super::ChartElementId::Series(id) => id,
-                    };
-                    order.iter().position(|member| member == id)
+        });
+        let element_at = |pos: Pos2| {
+            renderer_hit
+                .as_ref()
+                .filter(|_| Some(pos) == pointer)
+                .and_then(|hit| match hit.target {
+                    super::PointerTarget::Element(id) => {
+                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
+                    }
+                    _ => None,
                 })
+                .or_else(|| builtin_at(pos))
         };
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
