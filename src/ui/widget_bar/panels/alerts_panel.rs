@@ -630,6 +630,20 @@ impl AlertsPanel {
                 }
                 self.staged_display.retain(|(_, edit, _)|
                     !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id));
+                if let Some(restore) = &mut self.restoring {
+                    let (from, to) = if restore.redo {
+                        (&self.redo, &self.undo)
+                    } else {
+                        (&self.undo, &self.redo)
+                    };
+                    let retained = |history: &[PresentationEdit], index| {
+                        history.iter().take(index).filter(
+                        |edit| !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id)
+                    ).count()
+                    };
+                    restore.source_index = retained(from, restore.source_index);
+                    restore.destination_index = retained(to, restore.destination_index);
+                }
                 self.undo.retain(
                     |edit| !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id),
                 );
@@ -1708,8 +1722,16 @@ mod tests {
                 first.extend_line = true;
                 let mut second = first.clone();
                 second.id = Some(AlertId("2".into()));
+                let mut older = first.clone();
+                older.id = Some(AlertId("older".into()));
+                events.push(AlertEvent::Upsert(Box::new(older.clone())));
                 events.push(AlertEvent::Upsert(Box::new(first.clone())));
                 events.push(AlertEvent::Upsert(Box::new(second.clone())));
+                poll(&mut panel);
+                older.extend_line = false;
+                panel.save(older.clone());
+                host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+                events.push(AlertEvent::Upsert(Box::new(older.clone())));
                 poll(&mut panel);
                 first.extend_line = false;
                 panel.save(first.clone());
@@ -1721,6 +1743,12 @@ mod tests {
                 second.extend_line = false;
                 panel.save(second.clone());
                 let edit = host.reply.lock().unwrap().take().unwrap();
+                // A confirmed new edit stays newer than a failed restore even if an earlier
+                // history entry is removed before the replies arrive.
+                if reject_restore {
+                    events.push(AlertEvent::Upsert(Box::new(second)));
+                }
+                events.push(AlertEvent::Remove(older.id.unwrap()));
                 let mut replies = vec![(restore, reject_restore), (edit, !reject_restore)];
                 if reverse_replies {
                     replies.reverse();
@@ -1732,9 +1760,7 @@ mod tests {
                         Ok(())
                     });
                 }
-                if reject_restore {
-                    events.push(AlertEvent::Upsert(Box::new(second)));
-                } else {
+                if !reject_restore {
                     first.extend_line = true;
                     events.push(AlertEvent::Upsert(Box::new(first)));
                 }
@@ -1743,7 +1769,7 @@ mod tests {
                 let saves = host.saved.lock().unwrap();
                 assert_eq!(
                     saves.len(),
-                    4,
+                    5,
                     "reject_restore={reject_restore}, reverse_replies={reverse_replies}"
                 );
                 let sent = saves.last().unwrap();
