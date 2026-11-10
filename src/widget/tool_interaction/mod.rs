@@ -355,6 +355,9 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
+        if owns_gesture {
+            text::begin_fibonacci_edit(ui, drawing_manager, response, price_rect);
+        }
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {

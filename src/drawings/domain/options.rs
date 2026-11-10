@@ -328,6 +328,12 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
+    /// Custom retracement text beside this level, independent of its numeric label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    /// Line width in points; absent inherits the drawing's level width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -344,6 +350,8 @@ impl FibonacciLevel {
         Self {
             value,
             label: label.to_string(),
+            text: String::new(),
+            width: None,
             color,
             visible: true,
             show_price: true,
@@ -407,9 +415,39 @@ pub struct FibonacciConfig {
     /// Place labels at the left end of level lines instead of the right.
     #[serde(default)]
     pub labels_on_left: bool,
+    /// Font size of level labels and custom text, in points (1 through 256).
+    #[serde(default = "fib_font_size")]
+    pub label_size: f32,
+    /// Retracement labels sit outside the Left/Right endpoint or midway at Center.
+    /// Absent follows `labels_on_left` for earlier drawings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_position: Option<LineTextHorizontalAlign>,
+    /// Edge of a retracement label resting on its level; middle places it on the line.
+    #[serde(default = "fib_vertical_align")]
+    pub label_vertical: LineTextVerticalAlign,
+    /// Whether custom retracement text is visible, independently of prices and ratios.
+    #[serde(default = "percent_levels")]
+    pub show_text: bool,
+    /// Retracement text sits outside the Left/Right endpoint or midway at Center.
+    #[serde(default)]
+    pub text_position: LineTextHorizontalAlign,
+    /// Edge of the custom retracement text resting on its level.
+    #[serde(default = "fib_vertical_align")]
+    pub text_vertical: LineTextVerticalAlign,
+    /// Show the construction line between anchors, using the drawing's line style.
+    #[serde(default = "percent_levels")]
+    pub trend_visible: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+}
+
+fn fib_font_size() -> f32 {
+    12.0
+}
+
+fn fib_vertical_align() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Middle
 }
 
 fn fib_level_width() -> f32 {
@@ -458,6 +496,13 @@ impl FibonacciConfig {
             show_levels: None,
             levels_as_percent: false,
             labels_on_left: true,
+            label_size: fib_font_size(),
+            label_position: None,
+            label_vertical: fib_vertical_align(),
+            show_text: true,
+            text_position: LineTextHorizontalAlign::Center,
+            text_vertical: fib_vertical_align(),
+            trend_visible: true,
         }
     }
 
@@ -579,6 +624,68 @@ impl FibonacciConfig {
             show_levels: (tool == T::FibonacciWedge).then_some(true),
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
             ..Self::legacy()
+        }
+    }
+
+    /// Whether ratios, line widths and typography are finite and within drawing limits.
+    pub fn is_valid(&self) -> bool {
+        let width = |value: f32| value > 0.0 && value <= super::super::validation::MAX_STROKE_WIDTH;
+        width(self.level_width)
+            && (1.0..=256.0).contains(&self.label_size)
+            && self
+                .levels
+                .iter()
+                .all(|level| level.value.is_finite() && level.width.is_none_or(width))
+    }
+
+    /// Apply just the fields edited against `original`, keeping the rest of this drawing's
+    /// settings. Adding or removing a level replaces the ordered table intentionally.
+    #[cfg(feature = "ui")]
+    pub(crate) fn apply_edits(&mut self, original: &Self, edited: &Self) {
+        macro_rules! fields {
+            ($target:expr, $original:expr, $edited:expr, $($field:ident),+ $(,)?) => {
+                $(if $original.$field != $edited.$field {
+                    $target.$field.clone_from(&$edited.$field);
+                })+
+            };
+        }
+        fields!(
+            self,
+            original,
+            edited,
+            level_width,
+            level_style,
+            show_background,
+            background_opacity,
+            extend_left,
+            extend_right,
+            reverse,
+            show_prices,
+            show_levels,
+            levels_as_percent,
+            labels_on_left,
+            logarithmic,
+            label_size,
+            label_position,
+            label_vertical,
+            show_text,
+            text_position,
+            text_vertical,
+            trend_visible
+        );
+        if original.levels.len() == edited.levels.len() {
+            for ((target, original), edited) in self
+                .levels
+                .iter_mut()
+                .zip(&original.levels)
+                .zip(&edited.levels)
+            {
+                fields!(
+                    target, original, edited, value, label, color, visible, show_price, text, width
+                );
+            }
+        } else {
+            self.levels.clone_from(&edited.levels);
         }
     }
 

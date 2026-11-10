@@ -226,6 +226,16 @@ impl StoredDrawing {
         }) {
             return Some("fib_config.level_width".into());
         }
+        if d.fib_config.as_ref().is_some_and(|c| {
+            !(1.0..=256.0).contains(&c.label_size)
+                || c.levels.iter().any(|level| {
+                    level.width.is_some_and(|width| {
+                        !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
+                    })
+                })
+        }) {
+            return Some("fib_config".into());
+        }
         for (name, values) in [
             (
                 "fib_config.levels",
@@ -1193,6 +1203,8 @@ mod tests {
                 color: [9, 10, 11, 12],
                 visible: false,
                 show_price: false,
+                text: String::new(),
+                width: None,
             }],
             level_width: 3.5,
             level_style: LineStyle::Dashed,
@@ -2053,7 +2065,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 28] = [
+        let cases: [(Spoil, &str); 34] = [
             (
                 |s| {
                     first(s)
@@ -2157,6 +2169,30 @@ mod tests {
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 101.0,
                 "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = 0.0,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = f32::NAN,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = 257.0,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(0.0),
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(f32::NAN),
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(101.0),
+                "invalid fib_config",
             ),
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,

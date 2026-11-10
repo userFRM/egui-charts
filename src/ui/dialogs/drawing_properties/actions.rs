@@ -258,7 +258,6 @@ impl DrawingProps {
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
-                    fib_config,
                     pitchfork,
                     gann,
                     ghost_feed,
@@ -279,6 +278,17 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                 );
+                if settings.fib_config != target.fib_config {
+                    if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciRetracement {
+                        let original = target.fibonacci_config();
+                        let edited = settings.fibonacci_config();
+                        let mut config = drawing.fibonacci_config().into_owned();
+                        config.apply_edits(&original, &edited);
+                        drawing.fib_config = Some(config);
+                    } else {
+                        drawing.fib_config.clone_from(&settings.fib_config);
+                    }
+                }
                 if settings.position_readout.account_currency
                     != target.position_readout.account_currency
                 {
@@ -336,12 +346,8 @@ impl DrawingProps {
             {
                 return Err("Fibonacci ratios must be finite");
             }
-            if settings
-                .fib_config
-                .as_ref()
-                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
-            {
-                return Err("Fibonacci widths must be above 0 and at most 100");
+            if settings.fib_config.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err("Fibonacci widths must be above 0 and at most 100, font size 1 to 256");
             }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels

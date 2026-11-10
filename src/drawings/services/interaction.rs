@@ -612,7 +612,7 @@ mod tests {
                         timeframe: None,
                         finer: &[],
                     };
-                    fib.render_fibonacci(ui.painter(), rect, &view);
+                    fib.render_fibonacci(ui.painter(), rect, &view, false);
                 });
                 output.textures_delta.clear();
                 let line = output.shapes.iter().any(|s| matches!(&s.shape,
