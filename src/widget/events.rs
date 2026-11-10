@@ -577,9 +577,11 @@ impl Chart {
     }
 
     fn prepare_pointer_input(&mut self, ui: &Ui) {
-        ui.ctx().add_plugin(PointerInput);
         let frame = ui.ctx().cumulative_frame_nr();
         if self.host_events.input_frame != Some(frame) {
+            if ui.ctx().plugin_opt::<PointerInput>().is_none() {
+                ui.ctx().add_plugin(PointerInput);
+            }
             self.host_events.input_frame = Some(frame);
             ui.input(|input| {
                 if input.pointer.primary_pressed() {
