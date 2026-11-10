@@ -675,11 +675,15 @@ impl Chart {
                 slot,
                 formatter.as_deref(),
             );
-            measured = measured.max(crate::chart::rendering::axes::price_axis_width(
+            measured = measured.max(crate::chart::rendering::axes::price_axis_width_with_edges(
                 &clipped,
                 &map,
                 &[],
                 formatter.as_deref(),
+                self.config
+                    .price_axis
+                    .edge_ticks_visible
+                    .then_some(label_rect),
             ));
             ui.interact(
                 axis,
