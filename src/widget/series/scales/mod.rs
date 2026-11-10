@@ -1098,13 +1098,12 @@ impl Chart {
                     for value in shared_prices(study.as_ref(), visible.clone()) {
                         include(&mut bounds, value, transform);
                     }
-                } else if !self.is_custom_data(id) {
-                    let Some(range) = crate::widget::IndicatorPane::with_config(
+                } else if !self.is_custom_data(id)
+                    && let Some(range) = crate::widget::IndicatorPane::with_config(
                         crate::widget::IndicatorPaneConfig::from_study(study.as_ref()),
                     )
-                    .value_range(study.as_ref(), &visible) else {
-                        continue;
-                    };
+                    .value_range(study.as_ref(), &visible)
+                {
                     for value in [range.0, range.1] {
                         include(&mut bounds, value, transform);
                     }
