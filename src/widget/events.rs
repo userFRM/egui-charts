@@ -361,6 +361,7 @@ pub(super) struct HostEvents {
     click_frames: [Option<u64>; 3],
     modifiers: Modifiers,
     input_frame: Option<(u64, Modifiers)>,
+    pointer_touch: Option<(egui::TouchDeviceId, egui::TouchId)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
     pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
@@ -562,6 +563,20 @@ impl Chart {
         if self.host_events.input_frame.map(|(at, _)| at) != Some(frame) {
             self.host_events.input_frame = Some((frame, self.host_events.modifiers));
             self.host_events.modifiers = ui.input(|input| input.modifiers);
+            ui.input(|input| {
+                if input.pointer.primary_pressed() {
+                    self.host_events.pointer_touch = input.raw.events.iter().find_map(|event| {
+                        let egui::Event::Touch { device_id, id, phase: egui::TouchPhase::Start, pos, .. } = event else {
+                            return None;
+                        };
+                        input.raw.events.iter().any(|event| matches!(event,
+                            egui::Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, .. } if point == pos
+                        )).then_some((*device_id, *id))
+                    });
+                } else if !input.pointer.primary_down() && !input.pointer.primary_released() {
+                    self.host_events.pointer_touch = None;
+                }
+            });
         }
     }
 
@@ -637,8 +652,10 @@ impl Chart {
             };
             let touch = inputs()
                 .filter(|(_, candidate, _)| {
-                    matches!(candidate, Event::Touch { pos: point, phase, .. }
-                        if *point == pos && phase_matches(*phase))
+                    matches!(candidate, Event::Touch { device_id, id, pos: point, phase, .. }
+                        if phase_matches(*phase) && (*point == pos
+                            || (matches!(event, Event::PointerButton { button: PointerButton::Primary, pressed: false, .. })
+                                && self.host_events.pointer_touch == Some((*device_id, *id)))))
                 })
                 .min_by_key(|(index, _, _)| index.abs_diff(at));
             let (_, event, modifiers) = touch.unwrap_or((at, event, modifiers));
@@ -2442,6 +2459,78 @@ mod tests {
                     .iter()
                     .any(|(id, bar)| *id == series && bar.time == time)
             );
+        }
+    }
+    #[test]
+    fn touch_tap_lifted_off_its_press_position_reports_touch() {
+        for touch_click in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let touch_pos = if touch_click {
+                pos
+            } else {
+                pos + egui::vec2(100.0, 0.0)
+            };
+            let touch = |phase| Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(3),
+                phase,
+                pos: touch_pos
+                    + if phase == egui::TouchPhase::End {
+                        egui::vec2(0.5, 0.25)
+                    } else {
+                        egui::Vec2::ZERO
+                    },
+                force: Some(0.6),
+            };
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::SHIFT,
+            };
+            frame(
+                &ctx,
+                &mut chart,
+                1.0,
+                vec![
+                    touch(egui::TouchPhase::Start),
+                    Event::PointerMoved(pos),
+                    button(true),
+                ],
+            );
+            let lift = touch(egui::TouchPhase::End);
+            let release = button(false);
+            frame(
+                &ctx,
+                &mut chart,
+                1.1,
+                vec![lift.clone(), release.clone(), Event::PointerGone],
+            );
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::Click { position, .. } => Some(position),
+                    _ => None,
+                })
+                .expect("tap");
+            assert_eq!(pointer.pos, pos);
+            assert_eq!(
+                pointer.kind,
+                if touch_click {
+                    PointerKind::Touch
+                } else {
+                    PointerKind::Mouse
+                }
+            );
+            assert_eq!(
+                pointer.origin,
+                Some(if touch_click { lift } else { release })
+            );
+            assert_eq!(pointer.index, 50);
         }
     }
 }
