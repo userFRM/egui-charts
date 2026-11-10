@@ -1648,22 +1648,18 @@ fn drawing_drag_hides_the_value_readout() {
     }
 }
 
-/// A host-positioned value tag stays inside its target's column when axes share an edge.
+/// A host-positioned value tag sits in its target's column, against the plot, when axes share
+/// an edge.
 #[test]
 fn series_crosshair_label_sits_on_the_target_outer_axis() {
     use crate::model::{AxisSide, Bar, SeriesScale};
     use crate::scales::CustomPriceFormatter;
-    use crate::widget::{PaneId, SeriesId, SeriesOptions};
+    use crate::widget::{PaneId, PaneScale, SeriesId, SeriesOptions};
 
-    for (width, theme) in [
-        (800.0, crate::theme::Theme::dark()),
-        (800.0, crate::theme::Theme::light()),
-        (360.0, crate::theme::Theme::dark()),
-        (360.0, crate::theme::Theme::light()),
-    ] {
+    for width in [800.0, 360.0] {
         for side in [None, Some(AxisSide::Left), Some(AxisSide::Right)] {
             let ctx = egui::Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
             let mut chart = chart(&[100.0], &[200.0]);
             chart.set_size(Some(egui::vec2(width - 16.0, 584.0)));
             chart.config.show_volume = false;
@@ -1693,13 +1689,22 @@ fn series_crosshair_label_sits_on_the_target_outer_axis() {
                     .set_range(1000.0, 2000.0);
                 id
             });
+            chart.set_series_formatter(
+                SeriesId::MAIN,
+                Some(std::sync::Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("x{value:.0}")
+                }))),
+            );
             if let Some(side) = side {
                 assert!(chart.place_pane_scales(PaneId::MAIN, side));
             }
             frame(&ctx, &mut chart, 0.0, vec![]);
             let time = chart.bars(SeriesId::MAIN)[90].time;
-            for (step, id) in ids.into_iter().enumerate() {
-                chart.set_series_crosshair_position(id, Some((time, 1375.0)));
+            for (step, (id, price)) in [(SeriesId::MAIN, 151.0), (ids[0], 1375.0), (ids[1], 1375.0)]
+                .into_iter()
+                .enumerate()
+            {
+                chart.set_series_crosshair_position(id, Some((time, price)));
                 let painted = shapes(
                     &ctx,
                     &mut chart,
@@ -1708,28 +1713,35 @@ fn series_crosshair_label_sits_on_the_target_outer_axis() {
                 );
                 let plot = chart.get_rendered_price_rect();
                 let axis = chart
-                    .secondary_axes(
+                    .pane_scale_axes(
+                        PaneId::MAIN,
                         egui::Rect::from_min_max(
                             Pos2::new(8.0, 8.0),
                             Pos2::new(width - 8.0, 592.0),
                         ),
                         plot,
                     )
-                    .into_iter()
-                    .find(|(key, _)| Some(*key) == chart.series_scale(id))
+                    .find(|(key, _)| Some(*key) == chart.series_scale(id).map(PaneScale::Named))
                     .unwrap()
                     .1;
+                let label = format!("x{price:.0}");
                 let tag = painted
                     .iter()
                     .find_map(|shape| match shape {
-                        Shape::Text(text) if text.galley.text() == "x1375" => {
+                        Shape::Text(text) if text.galley.text() == label => {
                             Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
                         }
                         _ => None,
                     })
                     .expect("target price label");
+                // Gaps from the text to the column's edge beside the plot and to its other edge.
+                let (inner, outer) = if axis.center().x < plot.center().x {
+                    (axis.right() - tag.right(), tag.left() - axis.left())
+                } else {
+                    (tag.left() - axis.left(), axis.right() - tag.right())
+                };
                 assert!(
-                    tag.left() >= axis.left() && tag.right() <= axis.right(),
+                    inner >= 0.0 && outer >= 0.0 && inner < outer,
                     "width {width}, {side:?} {id:?}: tag {tag:?}, axis {axis:?}"
                 );
             }
