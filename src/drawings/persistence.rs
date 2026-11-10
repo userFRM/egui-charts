@@ -322,8 +322,10 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 8 extends a trend line past the anchor its Left or
-    /// Right names; those saved before that change load with the reach they were drawn with.
+    /// Current storage format version. Version 9 draws a callout's border at its stored width;
+    /// those saved before that change load with the 1 px border they were drawn with. Version 8
+    /// extends a trend line past the anchor its Left or Right names; those saved before that
+    /// change load with the reach they were drawn with.
     /// Version 7 does the same for an info line or trend angle. Version 6 draws arrow marks in
     /// their own colour; earlier versions load in the colour they were drawn in. Version 5 gives
     /// Elliott double and triple
@@ -333,7 +335,7 @@ impl DrawingStorage {
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 8;
+    pub const CURRENT_VERSION: u32 = 9;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -592,6 +594,11 @@ impl DrawingStorage {
                                     settings.color = [242, 54, 69, 255];
                                 }
                             }
+                        }
+                        if version < 9 && tool == T::Callout {
+                            // Earlier renderers drew a callout's border 1 px wide whatever its
+                            // width.
+                            drawing.drawing.stroke_width = 1.0;
                         }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
@@ -1726,13 +1733,16 @@ mod tests {
         }
 
         // Strokes saved before version 4 were drawn at twice (brush) and eight times
-        // (highlighter) their width, the highlighter at alpha 100. They load as drawn, once.
+        // (highlighter) their width, the highlighter at alpha 100, and callout borders before
+        // version 9 at 1 px whatever their width. They load as drawn, once.
         for (version, tool, width, alpha, want_width, want_alpha) in [
             (2, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
             (3, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
             (3, DrawingToolType::Highlighter, 2.0, 255, 16.0, 100),
             (3, DrawingToolType::Highlighter, 20.0, 40, 100.0, 100),
             (4, DrawingToolType::Highlighter, 2.0, 40, 2.0, 40),
+            (8, DrawingToolType::Callout, 2.0, 255, 1.0, 255),
+            (9, DrawingToolType::Callout, 2.0, 255, 2.0, 255),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -2033,10 +2043,11 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let error = DrawingStorage::from_json(&current.replace("\"version\": 8", "\"version\": 9"))
-            .unwrap_err();
+        let error =
+            DrawingStorage::from_json(&current.replace("\"version\": 9", "\"version\": 10"))
+                .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 9, supported } if *supported == (1..=8)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 10, supported } if *supported == (1..=9)),
             "{error}"
         );
     }
