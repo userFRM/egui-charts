@@ -609,7 +609,9 @@ impl AlertsPanel {
                                 &mut self.redo
                             };
                             to.insert(restore.destination_index.min(to.len()), restore.inverse);
-                        } else {
+                        } else if old.extend_line != alert.extend_line
+                            || old.blink_on_trigger != alert.blink_on_trigger
+                        {
                             self.remember(inverse, keep_redo);
                         }
                     }
@@ -1618,7 +1620,9 @@ mod tests {
     #[test]
     fn marker_change_during_a_pending_undo_stays_undoable() {
         use egui_kittest::{Harness, kittest::Queryable};
-        for reverse_pushes in [false, true] {
+        for (reverse_pushes, duplicate) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             for pending_redo in [false, true] {
                 for next_redo in [false, true] {
                     let host = Arc::new(Host::default());
@@ -1670,6 +1674,11 @@ mod tests {
                     h.state_mut().save(second.clone());
                     answer();
                     h.run_steps(3);
+                    if duplicate {
+                        h.state_mut().save(second.clone());
+                        answer();
+                        h.run_steps(3);
+                    }
                     for alert in if reverse_pushes {
                         [&second, &first]
                     } else {
@@ -1677,6 +1686,10 @@ mod tests {
                     } {
                         events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                         h.run_steps(3);
+                        if duplicate && alert.id == second.id {
+                            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                            h.run_steps(3);
+                        }
                     }
                     let saved = host.saved.lock().unwrap().len();
                     h.get_by_label(if next_redo { "Redo" } else { "Undo" })
@@ -1689,7 +1702,7 @@ mod tests {
                         assert_eq!(
                             saves.len(),
                             saved + 1,
-                            "reverse_pushes={reverse_pushes}, pending_redo={pending_redo}, next_redo={next_redo}"
+                            "reverse_pushes={reverse_pushes}, duplicate={duplicate}, pending_redo={pending_redo}, next_redo={next_redo}"
                         );
                         let sent = saves.last().unwrap();
                         let expected = if next_redo { ("1", false) } else { ("2", true) };
