@@ -120,7 +120,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Shared renderers support lines, steps, histograms, columns, dots, crosses, areas, shapes, bar/background colours and filled regions.
 - [x] MACD histogram columns, displaced Ichimoku cloud fills into visible future space, and separate Parabolic SAR crosses.
 - [x] RSI reads 100 with no losses, 0 with no gains and 50 on flat prices at any price size, and its divergence and stochastic studies use the same values.
-- [x] Connors RSI's price and streak components use Wilder smoothing and read 100 on gains alone.
+- [x] Connors RSI's price and streak components use Wilder smoothing and read 100 on gains alone. Its pane opens with dashed guides at 70, 30 and a faint 50, and a light blue fill tied to the outer guides even when the middle guide moves past them. Applied settings independently edit guide values, colours, patterns, widths and visibility, fill colour and opacity, and the latest-value line; snapshots and saved templates retain them.
 - [x] Both Tasuki Gap detectors need the third candle to open inside the second body and close inside the gap.
 - [x] Woodies CCI reads the close, with separate neutral, transition and established histogram colours.
 - [x] PPO and PVO draw their histograms as columns and offer average-type inputs.
@@ -136,7 +136,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Add a dedicated volatility-index study.
 - [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies.
 - [ ] Add the remaining specialised reversal and ghost-pivot studies.
-- [ ] Complete the remaining style and calculation controls of the built-in studies, including Connors RSI, Stochastic and Stochastic RSI.
+- [ ] Complete the remaining style and calculation controls of the built-in studies, including live previews of Connors RSI edits, Stochastic and Stochastic RSI.
 - [ ] Give session and periodic volume profile studies level extension, session hours, period lengths and rows in ticks.
 
 ### Study API and Editing
