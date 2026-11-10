@@ -359,8 +359,7 @@ pub(super) struct HostEvents {
     kind: Option<PointerKind>,
     cursor_data_policy: CursorDataPolicy,
     click_frames: [Option<u64>; 3],
-    modifiers: Modifiers,
-    input_frame: Option<(u64, Modifiers)>,
+    input_frame: Option<u64>,
     pointer_touch: Option<(egui::TouchDeviceId, egui::TouchId)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
@@ -371,6 +370,25 @@ pub(super) struct HostEvents {
     pub(super) touch_position: Option<Option<Pos2>>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
+}
+
+/// Capture the viewport's carried keys before egui applies this frame's changes, even while
+/// no chart is shown. The resulting modifiers belong to the input, not to a chart instance.
+struct PointerInput;
+
+fn pointer_input_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::new(("chart_pointer_input", viewport))
+}
+
+impl egui::Plugin for PointerInput {
+    fn debug_name(&self) -> &'static str {
+        "chart pointer input"
+    }
+
+    fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        let modifiers = ctx.input_for(input.viewport_id, |input| input.modifiers);
+        ctx.data_mut(|data| data.insert_temp(pointer_input_id(input.viewport_id), modifiers));
+    }
 }
 
 impl HostEvents {
@@ -559,10 +577,10 @@ impl Chart {
     }
 
     fn prepare_pointer_input(&mut self, ui: &Ui) {
+        ui.ctx().add_plugin(PointerInput);
         let frame = ui.ctx().cumulative_frame_nr();
-        if self.host_events.input_frame.map(|(at, _)| at) != Some(frame) {
-            self.host_events.input_frame = Some((frame, self.host_events.modifiers));
-            self.host_events.modifiers = ui.input(|input| input.modifiers);
+        if self.host_events.input_frame != Some(frame) {
+            self.host_events.input_frame = Some(frame);
             ui.input(|input| {
                 if input.pointer.primary_pressed() {
                     self.host_events.pointer_touch = input.raw.events.iter().find_map(|event| {
@@ -590,34 +608,27 @@ impl Chart {
 
         ui.input(|input| {
             let events = &input.raw.events;
-            let initial = if events
-                .iter()
-                .any(|event| matches!(event, Event::ModifiersChanged(_)))
-            {
-                self.host_events.input_frame?.1
-            } else {
-                input.modifiers
-            };
+            let initial = ui.ctx().data(|data| {
+                data.get_temp::<Modifiers>(pointer_input_id(input.raw.viewport_id))
+                    .unwrap_or(input.modifiers)
+            });
             let inputs = || {
                 events
                     .iter()
                     .enumerate()
                     .scan(initial, |modifiers, (at, event)| {
                         match event {
-                            Event::ModifiersChanged(keys)
-                            | Event::PointerButton {
-                                modifiers: keys, ..
-                            }
-                            | Event::Key {
-                                modifiers: keys, ..
-                            }
-                            | Event::MouseWheel {
-                                modifiers: keys, ..
-                            } => *modifiers = *keys,
+                            Event::ModifiersChanged(keys) => *modifiers = *keys,
                             Event::WindowFocused(false) => *modifiers = Modifiers::NONE,
                             _ => {}
                         }
-                        Some((at, event, *modifiers))
+                        let keys = match event {
+                            Event::PointerButton { modifiers, .. }
+                            | Event::Key { modifiers, .. }
+                            | Event::MouseWheel { modifiers, .. } => *modifiers,
+                            _ => *modifiers,
+                        };
+                        Some((at, event, keys))
                     })
             };
             let (at, event, modifiers) = inputs()
@@ -2531,6 +2542,58 @@ mod tests {
                 Some(if touch_click { lift } else { release })
             );
             assert_eq!(pointer.index, 50);
+        }
+    }
+    #[test]
+    fn pointer_modifiers_precede_a_later_change_in_the_frame() {
+        for hidden in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            if hidden {
+                ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(1.0),
+                        events: vec![Event::ModifiersChanged(Modifiers::SHIFT)],
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+            } else {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    1.0,
+                    vec![Event::ModifiersChanged(Modifiers::SHIFT)],
+                );
+            }
+            chart.drain_events().for_each(drop);
+            let moved = Event::PointerMoved(pos);
+            frame(
+                &ctx,
+                &mut chart,
+                1.1,
+                vec![
+                    moved.clone(),
+                    if hidden {
+                        Event::ModifiersChanged(Modifiers::CTRL)
+                    } else {
+                        Event::WindowFocused(false)
+                    },
+                ],
+            );
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .expect("move");
+            assert_eq!(pointer.origin, Some(moved));
+            assert_eq!(pointer.modifiers, Modifiers::SHIFT, "hidden={hidden}");
         }
     }
 }
