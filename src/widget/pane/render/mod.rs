@@ -698,14 +698,6 @@ impl Chart {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
                             .map(|index| {
-                                let index =
-                                    if self.chart_options.time_scale.ignore_whitespace_indices
-                                        || self.chart_options.time_scale.ignore_hidden_indices
-                                    {
-                                        index
-                                    } else {
-                                        index.round()
-                                    };
                                 Pos2::new(
                                     pane_mapping.index_to_x(index),
                                     if target_panel {
@@ -720,6 +712,12 @@ impl Chart {
                     })
                     .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
                     .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
+                if let Some(pos) = hover {
+                    panel.bar_index = panel.bar_index.filter(|index| {
+                        self.pointer_time(pos).and_then(|(time, _)| time)
+                            == self.state.shown().get(*index).map(|bar| bar.time)
+                    });
+                }
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
                 if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;

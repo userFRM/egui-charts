@@ -79,7 +79,6 @@ pub fn render_crosshair_with_options(
     bar_seconds: i64,
     price_formatter: Option<&dyn PriceFormatter>,
 ) -> [Option<Rect>; 2] {
-    let options = options.resolved(context.painter.ctx());
     let bar = coords
         .local_idx_at_x(hover_pos.x, visible_data.len())
         .map(|idx| (coords.start_idx + idx, &visible_data[idx]));
@@ -95,6 +94,36 @@ pub fn render_crosshair_with_options(
             pos.y = price_scale.price_to_y(price);
         }
     }
+    render_crosshair_at_time(
+        context,
+        pos,
+        bar.map(|(_, candle)| candle.time),
+        price_scale,
+        options,
+        chart_bottom,
+        axis_right,
+        last_price_tag,
+        scale,
+        bar_seconds,
+        price_formatter,
+    )
+}
+
+/// Paints an already resolved crosshair without rounding an independently keyed point.
+pub(crate) fn render_crosshair_at_time(
+    context: &RenderContext,
+    pos: Pos2,
+    time: Option<chrono::DateTime<chrono::Utc>>,
+    price_scale: &PriceMap,
+    options: &CrosshairOptions,
+    chart_bottom: f32,
+    axis_right: f32,
+    last_price_tag: Option<Rect>,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    price_formatter: Option<&dyn PriceFormatter>,
+) -> [Option<Rect>; 2] {
+    let options = options.resolved(context.painter.ctx());
     render_crosshair_lines(context, pos, &options, chart_bottom);
     let price_tag = render_crosshair_price_tag(
         context,
@@ -109,19 +138,19 @@ pub fn render_crosshair_with_options(
                 .label(price_scale.y_to_scale(pos.y), 2, Some(price_formatter))
         }),
     );
-    let time_tag = bar
+    let time_tag = time
         .filter(|_| {
             options.label_visible
                 && options.vert_label_visible
                 && options.style != CrosshairStyle::Hidden
         })
-        .map(|(_, candle)| {
+        .map(|time| {
             paint_crosshair_tag(
                 context.painter,
                 Pos2::new(pos.x, chart_bottom + 1.5),
                 Align2::CENTER_TOP,
                 context.rect.left()..=axis_right.max(context.rect.right()),
-                scale.format_crosshair(candle.time, bar_seconds),
+                scale.format_crosshair(time, bar_seconds),
                 (
                     options.label_text_color,
                     options.vert_label_background_color,

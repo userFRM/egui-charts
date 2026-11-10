@@ -507,7 +507,7 @@ impl Chart {
     }
 
     /// Selects from the same fractional positions used to paint added series.
-    fn pointer_time(&self, pos: Pos2) -> Option<(Option<DateTime<Utc>>, f64)> {
+    pub(super) fn pointer_time(&self, pos: Pos2) -> Option<(Option<DateTime<Utc>>, f64)> {
         let shown = self.state.shown();
         let coords = self.get_chart_mapping();
         let index = coords.x_to_idx_f64(pos.x);
@@ -515,7 +515,7 @@ impl Chart {
             return Some((None, index.round()));
         }
         let pointer_time = crate::model::time_at(shown, index)?;
-        let mut selected = self.crosshair_position(pos, &coords).map(|pos| {
+        let mut selected = self.main_crosshair_position(pos, &coords).map(|pos| {
             let index = coords.x_to_idx_f64(pos.x).round();
             let time =
                 (index >= 0.0 && index < shown.len() as f64).then(|| shown[index as usize].time);
@@ -2595,6 +2595,117 @@ mod tests {
                 .expect("move");
             assert_eq!(pointer.origin, Some(moved));
             assert_eq!(pointer.modifiers, Modifiers::SHIFT, "hidden={hidden}");
+        }
+    }
+    #[test]
+    fn drawn_crosshair_time_matches_added_point_payload() {
+        use crate::widget::{CustomPoint, ImageExportOptions, Primitive, test_frames::shapes};
+        #[derive(Clone)]
+        struct Point(DateTime<Utc>);
+        impl CustomPoint for Point {
+            fn time(&self) -> DateTime<Utc> {
+                self.0
+            }
+            fn prices(&self) -> Vec<f64> {
+                vec![115.0]
+            }
+        }
+        struct Renderer;
+        impl Primitive for Renderer {}
+        let start = "2024-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        for pane in [false, true] {
+            for (whitespace, hidden) in [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let ctx = Context::default();
+                let mut chart = Chart::new(crate::model::BarData::from_bars(
+                    [0, 2, 10]
+                        .map(|m| Bar::from_value(start + chrono::TimeDelta::minutes(m), 100.0))
+                        .to_vec(),
+                ));
+                chart.set_timeframe(crate::model::Timeframe::Min1);
+                chart.config.show_volume = false;
+                chart.chart_options.tooltip.enabled = false;
+                chart.chart_options.time_scale.ignore_whitespace_indices = whitespace;
+                chart.chart_options.time_scale.ignore_hidden_indices = hidden;
+                chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+                chart.chart_options.crosshair.vert_line_style = crate::model::LineStyle::Solid;
+                let series = chart.add_series(Default::default());
+                chart.set_data(
+                    series,
+                    [1, 2, 3]
+                        .map(|m| Bar::from_value(start + chrono::TimeDelta::minutes(m), 110.0))
+                        .to_vec(),
+                );
+                let custom = chart.add_custom_data_series::<Point>(
+                    "Points",
+                    |study| study.with_overlay(true),
+                    Renderer,
+                );
+                chart.set_custom_data(custom, vec![Point(start + chrono::TimeDelta::minutes(4))]);
+                if pane {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(series, pane));
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.apply_synced_time_scale(160.0, 0.0);
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                for (step, (minute, index)) in
+                    [(3, 1.125), (4, 1.25), (2, 1.0)].into_iter().enumerate()
+                {
+                    let map = chart.get_chart_mapping();
+                    let x = map.index_to_x(index);
+                    let y = if pane {
+                        chart.pane_layout.panes.last().unwrap().rect.center().y
+                    } else {
+                        map.rect.center().y
+                    };
+                    let pos = Pos2::new(x, y);
+                    let painted = shapes(
+                        &ctx,
+                        &mut chart,
+                        1.0 + step as f64,
+                        vec![Event::PointerMoved(pos)],
+                    );
+                    let expected = start + chrono::TimeDelta::minutes(minute);
+                    let pointer = chart
+                        .drain_events()
+                        .filter_map(|event| match event {
+                            ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                            _ => None,
+                        })
+                        .last()
+                        .expect("move");
+                    assert_eq!(pointer.time, Some(expected));
+                    assert_eq!(pointer.index, 1);
+                    assert_eq!(chart.hover_time(), Some(expected));
+                    assert_eq!(
+                        chart.last_crosshair.map(|(time, _)| time),
+                        Some(expected),
+                        "pane={pane}, filters={whitespace},{hidden}"
+                    );
+                    let verticals = painted.iter().filter(|shape| matches!(shape, egui::Shape::LineSegment {points, stroke}
+                        if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x && (points[0].x-x).abs()<0.01)).count();
+                    assert!(
+                        verticals >= if pane { 2 } else { 1 },
+                        "pane={pane}, minute={minute}"
+                    );
+                    let label = chart.format_time(expected);
+                    assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text()==label)));
+                    let mut snapshot = chart.export_snapshot(
+                        &ctx,
+                        &ImageExportOptions {
+                            include_crosshair: true,
+                            ..Default::default()
+                        },
+                    );
+                    let exported = shapes(&Context::default(), &mut snapshot, 0.0, vec![]);
+                    assert_eq!(
+                        snapshot.last_crosshair.map(|(time, _)| time),
+                        Some(expected)
+                    );
+                    assert!(exported.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text()==label)));
+                }
+            }
         }
     }
 }

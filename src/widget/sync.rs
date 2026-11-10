@@ -18,14 +18,19 @@ pub struct VisibleTimeRange {
 }
 
 impl Chart {
-    /// The time of the nearest hovered bar or price-based element, or `None` outside the data.
+    /// The time of the nearest eligible hovered point, or `None` outside the data.
     pub fn hover_time(&self) -> Option<DateTime<Utc>> {
         self.hover_period().map(|(open, _)| open)
     }
 
     /// The hovered bar's period, from its open until the next bar of its interval opens.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let index = self.last_hover_bar_idx?.round();
+        let index = self.last_hover_bar_idx?;
+        if index.fract() != 0.0 {
+            let time = self.last_crosshair?.0;
+            return Some((time, time));
+        }
+        let index = index.round();
         (index >= 0.0 && index < self.state.shown().len() as f64)
             .then(|| self.bar_period(index as usize))
     }
@@ -148,6 +153,18 @@ impl Chart {
 
     fn synced_index(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Option<f64> {
         let bars = self.state.shown();
+        let added_point = self.price_series.iter().any(|item| {
+            item.bars
+                .binary_search_by_key(&from, |bar| bar.time)
+                .is_ok()
+        }) || self.custom_series().any(|item| {
+            item.shown(&item.keys())
+                .binary_search_by_key(&from, |key| key.time)
+                .is_ok()
+        });
+        if added_point && let Some(index) = crate::model::index_at(bars, from) {
+            return Some(index);
+        }
         let after = bars.partition_point(|bar| bar.time <= from);
         let index = if after > 0 && from < self.bar_period(after - 1).1 {
             after - 1
