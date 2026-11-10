@@ -23,7 +23,7 @@ impl Chart {
         self.hover_period().map(|(open, _)| open)
     }
 
-    /// The hovered bar's period, from its open until the next bar of its interval opens.
+    /// The hovered bar's period, or an independently keyed point's exact timestamp as both bounds.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let index = self.last_hover_bar_idx?;
         if index.fract() != 0.0 {
@@ -62,6 +62,7 @@ impl Chart {
     /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
     /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
     /// against its own series, including after bars are evicted or older history is loaded.
+    /// An exact added or custom point between main bars keeps its fractional position.
     /// Inside a [`super::ChartLayout`] the position stays until it is cleared or replaced, and
     /// returns after a linked pointer leaves.
     pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
@@ -270,8 +271,8 @@ impl Chart {
         self.synced_crosshair_series = None;
     }
 
-    /// Returns the nearest hovered local index from the last frame, counting elements on
-    /// price-based types. Use [`Self::hover_time`] to exchange positions between charts.
+    /// Returns the selected local index, including fractional added or custom points, from the
+    /// last frame. Counts elements on price-based types. Use [`Self::hover_time`] between charts.
     pub fn get_hover_bar_idx(&self) -> Option<f64> {
         self.last_hover_bar_idx
     }
