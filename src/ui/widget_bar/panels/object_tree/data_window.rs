@@ -52,7 +52,8 @@ impl DataWindowInfo {
     /// Formats this readout's raw values with the chart's host formatters. Call after
     /// populating OHLCV and previous close; missing hooks retain instrument formatting.
     pub fn with_chart_formatters(mut self, chart: &crate::widget::Chart) -> Self {
-        let formats = chart.value_formatters();
+        let price_formatter = chart.series_price_formatter(crate::widget::SeriesId::MAIN);
+        let formats = chart.value_formatters(price_formatter.as_deref());
         self.formatted_prices = formats.price.map(|formatter| {
             [self.open, self.high, self.low, self.close].map(|value| formatter.format(value))
         });
@@ -69,7 +70,7 @@ impl DataWindowInfo {
                             self.change
                         )
                     },
-                    |formatter| formatter.format(self.change),
+                    |formatter| formatter.format_change(self.change),
                 );
                 let percentage = formats.percentage.map_or_else(
                     || format!("{:+.2}%", self.change_percent),

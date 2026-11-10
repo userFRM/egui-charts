@@ -17,6 +17,7 @@ enum Tab {
 }
 
 /// A complete edit for the host to apply to the original study id.
+#[derive(Clone, PartialEq)]
 pub struct StudyEdit {
     /// Stable id of the applied study.
     pub id: SeriesId,
@@ -27,7 +28,7 @@ pub struct StudyEdit {
 }
 
 /// Inputs, Style and Visibility editor for an applied study. Closing or cancelling discards
-/// staged values; no study or output history is cloned while the dialog is open.
+/// staged values. Chart-aware previews retain an opening settings snapshot for restoration.
 #[derive(Default)]
 pub struct IndicatorSettingsDialog {
     edit: Option<StudyEdit>,
@@ -40,6 +41,8 @@ pub struct IndicatorSettingsDialog {
     sources: Vec<(crate::studies::StudySource, String)>,
     overlay: bool,
     price_scale: bool,
+    original: Option<crate::studies::StudySettingsSnapshot>,
+    previewed: Option<StudyEdit>,
 }
 
 impl crate::ui_kit::tab_bar::TabLabel for Tab {
@@ -81,6 +84,8 @@ impl IndicatorSettingsDialog {
             self.edit = None;
             return;
         }
+        self.original = Some(study.snapshot_settings());
+        self.previewed = None;
         self.edit = Some(StudyEdit {
             id,
             inputs: Vec::new(),
@@ -164,6 +169,67 @@ impl IndicatorSettingsDialog {
             self.edit = None;
         }
         self.show(ctx, theme)
+    }
+
+    /// Preview staged values on the chart without recording history. Closing or cancelling
+    /// restores the opening settings on the current bars. Apply restores them too, then returns
+    /// the final edit for the host to commit in one [`Chart::user_action`](crate::widget::Chart::user_action).
+    /// Call this every frame from opening until the dialog closes, using the same chart.
+    pub fn show_preview_for_chart(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        chart: &mut crate::widget::Chart,
+    ) -> Option<StudyEdit> {
+        let id = self.edit.as_ref()?.id;
+        self.current_interval = chart.timeframe();
+        let result = self.show_for_chart(ctx, theme, chart);
+        if self.edit.is_none() {
+            if self.previewed.take().is_some()
+                && let Some(original) = self.original.take()
+                && let Some(study) = chart.indicator_mut(id)
+            {
+                // The host can revoke editing while a preview is open.
+                let enabled = study.user_edit_enabled();
+                study.restore_settings(&original).ok()?;
+                if let Some(interval) = self.current_interval {
+                    study.set_timeframe(interval);
+                }
+                if !enabled {
+                    let mut settings = study.settings();
+                    settings.user_edit_enabled = false;
+                    study.apply_settings(&[], settings).ok()?;
+                }
+                ctx.request_repaint();
+            }
+            return result;
+        }
+        let mut pending = self.edit.as_ref()?.clone();
+        pending.inputs = self
+            .inputs
+            .iter()
+            .map(|input| (input.id.clone(), input.value.clone()))
+            .collect();
+        if self.previewed.as_ref() != Some(&pending)
+            && let Some(study) = chart.indicator_mut(id)
+            && study
+                .apply_settings(&pending.inputs, pending.settings.clone())
+                .is_ok()
+        {
+            // Inputs can change the number of plots and the declared guide values.
+            pending.settings = study.settings();
+            self.edit.as_mut()?.settings = pending.settings.clone();
+            self.line_names = study.line_names();
+            self.levels = study
+                .pane()
+                .levels
+                .into_iter()
+                .map(|(value, _, caption)| (value, caption))
+                .collect();
+            self.previewed = Some(pending);
+            ctx.request_repaint();
+        }
+        None
     }
 
     /// Show the staged edit. Apply returns it once; the host calls
@@ -762,6 +828,246 @@ mod tests {
         );
     }
 
+    /// Both oscillators preview real inputs and independent guide styles, then cancel or commit
+    /// as one undoable edit. Reference values use rational SMA and Wilder calculations.
+    #[test]
+    fn stochastic_preview_cancel_apply_and_stream_restore() {
+        use crate::model::{Bar, BarData, PriceSource};
+        use crate::studies::{IndicatorFactory, StudySource, StudyTemplate};
+        use crate::widget::Chart;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (name, expected) in [
+            (
+                "Stochastic",
+                [
+                    [925.0 / 21.0, 865.0 / 21.0],
+                    [100.0 / 3.0, 215.0 / 6.0],
+                    [125.0 / 2.0, 575.0 / 12.0],
+                ],
+            ),
+            (
+                "StochRSI",
+                [
+                    [15370.0 / 369.0, 860855.0 / 21402.0],
+                    [38425.0 / 1269.0, 1270975.0 / 36801.0],
+                    [101875.0 / 1269.0, 70150.0 / 1269.0],
+                ],
+            ),
+        ] {
+            let bar = |i, p| {
+                Bar::new(
+                    chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
+                    p + if i % 2 == 0 { 1.0 } else { -0.5 },
+                    p + 2.0,
+                    p - 1.0,
+                    p,
+                    1.0,
+                )
+            };
+            let mut bars: Vec<_> = [10.0, 12.0, 11.0, 14.0, 13.0, 15.0, 12.0, 16.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, p)| bar(i as i64, p))
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min1);
+            let id = chart.add_indicator(IndicatorFactory::new().create(name).unwrap());
+            let before = chart
+                .indicators()
+                .find(|(i, _)| *i == id)
+                .unwrap()
+                .1
+                .snapshot_settings();
+            let defaults = chart
+                .indicators()
+                .find(|(i, _)| *i == id)
+                .unwrap()
+                .1
+                .settings();
+            assert_eq!(defaults.levels.len(), 3, "{name}");
+            assert!(defaults.fill_between_levels);
+            assert_eq!(defaults.precision, Some(2));
+            assert!(defaults.price_line_plots.is_empty());
+            let mut edited = defaults.clone();
+            edited.levels[0].value = Some(85.0);
+            edited.levels[0].pattern = LineStyle::Solid;
+            edited.levels[0].width = 3.0;
+            edited.levels[0].color = egui::Color32::RED;
+            edited.levels[1].value = Some(15.0);
+            edited.levels[1].pattern = LineStyle::Dotted;
+            edited.levels[1].width = 2.0;
+            edited.levels[1].visible = false;
+            edited.levels[2].value = Some(120.0);
+            edited.level_fill_color = egui::Color32::from_rgba_unmultiplied(20, 120, 80, 60);
+            edited.plots[0].plot_type = PlotType::StepLine;
+            edited.price_line_plots = vec![1];
+            let mut dialog = IndicatorSettingsDialog::default();
+            for (action, theme, size) in [
+                ("Cancel", Theme::light(), egui::vec2(320.0, 450.0)),
+                ("Cancel", Theme::dark(), egui::vec2(320.0, 450.0)),
+                ("Apply", Theme::dark(), egui::vec2(1440.0, 900.0)),
+            ] {
+                assert!(dialog.open_for_chart(&chart, id));
+                dialog.tab = Tab::Style;
+                dialog.edit.as_mut().unwrap().settings = edited.clone();
+                for input in &mut dialog.inputs {
+                    if matches!(input.value, InputValue::Length(_)) {
+                        input.value = InputValue::Length(
+                            if matches!(input.id.as_str(), "k_period" | "stoch_period") {
+                                3
+                            } else {
+                                2
+                            },
+                        );
+                    }
+                }
+                let mut applied = None;
+                let setup_theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .with_size(size)
+                    .build_ui(|ui| {
+                        chart.show(ui);
+                        if let Some(edit) =
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
+                        {
+                            applied = Some(edit);
+                        }
+                    });
+                harness.run();
+                drop(harness);
+                let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+                assert_eq!(study.settings(), edited);
+                assert_eq!(study.level_fill_indices(), Some([0, 1]));
+                assert!(study.plot_price_line(1));
+                assert!(!study.plot_price_line(0));
+                for (line, value) in expected[0].iter().enumerate() {
+                    assert!(
+                        (study.values().value(line, 7).unwrap() - value).abs() < 1e-9,
+                        "{name} line {line}"
+                    );
+                }
+                assert!(!chart.undo(), "preview must not enter history");
+                let setup_theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .with_size(size)
+                    .build_ui(|ui| {
+                        if let Some(edit) =
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
+                        {
+                            applied = Some(edit);
+                        }
+                    });
+                harness.run();
+                for caption in [
+                    "Overbought",
+                    "Oversold",
+                    "Middle guide",
+                    "Fill colour",
+                    "Latest value line",
+                ] {
+                    assert!(
+                        harness.query_all_by_label(caption).next().is_some(),
+                        "{name}: {caption}"
+                    );
+                }
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                        .contains_rect(harness.get_by_label(action).rect())
+                );
+                harness.get_by_label(action).click();
+                harness.run();
+                drop(harness);
+                assert!(
+                    chart
+                        .indicators()
+                        .find(|(i, _)| *i == id)
+                        .unwrap()
+                        .1
+                        .snapshot_settings()
+                        == before
+                );
+                if action == "Cancel" {
+                    assert!(applied.is_none());
+                } else {
+                    let edit = applied.unwrap();
+                    chart.user_action(|chart| {
+                        chart
+                            .indicator_mut(id)
+                            .unwrap()
+                            .apply_settings(&edit.inputs, edit.settings)
+                            .unwrap()
+                    });
+                }
+            }
+            assert!(chart.undo());
+            assert!(
+                chart
+                    .indicators()
+                    .find(|(i, _)| *i == id)
+                    .unwrap()
+                    .1
+                    .snapshot_settings()
+                    == before
+            );
+            assert!(chart.redo());
+            let study = chart.indicator_mut(id).unwrap();
+            study.calculate(&bars);
+            bars[7] = bar(7, 14.0);
+            study.update(&bars, 7);
+            for (line, value) in expected[1].iter().enumerate() {
+                assert!((study.values().value(line, 7).unwrap() - value).abs() < 1e-9);
+            }
+            bars.push(bar(8, 17.0));
+            study.update(&bars, 8);
+            for (line, value) in expected[2].iter().enumerate() {
+                assert!((study.values().value(line, 8).unwrap() - value).abs() < 1e-9);
+            }
+            let saved = serde_json::to_string(&StudyTemplate::from_study(study)).unwrap();
+            let mut loaded = serde_json::from_str::<StudyTemplate>(&saved)
+                .unwrap()
+                .create()
+                .unwrap();
+            loaded.calculate(&bars);
+            assert_eq!(loaded.settings(), edited);
+            for line in 0..2 {
+                for i in 0..bars.len() {
+                    assert_eq!(
+                        loaded.values().value(line, i),
+                        study.values().value(line, i)
+                    );
+                }
+            }
+            if name == "StochRSI" {
+                loaded
+                    .set_input(
+                        "source",
+                        InputValue::Source(StudySource::Price(PriceSource::Open)),
+                    )
+                    .unwrap();
+                loaded
+                    .set_input("plot_offset", InputValue::Integer(2))
+                    .unwrap();
+                loaded.calculate(&bars);
+                // Alternating open/close changes give this independent Wilder/SMA result.
+                assert!((loaded.plot_value(0, 10).unwrap() - 66.0).abs() < 1e-9);
+            }
+            let mut hidden = loaded.settings();
+            hidden.fill_between_levels = false;
+            loaded.apply_settings(&[], hidden).unwrap();
+            assert!(!loaded.pane().fill_between_levels);
+            assert_eq!(loaded.level_fill_color(), edited.level_fill_color);
+        }
+    }
+
     /// CRSI declares its guides so the shared editor can stage, cancel, save and undo them.
     #[test]
     fn crsi_bands_and_calculation_survive_edits_and_restore() {
@@ -1134,10 +1440,9 @@ mod tests {
         }
     }
 
-    /// The smoothing length and band deviation hide when the chosen type does not use them and
-    /// keep their values, which an edit still carries.
+    /// Previewed smoothing keeps hidden inputs and follows the plots its type adds or removes.
     #[test]
-    fn smoothing_inputs_hide_when_they_do_not_apply() {
+    fn smoothing_preview_keeps_inputs_and_updates_plot_styles() {
         use crate::studies::RSI;
         use egui_kittest::{Harness, kittest::Queryable};
 
@@ -1146,11 +1451,15 @@ mod tests {
             .set_input("smoothing_deviation", InputValue::Number(3.0))
             .unwrap();
         let mut dialog = IndicatorSettingsDialog::default();
-        dialog.open(
-            SeriesId(2),
-            &ConfiguredStudy::new(Box::new(study)),
-            Some(Timeframe::Min1),
-        );
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(study));
+        let before = chart
+            .indicators()
+            .find(|(i, _)| *i == id)
+            .unwrap()
+            .1
+            .snapshot_settings();
+        assert!(dialog.open_for_chart(&chart, id));
         let at = |id| {
             dialog
                 .inputs
@@ -1159,18 +1468,19 @@ mod tests {
                 .unwrap()
         };
         let (smoothing, deviation) = (at("smoothing"), at("smoothing_deviation"));
-        for (choice, length_shown, deviation_shown) in [
-            (0, false, false),
-            (1, true, false),
-            (2, true, true),
-            (6, true, false),
+        for (choice, length_shown, deviation_shown, plots) in [
+            (0, false, false, 1),
+            (1, true, false, 2),
+            (2, true, true, 4),
+            (6, true, false, 2),
+            (2, true, true, 4),
         ] {
             dialog.inputs[smoothing].value = InputValue::Choice(choice);
             let mut harness = Harness::builder()
                 .with_context_setup(egui_extras::install_image_loaders)
                 .with_size(egui::Vec2::new(1440.0, 900.0))
                 .build_ui(|ui| {
-                    dialog.show(ui.ctx(), &Theme::dark());
+                    dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
                 });
             harness.run();
             for (label, shown) in [
@@ -1182,7 +1492,45 @@ mod tests {
             }
             drop(harness);
             assert_eq!(dialog.inputs[deviation].value, InputValue::Number(3.0));
+            let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+            assert_eq!(study.line_count(), plots);
+            assert_eq!(dialog.edit.as_ref().unwrap().settings, study.settings());
+            assert_eq!(dialog.line_names.len(), plots);
         }
+        let mut applied = None;
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui(|ui| {
+                if let Some(edit) =
+                    dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                {
+                    applied = Some(edit);
+                }
+            });
+        harness.run();
+        harness.get_by_label("Apply").click();
+        harness.run();
+        drop(harness);
+        let study = chart.indicator_mut(id).unwrap();
+        assert!(study.snapshot_settings() == before);
+        let edit = applied.unwrap();
+        study.apply_settings(&edit.inputs, edit.settings).unwrap();
+        assert_eq!(study.line_count(), 4);
+
+        let id = chart.add_indicator(Box::new(crate::studies::AdxBreakout::default()));
+        assert!(dialog.open_for_chart(&chart, id));
+        dialog
+            .inputs
+            .iter_mut()
+            .find(|input| input.id == "threshold")
+            .unwrap()
+            .value = InputValue::Length(25);
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(dialog.levels[0].0, 25.0);
     }
 
     #[test]
@@ -1222,14 +1570,45 @@ mod tests {
 
         let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
         let id = chart.add_indicator(Box::new(SMA::new(20)));
+        chart.set_timeframe(Timeframe::Min1);
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.hidden_intervals = vec![Timeframe::Hour1];
+        study.apply_settings(&[], settings).unwrap();
         assert!(dialog.open_for_chart(&chart, id));
+        dialog.edit.as_mut().unwrap().settings.plots[0].visible = false;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(
+                dialog
+                    .show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    .is_none()
+            );
+        })
+        .drop_without_applying_deltas();
+        assert!(
+            !chart
+                .indicators()
+                .find(|(i, _)| *i == id)
+                .unwrap()
+                .1
+                .plot_style(0)
+                .visible
+        );
+        chart.set_timeframe(Timeframe::Hour1);
         assert!(chart.set_indicator_user_edit_enabled(id, false));
         assert!(
             dialog
-                .show_for_chart(&ctx, &Theme::dark(), &chart)
+                .show_preview_for_chart(&ctx, &Theme::dark(), &mut chart)
                 .is_none()
         );
         assert!(!dialog.is_open());
+        let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+        assert!(study.plot_style(0).visible);
+        assert!(!study.user_edit_enabled());
+        assert!(
+            !study.is_visible(),
+            "restore keeps the chart's current interval"
+        );
         assert!(!dialog.open_for_chart(&chart, id));
         assert!(chart.set_indicator_user_edit_enabled(id, true));
         assert!(dialog.open_for_chart(&chart, id));
