@@ -94,9 +94,25 @@ impl SettingsDialog {
                     }
                     // Hollow candles always compare the close with the previous close.
                     if (candles && !hollow) || bars {
+                        let previous_close = if bars || volume || heikin {
+                            let styles = &mut self
+                                .settings
+                                .chart_type_params
+                                .get_or_insert_with(Default::default)
+                                .styles;
+                            if bars {
+                                &mut styles.bars.color_by_previous_close
+                            } else if volume {
+                                &mut styles.volume_candles.color_by_previous_close
+                            } else {
+                                &mut styles.heikin.color_by_previous_close
+                            }
+                        } else {
+                            &mut self.settings.candle_colors.color_by_previous_close
+                        };
                         styled_checkbox(
                             ui,
-                            &mut self.settings.candle_colors.color_by_previous_close,
+                            previous_close,
                             "Color bars based on previous close",
                             theme.ui.text,
                         );
@@ -475,6 +491,7 @@ mod tests {
                 (ChartType::Heikin, "Body"),
                 (ChartType::Heikin, "Borders"),
                 (ChartType::Heikin, "Wick"),
+                (ChartType::Heikin, "Color bars based on previous close"),
                 (ChartType::Heikin, "Use original prices on scale"),
                 (ChartType::Heikin, "Reset to defaults"),
                 (ChartType::VolumeCandles, "Body"),
@@ -534,10 +551,8 @@ mod tests {
                             "Body" => expected.show_body = false,
                             "Borders" => expected.show_border = false,
                             "Wick" => expected.show_wick = false,
-                            "Color bars based on previous close" => {
-                                expected.color_by_previous_close = true
-                            }
-                            "Use original prices on scale" => {}
+                            "Color bars based on previous close"
+                            | "Use original prices on scale" => {}
                             "Reset to defaults" => {
                                 expected = crate::widget::settings::CandleColorConfig {
                                     show_border: true,
@@ -548,6 +563,16 @@ mod tests {
                         }
                     }
                     assert_eq!(style, expected);
+                    let styles = &chart.chart_type_params().styles;
+                    assert_eq!(
+                        if kind == ChartType::Heikin {
+                            styles.heikin.color_by_previous_close
+                        } else {
+                            styles.volume_candles.color_by_previous_close
+                        },
+                        accept && label == "Color bars based on previous close"
+                    );
+                    assert!(!styles.candles.color_by_previous_close);
                     assert_eq!(
                         chart.chart_type_params().styles.heikin.real_price_only,
                         match label {
