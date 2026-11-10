@@ -5,10 +5,7 @@
 
 use super::ChartView;
 use super::style::{Acceleration, ellipse_arc, ellipse_point, sample_curve, smooth_path};
-use crate::drawings::domain::{
-    Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLabelPosition, FibonacciLevel,
-    LineTextHorizontalAlign, LineTextVerticalAlign,
-};
+use crate::drawings::domain::{Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rangef, Rect, Stroke};
@@ -90,7 +87,7 @@ fn level_galley(
     });
     painter.layout_no_wrap(
         text,
-        egui::FontId::proportional(fib_font_size(config)),
+        egui::FontId::proportional(typography::font_size(config.label_size)),
         level_color(level),
     )
 }
@@ -166,6 +163,7 @@ impl Drawing {
         painter: &egui::Painter,
         chart_rect: Rect,
         view: &ChartView,
+        selected: bool,
     ) {
         let [start, end, ..] = self.chart_points.as_slice() else {
             return;
@@ -190,9 +188,7 @@ impl Drawing {
             .collect();
         levels.sort_by(|a, b| a.0.value.total_cmp(&b.0.value));
         let range = self.fib_level_x_range(&config, chart_rect);
-        if self.tool_type == Tool::FibonacciExtension
-            && (!range.min.is_finite() || !range.max.is_finite() || range.min > range.max)
-        {
+        if !range.min.is_finite() || !range.max.is_finite() || range.min >= range.max {
             self.render_fib_trend(painter);
             return;
         }
@@ -209,52 +205,109 @@ impl Drawing {
             }
         }
         for (level, y, price) in levels {
-            if self.tool_type == Tool::FibonacciExtension {
-                let galley = level_galley(painter, &config, level, Some(price), Some(view));
-                let label = fib_text_bounds(
-                    galley.size(),
-                    range,
-                    y,
-                    config.label_position(),
-                    true,
-                    painter.clip_rect(),
+            if !matches!(
+                self.tool_type,
+                Tool::FibonacciRetracement | Tool::FibonacciExtension
+            ) || !chart_rect.y_range().contains(y)
+            {
+                paint_level_line(
+                    painter,
+                    [Pos2::new(range.min, y), Pos2::new(range.max, y)],
+                    &config,
+                    level,
                 );
-                let caption = config.show_captions.then(|| {
-                    let text = painter.layout_no_wrap(
-                        level.caption.clone(),
-                        egui::FontId::proportional(fib_font_size(&config)),
+            }
+            if !chart_rect.y_range().contains(y) {
+                continue;
+            }
+            if matches!(
+                self.tool_type,
+                Tool::FibonacciRetracement | Tool::FibonacciExtension
+            ) {
+                let label = level_galley(painter, &config, level, Some(price), Some(view));
+                let mut text = painter.layout_no_wrap(
+                    if config.show_text {
+                        level.text.clone()
+                    } else {
+                        String::new()
+                    },
+                    egui::FontId::proportional(typography::font_size(config.label_size)),
+                    level_color(level),
+                );
+                if text.text().is_empty() && config.show_text && selected && !self.locked {
+                    let hint = painter.layout_no_wrap(
+                        crate::localization::text(painter.ctx(), "Add text"),
+                        egui::FontId::proportional(typography::font_size(config.label_size)),
                         level_color(level),
                     );
-                    let bounds = fib_text_bounds(
-                        text.size(),
+                    let bounds = retracement_text_bounds(
                         range,
                         y,
-                        config.caption_position,
-                        false,
+                        hint.size(),
+                        config.text_position,
+                        config.text_vertical,
+                        self.tool_type == Tool::FibonacciExtension,
                         painter.clip_rect(),
                     );
-                    (text, bounds)
-                });
-                let mut gaps: Vec<_> = std::iter::once((&galley, label))
-                    .chain(caption.iter().map(|(text, bounds)| (text, *bounds)))
-                    .filter(|(text, bounds)| {
-                        !text.text().is_empty() && bounds.y_range().contains(y)
-                    })
-                    .map(|(_, bounds)| bounds.x_range().expand(2.0))
-                    .collect();
+                    if painter.ctx().input(|input| {
+                        input
+                            .pointer
+                            .hover_pos()
+                            .is_some_and(|pos| bounds.contains(pos))
+                    }) {
+                        text = hint;
+                    }
+                }
+                let mut gaps = Vec::new();
+                for (galley, horizontal, vertical, inside) in [
+                    (
+                        label,
+                        config.label_position.unwrap_or(if config.labels_on_left {
+                            crate::drawings::LineTextHorizontalAlign::Left
+                        } else {
+                            crate::drawings::LineTextHorizontalAlign::Right
+                        }),
+                        config.label_vertical,
+                        false,
+                    ),
+                    (
+                        text,
+                        config.text_position,
+                        config.text_vertical,
+                        self.tool_type == Tool::FibonacciExtension,
+                    ),
+                ] {
+                    if !galley.text().is_empty() {
+                        let bounds = retracement_text_bounds(
+                            range,
+                            y,
+                            galley.size(),
+                            horizontal,
+                            vertical,
+                            inside,
+                            painter.clip_rect(),
+                        );
+                        if bounds.y_range().contains(y)
+                            && bounds.right() > range.min
+                            && bounds.left() < range.max
+                        {
+                            gaps.push(bounds.x_range().expand(2.0));
+                        }
+                        painter.galley(bounds.min, galley, level_color(level));
+                    }
+                }
                 gaps.sort_by(|a, b| a.min.total_cmp(&b.min));
                 let mut x = range.min;
                 for gap in gaps {
-                    let end = gap.min.clamp(range.min, range.max);
-                    if end > x {
+                    if gap.min > x {
                         paint_level_line(
                             painter,
-                            [Pos2::new(x, y), Pos2::new(end, y)],
+                            [Pos2::new(x, y), Pos2::new(gap.min.min(range.max), y)],
                             &config,
                             level,
                         );
                     }
-                    x = x.max(gap.max.clamp(range.min, range.max));
+                    x = x.max(gap.max).min(range.max);
                 }
                 if x < range.max {
                     paint_level_line(
@@ -264,25 +317,6 @@ impl Drawing {
                         level,
                     );
                 }
-                if chart_rect.y_range().contains(y) {
-                    if !galley.text().is_empty() {
-                        painter.galley(label.min, galley, level_color(level));
-                    }
-                    if let Some((text, bounds)) =
-                        caption.filter(|(text, _)| !text.text().is_empty())
-                    {
-                        painter.galley(bounds.min, text, level_color(level));
-                    }
-                }
-                continue;
-            }
-            paint_level_line(
-                painter,
-                [Pos2::new(range.min, y), Pos2::new(range.max, y)],
-                &config,
-                level,
-            );
-            if !chart_rect.y_range().contains(y) {
                 continue;
             }
             paint_price_label(
@@ -304,69 +338,56 @@ impl Drawing {
         self.render_fib_trend(painter);
     }
 
-    /// Caption hit boxes share the renderer's layout, including empty fields on selected levels.
-    pub(crate) fn fib_caption_rects(
+    /// The custom text field of a visible retracement or extension level, including the empty-field hint.
+    pub(crate) fn fib_text_bounds(
         &self,
         painter: &egui::Painter,
         pane: Rect,
-    ) -> Vec<(usize, Rect)> {
-        if self.tool_type != Tool::FibonacciExtension {
-            return Vec::new();
+        index: usize,
+        text: &str,
+    ) -> Option<Rect> {
+        if !matches!(
+            self.tool_type,
+            Tool::FibonacciRetracement | Tool::FibonacciExtension
+        ) || self.points.len() < 2
+        {
+            return None;
         }
         let config = self.fibonacci_config();
-        if !config.show_captions {
-            return Vec::new();
+        let level = config.levels.get(index)?;
+        if !config.show_text || !level.visible {
+            return None;
         }
-        let range = self.fib_level_x_range(&config, pane);
-        if !range.min.is_finite() || !range.max.is_finite() || range.min > range.max {
-            return Vec::new();
-        }
-        config
-            .levels
+        let visible_index = config.levels[..index]
             .iter()
-            .enumerate()
-            .filter(|(_, level)| level.visible)
-            .zip(&self.level_ys)
-            .filter(|(_, y)| pane.y_range().contains(**y))
-            .map(|((index, level), &y)| {
-                let text = painter.layout_no_wrap(
-                    if level.caption.is_empty() {
-                        crate::localization::text(painter.ctx(), "Add text")
-                    } else {
-                        level.caption.clone()
-                    },
-                    egui::FontId::proportional(fib_font_size(&config)),
-                    level_color(level),
-                );
-                (
-                    index,
-                    fib_text_bounds(text.size(), range, y, config.caption_position, false, pane),
-                )
-            })
-            .collect()
-    }
-
-    /// Empty captions expose an input hint only while their extension is selected.
-    pub(crate) fn render_fib_caption_hints(&self, painter: &egui::Painter, pane: Rect) {
-        if self.tool_type != Tool::FibonacciExtension {
-            return;
+            .filter(|level| level.visible)
+            .count();
+        let y = *self.level_ys.get(visible_index)?;
+        if !pane.y_range().contains(y) {
+            return None;
         }
-        let config = self.fibonacci_config();
-        for (index, rect) in self.fib_caption_rects(painter, pane) {
-            if config.levels[index].caption.is_empty() {
-                painter.text(
-                    rect.min,
-                    egui::Align2::LEFT_TOP,
-                    crate::localization::text(painter.ctx(), "Add text"),
-                    egui::FontId::proportional(fib_font_size(&config)),
-                    painter.ctx().global_style().visuals.weak_text_color(),
-                );
-            }
+        let galley = painter.layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(typography::font_size(config.label_size)),
+            level_color(level),
+        );
+        let range = self.fib_level_x_range(&config, pane);
+        if !range.min.is_finite() || !range.max.is_finite() || range.min >= range.max {
+            return None;
         }
+        Some(retracement_text_bounds(
+            range,
+            y,
+            galley.size(),
+            config.text_position,
+            config.text_vertical,
+            self.tool_type == Tool::FibonacciExtension,
+            pane,
+        ))
     }
 
     fn render_fib_trend(&self, painter: &egui::Painter) {
-        if !self.fibonacci_config().show_trend {
+        if !self.fibonacci_config().trend_visible {
             return;
         }
         for pair in self.points.windows(2) {
@@ -946,42 +967,6 @@ impl Drawing {
     }
 }
 
-fn fib_font_size(config: &FibonacciConfig) -> f32 {
-    if config.font_size.is_finite() {
-        config.font_size.clamp(1.0, 256.0)
-    } else {
-        typography::SM_MD
-    }
-}
-
-fn fib_text_bounds(
-    size: egui::Vec2,
-    range: Rangef,
-    y: f32,
-    position: FibonacciLabelPosition,
-    outside: bool,
-    clip: Rect,
-) -> Rect {
-    use LineTextHorizontalAlign as H;
-    use LineTextVerticalAlign as V;
-    let (x, horizontal) = match (position.horizontal, outside) {
-        (H::Left, true) => (range.min - 4.0, egui::Align::Max),
-        (H::Right, true) => (range.max + 4.0, egui::Align::Min),
-        (H::Left, false) => (range.min + 4.0, egui::Align::Min),
-        (H::Right, false) => (range.max - 4.0, egui::Align::Max),
-        (H::Center, _) => (range.center(), egui::Align::Center),
-    };
-    let (y, vertical) = match position.vertical {
-        V::Bottom => (y - 2.0, egui::Align::Max),
-        V::Middle => (y, egui::Align::Center),
-        V::Top => (y + 2.0, egui::Align::Min),
-    };
-    let bounds = egui::Align2([horizontal, vertical]).anchor_size(Pos2::new(x, y), size);
-    let shift = (clip.min - bounds.min).max(egui::Vec2::ZERO)
-        + (clip.max - bounds.max).min(egui::Vec2::ZERO);
-    bounds.translate(shift)
-}
-
 fn level_width(config: &FibonacciConfig) -> f32 {
     if config.level_width.is_finite() && config.level_width > 0.0 {
         config
@@ -990,6 +975,45 @@ fn level_width(config: &FibonacciConfig) -> f32 {
     } else {
         2.0
     }
+}
+
+fn effective_width(config: &FibonacciConfig, level: &FibonacciLevel) -> f32 {
+    level
+        .width
+        .filter(|width| width.is_finite() && *width > 0.0)
+        .map_or_else(
+            || level_width(config),
+            |width| width.min(crate::drawings::validation::MAX_STROKE_WIDTH),
+        )
+}
+
+/// Left and right sit outside the anchors; the centre sits midway between them.
+fn retracement_text_bounds(
+    range: Rangef,
+    y: f32,
+    size: egui::Vec2,
+    horizontal: crate::drawings::LineTextHorizontalAlign,
+    vertical: crate::drawings::LineTextVerticalAlign,
+    inside: bool,
+    clip: Rect,
+) -> Rect {
+    use crate::drawings::{LineTextHorizontalAlign as H, LineTextVerticalAlign as V};
+    let (x, align) = match horizontal {
+        H::Left if inside => (range.min + 4.0, egui::Align::Min),
+        H::Right if inside => (range.max - 4.0, egui::Align::Max),
+        H::Left => (range.min - 4.0, egui::Align::Max),
+        H::Center => ((range.min + range.max) * 0.5, egui::Align::Center),
+        H::Right => (range.max + 4.0, egui::Align::Min),
+    };
+    let (y, vertical) = match vertical {
+        V::Bottom => (y - 2.0, egui::Align::Max),
+        V::Middle => (y, egui::Align::Center),
+        V::Top => (y + 2.0, egui::Align::Min),
+    };
+    let bounds = egui::Align2([align, vertical]).anchor_size(Pos2::new(x, y), size);
+    let shift = (clip.min - bounds.min).max(egui::Vec2::ZERO)
+        + (clip.max - bounds.max).min(egui::Vec2::ZERO);
+    bounds.translate(shift)
 }
 
 fn paint_level_path(
@@ -1001,7 +1025,7 @@ fn paint_level_path(
     if points.iter().any(|p| !p.is_finite()) {
         return;
     }
-    let stroke = Stroke::new(level_width(config), level_color(level));
+    let stroke = Stroke::new(effective_width(config, level), level_color(level));
     if let Some((dash, gap)) = config.level_style.dash_pattern() {
         crate::painting::dashed_line::draw_dashed_polyline(painter, &points, stroke, dash, gap);
     } else {
@@ -1036,7 +1060,7 @@ fn paint_level_line(
     if points.iter().any(|p| !p.is_finite()) {
         return;
     }
-    let stroke = Stroke::new(level_width(config), level_color(level));
+    let stroke = Stroke::new(effective_width(config, level), level_color(level));
     if let Some((dash, gap)) = config.level_style.dash_pattern() {
         super::utils::draw_dashed_line(painter, points[0], points[1], stroke, dash, gap);
     } else {
@@ -1219,6 +1243,148 @@ mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
 
+    /// A quarter retracement of 100 to 200 is 175; a half log retracement of 100 to
+    /// 400 is 200. Width and custom text choices do not change either geometry.
+    #[test]
+    fn retracement_level_widths_text_and_placement_are_independent() {
+        use crate::drawings::ChartPoint;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 700.0));
+        for (logarithmic, reverse, end, ratio, price) in [
+            (false, false, 200.0, 0.25, 175.0),
+            (false, true, 200.0, 0.25, 125.0),
+            (true, false, 400.0, 0.5, 200.0),
+            (true, true, 400.0, 0.5, 200.0),
+        ] {
+            for (horizontal, vertical, text_horizontal, text_vertical, text_visible) in [
+                ("Left", "Bottom", "Right", "Top", true),
+                ("Center", "Middle", "Left", "Bottom", true),
+                ("Right", "Top", "Center", "Middle", true),
+                ("Right", "Top", "Center", "Middle", false),
+            ] {
+                let mut drawing = Drawing::new(1, Tool::FibonacciRetracement);
+                drawing.chart_points =
+                    vec![ChartPoint::new(300.0, 100.0), ChartPoint::new(700.0, end)];
+                drawing.color = [170, 10, 170, 255];
+                drawing.fib_config = Some(serde_json::from_value(serde_json::json!({
+                    "levels": [
+                        {"value": ratio,"color":[255,0,0,255],"visible":true,"show_price":true,"width":4.0,"text":"My level"},
+                        {"value":1.0,"color":[0,255,0,255],"visible":true,"show_price":false}
+                    ],
+                    "level_width":2.0,"show_background":false,"background_opacity":51,
+                    "extend_left":false,"extend_right":false,"reverse":reverse,"logarithmic":logarithmic,
+                    "show_levels":false,"label_size":18.0,"trend_visible":false,
+                    "label_position":horizontal,"label_vertical":vertical,
+                    "text_position":text_horizontal,"text_vertical":text_vertical,"show_text":text_visible
+                })).unwrap());
+                drawing.update_screen_coords(|x| x, |price| 600.0 - price as f32);
+                let view = ChartView {
+                    price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|x| x,
+                    price_to_y: &|price| 600.0 - price as f32,
+                    y_to_price: &|y| 600.0 - f64::from(y),
+                    time_axis: true,
+                    executions: None,
+                    timeframe: None,
+                    finer: &[],
+                };
+                let output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        drawing.render_fibonacci(
+                            &ui.painter().with_clip_rect(rect),
+                            rect,
+                            &view,
+                            false,
+                        )
+                    },
+                );
+                let shapes = output.shapes.clone();
+                output.drop_without_applying_deltas();
+                let lines: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(lines.iter().any(|(points, stroke)| stroke.width == 4.0
+                    && stroke.color == Color32::RED
+                    && (points[0].y - (600.0 - price)).abs() < 0.001));
+                assert!(
+                    lines
+                        .iter()
+                        .any(|(_, stroke)| stroke.width == 2.0 && stroke.color == Color32::GREEN)
+                );
+                assert!(
+                    !lines
+                        .iter()
+                        .any(|(_, stroke)| stroke.color == drawing.color32()),
+                    "hidden construction"
+                );
+                let texts: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                let label = texts
+                    .iter()
+                    .find(|text| text.galley.text() == format!("{price:.2}"))
+                    .unwrap();
+                let custom = text_visible.then(|| {
+                    (
+                        texts
+                            .iter()
+                            .find(|text| text.galley.text() == "My level")
+                            .unwrap(),
+                        text_horizontal,
+                        text_vertical,
+                    )
+                });
+                for (text, horizontal, vertical) in
+                    std::iter::once((label, horizontal, vertical)).chain(custom)
+                {
+                    assert_eq!(text.galley.job.sections[0].format.font_id.size, 18.0);
+                    assert_eq!(text.galley.job.sections[0].format.color, Color32::RED);
+                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                    match horizontal {
+                        "Left" => assert!((bounds.right() - 296.0).abs() < 0.001),
+                        "Center" => assert!((bounds.center().x - 500.0).abs() < 0.001),
+                        _ => assert!((bounds.left() - 704.0).abs() < 0.001),
+                    }
+                    match vertical {
+                        "Bottom" => assert!((bounds.bottom() - (598.0 - price)).abs() < 0.001),
+                        "Middle" => assert!((bounds.center().y - (600.0 - price)).abs() < 0.001),
+                        _ => assert!((bounds.top() - (602.0 - price)).abs() < 0.001),
+                    }
+                    if vertical == "Middle" && (300.0..700.0).contains(&bounds.center().x) {
+                        assert!(
+                            !lines
+                                .iter()
+                                .any(|(points, stroke)| stroke.color == Color32::RED
+                                    && points[0].x.min(points[1].x) < bounds.center().x
+                                    && points[0].x.max(points[1].x) > bounds.center().x),
+                            "text interrupts its level"
+                        );
+                    }
+                }
+                assert_eq!(
+                    texts.iter().any(|text| text.galley.text() == "My level"),
+                    text_visible
+                );
+            }
+        }
+    }
+
     /// A 100 point swing projected from 150 puts the half level at 200. Its captions and
     /// numeric labels have independent positions, but share typography and leave gaps on-line.
     #[test]
@@ -1243,12 +1409,12 @@ mod tests {
                             .map(|(x, y)| crate::drawings::ChartPoint::new(x, y))
                             .to_vec();
                         drawing.fib_config = Some(serde_json::from_value(serde_json::json!({
-                        "levels":[{"value":0.5,"label":"","caption":"Target","color":[211,41,73,255],"visible":true,"show_price":true}],
+                        "levels":[{"value":0.5,"label":"","text":"Target","width":4.0,"color":[211,41,73,255],"visible":true,"show_price":true}],
                         "show_background":false,"background_opacity":51,"extend_left":shift < 0.0,"extend_right":shift > 0.0,"reverse":false,
                         "show_prices":true,"show_levels":true,"levels_as_percent":false,
-                        "label_position":{"horizontal":horizontal,"vertical":vertical},
-                        "caption_position":{"horizontal":caption_horizontal,"vertical":caption_vertical},
-                        "font_size":18.0,"show_captions":captions,"show_trend":false,"level_width":4.0
+                        "label_position":horizontal,"label_vertical":vertical,
+                        "text_position":caption_horizontal,"text_vertical":caption_vertical,
+                        "label_size":18.0,"show_text":captions,"trend_visible":false,"level_width":2.0
                     })).unwrap());
                         drawing.update_screen_coords(|x| x + shift, |price| 400.0 - price as f32);
                         assert_eq!(
@@ -1279,6 +1445,7 @@ mod tests {
                                     timeframe: None,
                                     finer: &[],
                                 },
+                                false,
                             );
                         });
                         output.textures_delta.clear();
@@ -1292,8 +1459,8 @@ mod tests {
                             )));
                             assert!(
                                 drawing
-                                    .fib_caption_rects(&ctx.debug_painter(), pane)
-                                    .is_empty()
+                                    .fib_text_bounds(&ctx.debug_painter(), pane, 0, "Target")
+                                    .is_none()
                             );
                             output.drop_without_applying_deltas();
                             continue;
@@ -2357,6 +2524,7 @@ mod tests {
                         timeframe: None,
                         finer: &[],
                     },
+                    false,
                 )
             });
             let fills: Vec<_> = output

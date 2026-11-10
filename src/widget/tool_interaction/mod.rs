@@ -347,7 +347,6 @@ impl Chart {
             drawing_manager.place_at_pointer = false;
             drawing_manager.start_drawing_with_coords(tool, pos, x_to_bar_snapped, y_to_price);
         }
-        super::drawing_api::begin_fibonacci_caption_edit(ui, drawing_manager, response, price_rect);
         let owns_gesture = drawing_manager
             .curr_drawing
             .as_ref()
@@ -358,6 +357,9 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
+        if owns_gesture {
+            text::begin_fibonacci_edit(ui, drawing_manager, response, price_rect);
+        }
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
@@ -1621,7 +1623,7 @@ mod tests {
                     level.visible = index == 0;
                 }
                 if !selected {
-                    config.levels[0].caption = "Target".into();
+                    config.levels[0].text = "Target".into();
                 }
                 vec![
                     ChartPoint::new(20.0, 12.0),

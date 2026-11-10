@@ -37,69 +37,6 @@ impl std::fmt::Display for DrawingError {
 }
 impl std::error::Error for DrawingError {}
 
-/// Open a caption on a single click, leaving drag gestures with drawing selection.
-pub(crate) fn begin_fibonacci_caption_edit(
-    ui: &egui::Ui,
-    manager: &mut crate::drawings::DrawingManager,
-    response: &egui::Response,
-    pane: egui::Rect,
-) {
-    if manager.text_editor.is_some()
-        || manager.active_tool.is_some()
-        || manager.eraser_mode
-        || manager.dragging_handle.is_some()
-        || !response.contains_pointer()
-    {
-        return;
-    }
-    let Some(pos) = ui.input(|i| {
-        i.pointer
-            .primary_clicked()
-            .then(|| i.pointer.interact_pos())
-            .flatten()
-    }) else {
-        return;
-    };
-    let painter = ui.painter().with_clip_rect(pane);
-    let hit = crate::drawings::services::in_z_order(&manager.drawings)
-        .into_iter()
-        .rev()
-        .filter(|d| {
-            d.selectable
-                && !d.locked
-                && manager.owns_pane(d)
-                && d.is_visible_on_timeframe(&manager.curr_timeframe)
-        })
-        .find_map(|d| {
-            d.fib_caption_rects(&painter, pane)
-                .into_iter()
-                .find(|(index, rect)| {
-                    rect.contains(pos)
-                        && (manager.is_selected(d.id)
-                            || !d.fibonacci_config().levels[*index].caption.is_empty())
-                })
-                .map(|(level, _)| {
-                    (
-                        d.id,
-                        level,
-                        d.fibonacci_config().levels[level].caption.clone(),
-                    )
-                })
-        });
-    if let Some((id, level, draft)) = hit {
-        manager.text_editor = Some(crate::drawings::manager::TextEditState {
-            id,
-            level: Some(level),
-            draft,
-            focus: true,
-            opened_frame: None,
-            placed: false,
-            inline: true,
-        });
-        manager.select(id);
-    }
-}
-
 impl Chart {
     /// Creates a completed drawing from UTC times and prices, with the supplied drawing's
     /// properties, pane, group and layer. Its id and storage identity are replaced.
@@ -167,44 +104,6 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a three-anchor Fibonacci extension's level and text settings as one undoable
-    /// edit. Invalid settings, other tools and locked drawings leave history untouched.
-    pub fn set_fibonacci_extension(
-        &mut self,
-        id: usize,
-        config: crate::drawings::FibonacciConfig,
-    ) -> Result<(), DrawingError> {
-        let mut drawing = self
-            .drawings()
-            .drawings
-            .iter()
-            .find(|d| d.id == id)
-            .ok_or(DrawingError::UnknownDrawing(id))?
-            .clone();
-        if drawing.locked {
-            return Err(DrawingError::Locked(id));
-        }
-        if drawing.tool_type != crate::drawings::DrawingToolType::FibonacciExtension {
-            return Err(DrawingError::Invalid(
-                "Drawing is not a Fibonacci extension",
-            ));
-        }
-        let unchanged = drawing.fib_config.as_ref() == Some(&config);
-        drawing.fib_config = Some(config);
-        self.drawings()
-            .validate_drawing(&drawing)
-            .map_err(DrawingError::Invalid)?;
-        if unchanged {
-            return Ok(());
-        }
-        self.user_action(|chart| {
-            chart
-                .drawings_mut()
-                .edit_drawing(id, |target| target.fib_config = drawing.fib_config);
-        });
-        Ok(())
-    }
-
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
     /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
     /// draws only the text placement, and a vertical line the text placement, the text's orientation
@@ -241,6 +140,44 @@ impl Chart {
                 drawing.line_measurements = measurements;
             });
         });
+        Ok(())
+    }
+
+    /// Replace a retracement's or extension's levels, typography, text placement and construction visibility
+    /// as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    pub fn set_fibonacci_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::FibonacciConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if !matches!(
+            drawing.tool_type,
+            crate::drawings::DrawingToolType::FibonacciRetracement
+                | crate::drawings::DrawingToolType::FibonacciExtension
+        ) {
+            return Err(DrawingError::Invalid(
+                "Drawing is not a Fibonacci retracement or extension",
+            ));
+        }
+        if !config.is_valid() {
+            return Err(DrawingError::Invalid("Invalid Fibonacci settings"));
+        }
+        if drawing.fib_config.as_ref() != Some(&config) {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config));
+            });
+        }
         Ok(())
     }
 
@@ -591,15 +528,16 @@ mod tests {
         let mut config = original.clone().unwrap();
         assert_eq!(config.levels.len(), 24);
         for (index, level) in config.levels.iter_mut().enumerate() {
-            level.caption = format!("Target {index}");
+            level.text = format!("Target {index}");
+            level.width = Some(1.5 + index as f32);
         }
-        config.font_size = 18.0;
-        config.show_trend = false;
+        config.label_size = 18.0;
+        config.trend_visible = false;
         config.reverse = true;
         config.logarithmic = true;
-        config.label_position = Some(crate::drawings::FibonacciLabelPosition::default());
+        config.label_position = Some(crate::drawings::LineTextHorizontalAlign::Center);
         chart.drawings_mut().drawings.push(drawing.clone());
-        chart.set_fibonacci_extension(7, config.clone()).unwrap();
+        chart.set_fibonacci_config(7, config.clone()).unwrap();
         assert_eq!(
             chart.drawings().drawings[0].chart_points,
             drawing.chart_points
@@ -621,13 +559,13 @@ mod tests {
         );
         // Repeated settings do not consume a history step.
         chart
-            .set_fibonacci_extension(chart.drawings().drawings[0].id, config.clone())
+            .set_fibonacci_config(chart.drawings().drawings[0].id, config.clone())
             .unwrap();
         let id = chart.drawings().drawings[0].id;
         for size in [0.0, 257.0, f32::NAN, f32::INFINITY] {
             let mut invalid = config.clone();
-            invalid.font_size = size;
-            assert!(chart.set_fibonacci_extension(id, invalid).is_err());
+            invalid.label_size = size;
+            assert!(chart.set_fibonacci_config(id, invalid).is_err());
             assert_eq!(
                 chart.drawings().drawings[0].fib_config,
                 Some(config.clone())
@@ -635,12 +573,12 @@ mod tests {
         }
         chart.drawings_mut().drawings[0].locked = true;
         assert_eq!(
-            chart.set_fibonacci_extension(id, FibonacciConfig::extension_default()),
+            chart.set_fibonacci_config(id, FibonacciConfig::extension_default()),
             Err(DrawingError::Locked(id))
         );
         chart.drawings_mut().drawings[0].locked = false;
         chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
-        assert!(chart.set_fibonacci_extension(id, config).is_err());
+        assert!(chart.set_fibonacci_config(id, config).is_err());
         assert!(!chart.can_undo());
     }
 
@@ -725,7 +663,7 @@ mod tests {
                 "Target"
             );
             let config = serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
-            assert_eq!(config["levels"][1]["caption"], "");
+            assert_eq!(config["levels"][1]["text"].as_str().unwrap_or_default(), "");
             frame(
                 &mut chart,
                 vec![Event::Key {
@@ -743,9 +681,9 @@ mod tests {
             assert!(chart.drawings().text_editor.is_none());
             assert_eq!(chart.drawings().drawings[0].chart_points, anchors);
             let config = serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
-            assert_eq!(config["levels"][0]["caption"], "");
+            assert_eq!(config["levels"][0]["text"].as_str().unwrap_or_default(), "");
             assert_eq!(
-                config["levels"][1]["caption"],
+                config["levels"][1]["text"].as_str().unwrap_or_default(),
                 if cancel { "" } else { "Target" }
             );
             if cancel {
@@ -758,7 +696,7 @@ mod tests {
                 chart.load_drawings(&json).unwrap();
                 let config =
                     serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
-                assert_eq!(config["levels"][1]["caption"], "Target");
+                assert_eq!(config["levels"][1]["text"], "Target");
             }
         }
     }

@@ -279,55 +279,15 @@ impl DrawingProps {
                     elliott_degree,
                 );
                 if settings.fib_config != target.fib_config {
-                    if drawing.tool_type == DrawingToolType::FibonacciExtension {
-                        let before = target.fibonacci_config();
-                        let after = settings.fibonacci_config();
+                    if matches!(
+                        drawing.tool_type,
+                        crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciExtension
+                    ) {
+                        let original = target.fibonacci_config();
+                        let edited = settings.fibonacci_config();
                         let mut config = drawing.fibonacci_config().into_owned();
-                        macro_rules! fib_edits {
-                            ($($field:ident),+ $(,)?) => {
-                                $(if after.$field != before.$field {
-                                    config.$field.clone_from(&after.$field);
-                                })+
-                            };
-                        }
-                        fib_edits!(
-                            level_width,
-                            level_style,
-                            show_background,
-                            background_opacity,
-                            extend_left,
-                            extend_right,
-                            reverse,
-                            logarithmic,
-                            show_prices,
-                            show_levels,
-                            levels_as_percent,
-                            labels_on_left,
-                            label_position,
-                            caption_position,
-                            font_size,
-                            show_captions,
-                            show_trend
-                        );
-                        if after.levels.len() != before.levels.len() {
-                            config.levels.clone_from(&after.levels);
-                        } else {
-                            for ((level, after), before) in config
-                                .levels
-                                .iter_mut()
-                                .zip(&after.levels)
-                                .zip(&before.levels)
-                            {
-                                macro_rules! level_edits {
-                                    ($($field:ident),+ $(,)?) => {
-                                        $(if after.$field != before.$field {
-                                            level.$field.clone_from(&after.$field);
-                                        })+
-                                    };
-                                }
-                                level_edits!(value, label, caption, color, visible, show_price);
-                            }
-                        }
+                        config.apply_edits(&original, &edited);
                         drawing.fib_config = Some(config);
                     } else {
                         drawing.fib_config.clone_from(&settings.fib_config);
@@ -390,19 +350,8 @@ impl DrawingProps {
             {
                 return Err("Fibonacci ratios must be finite");
             }
-            if settings
-                .fib_config
-                .as_ref()
-                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
-            {
-                return Err("Fibonacci widths must be above 0 and at most 100");
-            }
-            if settings
-                .fib_config
-                .as_ref()
-                .is_some_and(|c| !(1.0..=256.0).contains(&c.font_size))
-            {
-                return Err("Fibonacci font size must be between 1 and 256");
+            if settings.fib_config.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err("Fibonacci widths must be above 0 and at most 100, font size 1 to 256");
             }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
@@ -917,7 +866,7 @@ mod tests {
             .map(|id| {
                 let mut drawing = Drawing::new(id, DrawingToolType::FibonacciExtension);
                 let config = drawing.fib_config.as_mut().unwrap();
-                config.levels[1].caption = format!("Peer {id}");
+                config.levels[1].text = format!("Peer {id}");
                 config.levels[1].value = 0.25 + id as f32;
                 config.level_width = 2.0 + id as f32;
                 drawing
@@ -933,14 +882,14 @@ mod tests {
             .fib_config
             .as_mut()
             .unwrap();
-        config.font_size = 18.0;
-        config.levels[0].caption = "Target".into();
+        config.label_size = 18.0;
+        config.levels[0].text = "Target".into();
         let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
         for (index, drawing) in edits.iter().enumerate() {
             let config = drawing.fib_config.as_ref().unwrap();
-            assert_eq!(config.font_size, 18.0);
-            assert_eq!(config.levels[0].caption, "Target");
-            assert_eq!(config.levels[1].caption, format!("Peer {index}"));
+            assert_eq!(config.label_size, 18.0);
+            assert_eq!(config.levels[0].text, "Target");
+            assert_eq!(config.levels[1].text, format!("Peer {index}"));
             assert_eq!(config.levels[1].value, 0.25 + index as f32);
             assert_eq!(config.level_width, 2.0 + index as f32);
         }

@@ -61,30 +61,93 @@ impl TextTab {
         tool.supports_text()
             || matches!(
                 tool,
-                DrawingToolType::TrendAngle | DrawingToolType::FibonacciExtension
+                DrawingToolType::TrendAngle
+                    | DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
             )
     }
 
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 3]) {
         ui.space_md();
         if let Some(template) = &mut props.tool_settings
-            && template.settings.tool_type == DrawingToolType::FibonacciExtension
+            && matches!(
+                template.settings.tool_type,
+                DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension
+            )
         {
             let mut config = template.settings.fibonacci_config().into_owned();
             let original = config.clone();
-            FormGrid::new("extension_text").show(ui, |ui| {
-                fibonacci_text_controls(ui, &mut config);
-                for (index, level) in config.levels.iter_mut().enumerate() {
-                    let label = ui.label(format!(
-                        "{} {} ({})",
-                        l10n::text(ui.ctx(), "Level"),
-                        index + 1,
-                        level.value
-                    ));
-                    ui.add(egui::TextEdit::singleline(&mut level.caption).desired_width(180.0))
-                        .labelled_by(label.id);
-                    ui.end_row();
+            FormGrid::new("retracement_text").show(ui, |ui| {
+                let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.add(
+                    egui::DragValue::new(&mut config.label_size)
+                        .range(1.0..=256.0)
+                        .suffix(" px"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+                use LineTextHorizontalAlign as H;
+                use LineTextVerticalAlign as V;
+                let mut position = config.label_position.unwrap_or(if config.labels_on_left {
+                    H::Left
+                } else {
+                    H::Right
+                });
+                alignment_row(
+                    ui,
+                    "Label position",
+                    &mut position,
+                    [
+                        (H::Left, "Left"),
+                        (H::Center, "Center"),
+                        (H::Right, "Right"),
+                    ],
+                );
+                if position
+                    != config.label_position.unwrap_or(if config.labels_on_left {
+                        H::Left
+                    } else {
+                        H::Right
+                    })
+                {
+                    config.label_position = Some(position);
                 }
+                alignment_row(
+                    ui,
+                    "Label height",
+                    &mut config.label_vertical,
+                    [
+                        (V::Bottom, "Top"),
+                        (V::Middle, "Middle"),
+                        (V::Top, "Bottom"),
+                    ],
+                );
+                ui.label("");
+                ui.checkbox(
+                    &mut config.show_text,
+                    l10n::text(ui.ctx(), "Show level text"),
+                );
+                ui.end_row();
+                alignment_row(
+                    ui,
+                    "Text position",
+                    &mut config.text_position,
+                    [
+                        (H::Left, "Left"),
+                        (H::Center, "Center"),
+                        (H::Right, "Right"),
+                    ],
+                );
+                alignment_row(
+                    ui,
+                    "Text height",
+                    &mut config.text_vertical,
+                    [
+                        (V::Bottom, "Top"),
+                        (V::Middle, "Middle"),
+                        (V::Top, "Bottom"),
+                    ],
+                );
             });
             if config != original {
                 template.settings.fib_config = Some(config);
@@ -296,60 +359,6 @@ impl TextTab {
             ui.end_row();
         });
     }
-}
-
-/// Extension labels and captions share a font, with independent positions and visibility.
-pub(super) fn fibonacci_text_controls(ui: &mut Ui, config: &mut crate::drawings::FibonacciConfig) {
-    use LineTextHorizontalAlign as H;
-    use LineTextVerticalAlign as V;
-    let label = ui.label(l10n::text(ui.ctx(), "Font size"));
-    ui.add(
-        egui::DragValue::new(&mut config.font_size)
-            .range(1.0..=256.0)
-            .suffix(" px"),
-    )
-    .labelled_by(label.id);
-    ui.end_row();
-    let mut position = config.label_position();
-    for (label, along) in [
-        ("Label alignment", &mut position.horizontal),
-        ("Caption alignment", &mut config.caption_position.horizontal),
-    ] {
-        alignment_row(
-            ui,
-            label,
-            along,
-            [
-                (H::Left, "Left"),
-                (H::Center, "Center"),
-                (H::Right, "Right"),
-            ],
-        );
-    }
-    for (label, across) in [
-        ("Label placement", &mut position.vertical),
-        ("Caption placement", &mut config.caption_position.vertical),
-    ] {
-        alignment_row(
-            ui,
-            label,
-            across,
-            [
-                (V::Bottom, "Top"),
-                (V::Middle, "Middle"),
-                (V::Top, "Bottom"),
-            ],
-        );
-    }
-    if position != config.label_position() {
-        config.label_position = Some(position);
-    }
-    ui.label("");
-    ui.checkbox(
-        &mut config.show_captions,
-        l10n::text(ui.ctx(), "Show captions"),
-    );
-    ui.end_row();
 }
 
 #[cfg(test)]

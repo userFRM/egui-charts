@@ -211,10 +211,15 @@ impl DrawingInteraction {
                         let on_level = drawing
                             .fib_level_x_range(&config, Rect::EVERYTHING)
                             .contains(point.x)
-                            && drawing.level_ys.iter().any(|y| {
-                                (point.y - y).abs() <= hit_distance.max(config.level_width / 2.0)
-                            });
-                        let on_trend = config.show_trend
+                            && config
+                                .visible_levels()
+                                .zip(&drawing.level_ys)
+                                .any(|(level, y)| {
+                                    (point.y - y).abs()
+                                        <= hit_distance
+                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
+                                });
+                        let on_trend = config.trend_visible
                             && drawing
                                 .points
                                 .windows(2)
@@ -613,7 +618,7 @@ mod tests {
                         timeframe: None,
                         finer: &[],
                     };
-                    fib.render_fibonacci(ui.painter(), rect, &view);
+                    fib.render_fibonacci(ui.painter(), rect, &view, false);
                 });
                 output.textures_delta.clear();
                 let line = output.shapes.iter().any(|s| matches!(&s.shape,
@@ -685,6 +690,28 @@ mod tests {
                 DrawingToolType::FibonacciExtension,
                 None,
                 (90.0, 310.0),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                Some(FibonacciConfig {
+                    trend_visible: false,
+                    ..Default::default()
+                }),
+                (90.0, 310.0),
+                None,
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel {
+                        width: Some(40.0),
+                        ..crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])
+                    }],
+                    trend_visible: false,
+                    ..Default::default()
+                }),
+                (150.0, 265.0),
                 Some(7),
             ),
             (

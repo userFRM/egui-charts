@@ -19,8 +19,8 @@ pub(crate) fn plot_value_color(
         .filter(|color| *color != egui::Color32::TRANSPARENT)
 }
 
-/// Horizontal line at each enabled output's latest value, across the clip rect. A missing latest
-/// value, a hidden output or a bar-colouring plot draws none.
+/// Horizontal line at each enabled output's latest value and enabled pane guide, across the
+/// clip rect. A missing latest value, a hidden output or a bar-colouring plot draws none.
 pub(crate) fn paint_price_lines(
     painter: &egui::Painter,
     study: &dyn crate::studies::Indicator,
@@ -33,6 +33,20 @@ pub(crate) fn paint_price_lines(
         return;
     };
     let rect = painter.clip_rect();
+    let paint = |value, color| {
+        let y = price.price_to_y(value);
+        if !y.is_finite() || !rect.y_range().contains(y) || color == egui::Color32::TRANSPARENT {
+            return;
+        }
+        crate::painting::dashed_line::draw_dashed_line(
+            painter,
+            egui::pos2(rect.left(), y),
+            egui::pos2(rect.right(), y),
+            egui::Stroke::new(1.0, color),
+            1.0,
+            3.0,
+        );
+    };
     for line in 0..study.line_count() {
         let style = study.plot_style(line);
         if !style.visible
@@ -52,20 +66,14 @@ pub(crate) fn paint_price_lines(
         let Some(value) = value else {
             continue;
         };
-        let y = price.price_to_y(value);
-        if !y.is_finite() || !rect.y_range().contains(y) {
-            continue;
-        }
         let color = plot_value_color(study, line, bar.checked_add_signed(study.plot_offset(line)))
             .unwrap_or(style.color);
-        crate::painting::dashed_line::draw_dashed_line(
-            painter,
-            egui::pos2(rect.left(), y),
-            egui::pos2(rect.right(), y),
-            egui::Stroke::new(1.0, color),
-            1.0,
-            3.0,
-        );
+        paint(value, color);
+    }
+    for (index, (value, ..)) in study.pane().levels.into_iter().enumerate() {
+        if let Some(color) = study.level_price_line(index) {
+            paint(value, color);
+        }
     }
 }
 
