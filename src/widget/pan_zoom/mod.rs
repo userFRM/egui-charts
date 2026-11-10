@@ -1284,96 +1284,131 @@ mod tests {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn wheel_zooms_both_axes_with_and_without_the_zoom_modifier() {
-        for (modifiers, right_bar_stays, fraction, group_enabled) in [
-            (Modifiers::NONE, false, 0.25, true),
-            (Modifiers::NONE, false, 0.25, false),
-            (Modifiers::CTRL, false, 0.75, true),
-            (Modifiers::COMMAND, false, 0.75, true),
-            (Modifiers::COMMAND, false, 0.75, false),
-            (Modifiers::NONE, true, 0.25, true),
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 800.0),
+            (crate::theme::Theme::dark(), 800.0),
+            (crate::theme::Theme::light(), 360.0),
+            (crate::theme::Theme::dark(), 360.0),
         ] {
-            for price in [false, true] {
-                for delta in [-1.0_f32, 1.0] {
-                    for (unit, source) in [
-                        (egui::MouseWheelUnit::Line, egui::MouseWheelSource::Wheel),
-                        (
-                            egui::MouseWheelUnit::Point,
-                            egui::MouseWheelSource::Momentum,
-                        ),
-                    ] {
-                        let case = format!(
-                            "{modifiers:?}, price={price}, delta={delta}, unit={unit:?}, enabled={group_enabled}"
-                        );
-                        let ctx = egui::Context::default();
-                        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-                        chart.chart_options.handle_scale.enabled = group_enabled;
-                        chart.chart_options.handle_scroll.enabled = !group_enabled;
-                        chart.chart_options.time_scale.right_bar_stays_on_scroll = right_bar_stays;
-                        chart.state.price_scale_mut().set_range(90.0, 110.0);
-                        frame(&ctx, &mut chart, 0.0, Vec::new());
-                        let (spacing, offset) = chart.get_time_scale_state();
-                        let rect = chart.last_rendered_price_rect;
-                        let pointer = Pos2::new(
-                            if price {
-                                rect.right() + 10.0
-                            } else {
-                                rect.left() + rect.width() * fraction
-                            },
-                            rect.top() + rect.height() * fraction,
-                        );
-                        frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
-                        let anchor_price =
-                            110.0 - 20.0 * f64::from((pointer.y - rect.top()) / rect.height());
-                        let wheel = Event::MouseWheel {
-                            unit,
-                            delta: egui::vec2(0.0, delta),
-                            phase: egui::TouchPhase::Move,
-                            source,
-                            modifiers,
-                        };
-                        frame(&ctx, &mut chart, 0.04, vec![wheel]);
-                        for i in 3..10 {
-                            frame(&ctx, &mut chart, i as f64 * 0.02, Vec::new());
-                        }
-                        let (zoomed, moved) = chart.get_time_scale_state();
-                        let range = chart.state.price_scale().range();
-                        if price && group_enabled {
-                            let span = range.max - range.min;
-                            assert_eq!(span < 20.0, delta > 0.0, "{case}: {range:?}");
-                            assert!((span - 20.0).abs() > 1e-6, "{case}");
-                            // Affine range scaling keeps the pointed value at its original fraction.
-                            let anchored = range.max
-                                - span * f64::from((pointer.y - rect.top()) / rect.height());
-                            assert!(
-                                (anchored - anchor_price).abs() < 1e-6,
-                                "{case}: anchor {anchored}, expected {anchor_price}"
+            let ctx = egui::Context::default();
+            let frame = |ctx: &egui::Context, chart: &mut Chart, time, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            for (modifiers, right_bar_stays, fraction, group_enabled) in [
+                (Modifiers::NONE, false, 0.25, true),
+                (Modifiers::NONE, false, 0.25, false),
+                (Modifiers::CTRL, false, 0.75, true),
+                (Modifiers::COMMAND, false, 0.75, true),
+                (Modifiers::COMMAND, false, 0.75, false),
+                (Modifiers::NONE, true, 0.25, true),
+            ] {
+                for price in [false, true] {
+                    for delta in [-1.0_f32, 1.0] {
+                        for (unit, source) in [
+                            (egui::MouseWheelUnit::Line, egui::MouseWheelSource::Wheel),
+                            (
+                                egui::MouseWheelUnit::Point,
+                                egui::MouseWheelSource::Momentum,
+                            ),
+                        ] {
+                            let case = format!(
+                                "{modifiers:?}, price={price}, delta={delta}, unit={unit:?}, enabled={group_enabled}, width={width}"
                             );
-                            assert_eq!((zoomed, moved), (spacing, offset), "{case}");
-                        } else {
-                            assert_eq!((range.min, range.max), (90.0, 110.0), "{case}");
-                            if group_enabled {
-                                assert_eq!(
-                                    zoomed > spacing,
-                                    delta > 0.0,
-                                    "{case}: spacing {spacing} -> {zoomed}"
-                                );
-                                assert_ne!(zoomed, spacing, "{case}");
-                            } else {
-                                assert_eq!((zoomed, moved), (spacing, offset), "{case}");
-                            }
-                            assert_eq!(
-                                moved == offset,
-                                right_bar_stays || !group_enabled,
-                                "{case}"
+                            let time = ctx.input(|input| input.time) + 1.0;
+                            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                            chart.set_theme(&ctx, &theme);
+                            chart.chart_options.handle_scale.enabled = group_enabled;
+                            chart.chart_options.handle_scroll.enabled = !group_enabled;
+                            chart.chart_options.time_scale.right_bar_stays_on_scroll =
+                                right_bar_stays;
+                            chart.state.price_scale_mut().set_range(90.0, 110.0);
+                            frame(&ctx, &mut chart, time, Vec::new());
+                            let (spacing, offset) = chart.get_time_scale_state();
+                            let rect = chart.last_rendered_price_rect;
+                            let pointer = Pos2::new(
+                                if price {
+                                    rect.right() + 10.0
+                                } else {
+                                    rect.left() + rect.width() * fraction
+                                },
+                                rect.top() + rect.height() * fraction,
                             );
-                            let anchor = if right_bar_stays {
-                                rect.right() - 1.0
-                            } else {
-                                pointer.x
+                            frame(
+                                &ctx,
+                                &mut chart,
+                                time + 0.02,
+                                vec![Event::PointerMoved(pointer)],
+                            );
+                            let anchor_price =
+                                110.0 - 20.0 * f64::from((pointer.y - rect.top()) / rect.height());
+                            let wheel = Event::MouseWheel {
+                                unit,
+                                delta: egui::vec2(0.0, delta),
+                                phase: egui::TouchPhase::Move,
+                                source,
+                                modifiers,
                             };
-                            let expected = offset
-                                + (rect.right() - anchor - 1.0) * (1.0 / zoomed - 1.0 / spacing);
-                            assert!((moved - expected).abs() < 1e-4, "{case}: anchor moved");
+                            frame(&ctx, &mut chart, time + 0.04, vec![wheel]);
+                            for i in 3..10 {
+                                frame(&ctx, &mut chart, time + i as f64 * 0.02, Vec::new());
+                            }
+                            let (zoomed, moved) = chart.get_time_scale_state();
+                            let range = chart.state.price_scale().range();
+                            if price && group_enabled {
+                                let span = range.max - range.min;
+                                assert_eq!(span < 20.0, delta > 0.0, "{case}: {range:?}");
+                                assert!((span - 20.0).abs() > 1e-6, "{case}");
+                                // Affine range scaling keeps the pointed value at its original fraction.
+                                let anchored = range.max
+                                    - span * f64::from((pointer.y - rect.top()) / rect.height());
+                                assert!(
+                                    (anchored - anchor_price).abs() < 1e-6,
+                                    "{case}: anchor {anchored}, expected {anchor_price}"
+                                );
+                                assert_eq!((zoomed, moved), (spacing, offset), "{case}");
+                            } else {
+                                assert_eq!((range.min, range.max), (90.0, 110.0), "{case}");
+                                if group_enabled {
+                                    assert_eq!(
+                                        zoomed > spacing,
+                                        delta > 0.0,
+                                        "{case}: spacing {spacing} -> {zoomed}"
+                                    );
+                                    assert_ne!(zoomed, spacing, "{case}");
+                                } else {
+                                    assert_eq!((zoomed, moved), (spacing, offset), "{case}");
+                                }
+                                assert_eq!(
+                                    moved == offset,
+                                    right_bar_stays || !group_enabled,
+                                    "{case}"
+                                );
+                                let anchor = if right_bar_stays {
+                                    rect.right() - 1.0
+                                } else {
+                                    pointer.x
+                                };
+                                let expected = offset
+                                    + (rect.right() - anchor - 1.0)
+                                        * (1.0 / zoomed - 1.0 / spacing);
+                                assert!((moved - expected).abs() < 1e-4, "{case}: anchor moved");
+                            }
                         }
                     }
                 }
