@@ -1546,6 +1546,12 @@ mod tests {
     #[test]
     fn info_line_readouts_read_on_their_card_in_every_theme() {
         use crate::theme::{apply_to_egui, contrast, presets};
+        // The measure agrees with WCAG 2: the default blue on the dark card is 2.28:1.
+        let blue = contrast(
+            Color32::from_rgb(41, 98, 255),
+            Color32::from_rgb(55, 59, 70),
+        );
+        assert!((blue - 2.28).abs() < 0.01, "{blue}");
         let bars = sample_bars();
         let ctx = egui::Context::default();
         let mut ratios = Vec::new();
