@@ -64,6 +64,7 @@ impl TextTab {
                 DrawingToolType::TrendAngle
                     | DrawingToolType::FibonacciRetracement
                     | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
             )
     }
 
@@ -72,12 +73,14 @@ impl TextTab {
         if let Some(template) = &mut props.tool_settings
             && matches!(
                 template.settings.tool_type,
-                DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
             )
         {
             let mut config = template.settings.fibonacci_config().into_owned();
             let original = config.clone();
-            FormGrid::new("retracement_text").show(ui, |ui| {
+            FormGrid::new("fibonacci_text").show(ui, |ui| {
                 let label = ui.label(l10n::text(ui.ctx(), "Font size"));
                 ui.add(
                     egui::DragValue::new(&mut config.label_size)
@@ -122,6 +125,9 @@ impl TextTab {
                         (V::Top, "Bottom"),
                     ],
                 );
+                if template.settings.tool_type == DrawingToolType::FibonacciChannel {
+                    return;
+                }
                 ui.label("");
                 ui.checkbox(
                     &mut config.show_text,

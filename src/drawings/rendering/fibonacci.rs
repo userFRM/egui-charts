@@ -537,19 +537,39 @@ impl Drawing {
         }
         for (level, &line) in levels {
             paint_level_line(painter, line, &config, level);
-            let point = if config.labels_on_left {
-                line[0]
+            use crate::drawings::LineTextHorizontalAlign as H;
+            let position = config.label_position.unwrap_or(if config.labels_on_left {
+                H::Left
             } else {
-                line[1]
+                H::Right
+            });
+            let point = match position {
+                H::Left => line[0],
+                H::Center => line[0].lerp(line[1], 0.5),
+                H::Right => line[1],
             };
-            paint_price_label(
+            if !point.is_finite() || !chart_rect.y_range().contains(point.y) {
+                continue;
+            }
+            let price = (view.y_to_price)(point.y);
+            let galley = level_galley(
                 painter,
                 &config,
                 level,
-                (view.y_to_price)(point.y),
-                view,
-                point,
+                price.is_finite().then_some(price),
+                Some(view),
             );
+            if !galley.text().is_empty() {
+                let bounds = retracement_text_bounds(
+                    Rangef::new(line[0].x, line[1].x),
+                    point.y,
+                    galley.size(),
+                    position,
+                    config.label_vertical,
+                    painter.clip_rect(),
+                );
+                painter.galley(bounds.min, galley, level_color(level));
+            }
         }
 
         if !self.completed && self.points.len() == 2 {
@@ -749,7 +769,9 @@ impl Drawing {
         let mut ends = None;
         for level in levels {
             let angles = wedge_angles(start, edge, boundary);
-            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let clip = painter
+                .clip_rect()
+                .expand(effective_width(&config, level) + 2.0);
             let ppp = painter.pixels_per_point();
             let radius = start.distance(edge);
             let points = if config.show_background {
@@ -784,7 +806,9 @@ impl Drawing {
             previous = level.value;
             paint_level_path(&painter, points, &config, level);
         }
-        if let Some(ends) = ends {
+        if config.trend_visible
+            && let Some(ends) = ends
+        {
             for end in ends {
                 self.styled_segment(
                     &painter,
@@ -808,15 +832,42 @@ impl Drawing {
             .filter(|l| l.value.is_finite() && l.value >= 0.0)
         {
             let points = wedge_arc_points(start, edge, boundary, level.value, clip, 1.0);
+            // Wide arcs add their own ink area without widening the other levels' hit lines.
+            let width = effective_width(&config, level);
+            if width > 10.0 {
+                let mut previous_normal = None;
+                for pair in points.windows(2) {
+                    if pair[0] == pair[1] {
+                        continue;
+                    }
+                    let normal = (pair[1] - pair[0]).normalized().rot90() * (width / 2.0);
+                    if let Some(previous) = previous_normal.replace(normal) {
+                        outline.areas.push(vec![
+                            pair[0] + previous,
+                            pair[0] + normal,
+                            pair[0] - previous,
+                            pair[0] - normal,
+                        ]);
+                    }
+                    outline.areas.push(vec![
+                        pair[0] + normal,
+                        pair[1] + normal,
+                        pair[1] - normal,
+                        pair[0] - normal,
+                    ]);
+                }
+            }
             outline
                 .lines
                 .extend(points.windows(2).map(|w| [w[0], w[1]]));
             outer = outer.max(level.value);
         }
-        let outer = wedge_arc_points(start, edge, boundary, outer, clip, 1.0);
-        outline
-            .lines
-            .extend([[start, *outer.first()?], [start, *outer.last()?]]);
+        if config.trend_visible {
+            let outer = wedge_arc_points(start, edge, boundary, outer, clip, 1.0);
+            outline
+                .lines
+                .extend([[start, *outer.first()?], [start, *outer.last()?]]);
+        }
         Some(outline)
     }
 }
@@ -1009,7 +1060,11 @@ fn paint_level_path(
         return;
     }
     let stroke = Stroke::new(effective_width(config, level), level_color(level));
-    if let Some((dash, gap)) = config.level_style.dash_pattern() {
+    if let Some((dash, gap)) = level
+        .line_style
+        .unwrap_or(config.level_style)
+        .dash_pattern()
+    {
         crate::painting::dashed_line::draw_dashed_polyline(painter, &points, stroke, dash, gap);
     } else {
         painter.add(egui::Shape::line(points, stroke));
@@ -1044,7 +1099,11 @@ fn paint_level_line(
         return;
     }
     let stroke = Stroke::new(effective_width(config, level), level_color(level));
-    if let Some((dash, gap)) = config.level_style.dash_pattern() {
+    if let Some((dash, gap)) = level
+        .line_style
+        .unwrap_or(config.level_style)
+        .dash_pattern()
+    {
         super::utils::draw_dashed_line(painter, points[0], points[1], stroke, dash, gap);
     } else {
         painter.line_segment(points, stroke);
@@ -1792,6 +1851,212 @@ mod tests {
         }
     }
 
+    /// Channel labels follow the price at their alignment point, including reversed anchors and
+    /// log scales: the midpoint of 125 and 225 is 175, or sqrt(125*225) on a log scale.
+    #[test]
+    fn channel_labels_follow_the_local_level_height() {
+        use crate::drawings::{
+            ChartPoint, LineTextHorizontalAlign as H, LineTextVerticalAlign as V,
+        };
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1400.0, 600.0));
+        for log in [false, true] {
+            for reversed in [false, true] {
+                for (position, x, price) in [
+                    (H::Left, 300.0, 125.0),
+                    (
+                        H::Center,
+                        500.0,
+                        if log {
+                            (125.0_f64 * 225.0).sqrt()
+                        } else {
+                            175.0
+                        },
+                    ),
+                    (H::Right, 700.0, 225.0),
+                ] {
+                    for (vertical, clip) in [
+                        (V::Top, rect),
+                        (V::Middle, rect),
+                        (V::Bottom, rect),
+                        (V::Middle, rect.translate(egui::vec2(0.0, -1000.0))),
+                        (V::Middle, rect.translate(egui::vec2(0.0, 1000.0))),
+                    ] {
+                        let mut d = Drawing::new(0, Tool::FibonacciChannel);
+                        // A half-channel translation takes 100 to 125; B is 200 on a linear
+                        // scale or 180 on a log scale, giving 225 at the other endpoint.
+                        let a = ChartPoint::new(300.0, 100.0);
+                        let b = ChartPoint::new(700.0, if log { 180.0 } else { 200.0 });
+                        let c = ChartPoint::new(300.0, if log { 156.25 } else { 150.0 });
+                        d.chart_points = if reversed {
+                            vec![
+                                b,
+                                a,
+                                ChartPoint::new(700.0, if log { 281.25 } else { 250.0 }),
+                            ]
+                        } else {
+                            vec![a, b, c]
+                        };
+                        let mut config = FibonacciConfig::for_tool(Tool::FibonacciChannel);
+                        config.levels = vec![FibonacciLevel::new(0.5, "", [211, 41, 73, 255])];
+                        config.label_position = Some(position);
+                        config.label_vertical = vertical;
+                        config.label_size = 20.0;
+                        config.show_levels = Some(false);
+                        config.show_background = false;
+                        d.fib_config = Some(config);
+                        let y = |p: f64| {
+                            if log {
+                                (600.0 - p.ln() * 100.0) as f32
+                            } else {
+                                500.0 - p as f32
+                            }
+                        };
+                        let inverse = |y: f32| {
+                            if log {
+                                ((600.0 - f64::from(y)) / 100.0).exp()
+                            } else {
+                                500.0 - f64::from(y)
+                            }
+                        };
+                        d.update_screen_coords(|x| x, y);
+                        let view = ChartView {
+                            price_formatter: None,
+                            time_formatter: None,
+                            bar_seconds: 0,
+                            instrument: None,
+                            bars: &[],
+                            revision: 0,
+                            bar_to_x: &|x| x,
+                            price_to_y: &y,
+                            y_to_price: &inverse,
+                            time_axis: true,
+                            executions: None,
+                            timeframe: None,
+                            finer: &[],
+                        };
+                        let mut output =
+                            egui::Context::default().run_ui(Default::default(), |ui| {
+                                d.render_fibonacci_channel(
+                                    &ui.painter().with_clip_rect(clip),
+                                    clip,
+                                    &view,
+                                );
+                            });
+                        output.textures_delta.clear();
+                        let text = output.shapes.iter().find_map(|s| match &s.shape {
+                            egui::Shape::Text(t) => Some(t),
+                            _ => None,
+                        });
+                        if !clip.y_range().contains(y(price)) {
+                            assert!(
+                                text.is_none(),
+                                "offscreen prices must not be pinned to the pane"
+                            );
+                            output.drop_without_applying_deltas();
+                            continue;
+                        }
+                        let text = text.expect("channel price label");
+                        assert!((text.galley.text().parse::<f64>().unwrap() - price).abs() < 0.01);
+                        let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                        let near = |a: f32, b: f32| {
+                            assert!(
+                                (a - b).abs() < 0.01,
+                                "{position:?} {vertical:?}: {a} != {b}"
+                            )
+                        };
+                        match position {
+                            H::Left => near(bounds.right(), x - 4.0),
+                            H::Center => near(bounds.center().x, x),
+                            H::Right => near(bounds.left(), x + 4.0),
+                        }
+                        match vertical {
+                            V::Top => near(bounds.top(), y(price) + 2.0),
+                            V::Middle => near(bounds.center().y, y(price)),
+                            V::Bottom => near(bounds.bottom(), y(price) - 2.0),
+                        }
+                        assert_eq!(text.galley.job.sections[0].format.font_id.size, 20.0);
+                        output.drop_without_applying_deltas();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Each wedge arc keeps its pattern and thickness; hiding the two radial edges removes
+    /// their paint and fallback hit geometry without removing arcs, labels or bands.
+    #[test]
+    fn wedge_level_styles_and_edges_are_independent() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(600.0, 600.0));
+        for trend in [false, true] {
+            for reversed in [false, true] {
+                let mut d = Drawing::new(7, Tool::FibonacciWedge);
+                d.points = vec![
+                    Pos2::new(100.0, 300.0),
+                    Pos2::new(300.0, 300.0),
+                    Pos2::new(100.0, 100.0),
+                ];
+                if reversed {
+                    d.points.swap(1, 2);
+                }
+                let mut json = serde_json::to_value(d.fib_config.as_ref().unwrap()).unwrap();
+                json["trend_visible"] = trend.into();
+                json["levels"] = serde_json::json!([
+                    {"value":0.5,"label":"","color":[211,41,73,255],"visible":true,"show_price":false,"width":40.0,"line_style":"Dotted"},
+                    {"value":1.0,"label":"","color":[37,157,89,255],"visible":true,"show_price":false,"width":3.0,"line_style":"Solid"},
+                    {"value":0.0,"label":"","color":[61,79,199,255],"visible":true,"show_price":false,"width":40.0,"line_style":"Solid"}
+                ]);
+                d.fib_config = Some(serde_json::from_value(json).unwrap());
+                let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                    d.render_fibonacci_wedge(ui.painter(), rect);
+                });
+                output.textures_delta.clear();
+                let red = Color32::from_rgb(211, 41, 73);
+                let green = Color32::from_rgb(37, 157, 89);
+                assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::LineSegment { stroke, .. } if stroke.color==red && stroke.width==40.0)), "dotted arc uses separate dashes");
+                assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::Path(p) if p.stroke.color==egui::epaint::ColorMode::Solid(green) && p.stroke.width==3.0 && p.points.len()>2)), "solid arc stays joined");
+                let edges = output
+                    .shapes
+                    .iter()
+                    .filter(|s| {
+                        matches!(&s.shape,
+                    egui::Shape::LineSegment { stroke, .. } if stroke.color==d.color32())
+                    })
+                    .count();
+                assert_eq!(edges, if trend { 2 } else { 0 });
+                let outline = d.fibonacci_wedge_outline(rect).unwrap();
+                assert_eq!(
+                    outline
+                        .lines
+                        .iter()
+                        .filter(|l| l[0] == d.points[0] && l[1] != d.points[0])
+                        .count(),
+                    if trend { 2 } else { 0 }
+                );
+                let interaction = crate::drawings::services::DrawingInteraction::new();
+                let at_radius =
+                    |radius: f32| d.points[0] + egui::vec2(1.0, -1.0).normalized() * radius;
+                assert_eq!(
+                    interaction.hit_test(at_radius(112.0), std::slice::from_ref(&d), "1D"),
+                    Some(7)
+                );
+                assert_eq!(
+                    interaction.hit_test(at_radius(212.0), std::slice::from_ref(&d), "1D"),
+                    None,
+                    "the wide inner arc must not enlarge the thin outer arc's hit area"
+                );
+                // Half a 200-point radius is 100; style must not change this geometry.
+                assert!(outline.lines.iter().any(|points| {
+                    points
+                        .iter()
+                        .all(|p| (p.distance(d.points[0]) - 100.0).abs() < 0.001)
+                }));
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
     /// Drawing-wide choices reach the painted labels, including a channel on a log scale.
     #[test]
     fn fibonacci_label_content_and_side_follow_settings() {
@@ -1895,6 +2160,19 @@ mod tests {
                 } else {
                     price
                 };
+                // Channel endpoints are x=560 and x=880, rising 100 or doubling per 320 px.
+                let price = if tool == Tool::FibonacciChannel && extend {
+                    let distance = if left { -560.0 } else { 520.0 } / 320.0;
+                    if log {
+                        price * 2.0_f64.powf(distance)
+                    } else {
+                        price + 100.0 * distance
+                    }
+                } else {
+                    price
+                };
+                let in_view =
+                    in_view && (tool != Tool::FibonacciChannel || (10.0..=1000.0).contains(&price));
                 let formatted = if custom {
                     format!("host:{price:.5}")
                 } else {

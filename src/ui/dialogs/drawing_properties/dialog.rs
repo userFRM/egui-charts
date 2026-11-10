@@ -656,16 +656,17 @@ mod tests {
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = Chart::new(BarData::new());
             let mut dialog = DrawingPropertiesDialog::new();
-            for (tool, fill, extend, text) in [
-                (Tool::HorizontalLine, false, false, true),
-                (Tool::Rect, true, true, true),
-                (Tool::Brush, true, false, false),
-                (Tool::TrendLine, false, true, true),
-                (Tool::TrendAngle, false, true, true),
-                (Tool::TextLabel, false, false, true),
-                (Tool::Highlighter, false, false, false),
-                (Tool::ArrowMarker, false, false, true),
-                (Tool::ArrowMarkDown, false, false, true),
+            for (tool, fill, extend, text, stroke) in [
+                (Tool::HorizontalLine, false, false, true, true),
+                (Tool::Rect, true, true, true, true),
+                (Tool::Brush, true, false, false, true),
+                (Tool::TrendLine, false, true, true, true),
+                (Tool::TrendAngle, false, true, true, true),
+                (Tool::TextLabel, false, false, true, true),
+                (Tool::Highlighter, false, false, false, true),
+                (Tool::ArrowMarker, false, false, true, false),
+                (Tool::ArrowMarkDown, false, false, true, false),
+                (Tool::FibonacciChannel, true, false, true, false),
             ] {
                 let mut drawing = Drawing::new(7, tool);
                 drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
@@ -683,8 +684,9 @@ mod tests {
                     ("Fill", fill),
                     ("Extend", extend),
                     ("Text", text),
-                    ("Line width", tool.draws_line()),
-                    ("Line style", tool.draws_line()),
+                    ("Color", tool != Tool::FibonacciChannel),
+                    ("Line width", stroke),
+                    ("Line style", stroke),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),

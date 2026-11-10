@@ -143,8 +143,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a retracement's or extension's levels, typography, text placement and construction
-    /// visibility as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    /// Replace a retracement's, extension's, channel's or wedge's levels, typography, text placement
+    /// and construction visibility as one undoable edit. Unknown ids, locked drawings and invalid
+    /// settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
@@ -163,9 +164,11 @@ impl Chart {
             drawing.tool_type,
             crate::drawings::DrawingToolType::FibonacciRetracement
                 | crate::drawings::DrawingToolType::FibonacciExtension
+                | crate::drawings::DrawingToolType::FibonacciChannel
+                | crate::drawings::DrawingToolType::FibonacciWedge
         ) {
             return Err(DrawingError::Invalid(
-                "Drawing is not a Fibonacci retracement or extension",
+                "Drawing is not a Fibonacci retracement, extension, channel or wedge",
             ));
         }
         if !config.is_valid() {
@@ -709,6 +712,85 @@ mod tests {
                 Default::default(),
                 "{tool:?}"
             );
+        }
+    }
+
+    /// Hosts can update either family in one history entry, including spare wedge arcs; invalid,
+    /// locked, missing and unrelated drawings leave their settings and history untouched.
+    #[test]
+    fn fibonacci_family_settings_are_validated_and_undoable() {
+        use crate::drawings::{DrawingTemplate, FibonacciConfig};
+        for tool in [
+            DrawingToolType::FibonacciChannel,
+            DrawingToolType::FibonacciWedge,
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(2.0, 100.0),
+                ChartPoint::new(8.0, 200.0),
+                ChartPoint::new(2.0, 150.0),
+            ];
+            let original = drawing.fib_config.clone();
+            chart.drawings_mut().drawings.push(drawing);
+            let mut json = serde_json::to_value(FibonacciConfig::for_tool(tool)).unwrap();
+            json["label_size"] = 20.0.into();
+            json["label_position"] = "Center".into();
+            json["trend_visible"] = false.into();
+            for (i, level) in json["levels"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
+                level["width"] = ((i + 1) as f64).into();
+                level["line_style"] = if i % 2 == 0 { "Dotted" } else { "Dashed" }.into();
+            }
+            let edited: FibonacciConfig = serde_json::from_value(json.clone()).unwrap();
+            chart.set_fibonacci_config(7, edited.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
+                    .unwrap(),
+                json
+            );
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].fib_config, original);
+            assert!(!chart.can_undo());
+            assert!(chart.redo());
+            // An unchanged assignment does not create a second history entry.
+            chart.set_fibonacci_config(7, edited.clone()).unwrap();
+            let template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
+            let mut peer = Drawing::new(8, tool);
+            template.apply_to(&mut peer).unwrap();
+            assert_eq!(peer.fib_config, Some(edited.clone()));
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            let mut restored = Chart::new(BarData::default());
+            restored.load_drawings(&saved).unwrap();
+            assert_eq!(
+                restored.drawings().drawings[0].fib_config,
+                Some(edited.clone())
+            );
+            for bad in [f32::NAN, 0.0, 101.0] {
+                let mut invalid = edited.clone();
+                invalid.levels[0].width = Some(bad);
+                assert!(chart.set_fibonacci_config(7, invalid).is_err());
+            }
+            chart.drawings_mut().drawings[0].locked = true;
+            assert_eq!(
+                chart.set_fibonacci_config(7, edited.clone()),
+                Err(DrawingError::Locked(7))
+            );
+            assert_eq!(
+                chart.set_fibonacci_config(77, edited.clone()),
+                Err(DrawingError::UnknownDrawing(77))
+            );
+            chart.drawings_mut().drawings[0].locked = false;
+            assert!(chart.undo());
+            assert!(!chart.can_undo());
+            assert_eq!(chart.drawings().drawings[0].fib_config, original);
+            chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
+            assert!(chart.set_fibonacci_config(7, edited).is_err());
         }
     }
 

@@ -283,6 +283,8 @@ impl DrawingProps {
                         drawing.tool_type,
                         crate::drawings::DrawingToolType::FibonacciRetracement
                             | crate::drawings::DrawingToolType::FibonacciExtension
+                            | crate::drawings::DrawingToolType::FibonacciChannel
+                            | crate::drawings::DrawingToolType::FibonacciWedge
                     ) {
                         let original = target.fibonacci_config();
                         let edited = settings.fibonacci_config();

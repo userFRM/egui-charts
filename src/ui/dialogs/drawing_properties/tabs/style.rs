@@ -26,14 +26,19 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
-            ui.label(l10n::text(ui.ctx(), "Color"));
-            if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
-            {
-                props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+            if tool != Some(DrawingToolType::FibonacciChannel) {
+                ui.label(l10n::text(ui.ctx(), "Color"));
+                if let Some(color) =
+                    color_swatch(ui, color_picker, props.color, "drawing_props_color")
+                {
+                    props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+                }
+                ui.end_row();
             }
-            ui.end_row();
 
-            if tool.is_none_or(|tool| tool.draws_line()) {
+            if tool
+                .is_none_or(|tool| tool.draws_line() && tool != DrawingToolType::FibonacciChannel)
+            {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
@@ -54,17 +59,26 @@ impl StyleTab {
                 let settings = &mut template.settings;
                 if matches!(
                     settings.tool_type,
-                    DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension
+                    DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciExtension
+                        | DrawingToolType::FibonacciChannel
+                        | DrawingToolType::FibonacciWedge
                 ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
                     ui.label(l10n::text(ui.ctx(), "All colours"));
                     if let Some(color) =
-                        color_swatch(ui, fill_picker, props.color, "retracement_color")
+                        color_swatch(ui, fill_picker, props.color, "fibonacci_color")
                     {
                         props.color = keep_opacity(color, props.color, fill_picker.custom_mode);
                         for level in &mut config.levels {
-                            level.color = props.color.to_srgba_unmultiplied();
+                            let [r, g, b, a] = color.to_srgba_unmultiplied();
+                            let opacity = if fill_picker.custom_mode {
+                                a
+                            } else {
+                                level.color[3]
+                            };
+                            level.color = [r, g, b, opacity];
                         }
                         if let Some(fill) = props.fill_color {
                             let [r, g, b, _] = props.color.to_srgba_unmultiplied();
@@ -73,10 +87,12 @@ impl StyleTab {
                         }
                     }
                     ui.end_row();
-                    ui.label(l10n::text(ui.ctx(), "Trend line"));
-                    ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
-                        .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
-                    ui.end_row();
+                    if settings.tool_type != DrawingToolType::FibonacciChannel {
+                        ui.label(l10n::text(ui.ctx(), "Trend line"));
+                        ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
+                            .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
+                        ui.end_row();
+                    }
                     ui.label(l10n::text(ui.ctx(), "Level width"));
                     line_width_row(ui, &mut config.level_width);
                     ui.end_row();
@@ -378,13 +394,14 @@ mod tests {
         }
     }
 
-    /// Palette swatches retain line opacity; a retracement's group picker also colours all
-    /// shown and spare levels, so its bands and construction line use the chosen colour.
+    /// Palette swatches retain each line's opacity, including shown and spare Fibonacci levels.
     #[test]
     fn palette_colours_keep_the_line_opacity() {
         for (tool, picker, alpha, fill) in [
             (DrawingToolType::Highlighter, 0, 51, None),
             (DrawingToolType::FibonacciRetracement, 1, 255, None),
+            (DrawingToolType::FibonacciChannel, 1, 255, None),
+            (DrawingToolType::FibonacciWedge, 1, 255, None),
             (
                 DrawingToolType::FibonacciRetracement,
                 1,
@@ -397,6 +414,11 @@ mod tests {
             let chart = Chart::new(BarData::new());
             let mut drawing = Drawing::new(0, tool);
             drawing.fill_color = fill;
+            if let Some(config) = &mut drawing.fib_config {
+                for (i, level) in config.levels.iter_mut().enumerate() {
+                    level.color[3] = if i % 2 == 0 { 51 } else { 153 };
+                }
+            }
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
             let mut pickers: [ColorPickerState; 2] = Default::default();
             pickers[picker].is_open = true;
@@ -440,7 +462,12 @@ mod tests {
             let [r, g, b, _] = swatch.to_srgba_unmultiplied();
             assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, alpha));
 
-            if tool == DrawingToolType::FibonacciRetracement {
+            if matches!(
+                tool,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciWedge
+            ) {
                 assert_eq!(
                     props.fill_color,
                     fill.map(|color| Color32::from_rgba_unmultiplied(r, g, b, color[3]))
@@ -456,7 +483,9 @@ mod tests {
                         .unwrap()
                         .levels
                         .iter()
-                        .all(|level| level.color == [r, g, b, alpha])
+                        .enumerate()
+                        .all(|(i, level)| level.color
+                            == [r, g, b, if i % 2 == 0 { 51 } else { 153 }])
                 );
             }
         }
