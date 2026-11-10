@@ -2639,7 +2639,7 @@ mod tests {
                 let series = chart.add_series(Default::default());
                 chart.set_data(
                     series,
-                    [1, 2, 3]
+                    [1, 2, 3, 18]
                         .map(|m| Bar::from_value(start + chrono::TimeDelta::minutes(m), 110.0))
                         .to_vec(),
                 );
@@ -2654,10 +2654,11 @@ mod tests {
                     assert!(chart.move_series_to_pane(series, pane));
                 }
                 frame(&ctx, &mut chart, 0.0, vec![]);
-                chart.apply_synced_time_scale(160.0, 0.0);
+                chart.apply_synced_time_scale(160.0, 1.0);
                 frame(&ctx, &mut chart, 0.1, vec![]);
-                for (step, (minute, index)) in
-                    [(3, 1.125), (4, 1.25), (2, 1.0)].into_iter().enumerate()
+                for (step, (minute, index)) in [(3, 1.125), (4, 1.25), (2, 1.0), (18, 3.0)]
+                    .into_iter()
+                    .enumerate()
                 {
                     let map = chart.get_chart_mapping();
                     let x = map.index_to_x(index);
@@ -2683,7 +2684,7 @@ mod tests {
                         .last()
                         .expect("move");
                     assert_eq!(pointer.time, Some(expected));
-                    assert_eq!(pointer.index, 1);
+                    assert_eq!(pointer.index, index.round() as isize);
                     assert_eq!(chart.hover_time(), Some(expected));
                     assert_eq!(
                         chart.last_crosshair.map(|(time, _)| time),

@@ -26,13 +26,11 @@ impl Chart {
     /// The hovered bar's period, or an independently keyed point's exact timestamp as both bounds.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let index = self.last_hover_bar_idx?;
-        if index.fract() != 0.0 {
+        if index.fract() != 0.0 || index < 0.0 || index >= self.state.shown().len() as f64 {
             let time = self.last_crosshair?.0;
             return Some((time, time));
         }
-        let index = index.round();
-        (index >= 0.0 && index < self.state.shown().len() as f64)
-            .then(|| self.bar_period(index as usize))
+        Some(self.bar_period(index as usize))
     }
 
     // Until the next bar opens if that comes sooner, as after a repeated element time.
