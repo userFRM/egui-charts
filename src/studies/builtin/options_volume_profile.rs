@@ -282,7 +282,11 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         self.refresh_cache();
-        if self.waiting_inputs.borrow().is_empty() || self.cache.borrow().awaiting_chain {
+        let (awaiting_chain, supplied) = {
+            let cache = self.cache.borrow();
+            (cache.awaiting_chain, cache.supplied.is_some())
+        };
+        if self.waiting_inputs.borrow().is_empty() || (awaiting_chain && !supplied) {
             return;
         }
         // In saved order, since the measure decides which levels are offered.
@@ -290,7 +294,9 @@ impl OptionsVolumeProfile {
         let labelled = pending.iter().any(|(id, _)| id == "measure_label");
         let mut waiting = Vec::new();
         for (id, value) in pending {
-            if id == "measure" && labelled {
+            // A label names the measure. Without chain rows only Gamma exposure is listed,
+            // which a saved position does not index.
+            if id == "measure" && (labelled || awaiting_chain) {
                 waiting.push((id, value));
                 continue;
             }
@@ -470,7 +476,7 @@ impl OptionsVolumeProfile {
                             .map(|(_, strike)| strike)
                     })
                 });
-                cache.awaiting_chain = selected.is_empty() && supplied.is_none();
+                cache.awaiting_chain = selected.is_empty();
                 cache.supplied = supplied;
                 cache.volume_available =
                     !selected.is_empty() && selected.iter().all(|row| row.volume.is_some());
@@ -1048,7 +1054,12 @@ impl Indicator for OptionsVolumeProfile {
             );
         }
         let waiting = self.waiting_inputs.borrow();
-        inputs.retain(|input| !waiting.iter().any(|(id, _)| *id == input.id));
+        // A held position keeps its saved meaning, which a label of the shown measure would undo.
+        inputs.retain(|input| {
+            !waiting
+                .iter()
+                .any(|(id, _)| *id == input.id || (id == "measure" && input.id == "measure_label"))
+        });
         inputs.extend(
             waiting
                 .iter()
@@ -2381,6 +2392,93 @@ mod tests {
                 assert_eq!(restored.plot_value(1, 0), Some(100.0));
                 assert_eq!(restored.volume_profiles(0..1)[0].profile.up(), [4.0]);
             }
+        }
+    }
+    /// A profile saved by an earlier release has no labels. Its measure position counts among
+    /// the measures the chain's rows list, whichever feed answers first, and a position that
+    /// the restored chain does not list is saved again as it was.
+    #[test]
+    fn earlier_saved_measure_keeps_its_position() {
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        // A call and a put at 100 with volume 10 and 5 and, when reported, open interest 4 and 2.
+        let rows = |interest: bool| -> Vec<OptionQuote> {
+            [OptionKind::Call, OptionKind::Put]
+                .into_iter()
+                .map(|kind| {
+                    let call = kind == OptionKind::Call;
+                    let mut row =
+                        OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+                    row.volume = Some(if call { 10.0 } else { 5.0 });
+                    row.open_interest = interest.then_some(if call { 4.0 } else { 2.0 });
+                    row.gamma = Some(0.05);
+                    row.multiplier = Some(100.0);
+                    row.underlying_price = Some(100.0);
+                    row
+                })
+                .collect()
+        };
+        let answer = |feed: &ChainFeed, interest: Option<bool>, exposure: bool| {
+            if exposure {
+                let mut row = OptionExposureRow::new(expiry, 100.0);
+                (row.calls, row.puts, row.net) = (Some(12.0), Some(-7.0), Some(5.0));
+                let snapshot =
+                    OptionExposure::new(OptionExposureKind::Gamma, time, "host units", vec![row]);
+                let sink = feed.1.lock().unwrap();
+                sink.as_ref().unwrap().push(snapshot).unwrap();
+            }
+            if let Some(interest) = interest {
+                let sink = feed.0.lock().unwrap();
+                sink.as_ref().unwrap().push(rows(interest)).unwrap();
+            }
+        };
+        let factory = |exposure: bool| {
+            let feed = ChainFeed::default();
+            let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+            let chain = OptionChain::new(&feed, query, || {}).unwrap();
+            let handle = exposure.then(|| {
+                let query =
+                    OptionExposureQuery::new("SAMPLE", expiry..=expiry, OptionExposureKind::Gamma);
+                OptionExposureHandle::new(&feed, query, || {}).unwrap()
+            });
+            let mut factory = crate::studies::IndicatorFactory::new();
+            factory.register("Options Volume Profile", move || {
+                let profile =
+                    OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", vec![expiry])
+                        .unwrap();
+                Box::new(match &handle {
+                    Some(handle) => profile.with_exposure(handle.clone()).unwrap(),
+                    None => profile,
+                })
+            });
+            (factory, feed)
+        };
+        // Saved over Volume, Open interest and Gamma exposure: Volume with the provider answering
+        // first, and Open interest restored over a chain that lists Volume alone.
+        for (exposure, position, interest, up) in [(true, 0, true, 10.0), (false, 1, false, 4.0)] {
+            let (original, feed) = factory(exposure);
+            answer(&feed, Some(true), exposure);
+            let mut study = original.create("Options Volume Profile").unwrap();
+            study
+                .set_input("measure", InputValue::Choice(position))
+                .unwrap();
+            let mut saved = crate::studies::StudyTemplate::from_study(study.as_ref());
+            saved.inputs.retain(|(id, _)| !id.ends_with("_label"));
+            // Restored, read after any provider answer and before the chain's, and saved again.
+            let (restoring, feed) = factory(exposure);
+            let restored = saved.create_with(&restoring).unwrap();
+            answer(&feed, None, exposure);
+            restored.inputs();
+            answer(&feed, Some(interest), false);
+            let saved = crate::studies::StudyTemplate::from_study(restored.as_ref());
+            let (later, feed) = factory(exposure);
+            answer(&feed, Some(true), exposure);
+            let restored = saved.create_with(&later).unwrap();
+            assert_eq!(
+                restored.volume_profiles(0..1)[0].profile.up(),
+                [up],
+                "position {position}"
+            );
         }
     }
     #[test]
