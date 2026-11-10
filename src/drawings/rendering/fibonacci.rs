@@ -560,12 +560,13 @@ impl Drawing {
                 Some(view),
             );
             if !galley.text().is_empty() {
-                let bounds = retracement_text_bounds(
+                let bounds = level_text_bounds(
                     Rangef::new(line[0].x, line[1].x),
                     point.y,
                     galley.size(),
                     position,
                     config.label_vertical,
+                    false,
                     painter.clip_rect(),
                 );
                 painter.galley(bounds.min, galley, level_color(level));
@@ -1108,43 +1109,6 @@ fn paint_level_line(
     } else {
         painter.line_segment(points, stroke);
     }
-}
-
-fn paint_price_label(
-    painter: &egui::Painter,
-    config: &FibonacciConfig,
-    level: &FibonacciLevel,
-    price: f64,
-    view: &ChartView,
-    point: Pos2,
-) {
-    if !point.is_finite() {
-        return;
-    }
-    let galley = level_galley(
-        painter,
-        config,
-        level,
-        price.is_finite().then_some(price),
-        Some(view),
-    );
-    if galley.text().is_empty() {
-        return;
-    }
-    let alignment = if config.labels_on_left {
-        egui::Align2::RIGHT_CENTER
-    } else {
-        egui::Align2::LEFT_CENTER
-    };
-    let bounds = alignment.anchor_size(
-        point + egui::vec2(if config.labels_on_left { -4.0 } else { 4.0 }, 0.0),
-        galley.size(),
-    );
-    // Lines extended to the pane edge keep their labels inside the pane.
-    let clip = painter.clip_rect();
-    let shift = (clip.min - bounds.min).max(egui::Vec2::ZERO)
-        + (clip.max - bounds.max).min(egui::Vec2::ZERO);
-    painter.galley(bounds.min + shift, galley, level_color(level));
 }
 
 fn level_color(level: &FibonacciLevel) -> Color32 {

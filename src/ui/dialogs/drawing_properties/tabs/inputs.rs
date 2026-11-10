@@ -1359,6 +1359,15 @@ mod tests {
             let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
             saved["levels"][3]["text"] = "Halfway".into();
             saved["levels"][3]["width"] = 4.0.into();
+            if tool == Tool::FibonacciWedge {
+                saved["levels"][3]["line_style"] = "Dotted".into();
+            }
+            drawing.fib_config = Some(serde_json::from_value(saved.clone()).unwrap());
+            let mut peer = drawing.clone();
+            peer.id = 8;
+            let mut peer_config = saved.clone();
+            peer_config["levels"][3]["text"] = "Peer".into();
+            peer_config["levels"][3]["width"] = 6.0.into();
             peer.fib_config = Some(serde_json::from_value(peer_config.clone()).unwrap());
             chart
                 .drawings_mut()
