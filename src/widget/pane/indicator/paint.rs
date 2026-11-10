@@ -510,6 +510,7 @@ impl IndicatorPane {
                         line,
                         Some(bar),
                     )
+                    .filter(|color| color.a() != 0)
                     .unwrap_or_else(|| indicator.plot_style(line).color);
                     // A fully transparent colour holds no RGB, so it has no opaque form.
                     let color = if color.a() == 0 {

@@ -776,6 +776,7 @@ impl<'a> Legend<'a> {
                             index,
                             Some(self.bar_index),
                         )
+                        .filter(|color| color.a() != 0)
                         .or_else(|| study_colors.get(index).copied())
                         .filter(|color| color.a() != 0)
                         .map_or(colors.text, |color| color.to_opaque());

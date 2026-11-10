@@ -13,9 +13,10 @@ pub(crate) fn plot_value_color(
         Some(bar) => bar.checked_add_signed(study.plot_offset(line).checked_neg()?)?,
         None => study.values().len().checked_sub(1)?,
     };
+    // Zero alpha can also encode a visible additive colour.
     study
         .plot_color(line, source)
-        .filter(|color| color.a() != 0)
+        .filter(|color| *color != egui::Color32::TRANSPARENT)
 }
 
 /// Horizontal line at each enabled output's latest value, across the clip rect. A missing latest
