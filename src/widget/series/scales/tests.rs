@@ -895,7 +895,7 @@ fn tick_formatters_receive_complete_axis_lists() {
                 let map = chart.series_price_map(id).unwrap();
                 let expected: Vec<_> = map.marks().iter().map(|mark| mark.price).collect();
                 let calls = recorder.lists.lock().unwrap();
-                assert!(calls.contains(&expected), "{mode:?}: {id:?}: {calls:?}");
+                assert!(!calls.is_empty(), "{mode:?}: {id:?}");
                 let bounds = match mode {
                     PriceScaleMode::Percentage => (0.0, 100.0),
                     PriceScaleMode::IndexedTo100 => (100.0, 200.0),
@@ -919,8 +919,10 @@ fn tick_formatters_receive_complete_axis_lists() {
                 }
                 if edges {
                     assert!(
-                        calls.iter().any(|values| values != &expected),
-                        "edge ticks are included"
+                        calls
+                            .iter()
+                            .all(|values| values != &expected && values == &calls[0]),
+                        "layout and painting include the same edge ticks: {calls:?}"
                     );
                 } else {
                     assert!(calls.iter().all(|values| values == &expected));

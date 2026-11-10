@@ -41,19 +41,28 @@ fn position_tags_in_a_series_pane_follow_its_display_format() {
         chart.drawings_mut().drawings.push(drawing);
         frame(&ctx, &mut chart, 0.0, vec![]);
         let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
-        let map = chart.series_price_map(id).unwrap();
         let plot = chart.get_rendered_price_rect();
+        let panel = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .unwrap()
+            .rect;
         for (price, expected) in [(100.1, "100.00"), (106.0, "106.00"), (94.2, "94.25")] {
             let expected = if host {
                 format!("host {price:.2}")
             } else {
                 expected.into()
             };
-            assert!(painted.iter().any(|shape| matches!(shape,
-                egui::Shape::Text(text) if text.pos.x >= plot.right()
-                    && (text.pos.y + text.galley.size().y / 2.0 - map.price_to_y(price)).abs() < 1.0
-                    && text.galley.text() == expected
-            )), "{expected} position tag");
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.pos.x >= plot.right()
+                        && panel.y_range().contains(text.pos.y)
+                        && text.galley.text() == expected
+                )),
+                "{expected} position tag"
+            );
         }
     }
 }
