@@ -190,6 +190,12 @@ impl Drawing {
             .collect();
         levels.sort_by(|a, b| a.0.value.total_cmp(&b.0.value));
         let range = self.fib_level_x_range(&config, chart_rect);
+        if self.tool_type == Tool::FibonacciExtension
+            && (!range.min.is_finite() || !range.max.is_finite() || range.min > range.max)
+        {
+            self.render_fib_trend(painter);
+            return;
+        }
         if config.show_background || self.fill_color.is_some() {
             for pair in levels.windows(2) {
                 let [(a, y1, _), (b, y2, _)] = [pair[0], pair[1]];
@@ -312,6 +318,9 @@ impl Drawing {
             return Vec::new();
         }
         let range = self.fib_level_x_range(&config, pane);
+        if !range.min.is_finite() || !range.max.is_finite() || range.min > range.max {
+            return Vec::new();
+        }
         config
             .levels
             .iter()
@@ -1216,131 +1225,149 @@ mod tests {
     fn fibonacci_extension_captions_alignment_font_and_trend_are_independent() {
         let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 400.0));
         for (horizontal, x) in [("Left", 300.0), ("Center", 400.0), ("Right", 500.0)] {
-            for vertical in ["Bottom", "Middle", "Top"] {
+            for vertical in ["Middle", "Bottom", "Top"] {
                 for captions in [false, true] {
-                    let caption_horizontal = match horizontal {
-                        "Left" => "Right",
-                        "Center" => "Left",
-                        _ => "Center",
-                    };
-                    let caption_vertical = match vertical {
-                        "Bottom" => "Middle",
-                        "Middle" => "Top",
-                        _ => "Bottom",
-                    };
-                    let mut drawing = Drawing::new(0, Tool::FibonacciExtension);
-                    drawing.chart_points = [(100.0, 100.0), (300.0, 200.0), (500.0, 150.0)]
-                        .map(|(x, y)| crate::drawings::ChartPoint::new(x, y))
-                        .to_vec();
-                    drawing.fib_config = Some(serde_json::from_value(serde_json::json!({
+                    for shift in [0.0, -1000.0, 1000.0, f32::INFINITY] {
+                        let caption_horizontal = match horizontal {
+                            "Left" => "Right",
+                            "Center" => "Left",
+                            _ => "Center",
+                        };
+                        let caption_vertical = match vertical {
+                            "Bottom" => "Middle",
+                            "Middle" => "Top",
+                            _ => "Bottom",
+                        };
+                        let mut drawing = Drawing::new(0, Tool::FibonacciExtension);
+                        drawing.chart_points = [(100.0, 100.0), (300.0, 200.0), (500.0, 150.0)]
+                            .map(|(x, y)| crate::drawings::ChartPoint::new(x, y))
+                            .to_vec();
+                        drawing.fib_config = Some(serde_json::from_value(serde_json::json!({
                         "levels":[{"value":0.5,"label":"","caption":"Target","color":[211,41,73,255],"visible":true,"show_price":true}],
-                        "show_background":false,"background_opacity":51,"extend_left":false,"extend_right":false,"reverse":false,
+                        "show_background":false,"background_opacity":51,"extend_left":shift < 0.0,"extend_right":shift > 0.0,"reverse":false,
                         "show_prices":true,"show_levels":true,"levels_as_percent":false,
                         "label_position":{"horizontal":horizontal,"vertical":vertical},
                         "caption_position":{"horizontal":caption_horizontal,"vertical":caption_vertical},
                         "font_size":18.0,"show_captions":captions,"show_trend":false,"level_width":4.0
                     })).unwrap());
-                    drawing.update_screen_coords(|x| x, |price| 400.0 - price as f32);
-                    assert_eq!(
-                        crate::drawings::services::DrawingInteraction::new().hit_test(
-                            Pos2::new(200.0, 250.0),
-                            std::slice::from_ref(&drawing),
-                            "1h"
-                        ),
-                        None
-                    );
-                    let ctx = egui::Context::default();
-                    let mut output = ctx.run_ui(Default::default(), |ui| {
-                        drawing.render_fibonacci(
-                            &ui.painter().with_clip_rect(pane),
-                            pane,
-                            &ChartView {
-                                price_formatter: None,
-                                time_formatter: None,
-                                bar_seconds: 0,
-                                instrument: None,
-                                bars: &[],
-                                revision: 0,
-                                bar_to_x: &|x| x,
-                                price_to_y: &|p| 400.0 - p as f32,
-                                y_to_price: &|y| 400.0 - f64::from(y),
-                                time_axis: true,
-                                executions: None,
-                                timeframe: None,
-                                finer: &[],
-                            },
+                        drawing.update_screen_coords(|x| x + shift, |price| 400.0 - price as f32);
+                        assert_eq!(
+                            crate::drawings::services::DrawingInteraction::new().hit_test(
+                                Pos2::new(200.0, 250.0),
+                                std::slice::from_ref(&drawing),
+                                "1h"
+                            ),
+                            None
                         );
-                    });
-                    output.textures_delta.clear();
-                    let texts: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|s| match &s.shape {
-                            egui::Shape::Text(text) => Some(text),
-                            _ => None,
-                        })
-                        .collect();
-                    assert_eq!(texts.len(), if captions { 2 } else { 1 });
-                    let label = texts
-                        .iter()
-                        .find(|text| text.galley.text() == "0.5 (200.00)")
-                        .unwrap();
-                    let bounds = Rect::from_min_size(label.pos, label.galley.size());
-                    let actual = match horizontal {
-                        "Left" => bounds.max.x + 4.0,
-                        "Right" => bounds.min.x - 4.0,
-                        _ => bounds.center().x,
-                    };
-                    assert!((actual - x).abs() < 0.01, "{horizontal}: {bounds:?}");
-                    let actual = match vertical {
-                        "Bottom" => bounds.max.y + 2.0,
-                        "Top" => bounds.min.y - 2.0,
-                        _ => bounds.center().y,
-                    };
-                    assert!((actual - 200.0).abs() < 0.01, "{vertical}: {bounds:?}");
-                    assert_eq!(label.galley.job.sections[0].format.font_id.size, 18.0);
-                    if captions {
-                        let caption = texts
-                            .iter()
-                            .find(|text| text.galley.text() == "Target")
-                            .unwrap();
-                        let bounds = Rect::from_min_size(caption.pos, caption.galley.size());
-                        let (actual, expected) = match caption_horizontal {
-                            "Left" => (bounds.min.x, 304.0),
-                            "Right" => (bounds.max.x, 496.0),
-                            _ => (bounds.center().x, 400.0),
-                        };
-                        assert!(
-                            (actual - expected).abs() < 0.01,
-                            "{caption_horizontal}: {bounds:?}"
-                        );
-                        let (actual, expected) = match caption_vertical {
-                            "Bottom" => (bounds.max.y, 198.0),
-                            "Top" => (bounds.min.y, 202.0),
-                            _ => (bounds.center().y, 200.0),
-                        };
-                        assert!(
-                            (actual - expected).abs() < 0.01,
-                            "{caption_vertical}: {bounds:?}"
-                        );
-                        assert_eq!(caption.galley.job.sections[0].format.font_id.size, 18.0);
-                    }
-                    for shape in &output.shapes {
-                        if let egui::Shape::LineSegment { points, stroke } = &shape.shape {
-                            assert_eq!(
-                                stroke.width, 4.0,
-                                "hidden trend paints no construction segments"
+                        let ctx = egui::Context::default();
+                        let mut output = ctx.run_ui(Default::default(), |ui| {
+                            drawing.render_fibonacci(
+                                &ui.painter().with_clip_rect(pane),
+                                pane,
+                                &ChartView {
+                                    price_formatter: None,
+                                    time_formatter: None,
+                                    bar_seconds: 0,
+                                    instrument: None,
+                                    bars: &[],
+                                    revision: 0,
+                                    bar_to_x: &|x| x,
+                                    price_to_y: &|p| 400.0 - p as f32,
+                                    y_to_price: &|y| 400.0 - f64::from(y),
+                                    time_axis: true,
+                                    executions: None,
+                                    timeframe: None,
+                                    finer: &[],
+                                },
                             );
-                            assert_eq!(points[0].y, 200.0);
-                            if horizontal == "Center" && vertical == "Middle" {
-                                assert!(
-                                    points[1].x <= bounds.min.x - 2.0
-                                        || points[0].x >= bounds.max.x + 2.0
+                        });
+                        output.textures_delta.clear();
+                        if shift != 0.0 {
+                            // Extending right gives [1300, 800], left gives [0, -500]: no level span.
+                            assert!(!output.shapes.iter().any(|shape| matches!(
+                                shape.shape,
+                                egui::Shape::Text(_)
+                                    | egui::Shape::LineSegment { .. }
+                                    | egui::Shape::Rect(_)
+                            )));
+                            assert!(
+                                drawing
+                                    .fib_caption_rects(&ctx.debug_painter(), pane)
+                                    .is_empty()
+                            );
+                            output.drop_without_applying_deltas();
+                            continue;
+                        }
+                        let texts: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|s| match &s.shape {
+                                egui::Shape::Text(text) => Some(text),
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(texts.len(), if captions { 2 } else { 1 });
+                        let label = texts
+                            .iter()
+                            .find(|text| text.galley.text() == "0.5 (200.00)")
+                            .unwrap();
+                        let bounds = Rect::from_min_size(label.pos, label.galley.size());
+                        let actual = match horizontal {
+                            "Left" => bounds.max.x + 4.0,
+                            "Right" => bounds.min.x - 4.0,
+                            _ => bounds.center().x,
+                        };
+                        assert!((actual - x).abs() < 0.01, "{horizontal}: {bounds:?}");
+                        let actual = match vertical {
+                            "Bottom" => bounds.max.y + 2.0,
+                            "Top" => bounds.min.y - 2.0,
+                            _ => bounds.center().y,
+                        };
+                        assert!((actual - 200.0).abs() < 0.01, "{vertical}: {bounds:?}");
+                        assert_eq!(label.galley.job.sections[0].format.font_id.size, 18.0);
+                        if captions {
+                            let caption = texts
+                                .iter()
+                                .find(|text| text.galley.text() == "Target")
+                                .unwrap();
+                            let bounds = Rect::from_min_size(caption.pos, caption.galley.size());
+                            let (actual, expected) = match caption_horizontal {
+                                "Left" => (bounds.min.x, 304.0),
+                                "Right" => (bounds.max.x, 496.0),
+                                _ => (bounds.center().x, 400.0),
+                            };
+                            assert!(
+                                (actual - expected).abs() < 0.01,
+                                "{caption_horizontal}: {bounds:?}"
+                            );
+                            let (actual, expected) = match caption_vertical {
+                                "Bottom" => (bounds.max.y, 198.0),
+                                "Top" => (bounds.min.y, 202.0),
+                                _ => (bounds.center().y, 200.0),
+                            };
+                            assert!(
+                                (actual - expected).abs() < 0.01,
+                                "{caption_vertical}: {bounds:?}"
+                            );
+                            assert_eq!(caption.galley.job.sections[0].format.font_id.size, 18.0);
+                        }
+                        for shape in &output.shapes {
+                            if let egui::Shape::LineSegment { points, stroke } = &shape.shape {
+                                assert_eq!(
+                                    stroke.width, 4.0,
+                                    "hidden trend paints no construction segments"
                                 );
+                                assert_eq!(points[0].y, 200.0);
+                                if horizontal == "Center" && vertical == "Middle" {
+                                    assert!(
+                                        points[1].x <= bounds.min.x - 2.0
+                                            || points[0].x >= bounds.max.x + 2.0
+                                    );
+                                }
                             }
                         }
+                        output.drop_without_applying_deltas();
                     }
-                    output.drop_without_applying_deltas();
                 }
             }
         }
