@@ -606,12 +606,13 @@ impl Chart {
     ) -> Option<(egui::Event, Modifiers)> {
         use egui::{Event, TouchPhase};
 
+        let viewport = ui.ctx().viewport_id();
+        let initial = ui
+            .ctx()
+            .data(|data| data.get_temp::<Modifiers>(pointer_input_id(viewport)));
         ui.input(|input| {
             let events = &input.raw.events;
-            let initial = ui.ctx().data(|data| {
-                data.get_temp::<Modifiers>(pointer_input_id(input.raw.viewport_id))
-                    .unwrap_or(input.modifiers)
-            });
+            let initial = initial.unwrap_or(input.modifiers);
             let inputs = || {
                 events
                     .iter()
