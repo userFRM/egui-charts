@@ -38,7 +38,7 @@ pub use axes::{
 };
 pub use candles::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
-    render_candle, render_chart_type, render_ohlc_bar, render_volume_bar,
+    render_candle, render_chart_type, render_ohlc_bar,
 };
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 pub use grid::{render_grid, render_vertical_grid};
