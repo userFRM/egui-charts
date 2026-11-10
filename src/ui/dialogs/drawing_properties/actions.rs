@@ -115,10 +115,7 @@ impl DrawingProps {
         self.tool_settings
             .as_ref()
             .map(|template| &template.settings)
-            .filter(|settings| {
-                let [r, g, b, _] = settings.color;
-                Color32::from_rgba_unmultiplied(r, g, b, self.color.a()) == self.color
-            })
+            .filter(|settings| self.paints(settings.color))
             .map_or_else(
                 || self.color.to_srgba_unmultiplied(),
                 |settings| {
@@ -126,6 +123,17 @@ impl DrawingProps {
                     [r, g, b, self.color.a()]
                 },
             )
+    }
+
+    /// Whether the paint colour shows the given colour's RGB at its own opacity. The custom
+    /// colour editor scales a hue by a fractional opacity, which can round a translucent channel
+    /// one step away; at full opacity every step is a picked hue.
+    fn paints(&self, [r, g, b, _]: [u8; 4]) -> bool {
+        // shortcut: a hue opened translucent reaches the editor premultiplied and can drift
+        // further; carry the unmultiplied colour through `ColorPicker` when that drift matters.
+        let exact = Color32::from_rgba_unmultiplied(r, g, b, self.color.a());
+        let step = u8::from(self.color.a() < 255);
+        (0..3).all(|i| exact[i].abs_diff(self.color[i]) <= step)
     }
 
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
@@ -228,8 +236,7 @@ impl DrawingProps {
             // Without tool settings no exact RGB is held: a colour that still paints as the
             // target's at this opacity was not edited.
             if [r, g, b] != [tr, tg, tb]
-                && (self.tool_settings.is_some()
-                    || Color32::from_rgba_unmultiplied(tr, tg, tb, a) != self.color)
+                && (self.tool_settings.is_some() || !self.paints(target.color))
             {
                 drawing.color[..3].copy_from_slice(&[r, g, b]);
             }
@@ -832,11 +839,14 @@ mod tests {
             ("nothing edited", |_| {}, |_| {}),
             (
                 "opacity only",
+                // The custom editor scales the hue by its opacity, 0.3287, which rounds blue's red
+                // to 13 where 41 at an opacity of 84 is 14.
                 |props| {
-                    let [r, g, b, _] = props.color.to_srgba_unmultiplied();
-                    props.color = Color32::from_rgba_unmultiplied(r, g, b, 128);
+                    let mut colour = egui::ecolor::Hsva::from(props.color);
+                    colour.a = 0.3287;
+                    props.color = colour.into();
                 },
-                |d| d.color[3] = 128,
+                |d| d.color[3] = 84,
             ),
             (
                 "colour",
