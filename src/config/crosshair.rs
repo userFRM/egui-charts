@@ -87,10 +87,12 @@ pub struct CrosshairOptions {
     pub label_visible: bool,
 
     /// Show the time-axis label, independently of the vertical line. Needs `label_visible`.
+    /// Options saved without it restore it from `vert_line_visible`, as they were drawn.
     pub vert_label_visible: bool,
 
     /// Show the price-axis label, independently of the horizontal line. Needs `label_visible`.
-    /// Also applies to volume and study values.
+    /// Also applies to volume and study values. Options saved without it restore it from
+    /// `horz_line_visible`, as they were drawn.
     pub horz_label_visible: bool,
 
     /// Background of the vertical line's label on the time axis (`Color32::PLACEHOLDER`:
