@@ -367,7 +367,7 @@ pub(super) struct HostEvents {
     pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
     pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
-    /// Present for touch readout input, including a readout still waiting for its hold.
+    /// Unsnapped touch readout position, including a readout still waiting for its hold.
     pub(super) touch_position: Option<Option<Pos2>>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
@@ -904,7 +904,11 @@ impl Chart {
             self.host_events.push(ChartEvent::TimeScaleResized(size));
         }
         let position = if let Some(position) = self.host_events.touch_position {
-            position.and_then(|pos| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
+            position.and_then(|pos| {
+                let origin = self.pointer_origin(ui, pos, None);
+                let pos = self.crosshair_position(pos, &self.get_chart_mapping())?;
+                self.pointer_at(ui, pos, origin)
+            })
         } else {
             ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
                 ui.rect_contains_pointer(egui::Rect::from_min_max(

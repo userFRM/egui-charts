@@ -1913,7 +1913,7 @@ fn tapping_the_price_button_of_a_latched_touch_readout_opens_its_action() {
 #[test]
 fn latched_touch_readout_is_the_reported_crosshair() {
     use crate::widget::ChartEvent;
-    use egui::TouchPhase::{End, Start};
+    use egui::TouchPhase::{End, Move, Start};
     for enabled in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
@@ -1926,18 +1926,38 @@ fn latched_touch_readout_is_the_reported_crosshair() {
         let map = chart.get_chart_mapping();
         let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
         let time = chart.state.shown()[50].time;
+        let moved = pos + egui::vec2(1.0, 1.0);
+        let mut movement = touch_events(Move, moved);
+        if let Event::Touch { force, .. } = &mut movement[0] {
+            *force = Some(0.6);
+        }
+        movement.insert(0, Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        movement.push(Event::ModifiersChanged(egui::Modifiers::NONE));
         let mut reported = None;
         for (t, events, expected) in [
             (1.0, touch_events(Start, pos), (!enabled).then_some(time)),
             (1.6, vec![], Some(time)),
-            (2.0, touch_events(End, pos), enabled.then_some(time)),
+            (1.8, movement, Some(time)),
+            (2.0, touch_events(End, moved), enabled.then_some(time)),
             (2.1, vec![], enabled.then_some(time)),
             (2.2, touch_events(Start, pos), Some(time)),
             (2.3, touch_events(End, pos), None),
         ] {
+            let origin = events
+                .iter()
+                .find(|event| matches!(event, Event::Touch { .. }))
+                .cloned();
             frame(&ctx, &mut chart, t, events);
             for event in chart.drain_events() {
                 if let ChartEvent::CrosshairMoved(pointer) = event {
+                    if t == 1.8 {
+                        let pointer = pointer.as_ref().expect("moved readout");
+                        assert_eq!(pointer.origin, origin);
+                        assert_eq!(pointer.modifiers, egui::Modifiers::SHIFT);
+                        if enabled {
+                            assert!((pointer.pos.x - pos.x).abs() < 0.01);
+                        }
+                    }
                     reported = pointer.and_then(|pointer| pointer.time);
                 }
             }

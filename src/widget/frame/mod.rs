@@ -3131,14 +3131,14 @@ impl Chart {
                         hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
                     })
                 })
-        }
-        .and_then(|pos| self.crosshair_position(pos, &coords));
+        };
         if touch_readout.touch_input
             && self.chart_options.tooltip.enabled
             && self.chart_options.tooltip.on_long_press
         {
             self.host_events.touch_position = Some(hover_pos);
         }
+        let hover_pos = hover_pos.and_then(|pos| self.crosshair_position(pos, &coords));
         let crosshair_point = hover_pos.and_then(|pos| self.pointer_time(pos));
         let crosshair_time = crosshair_point.and_then(|(time, _)| time);
         let mut study_action = None;
