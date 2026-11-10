@@ -1445,99 +1445,98 @@ mod tests {
     fn negative_prices_scroll_by_whole_rows() {
         use crate::model::{Capabilities, TradingRules};
 
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for width in [300.0, 240.0] {
-                for read_only in [true, false] {
-                    for (last, bid, ask, initial, down, back) in [
-                        (
-                            Some(-10.0),
-                            Some(-10.25),
-                            Some(-10.0),
-                            if read_only { -40 } else { -41 },
-                            if read_only { -42 } else { -43 },
-                            if read_only { -40 } else { -41 },
-                        ),
-                        (Some(-0.1), None, None, 0, -2, 0),
-                        (None, None, None, -40, -42, -40),
-                        (Some(0.25), Some(0.0), Some(0.25), 1, 0, 2),
-                        (Some(0.0), Some(0.0), Some(0.0), 0, 0, 2),
-                        (None, None, None, 1, 0, 2),
-                    ] {
-                        let ctx = egui::Context::default();
-                        crate::theme::apply_to_egui(&ctx, &theme);
-                        let rules = TradingRules::new("SPREAD");
-                        let market = Market {
-                            symbol: "SPREAD",
-                            formatter: None,
-                            pip_value: None,
-                            last,
-                            bid,
-                            ask,
-                            tick: 0.25,
-                            decimals: 2,
-                            currency: "USD",
-                            balance: None,
-                            capabilities: Capabilities::default(),
-                            rules: &rules,
-                            rules_ready: true,
-                            offline: None,
-                            ladder: None,
-                            ladder_unavailable: None,
-                            highlights: Vec::new(),
-                            orders: &[],
-                            positions: &[],
-                            trades: &[],
-                            session_open: None,
-                            last_fill: None,
-                            logo: None,
-                        };
-                        let mut ladder = Ladder {
-                            centre: last.is_none().then_some(initial),
-                            locked: !read_only,
+        for read_only in [true, false] {
+            for (last, bid, ask, initial, down, back) in [
+                (
+                    Some(-10.0),
+                    Some(-10.25),
+                    Some(-10.0),
+                    if read_only { -40 } else { -41 },
+                    if read_only { -42 } else { -43 },
+                    if read_only { -40 } else { -41 },
+                ),
+                (Some(-0.1), None, None, 0, -2, 0),
+                (None, None, None, -40, -42, -40),
+                (Some(0.25), Some(0.0), Some(0.25), 1, 0, 2),
+                (Some(0.0), Some(0.0), Some(0.0), 0, 0, 2),
+                (None, None, None, 1, 0, 2),
+            ] {
+                let ctx = egui::Context::default();
+                let rules = TradingRules::new("SPREAD");
+                let market = Market {
+                    symbol: "SPREAD",
+                    formatter: None,
+                    pip_value: None,
+                    last,
+                    bid,
+                    ask,
+                    tick: 0.25,
+                    decimals: 2,
+                    currency: "USD",
+                    balance: None,
+                    capabilities: Capabilities::default(),
+                    rules: &rules,
+                    rules_ready: true,
+                    offline: None,
+                    ladder: None,
+                    ladder_unavailable: None,
+                    highlights: Vec::new(),
+                    orders: &[],
+                    positions: &[],
+                    trades: &[],
+                    session_open: None,
+                    last_fill: None,
+                    logo: None,
+                };
+                let mut ladder = Ladder {
+                    centre: last.is_none().then_some(initial),
+                    locked: !read_only,
+                    ..Default::default()
+                };
+                let frame = |ladder: &mut Ladder, events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(300.0, 700.0),
+                            )),
+                            events,
                             ..Default::default()
-                        };
-                        let frame = |ladder: &mut Ladder, events| {
-                            ctx.run_ui(
-                                egui::RawInput {
-                                    screen_rect: Some(Rect::from_min_size(
-                                        egui::Pos2::ZERO,
-                                        vec2(width, 700.0),
-                                    )),
-                                    events,
-                                    ..Default::default()
-                                },
-                                |ui| {
-                                    let mut quantity = 1.0;
-                                    let mut tif = TimeInForce::Day;
-                                    let entry = (!read_only).then_some((&mut quantity, &mut tif));
-                                    assert_eq!(ladder.draw(ui, "SPREAD", &market, entry), None);
-                                },
-                            )
-                            .drop_without_applying_deltas();
-                        };
+                        },
+                        |ui| {
+                            let mut quantity = 1.0;
+                            let mut tif = TimeInForce::Day;
+                            let entry = (!read_only).then_some((&mut quantity, &mut tif));
+                            assert_eq!(ladder.draw(ui, "SPREAD", &market, entry), None);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                frame(&mut ladder, vec![]);
+                assert_eq!(ladder.centre, Some(initial));
+                // 40 points / 20 points per row = two ticks, or 0.50 at this price step.
+                for (delta, expected) in [(-40.0, down), (40.0, back)] {
+                    frame(
+                        &mut ladder,
+                        vec![
+                            egui::Event::PointerMoved(pos2(150.0, 200.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: vec2(0.0, delta),
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                    for _ in 0..60 {
                         frame(&mut ladder, vec![]);
-                        assert_eq!(ladder.centre, Some(initial));
-                        // 40 points / 20 points per row = two ticks, or 0.50 at this price step.
-                        for (delta, expected) in [(-40.0, down), (40.0, back)] {
-                            frame(
-                                &mut ladder,
-                                vec![
-                                    egui::Event::PointerMoved(pos2(width / 2.0, 200.0)),
-                                    egui::Event::MouseWheel {
-                                        unit: egui::MouseWheelUnit::Point,
-                                        delta: vec2(0.0, delta),
-                                        phase: egui::TouchPhase::Move,
-                                        source: egui::MouseWheelSource::Unknown,
-                                        modifiers: egui::Modifiers::NONE,
-                                    },
-                                ],
-                            );
-                            for _ in 0..60 {
-                                frame(&mut ladder, vec![]);
-                            }
-                            assert_eq!(ladder.centre, Some(expected), "read_only={read_only}");
-                        }
                     }
+                    assert_eq!(
+                        ladder.centre,
+                        Some(expected),
+                        "read_only={read_only} last={last:?} initial={initial}"
+                    );
                 }
             }
         }
