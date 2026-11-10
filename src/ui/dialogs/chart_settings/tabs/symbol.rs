@@ -110,12 +110,22 @@ impl SettingsDialog {
                         } else {
                             &mut self.settings.candle_colors.color_by_previous_close
                         };
-                        styled_checkbox(
+                        if styled_checkbox(
                             ui,
                             previous_close,
                             "Color bars based on previous close",
                             theme.ui.text,
-                        );
+                        ) && kind == crate::model::ChartType::Candles
+                        {
+                            // Templates can be saved before Ok applies the edit to the chart.
+                            self.settings
+                                .chart_type_params
+                                .get_or_insert_with(Default::default)
+                                .styles
+                                .candles
+                                .color_by_previous_close =
+                                self.settings.candle_colors.color_by_previous_close;
+                        }
                     }
                     if bars {
                         styled_checkbox(
@@ -483,11 +493,13 @@ mod tests {
     }
 
     /// Real pointer edits reach the painter only after acceptance; Cancel keeps the original
-    /// component and scale settings of Heikin-Ashi and volume candles in both themes.
+    /// component and scale settings in both themes. Templates saved before Ok retain each
+    /// chart type's independent previous-close rule.
     #[test]
     fn candle_dialogs_accept_and_cancel_component_and_scale_edits() {
         for theme in [Theme::light(), Theme::dark()] {
             for (kind, label) in [
+                (ChartType::Candles, "Color bars based on previous close"),
                 (ChartType::Heikin, "Body"),
                 (ChartType::Heikin, "Borders"),
                 (ChartType::Heikin, "Wick"),
@@ -537,9 +549,46 @@ mod tests {
                     for _ in 0..3 {
                         frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
                     }
-                    for control in [label, if accept { "Ok" } else { "Cancel" }] {
-                        click(&ctx, &mut chart, &mut dialog, &theme, control);
+                    click(&ctx, &mut chart, &mut dialog, &theme, label);
+                    if label == "Color bars based on previous close" {
+                        // Saving before Ok must carry the edit even when loaded on another type.
+                        let saved = serde_json::to_string(dialog.settings()).unwrap();
+                        for destination in [
+                            ChartType::Candles,
+                            ChartType::Bars,
+                            ChartType::Heikin,
+                            ChartType::VolumeCandles,
+                        ] {
+                            let mut loaded: ChartSettingsState =
+                                serde_json::from_str(&saved).unwrap();
+                            loaded.chart_type = destination;
+                            let mut restored = Chart::new(BarData::new());
+                            restored.set_chart_type(destination);
+                            loaded.apply_to_chart(&mut restored).unwrap();
+                            let styles = &restored.chart_type_params().styles;
+                            assert_eq!(
+                                styles.candles.color_by_previous_close,
+                                kind == ChartType::Candles,
+                                "{kind:?} to {destination:?}"
+                            );
+                            assert_eq!(
+                                styles.heikin.color_by_previous_close,
+                                kind == ChartType::Heikin
+                            );
+                            assert_eq!(
+                                styles.volume_candles.color_by_previous_close,
+                                kind == ChartType::VolumeCandles
+                            );
+                            assert!(!styles.bars.color_by_previous_close);
+                        }
                     }
+                    click(
+                        &ctx,
+                        &mut chart,
+                        &mut dialog,
+                        &theme,
+                        if accept { "Ok" } else { "Cancel" },
+                    );
                     assert!(!dialog.is_open);
                     let after = ChartSettingsState::from_chart(&chart);
                     // Theme colours only apply once a frame has run, so compare the candle
@@ -551,8 +600,10 @@ mod tests {
                             "Body" => expected.show_body = false,
                             "Borders" => expected.show_border = false,
                             "Wick" => expected.show_wick = false,
-                            "Color bars based on previous close"
-                            | "Use original prices on scale" => {}
+                            "Color bars based on previous close" => {
+                                expected.color_by_previous_close = kind == ChartType::Candles;
+                            }
+                            "Use original prices on scale" => {}
                             "Reset to defaults" => {
                                 expected = crate::widget::settings::CandleColorConfig {
                                     show_border: true,
@@ -567,12 +618,17 @@ mod tests {
                     assert_eq!(
                         if kind == ChartType::Heikin {
                             styles.heikin.color_by_previous_close
-                        } else {
+                        } else if kind == ChartType::VolumeCandles {
                             styles.volume_candles.color_by_previous_close
+                        } else {
+                            styles.candles.color_by_previous_close
                         },
                         accept && label == "Color bars based on previous close"
                     );
-                    assert!(!styles.candles.color_by_previous_close);
+                    assert_eq!(
+                        styles.candles.color_by_previous_close,
+                        accept && kind == ChartType::Candles
+                    );
                     assert_eq!(
                         chart.chart_type_params().styles.heikin.real_price_only,
                         match label {
