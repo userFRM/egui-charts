@@ -647,11 +647,15 @@ impl Chart {
             && show_price_button
             && ui.input(|input| {
                 (input.pointer.any_down() || input.pointer.any_released())
-                    && input.pointer.press_origin().is_some_and(|pos| {
-                        self.axis_hover.is_some_and(|(_, tag)| {
-                            rendering::axes::crosshair_price_button_rect(tag).contains(pos)
+                    && input
+                        .pointer
+                        .press_origin()
+                        .or(input.pointer.hover_pos())
+                        .is_some_and(|pos| {
+                            self.axis_hover.is_some_and(|(_, tag)| {
+                                rendering::axes::crosshair_price_button_rect(tag).contains(pos)
+                            })
                         })
-                    })
             });
         let axis_interaction = cfg!(feature = "icons")
             && (show_right_axis || show_left_axis)
