@@ -46,6 +46,7 @@ pub(crate) fn begin_fibonacci_caption_edit(
 ) {
     if manager.text_editor.is_some()
         || manager.active_tool.is_some()
+        || manager.eraser_mode
         || manager.dragging_handle.is_some()
         || !response.contains_pointer()
     {
