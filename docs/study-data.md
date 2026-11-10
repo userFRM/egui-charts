@@ -29,6 +29,12 @@ the daily bars back to the start of the date one year before the last chart bar'
 the oldest period, and stops there or at the end of its history, whatever its page size and the
 chart's first bar. Missing history and zero reference prices show N/A.
 
+With Use Daily Bars enabled on an intraday chart, Pivot Points Standard and Projected Pivot
+Points request the symbol's daily bars. A connected feed loads through the full period before
+the oldest retained pivot period, including yearly and aligned multi-year periods. Its start
+is UTC midnight, matching the dates used to group the daily bars, and loading stops there or
+at the end of the feed's history. Hosts supplying snapshots include that earlier period.
+
 The chart supplies Visible Average Price with its visible source range before autoscaling.
 Direct callers use [`set_visible_range(start..end)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.set_visible_range) before [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate). The end is exclusive;
 only finite prices in that range contribute to the arithmetic mean. The resulting horizontal
