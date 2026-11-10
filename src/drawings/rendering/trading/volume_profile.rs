@@ -833,11 +833,10 @@ mod tests {
     }
 
     /// A profile covers its bars whole, half a bar past each end, and the anchors of the volume
-    /// tools only choose bars: their handles sit on those bars, at the range's top, the anchored
-    /// point of control or the VWAP's start. Extending a fixed range right reads and covers the
-    /// bars past its second anchor.
+    /// profiles only choose bars: their handles sit on those bars, at the range's top or the
+    /// anchored point of control. An extended fixed range reads from its earlier anchor.
     #[test]
-    fn profile_drawings_cover_whole_bars_and_derive_their_handles() {
+    fn extended_fixed_range_reads_from_its_earlier_anchor() {
         use crate::data::VolumeProfileConfig;
         use crate::drawings::ChartPoint;
         let bars: Vec<_> = [(10.0, 1.0), (12.0, 1.0), (20.0, 1.0), (30.0, 9.0)]
@@ -1018,15 +1017,15 @@ mod tests {
         // anchor is outside loaded history. The expected prices are (high + low + close) / 3.
         for (name, volumes, anchor, first) in [
             (
-                "rounded anchor",
-                [1.0, 1.0, 1.0, 9.0],
-                1.2,
-                Some((1, 37.0 / 3.0)),
-            ),
-            (
                 "zero anchor volume",
                 [0.0, 1.0, 1.0, 9.0],
                 0.0,
+                Some((1, 37.0 / 3.0)),
+            ),
+            (
+                "rounded anchor",
+                [1.0, 1.0, 1.0, 9.0],
+                1.2,
                 Some((1, 37.0 / 3.0)),
             ),
             (
@@ -1084,6 +1083,63 @@ mod tests {
                 point.map(|p| vec![p]),
                 "{name}: handle"
             );
+            for (theme, width) in [
+                (crate::theme::Theme::light(), 800.0),
+                (crate::theme::Theme::dark(), 800.0),
+                (crate::theme::Theme::light(), 320.0),
+                (crate::theme::Theme::dark(), 320.0),
+            ] {
+                let mut manager = crate::drawings::DrawingManager::new();
+                manager.drawings.push(vwap.clone());
+                manager.update_all_screen_coords(bar_to_x, view.price_to_y);
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        manager.render_all(ui.painter(), ui.clip_rect(), &view);
+                    },
+                )
+                .drop_without_applying_deltas();
+                let drawing = &manager.drawings[0];
+                let (handle, position) = manager.get_handles(drawing)[0];
+                assert_eq!(position, point.unwrap_or(drawing.points[0]), "{name}");
+                assert_eq!(manager.hit_test_handle(drawing, position), Some(handle));
+                if point.is_some() {
+                    let before = drawing.chart_points.clone();
+                    manager.start_drag_handle(1, handle);
+                    manager.update_drag_handle(
+                        position + egui::vec2(0.0, 10.0),
+                        |x| (x - 100.0) / 10.0,
+                        view.y_to_price,
+                        |p, from, to| p - f64::from(to - from) / 10.0,
+                    );
+                    assert_eq!(
+                        manager.drawings[0].chart_points, before,
+                        "{name}: vertical drag"
+                    );
+                    manager.update_drag_handle(
+                        position + egui::vec2(10.0, 0.0),
+                        |x| (x - 100.0) / 10.0,
+                        view.y_to_price,
+                        |p, from, to| p - f64::from(to - from) / 10.0,
+                    );
+                    manager.end_drag_handle();
+                    assert_eq!(
+                        manager.drawings[0].chart_points[0].bar_idx,
+                        (position.x - 100.0) / 10.0 + 1.0,
+                        "{name}: horizontal drag"
+                    );
+                    assert!(manager.undo());
+                    assert_eq!(manager.drawings[0].chart_points, before, "{name}: undo");
+                }
+            }
         }
     }
 
