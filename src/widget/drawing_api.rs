@@ -143,6 +143,40 @@ impl Chart {
         Ok(())
     }
 
+    /// Replace a retracement's levels, typography, text placement and construction visibility
+    /// as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    pub fn set_fibonacci_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::FibonacciConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::FibonacciRetracement {
+            return Err(DrawingError::Invalid(
+                "Drawing is not a Fibonacci retracement",
+            ));
+        }
+        if !config.is_valid() {
+            return Err(DrawingError::Invalid("Invalid Fibonacci settings"));
+        }
+        if drawing.fib_config.as_ref() != Some(&config) {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config));
+            });
+        }
+        Ok(())
+    }
+
     /// Replace a position drawing's statistics, account currency and quantity precision in
     /// one undoable edit. A different currency needs a host-supplied conversion rate before
     /// monetary statistics can be calculated. Invalid settings and locked drawings change nothing.
