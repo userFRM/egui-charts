@@ -254,11 +254,15 @@ impl AlertsPanel {
         let Some(edit) = (if redo { &self.redo } else { &self.undo }).last().cloned() else {
             return;
         };
+        // Acknowledged saves can still be waiting for their host pushes.
+        for (_, _, keep_redo) in &mut self.staged_display {
+            *keep_redo = true;
+        }
         match edit {
             PresentationEdit::List(options) => {
                 let inverse = PresentationEdit::List(std::mem::replace(&mut self.options, options));
                 (if redo { &mut self.redo } else { &mut self.undo }).pop();
-                self.finish_restore(redo, inverse);
+                (if redo { &mut self.undo } else { &mut self.redo }).push(inverse);
             }
             PresentationEdit::Marker(id, line, blink) => {
                 let Some(mut alert) = self
@@ -271,7 +275,8 @@ impl AlertsPanel {
                 };
                 if alert.extend_line == line && alert.blink_on_trigger == blink {
                     (if redo { &mut self.redo } else { &mut self.undo }).pop();
-                    self.finish_restore(redo, PresentationEdit::Marker(id, line, blink));
+                    (if redo { &mut self.undo } else { &mut self.redo })
+                        .push(PresentationEdit::Marker(id, line, blink));
                     return;
                 }
                 let inverse =
@@ -295,10 +300,6 @@ impl AlertsPanel {
                 }
             }
         }
-    }
-
-    fn finish_restore(&mut self, redo: bool, inverse: PresentationEdit) {
-        (if redo { &mut self.undo } else { &mut self.redo }).push(inverse);
     }
 
     fn cancel_restore(&mut self) {
@@ -1620,9 +1621,14 @@ mod tests {
     #[test]
     fn marker_change_during_a_pending_undo_stays_undoable() {
         use egui_kittest::{Harness, kittest::Queryable};
-        for (reverse_pushes, duplicate) in
-            [(false, false), (true, false), (false, true), (true, true)]
-        {
+        for (reverse_pushes, duplicate, edit_before_restore) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+            (true, false, true),
+        ] {
             for pending_redo in [false, true] {
                 for next_redo in [false, true] {
                     let host = Arc::new(Host::default());
@@ -1633,7 +1639,15 @@ mod tests {
                     let mut toasts = Toasts::new();
                     let mut h = Harness::builder()
                         .allow_missing_glyphs()
-                        .with_size(egui::vec2(360.0, 900.0))
+                        .with_size(egui::vec2(300.0, 900.0))
+                        .with_context_setup(move |ctx| {
+                            let theme = if reverse_pushes {
+                                crate::theme::Theme::dark()
+                            } else {
+                                crate::theme::Theme::light()
+                            };
+                            crate::theme::apply_to_egui(ctx, &theme);
+                        })
                         .build_ui_state(
                             move |ui, panel: &mut AlertsPanel| {
                                 panel.poll(ui.ctx(), &mut toasts);
@@ -1654,6 +1668,12 @@ mod tests {
                     answer();
                     events.push(AlertEvent::Upsert(Box::new(first.clone())));
                     h.run_steps(3);
+                    if edit_before_restore {
+                        second.extend_line = false;
+                        h.state_mut().save(second.clone());
+                        answer();
+                        h.run_steps(3);
+                    }
                     h.get_by_label("Undo").click();
                     h.run_steps(3);
                     answer();
@@ -1671,9 +1691,11 @@ mod tests {
                     // The host answered the restore but has not pushed it. A chart marker menu
                     // uses this public save path while the row menu is also available again.
                     second.extend_line = false;
-                    h.state_mut().save(second.clone());
-                    answer();
-                    h.run_steps(3);
+                    if !edit_before_restore {
+                        h.state_mut().save(second.clone());
+                        answer();
+                        h.run_steps(3);
+                    }
                     if duplicate {
                         h.state_mut().save(second.clone());
                         answer();
@@ -1702,7 +1724,7 @@ mod tests {
                         assert_eq!(
                             saves.len(),
                             saved + 1,
-                            "reverse_pushes={reverse_pushes}, duplicate={duplicate}, pending_redo={pending_redo}, next_redo={next_redo}"
+                            "reverse_pushes={reverse_pushes}, duplicate={duplicate}, edit_before_restore={edit_before_restore}, pending_redo={pending_redo}, next_redo={next_redo}"
                         );
                         let sent = saves.last().unwrap();
                         let expected = if next_redo { ("1", false) } else { ("2", true) };
