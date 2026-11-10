@@ -13,6 +13,17 @@ impl DrawingManager {
     /// or cancellation until the primary button is released.
     pub(crate) fn box_selection_input(&mut self, ui: &egui::Ui) -> bool {
         let frame = ui.ctx().cumulative_frame_nr();
+        if let Some(area) = &mut self.selection.area {
+            // Give the owner the release frame, then free input even if no pane handled it.
+            match area.release_frame {
+                Some(released) if released != frame => self.end_selection_area(),
+                None if !ui.input(|i| i.pointer.primary_down()) => {
+                    area.release_frame = Some(frame);
+                    ui.ctx().request_repaint();
+                }
+                _ => {}
+            }
+        }
         let (pressed, held, modifier, origin) = ui.input(|i| {
             (
                 i.pointer.primary_pressed(),
@@ -44,7 +55,7 @@ impl DrawingManager {
     }
 
     /// Starts an area gesture in `pane` at `origin`, remembering the selection it adds to.
-    pub(crate) fn begin_selection_area(&mut self, origin: Pos2, pane: egui::Rect) {
+    pub(crate) fn begin_selection_area(&mut self, origin: Pos2, pane: Option<usize>) {
         self.selection.begin_area(origin, pane);
     }
 

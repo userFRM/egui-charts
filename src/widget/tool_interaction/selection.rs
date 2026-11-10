@@ -24,6 +24,7 @@ pub fn handle_selection<F1, F2, F3>(
     cursor_modes: &mut CursorModeState,
     response: &Response,
     price_rect: Rect,
+    pane: Option<usize>,
     x_to_bar: &F1,
     y_to_price: &F2,
     translate_price: &F3,
@@ -33,7 +34,7 @@ pub fn handle_selection<F1, F2, F3>(
     F3: Fn(f64, f32, f32) -> f64,
 {
     drawing_manager.interaction_modifiers = ui.input(|i| i.modifiers);
-    if handle_selection_area(ui, drawing_manager, response, price_rect) {
+    if handle_selection_area(ui, drawing_manager, response, price_rect, pane) {
         cursor_modes.eraser.set_hover(None);
         return;
     }
@@ -168,7 +169,8 @@ fn handle_selection_area(
     ui: &Ui,
     manager: &mut DrawingManager,
     response: &Response,
-    pane: Rect,
+    pane_rect: Rect,
+    pane: Option<usize>,
 ) -> bool {
     let area_input = manager.box_selection_input(ui);
     if manager.selection_area().is_none()
@@ -178,7 +180,7 @@ fn handle_selection_area(
         && response.drag_started_by(egui::PointerButton::Primary)
         && ui.input(|i| i.modifiers.ctrl || i.modifiers.command)
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
-        && pane.contains(origin)
+        && pane_rect.contains(origin)
         && manager.hit_test(origin).is_none()
         && !manager
             .selected_ids()
@@ -199,10 +201,10 @@ fn handle_selection_area(
     if !area.cancelled
         && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
     {
-        let rect = Rect::from_two_pos(area.origin, pane.clamp(pointer));
+        let rect = Rect::from_two_pos(pane_rect.clamp(area.origin), pane_rect.clamp(pointer));
         manager.update_selection_area(ui.ctx(), rect);
         let color = ui.visuals().selection.bg_fill;
-        ui.painter().with_clip_rect(pane).rect(
+        ui.painter().with_clip_rect(pane_rect).rect(
             rect,
             0.0,
             color.gamma_multiply(0.15),
@@ -367,6 +369,7 @@ mod tests {
                         assert_eq!(drawing.chart_points, old.chart_points);
                     }
                 }
+                assert!(chart.drawings().selection_area().is_none());
                 let selected: Vec<_> = chart.drawings().selected_ids().collect();
                 assert_eq!(selected, if cancel { vec![] } else { vec![6, 7, 8, 9] });
                 assert!(
@@ -492,6 +495,7 @@ mod tests {
                             &mut cursors,
                             &response,
                             pane,
+                            None,
                             &|x| x,
                             &f64::from,
                             &|price, from, to| price + f64::from(to - from),
@@ -630,6 +634,7 @@ mod tests {
                                     &mut cursors,
                                     &response,
                                     pane,
+                                    None,
                                     &|x| x - offset.x,
                                     &|y: f32| {
                                         f64::from(y.clamp(pane.top(), pane.bottom()) - offset.y)
@@ -891,6 +896,7 @@ mod tests {
                                     &mut cursors,
                                     &response,
                                     pane,
+                                    None,
                                     &|x| x,
                                     &f64::from,
                                     &|price, from, to| price + f64::from(to - from),
@@ -1309,6 +1315,7 @@ mod tests {
                                 &mut cursors,
                                 &response,
                                 pane,
+                                None,
                                 &|x| x / 10.0,
                                 &|y: f32| price(y.clamp(pane.top(), pane.bottom())),
                                 &|price, from, to| map.translate_price(price, from, to),
@@ -1382,6 +1389,243 @@ mod tests {
                 );
                 assert!(!manager.undo());
             }
+        }
+    }
+
+    /// One horizontal trend line at 15 over bars 30 to 70 on the 10 to 20 test chart, and the
+    /// chart after a first frame.
+    fn area_chart() -> (Context, crate::widget::Chart) {
+        use crate::widget::test_frames::{chart, frame};
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Arrow;
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(30.0, 15.0), ChartPoint::new(70.0, 15.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        (ctx, chart)
+    }
+
+    fn button(pos: Pos2, pressed: bool, modifiers: egui::Modifiers) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers,
+        }
+    }
+
+    /// Runs a Ctrl-drag area gesture on empty space, applies `change` while it is held, releases,
+    /// then clicks the line. Returns whether the pane moved, whether the gesture is still
+    /// active after the release, and the selection after the click.
+    fn area_gesture_with(
+        change: impl FnOnce(&mut crate::widget::Chart),
+    ) -> (bool, bool, Vec<usize>) {
+        use crate::widget::test_frames::frame;
+        use egui::{Modifiers, vec2};
+        let (ctx, mut chart) = area_chart();
+        let line = chart.drawings().drawings[0].points.clone();
+        let a = line[0] + vec2(0.0, -100.0);
+        let b = a + vec2(40.0, 30.0);
+        let pane = chart.get_rendered_price_rect();
+        let ctrl = Modifiers::CTRL;
+        frame(
+            &ctx,
+            &mut chart,
+            0.1,
+            vec![Event::ModifiersChanged(ctrl), Event::PointerMoved(a)],
+        );
+        frame(&ctx, &mut chart, 0.2, vec![button(a, true, ctrl)]);
+        frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(b)]);
+        assert!(
+            chart.drawings().selection_area().is_some(),
+            "the area gesture started"
+        );
+        change(&mut chart);
+        frame(
+            &ctx,
+            &mut chart,
+            0.4,
+            vec![Event::PointerMoved(b + vec2(1.0, 1.0))],
+        );
+        frame(
+            &ctx,
+            &mut chart,
+            0.5,
+            vec![Event::PointerMoved(b + vec2(2.0, 2.0))],
+        );
+        let moved = chart.get_rendered_price_rect() != pane;
+        frame(
+            &ctx,
+            &mut chart,
+            0.6,
+            vec![
+                button(b + vec2(2.0, 2.0), false, ctrl),
+                Event::ModifiersChanged(Modifiers::NONE),
+            ],
+        );
+        frame(&ctx, &mut chart, 0.7, vec![]);
+        frame(&ctx, &mut chart, 0.8, vec![]);
+        let stuck = chart.drawings().selection_area().is_some();
+        let line = chart.drawings().drawings[0].points.clone();
+        let mid = line[0] + (line[1] - line[0]) * 0.5;
+        let none = Modifiers::NONE;
+        frame(&ctx, &mut chart, 0.9, vec![Event::PointerMoved(mid)]);
+        frame(&ctx, &mut chart, 1.0, vec![button(mid, true, none)]);
+        frame(&ctx, &mut chart, 1.05, vec![button(mid, false, none)]);
+        frame(&ctx, &mut chart, 1.1, vec![]);
+        (moved, stuck, chart.drawings().selected_ids().collect())
+    }
+
+    /// Both a wider live price axis and a new study pane must leave selection usable on release.
+    #[test]
+    fn area_gesture_ends_when_the_pane_resizes() {
+        let changes: &[fn(&mut crate::widget::Chart)] = &[
+            |chart| {
+                let t =
+                    chrono::TimeZone::timestamp_opt(&chrono::Utc, 1_700_000_000 + 100 * 86_400, 0)
+                        .unwrap();
+                chart.update(
+                    crate::widget::SeriesId::MAIN,
+                    crate::model::Bar::new(t, 15.0, 1.0e7, 10.0, 1.0e7, 1.0),
+                );
+            },
+            #[cfg(feature = "studies")]
+            |chart| {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(5)));
+            },
+        ];
+        let results: Vec<_> = changes.iter().map(area_gesture_with).collect();
+        assert_eq!(
+            results,
+            vec![(true, false, vec![7]); changes.len()],
+            "live axis and added pane: (pane moved, gesture still active, selection)"
+        );
+    }
+
+    /// A release frees input before the next press even when no pane handles that release.
+    #[test]
+    fn orphaned_area_does_not_capture_the_next_press() {
+        use crate::widget::test_frames::frame;
+        use egui::{Modifiers, vec2};
+        let (ctx, mut chart) = area_chart();
+        let from = chart.drawings().drawings[0].points[0] + vec2(0.0, -100.0);
+        let to = from + vec2(40.0, 30.0);
+        for (step, events) in [
+            vec![
+                Event::ModifiersChanged(Modifiers::CTRL),
+                Event::PointerMoved(from),
+            ],
+            vec![button(from, true, Modifiers::CTRL)],
+            vec![Event::PointerMoved(to)],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 0.1 + step as f64 * 0.1, events);
+        }
+        assert!(chart.drawings().selection_area().is_some());
+        for (step, pressed) in [false, true].into_iter().enumerate() {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                    time: Some(0.4 + step as f64 * 0.1),
+                    events: vec![
+                        Event::ModifiersChanged(Modifiers::NONE),
+                        button(to, pressed, Modifiers::NONE),
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    assert_eq!(
+                        chart.drawings_mut().box_selection_input(ui),
+                        !pressed,
+                        "primary pressed {pressed}"
+                    );
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(chart.drawings().selection_area().is_none());
+    }
+
+    /// Main-pane handling must leave a study's release frame to it, or free a removed owner.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn area_gesture_ends_when_its_study_pane_disappears() {
+        use crate::widget::test_frames::frame;
+        use egui::{Modifiers, vec2};
+        for (remove, gone, restore) in [
+            (false, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, false, false),
+        ] {
+            let (ctx, mut chart) = area_chart();
+            let study = chart.add_indicator(Box::new(crate::studies::RSI::new(5)));
+            let mut drawing = Drawing::new(8, DrawingToolType::TrendLine);
+            drawing.completed = true;
+            drawing.pane = Some(study.0);
+            drawing.chart_points = vec![ChartPoint::new(30.0, 50.0), ChartPoint::new(70.0, 50.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let pane = chart.series_pane(study).unwrap();
+            let points = chart.drawings().drawings[1].points.clone();
+            let from = points[0] + vec2(-20.0, -30.0);
+            let near = from + vec2(10.0, 10.0);
+            let far = points[1] + vec2(20.0, 30.0);
+            let (held, to) = if restore { (far, near) } else { (near, far) };
+            let ctrl = Modifiers::CTRL;
+            for (i, events) in [
+                vec![Event::ModifiersChanged(ctrl), Event::PointerMoved(from)],
+                vec![button(from, true, ctrl)],
+                vec![Event::PointerMoved(held)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 0.2 + i as f64 * 0.1, events);
+            }
+            assert!(chart.drawings().selection_area().is_some());
+            assert_eq!(chart.drawings().is_selected(8), restore);
+            if gone {
+                frame(&ctx, &mut chart, 0.41, vec![Event::PointerGone]);
+                frame(&ctx, &mut chart, 0.42, vec![]);
+            }
+            if restore {
+                let layout = chart.pane_layout.clone();
+                chart.pane_layout.maximized = Some(crate::widget::PaneId::MAIN);
+                frame(&ctx, &mut chart, 0.41, vec![]);
+                frame(&ctx, &mut chart, 0.42, vec![]);
+                chart.pane_layout = layout;
+            }
+            if remove {
+                chart.remove_pane(pane);
+            }
+            frame(
+                &ctx,
+                &mut chart,
+                0.5,
+                vec![Event::PointerMoved(to), button(to, false, ctrl)],
+            );
+            if restore {
+                assert_eq!(
+                    chart.drawings().drawings[1].points,
+                    points,
+                    "precondition: the restored pane keeps its geometry"
+                );
+            }
+            frame(&ctx, &mut chart, 0.6, vec![]);
+            assert!(
+                chart.drawings().selection_area().is_none(),
+                "removed {remove}"
+            );
+            assert_eq!(
+                chart.drawings().is_selected(8),
+                !remove && !restore,
+                "the release position counts"
+            );
         }
     }
 }

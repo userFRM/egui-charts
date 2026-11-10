@@ -395,6 +395,7 @@ impl Chart {
                 cursor_modes,
                 response,
                 price_rect,
+                pane.map(|id| id.0),
                 &x_to_bar_edit,
                 &y_to_price,
                 &translate_price,
