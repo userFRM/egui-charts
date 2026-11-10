@@ -166,36 +166,30 @@ impl Drawing {
             Some(currency) => format!("{amount:.2} {currency}"),
             None => format!("{amount:.2}"),
         };
-        let capital = qty
-            .and_then(|qty| sizing.and_then(|sizing| sizing.required_capital(entry_price, qty)))
-            .map_or_else(|| l10n::text(ctx, "n/a"), money_text);
         let (summary, summary_fill, summary_text) = match exit {
             Some((exit_price, closed, _)) => {
                 let change = side * (exit_price - entry_price);
-                let pnl = money(change).map_or_else(|| l10n::text(ctx, "n/a"), money_text);
+                let change_text = view.price_formatter.map_or_else(
+                    || format!("{change:.2}"),
+                    |formatter| formatter.format(change),
+                );
                 let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
                 let summary = if self.position_readout.condensed {
-                    let change = view.price_formatter.map_or_else(
-                        || format!("{change:.2}"),
-                        |formatter| formatter.format(change),
-                    );
                     let ratio = egui::emath::format_with_decimals_in_range(risk_reward, 0..=8);
-                    format!("{change} ~ {qty_text}\n{ratio}")
+                    format!("{change_text} ~ {qty_text}\n{ratio}")
                 } else {
                     let key = if closed {
-                        "Closed P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                        "Closed P&L: {change}, Qty: {quantity}\nRisk/Reward: {ratio}"
                     } else {
-                        "Open P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                        "Open P&L: {change}, Qty: {quantity}\nRisk/Reward: {ratio}"
                     };
                     l10n::format_text(
                         ctx,
                         key,
                         &[
-                            ("pnl", pnl.as_str()),
-                            ("percent", format!("{:.2}", pct(exit_price)).as_str()),
+                            ("change", change_text.as_str()),
                             ("quantity", qty_text.as_str()),
                             ("ratio", format!("{risk_reward:.2}").as_str()),
-                            ("capital", capital.as_str()),
                         ],
                     )
                 };
@@ -212,98 +206,78 @@ impl Drawing {
                     if self.position_readout.condensed {
                         "n/a ~ {quantity}\nn/a"
                     } else {
-                        "P&L: n/a, Qty: {quantity}\nRisk/Reward: n/a, Capital: {capital}"
+                        "P&L: n/a, Qty: {quantity}\nRisk/Reward: n/a"
                     },
-                    &[
-                        ("quantity", qty_text.as_str()),
-                        ("capital", capital.as_str()),
-                    ],
+                    &[("quantity", qty_text.as_str())],
                 ),
                 theme.chart.bg_axis,
                 entry_color,
             ),
         };
-        let amount_value = |price: f64| {
-            let balance = match self.position_size {
-                Some(crate::drawings::PositionSize::RiskPercent { account_size, .. }) => {
-                    money(side * (price - entry_price)).map(|change| account_size + change)
-                }
-                _ => money((price - entry_price).abs()),
-            };
-            balance.filter(|value| value.is_finite())
-        };
-        let amount = |price: f64| amount_value(price).map(money_text);
-        let level_text = |price: f64| {
-            let mut level = String::with_capacity(32);
-            let _ = match view.price_formatter {
-                Some(formatter) => {
-                    write!(level, "{} ({:.2}%)", formatter.format(price), pct(price))
-                }
-                None => write!(level, "{price:.2} ({:.2}%)", pct(price)),
-            };
-            level
-        };
-        let condensed_level = |price: f64| {
+        let level_text = |price: f64, target: bool| {
             let change = (price - entry_price).abs();
             let points = view.price_formatter.map_or_else(
                 || format!("{change:.2}"),
                 |formatter| formatter.format(change),
             );
+            let figures = format!("{points} ({:.3}%)", pct(price).abs());
             let ticks = view
                 .instrument
                 .and_then(|instrument| instrument.tick_size)
                 .filter(|tick| tick.is_finite() && *tick > 0.0)
                 .map(|tick| egui::emath::format_with_decimals_in_range(change / tick, 0..=8));
-            let mut figures = format!("{points} ({:.3}%)", pct(price).abs());
-            if let Some(ticks) = ticks {
-                let _ = write!(figures, " {ticks}");
-            }
-            if matches!(
-                self.position_size,
-                Some(crate::drawings::PositionSize::RiskPercent { .. })
-            ) {
-                let balance = amount_value(price).map_or_else(
-                    || l10n::text(ctx, "n/a"),
-                    |balance| egui::emath::format_with_decimals_in_range(balance, 0..=2),
-                );
-                let _ = write!(figures, " {balance}");
-            }
-            let pnl = money(side * (price - entry_price))
-                .map_or_else(|| l10n::text(ctx, "n/a"), money_text);
-            let _ = write!(figures, " {pnl}");
-            figures
-        };
-        let target_level = level_text(target_price);
-        let target_label = if self.position_readout.condensed {
-            condensed_level(target_price)
-        } else {
-            match amount(target_price) {
-                Some(amount) => l10n::format_text(
-                    ctx,
-                    "Target: {level}, Amount: {amount}",
-                    &[
-                        ("level", target_level.as_str()),
-                        ("amount", amount.as_str()),
-                    ],
+            let pnl = money(side * (price - entry_price));
+            let balance = match self.position_size {
+                Some(crate::drawings::PositionSize::RiskPercent { account_size, .. }) => Some(
+                    pnl.map(|change| account_size + change)
+                        .filter(|balance| balance.is_finite())
+                        .map_or_else(
+                            || l10n::text(ctx, "n/a"),
+                            |balance| egui::emath::format_with_decimals_in_range(balance, 0..=2),
+                        ),
                 ),
-                None => {
-                    l10n::format_text(ctx, "Target: {level}", &[("level", target_level.as_str())])
+                _ => None,
+            };
+            let pnl = pnl.map_or_else(|| l10n::text(ctx, "n/a"), money_text);
+            if self.position_readout.condensed {
+                let mut level = figures;
+                for value in ticks
+                    .iter()
+                    .chain(balance.iter())
+                    .chain(std::iter::once(&pnl))
+                {
+                    let _ = write!(level, " {value}");
                 }
-            }
-        };
-        let stop_level = level_text(stop_price);
-        let stop_label = if self.position_readout.condensed {
-            condensed_level(stop_price)
-        } else {
-            match amount(stop_price) {
-                Some(amount) => l10n::format_text(
+                level
+            } else {
+                let key = match (target, ticks.is_some(), balance.is_some()) {
+                    (true, true, true) => {
+                        "Target: {level}, Ticks: {ticks}, Balance: {balance}, P&L: {pnl}"
+                    }
+                    (true, true, false) => "Target: {level}, Ticks: {ticks}, P&L: {pnl}",
+                    (true, false, true) => "Target: {level}, Balance: {balance}, P&L: {pnl}",
+                    (true, false, false) => "Target: {level}, P&L: {pnl}",
+                    (false, true, true) => {
+                        "Stop: {level}, Ticks: {ticks}, Balance: {balance}, P&L: {pnl}"
+                    }
+                    (false, true, false) => "Stop: {level}, Ticks: {ticks}, P&L: {pnl}",
+                    (false, false, true) => "Stop: {level}, Balance: {balance}, P&L: {pnl}",
+                    (false, false, false) => "Stop: {level}, P&L: {pnl}",
+                };
+                l10n::format_text(
                     ctx,
-                    "Stop: {level}, Amount: {amount}",
-                    &[("level", stop_level.as_str()), ("amount", amount.as_str())],
-                ),
-                None => l10n::format_text(ctx, "Stop: {level}", &[("level", stop_level.as_str())]),
+                    key,
+                    &[
+                        ("level", figures.as_str()),
+                        ("ticks", ticks.as_deref().unwrap_or_default()),
+                        ("balance", balance.as_deref().unwrap_or_default()),
+                        ("pnl", pnl.as_str()),
+                    ],
+                )
             }
         };
+        let target_label = level_text(target_price, true);
+        let stop_label = level_text(stop_price, false);
 
         // Labels sit on the box's centre line: the stats beside the entry on the stop
         // side, the target and stop levels outside their zones, beyond the stats.
@@ -519,36 +493,39 @@ mod tests {
     use crate::drawings::rendering::sample_bars;
 
     /// Risk 230 / (2.5 points * 50 per point * 10 units) = 0.184 lots, rounded
-    /// down to 0.18. A five-point gain pays 450; capital is 100 * 50 * 10 * 0.18 / 5 = 1800.
+    /// down to 0.18. The summary reports five points while the target reports 450 in money.
     #[test]
-    fn position_labels_use_lot_economics_and_leveraged_capital() {
+    fn position_labels_keep_price_changes_separate_from_money() {
         use crate::drawings::{ChartPoint, DrawingToolType, PositionSize};
         use crate::widget::test_frames::chart;
         for (tool, target, stop, low, high) in [
             (DrawingToolType::LongPos, 105.0, 97.5, 99.0, 106.0),
             (DrawingToolType::ShortPos, 95.0, 102.5, 94.0, 101.0),
         ] {
-            for (size, step, labels) in [
+            for (size, step, quantity_label, profit_label) in [
                 (
                     PositionSize::RiskAmount(230.0),
                     0.01,
-                    ["Qty: 0.18", "Closed P&L: 450.00", "Capital: 1800.00"],
+                    "Qty: 0.18",
+                    "P&L: 450.00",
                 ),
                 (
                     PositionSize::RiskAmount(230.40125),
                     0.000001,
-                    ["Qty: 0.184321", "Closed P&L: 460.80", "Capital: 1843.21"],
+                    "Qty: 0.184321",
+                    "P&L: 460.80",
                 ),
                 (
-                    PositionSize::Quantity(1e20),
+                    PositionSize::RiskPercent {
+                        account_size: 23_000.0,
+                        percent: 1.0,
+                    },
                     0.01,
-                    ["Qty: 1e20", "Closed P&L:", "Capital:"],
+                    "Qty: 0.18",
+                    "Balance: 23450, P&L: 450.00",
                 ),
-                (
-                    PositionSize::Quantity(1e-25),
-                    1e-27,
-                    ["Qty: 1e-25", "Closed P&L:", "Capital:"],
-                ),
+                (PositionSize::Quantity(1e20), 0.01, "Qty: 1e20", "P&L:"),
+                (PositionSize::Quantity(1e-25), 1e-27, "Qty: 1e-25", "P&L:"),
             ] {
                 let mut drawing = Drawing::new(1, tool);
                 drawing.position_target_color = Some([40, 100, 220, 255]);
@@ -638,7 +615,10 @@ mod tests {
                             _ => None,
                         })
                         .expect("position summary");
-                    for label in labels {
+                    assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                        egui::Shape::Text(t) if t.galley.text().starts_with("Target:")
+                            && t.galley.text().contains(profit_label))));
+                    for label in [quantity_label, "Closed P&L: 5.00", "Risk/Reward: 2.00"] {
                         assert!(
                             summary.galley.job.text.contains(label),
                             "{tool:?}: missing {label}: {}",
@@ -653,7 +633,7 @@ mod tests {
                         summary.visual_bounding_rect()
                     );
                     output.drop_without_applying_deltas();
-                    if size == PositionSize::RiskAmount(230.0) && width == 800.0 {
+                    if size == PositionSize::RiskAmount(230.0) {
                         use crate::drawings::PositionReadout;
                         let readout = PositionReadout {
                             account_currency: Some("EUR".into()),
@@ -713,9 +693,15 @@ mod tests {
                                         && text.contains("-200.00 EUR")));
                                 } else {
                                     assert!(summary.contains("Qty: 0.2"), "{summary}");
-                                    assert!(summary.contains("400.00 EUR"), "{summary}");
+                                    assert!(summary.contains("Closed P&L: 5.00"), "{summary}");
+                                    assert!(texts.iter().any(|text| text.contains(
+                                        "Target: 5.00 (5.000%), Ticks: 20, P&L: 400.00 EUR"
+                                    )));
+                                    assert!(texts.iter().any(|text| text.contains(
+                                        "Stop: 2.50 (2.500%), Ticks: 10, P&L: -200.00 EUR"
+                                    )));
                                 }
-                                assert_eq!(summary.contains("Capital: 1600.00 EUR"), !condensed);
+                                assert!(!summary.contains("Capital:"));
                                 assert!(summary.contains('\n'));
                             }
                             assert!(
@@ -757,7 +743,7 @@ mod tests {
                         let output = render(&mut chart);
                         assert!(
                             output.shapes.iter().any(|s| matches!(&s.shape,
-                            egui::Shape::Text(t) if t.galley.text().contains("Closed P&L: -225.00")
+                            egui::Shape::Text(t) if t.galley.text().contains("Closed P&L: -5.00")
                                 && t.galley.text().contains("Risk/Reward: 0.50"))),
                             "reversal exchanges the levels and recomputes signed risk"
                         );
@@ -767,16 +753,8 @@ mod tests {
                     if size == PositionSize::RiskAmount(230.0) && !dark && width == 800.0 {
                         crate::localization::mark_keys(&ctx);
                         let output = render(&mut chart);
-                        let target_text = if tool == DrawingToolType::LongPos {
-                            "~105.00 (5.00%)~450.00~"
-                        } else {
-                            "~95.00 (5.00%)~450.00~"
-                        };
-                        let stop_text = if tool == DrawingToolType::LongPos {
-                            "~97.50 (-2.50%)~225.00~"
-                        } else {
-                            "~102.50 (-2.50%)~225.00~"
-                        };
+                        let target_text = "~5.00 (5.000%)~20~450.00~";
+                        let stop_text = "~2.50 (2.500%)~10~-225.00~";
                         let texts: Vec<_> = output
                             .shapes
                             .iter()
@@ -786,8 +764,7 @@ mod tests {
                             })
                             .collect();
                         output.drop_without_applying_deltas();
-                        for expected in ["~450.00~5.00~0.18~2.00~1800.00~", target_text, stop_text]
-                        {
+                        for expected in ["~5.00~0.18~2.00~", target_text, stop_text] {
                             assert!(
                                 texts.iter().any(|text| text == expected),
                                 "{tool:?}: missing translated {expected}"

@@ -272,6 +272,22 @@ impl InputsTab {
                         }
                     });
                     ui.end_row();
+                    if let Some(currency) = &mut readout.account_currency {
+                        let label = ui.label(l10n::text(ui.ctx(), "Currency code"));
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(currency)
+                                    .char_limit(16)
+                                    .desired_width(80.0),
+                            )
+                            .labelled_by(label.id)
+                            .changed()
+                        {
+                            currency.make_ascii_uppercase();
+                            readout.conversion_rate = None;
+                        }
+                        ui.end_row();
+                    }
                     if readout.account_currency.is_some() {
                         let label = ui.label(l10n::text(ui.ctx(), "Conversion rate"));
                         let mut rate = readout.conversion_rate.unwrap_or(0.0);
@@ -1346,13 +1362,43 @@ mod tests {
                         .conversion_rate,
                     None
                 );
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let label = texts
+                    .iter()
+                    .find(|(text, _)| text == "Currency code")
+                    .unwrap()
+                    .1;
+                let code = texts
+                    .iter()
+                    .find(|(text, rect)| {
+                        text == "EUR" && (rect.center().y - label.center().y).abs() < 4.0
+                    })
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, code);
+                frame(
+                    &mut dialog,
+                    &mut chart,
+                    &ctx,
+                    vec![
+                        Event::Key {
+                            key: Key::A,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        },
+                        Event::Text("sar".into()),
+                    ],
+                );
                 enter(&mut dialog, &mut chart, &ctx, "Conversion rate", "0.8");
                 press(&mut dialog, &mut chart, "Automatic");
                 press(&mut dialog, &mut chart, "2");
                 let expected = crate::drawings::PositionReadout {
                     persistent: true,
                     condensed: true,
-                    account_currency: Some("EUR".into()),
+                    account_currency: Some("SAR".into()),
                     conversion_rate: Some(0.8),
                     quantity_decimals: Some(2),
                 };
