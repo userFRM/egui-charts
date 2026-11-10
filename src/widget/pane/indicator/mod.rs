@@ -594,7 +594,7 @@ impl IndicatorPane {
                                     | crate::scales::PriceScaleMode::IndexedTo100
                             )
                         {
-                            mapping.price.transform().label(
+                            mapping.price.label(
                                 mapping.price.y_to_scale(pos.y),
                                 indicator.precision().unwrap_or(2),
                                 self.price_formatter.as_deref(),

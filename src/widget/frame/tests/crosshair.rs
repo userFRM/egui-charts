@@ -1744,16 +1744,21 @@ fn pane_crosshair_label_uses_the_series_scale_mode() {
     use crate::model::{Bar, SeriesScale};
     use crate::scales::{CustomPriceFormatter, PriceScaleMode};
     use crate::widget::{SeriesId, SeriesOptions};
+    use PriceScaleMode::{IndexedTo100, Percentage};
 
-    for (mode, custom, study, expected) in [
-        (PriceScaleMode::Percentage, false, false, "+37.50%"),
-        (PriceScaleMode::IndexedTo100, false, false, "137.50"),
-        (PriceScaleMode::Percentage, true, false, "relative 37.50"),
-        (PriceScaleMode::IndexedTo100, true, false, "relative 137.50"),
-        (PriceScaleMode::Percentage, false, true, "+37.50%"),
-        (PriceScaleMode::IndexedTo100, false, true, "137.50"),
-        (PriceScaleMode::Percentage, true, true, "relative 37.50"),
-        (PriceScaleMode::IndexedTo100, true, true, "relative 137.50"),
+    // Each row: mode, percentage formatter, shared study, the range's shift in axis units and
+    // the label 37.5% up the pane.
+    for (mode, custom, study, shift, expected) in [
+        (Percentage, false, false, 0.0, "+37.50%"),
+        (IndexedTo100, false, false, 0.0, "137.50"),
+        (Percentage, true, false, 0.0, "relative 37.50"),
+        (IndexedTo100, true, false, 0.0, "relative 137.50"),
+        (Percentage, false, true, 0.0, "+37.50%"),
+        (IndexedTo100, false, true, 0.0, "137.50"),
+        (Percentage, true, true, 0.0, "relative 37.50"),
+        (IndexedTo100, true, true, 0.0, "relative 137.50"),
+        (Percentage, false, false, 1300.0, "+1,337.50%"),
+        (IndexedTo100, false, false, 1300.0, "1,437.50"),
     ] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[1000.0], &[1000.0]);
@@ -1803,7 +1808,7 @@ fn pane_crosshair_label_uses_the_series_scale_mode() {
         chart
             .series_price_scale_mut(id)
             .unwrap()
-            .set_range(base, base + 100.0);
+            .set_range(base + shift, base + shift + 100.0);
         frame(&ctx, &mut chart, 0.15, vec![]);
         let rect = chart
             .pane_layout
@@ -1813,7 +1818,8 @@ fn pane_crosshair_label_uses_the_series_scale_mode() {
             .unwrap()
             .rect;
         let x = chart.get_chart_mapping().idx_to_x(50);
-        // (1375 - 1000) / 1000 = 37.5%; 1375 / 1000 * 100 = 137.5.
+        // (1375 - 1000) / 1000 = 37.5%; 1375 / 1000 * 100 = 137.5. Each further 10 adds one
+        // unit to both, so 14375 reads 1337.5% and 1437.5, grouped as the ticks are.
         let pointer = Pos2::new(x, rect.bottom() - rect.height() * 0.375);
         let time = chart.bars(SeriesId::MAIN)[50].time;
         for host in [false, true] {
@@ -1821,15 +1827,25 @@ fn pane_crosshair_label_uses_the_series_scale_mode() {
                 continue;
             }
             let events = if host {
-                chart.set_series_crosshair_position(id, Some((time, 1375.0)));
+                chart.set_series_crosshair_position(id, Some((time, 1375.0 + 10.0 * shift)));
                 vec![Event::PointerGone]
             } else {
                 vec![Event::PointerMoved(pointer)]
             };
             let painted = shapes(&ctx, &mut chart, if host { 0.3 } else { 0.2 }, events);
-            assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
-                if text.fallback_color == egui::Color32::MAGENTA && text.galley.text() == expected)),
-                "{mode:?}, custom {custom}, study {study}, host {host}: expected {expected}");
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) if text.fallback_color == egui::Color32::MAGENTA => {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                labels.contains(&expected),
+                "{mode:?}, custom {custom}, study {study}, host {host}: {expected}, got {labels:?}"
+            );
         }
     }
 }
