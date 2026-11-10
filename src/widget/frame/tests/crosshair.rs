@@ -1825,7 +1825,7 @@ fn touch_readout_activates_without_keyboard_focus() {
 #[test]
 fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
     use egui::TouchPhase::{End, Move, Start};
-    for width in [300.0, 780.0] {
+    for (width, held) in [(300.0, false), (780.0, false), (300.0, true), (780.0, true)] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
         chart.chart_options.tooltip.on_long_press = true;
@@ -1838,7 +1838,9 @@ fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
         let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
         frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
         frame(&ctx, &mut chart, 1.6, vec![]);
-        frame(&ctx, &mut chart, 1.7, touch_events(End, pos));
+        if !held {
+            frame(&ctx, &mut chart, 1.7, touch_events(End, pos));
+        }
         let size = egui::vec2(width, 600.0);
         touch_frame(&ctx, &mut chart, 2.0, vec![], size, true);
         let inside = chart.last_rendered_price_rect.contains(pos);
@@ -1846,22 +1848,24 @@ fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
         let start = chart.last_rendered_price_rect.center();
         let end = start + egui::vec2(60.0, 0.0);
         let viewport = chart.get_time_scale_state();
-        touch_frame(
-            &ctx,
-            &mut chart,
-            2.1,
-            touch_events(Start, start),
-            size,
-            true,
-        );
+        if !held {
+            touch_frame(
+                &ctx,
+                &mut chart,
+                2.1,
+                touch_events(Start, start),
+                size,
+                true,
+            );
+        }
         touch_frame(&ctx, &mut chart, 2.2, touch_events(Move, end), size, true);
         touch_frame(&ctx, &mut chart, 2.3, touch_events(End, end), size, true);
         assert_eq!(
             chart.get_time_scale_state() == viewport,
-            inside,
-            "width={width}"
+            inside || held,
+            "width={width}, held={held}"
         );
-        assert_eq!(chart.hover_time().is_some(), inside);
+        assert_eq!(chart.hover_time().is_some(), inside || held);
     }
 }
 
