@@ -2639,7 +2639,7 @@ mod tests {
                 let series = chart.add_series(Default::default());
                 chart.set_data(
                     series,
-                    [1, 2, 3, 18]
+                    [1, 2, 3, 12]
                         .map(|m| Bar::from_value(start + chrono::TimeDelta::minutes(m), 110.0))
                         .to_vec(),
                 );
@@ -2656,7 +2656,7 @@ mod tests {
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 chart.apply_synced_time_scale(160.0, 1.0);
                 frame(&ctx, &mut chart, 0.1, vec![]);
-                for (step, (minute, index)) in [(3, 1.125), (4, 1.25), (2, 1.0), (18, 3.0)]
+                for (step, (minute, index)) in [(3, 1.125), (4, 1.25), (2, 1.0), (12, 3.0)]
                     .into_iter()
                     .enumerate()
                 {
