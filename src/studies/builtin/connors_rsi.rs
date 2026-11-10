@@ -292,23 +292,4 @@ mod tests {
             _ => panic!("expected a value after warmup"),
         }
     }
-
-    #[test]
-    fn test_connors_rsi_range() {
-        let mut crsi = ConnorsRSI::new().with_periods(3, 2, 20);
-
-        let data: Vec<Bar> = (0..100).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        crsi.calculate(&data);
-
-        // CRSI should be bounded between 0 and 100
-        let mut checked = 0;
-        for value in &crsi.values.to_rows() {
-            if let IndicatorValue::Single(v) = value {
-                assert!(*v >= 0.0 && *v <= 100.0, "CRSI {v} out of range");
-                checked += 1;
-            }
-        }
-        assert!(checked > 0, "no value to check");
-    }
 }

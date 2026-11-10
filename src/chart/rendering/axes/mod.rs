@@ -562,7 +562,18 @@ pub fn price_axis_width(
     tag_labels: &[&str],
     formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> f32 {
-    price_marks(price_map, formatter)
+    price_axis_width_with_edges(painter, price_map, tag_labels, formatter, None)
+}
+
+/// Measures the list painted by an axis, including edge ticks when `pane` is present.
+pub(crate) fn price_axis_width_with_edges(
+    painter: &Painter,
+    price_map: &PriceMap,
+    tag_labels: &[&str],
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+    pane: Option<Rect>,
+) -> f32 {
+    labels::price_axis_marks(painter, price_map, pane, formatter)
         .into_iter()
         .map(|mark| mark.label)
         .chain(tag_labels.iter().map(|label| (*label).to_owned()))

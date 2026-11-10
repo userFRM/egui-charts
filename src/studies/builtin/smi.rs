@@ -167,24 +167,33 @@ mod tests {
 
     #[test]
     fn test_smi_calculation() {
+        // Blau's SMI by hand: first distance=105-(106+98)/2=3, range=8,
+        // so SMI=75. Next distance=104-(107+99)/2=1; double EMA(2), alpha 2/3,
+        // gives 5/3 then 19/9, so SMI=475/9. EMA(3) signal is (75+475/9)/2=575/9.
         let mut smi = StochasticMomentumIndex::new(5, 2, 2, 3);
-
-        let data: Vec<Bar> = (0..20)
+        let mut data: Vec<Bar> = (0..6)
             .map(|i| make_bar(102.0 + i as f64, 98.0 + i as f64, 101.0 + i as f64))
             .collect();
-
+        data[5].close = 104.0;
         smi.calculate(&data);
-
-        assert_eq!(smi.values.len(), 20);
-
-        // Should have valid values
-        let valid_cnt = smi
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
+        assert_eq!(smi.values().len(), 6);
+        for bar in 0..4 {
+            assert_eq!(smi.values().value(0, bar), None);
+        }
+        for (bar, expected) in [(4, [75.0, 75.0]), (5, [475.0 / 9.0, 575.0 / 9.0])] {
+            for (line, want) in expected.into_iter().enumerate() {
+                let got = smi.values().value(line, bar).unwrap();
+                assert!((got - want).abs() < 1e-12, "line {line}, bar {bar}: {got}");
+            }
+        }
+        // A zero high-low range has no defined ratio.
+        smi.calculate(&vec![make_bar(100.0, 100.0, 100.0); 6]);
+        assert_eq!(smi.values().len(), 6);
+        assert!(
+            smi.values()
+                .to_rows()
+                .iter()
+                .all(|v| matches!(v, IndicatorValue::None))
+        );
     }
 }

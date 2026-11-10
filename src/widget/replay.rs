@@ -163,9 +163,9 @@ impl Chart {
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
     /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
     /// that studies request for other symbols and intervals. A bar's close is its
-    /// `BarClock::next_open`; without a timeframe, timestamps are observation instants and bars
-    /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
-    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
+    /// `BarClock::next_open`; without a timeframe or on numeric and custom horizontal axes,
+    /// keys strictly before `time` are available. Supply finer bars with `set_replay_source`
+    /// to build the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
     ///
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
@@ -310,7 +310,7 @@ impl Chart {
             return;
         };
         let clock = self
-            .timeframe
+            .calendar_timeframe()
             .map_or_else(BarClock::exact, |_| self.bar_clock());
         let market = self.market_replay.is_some();
         let main_live = self.main_bars_live();
@@ -435,7 +435,7 @@ impl Chart {
     /// Retains the bars of `series` as it enters the chart, leaving it those the cutoff completed.
     pub(super) fn replay_admit(&mut self, series: &mut PriceSeries) {
         let clock = self
-            .timeframe
+            .calendar_timeframe()
             .map_or_else(BarClock::exact, |_| self.bar_clock());
         let time = self.replay_time();
         if let (Some(time), Some(replay)) = (time, self.replay_window_mut()) {
@@ -650,26 +650,65 @@ mod tests {
 
     /// An added series brought back by undo shows what it would have shown had it never left:
     /// the bars completed at the cutoff during replay, and all of them after the exit. A cutoff
-    /// at minute 2 completes the bars of minutes 0 and 1.
+    /// at minute 2 completes the bars of minutes 0 and 1; on a custom axis, cutoff key 3
+    /// admits keys 0, 1 and 2 regardless of the displayed calendar interval.
     #[test]
-    fn undoing_a_series_removal_across_replay_keeps_its_history_and_the_cutoff() {
-        let minutes: Vec<_> = (0..5).map(|i| bar(i, [10.0; 5])).collect();
-        for removed_in_replay in [true, false] {
+    fn custom_key_replay_cutoff_ignores_the_timeframe() {
+        let scale = Arc::new(crate::scales::CustomHorizontalScale::new(0..6_u8, |key| {
+            key.to_string()
+        }));
+        for (timeframe, custom, removed_in_replay) in [
+            (Some(Timeframe::Min1), false),
+            (None, true),
+            (Some(Timeframe::Day1), true),
+            (Some(Timeframe::Month1), true),
+        ]
+        .into_iter()
+        .flat_map(|(timeframe, custom)| [true, false].map(|removed| (timeframe, custom, removed)))
+        {
+            let minutes: Vec<_> = (0..5)
+                .map(|i| {
+                    if custom {
+                        scale.value(&i, 10.0).unwrap()
+                    } else {
+                        bar(i.into(), [10.0; 5])
+                    }
+                })
+                .collect();
+            let cutoff = if custom {
+                scale.time(&3).unwrap()
+            } else {
+                time(2)
+            };
+            let count = if custom { 3 } else { 2 };
             let mut chart = Chart::new(BarData::from_bars(minutes.clone()));
-            chart.set_timeframe(Timeframe::Min1);
+            if custom {
+                chart.set_horizontal_scale(Some(scale.clone()));
+            }
+            if let Some(timeframe) = timeframe {
+                chart.set_timeframe(timeframe);
+            }
             let id = chart.add_series(Default::default());
             chart.set_data(id, minutes.clone());
             if removed_in_replay {
-                chart.set_replay_time(Some(time(2)));
+                chart.set_replay_time(Some(cutoff));
+                assert_eq!(chart.bars(SeriesId::MAIN), &minutes[..count]);
+                assert_eq!(chart.bars(id), &minutes[..count]);
             }
             assert!(chart.user_action(|chart| chart.remove_series(id)));
             if removed_in_replay {
                 chart.set_replay_time(None);
                 assert!(chart.undo());
             } else {
-                chart.set_replay_time(Some(time(2)));
+                chart.set_replay_time(Some(cutoff));
+                assert_eq!(chart.bars(SeriesId::MAIN), &minutes[..count]);
                 assert!(chart.undo());
-                assert_eq!(chart.bars(id), &minutes[..2], "undone during replay");
+                assert_eq!(chart.bars(id), &minutes[..count], "undone during replay");
+                chart.set_replay_time(Some(minutes[4].time));
+                assert_eq!(chart.bars(SeriesId::MAIN), &minutes[..4]);
+                assert_eq!(chart.bars(id), &minutes[..4]);
+                chart.set_replay_time(Some(cutoff));
+                assert_eq!(chart.bars(id), &minutes[..count]);
                 chart.set_replay_time(None);
             }
             assert_eq!(

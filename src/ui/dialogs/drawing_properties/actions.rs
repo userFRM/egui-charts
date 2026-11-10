@@ -242,9 +242,9 @@ impl DrawingProps {
                 let settings = &template.settings;
                 // A tool setting that differs from the target's was edited.
                 macro_rules! edited {
-                    ($($field:ident),+ $(,)?) => {
-                        $(if settings.$field != target.$field {
-                            drawing.$field.clone_from(&settings.$field);
+                    ($($field:ident $(.$member:ident)?),+ $(,)?) => {
+                        $(if settings.$field$(.$member)? != target.$field$(.$member)? {
+                            drawing.$field$(.$member)?.clone_from(&settings.$field$(.$member)?);
                         })+
                     };
                 }
@@ -265,6 +265,9 @@ impl DrawingProps {
                     bars_pattern,
                     position_size,
                     position_sizing,
+                    position_readout.persistent,
+                    position_readout.condensed,
+                    position_readout.quantity_decimals,
                     position_target_color,
                     position_stop_color,
                     volume_profile,
@@ -276,6 +279,24 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                 );
+                if settings.position_readout.account_currency
+                    != target.position_readout.account_currency
+                {
+                    drawing
+                        .position_readout
+                        .account_currency
+                        .clone_from(&settings.position_readout.account_currency);
+                    // A peer's old rate cannot follow it into a different currency.
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                } else if settings.position_readout.conversion_rate
+                    != target.position_readout.conversion_rate
+                    && drawing.position_readout.account_currency
+                        == settings.position_readout.account_currency
+                {
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                }
                 // Only the image's opacity: each picture keeps its own frame size.
                 let opacity = settings.image.map_or(255, |c| c.opacity);
                 if opacity != target.image.map_or(255, |c| c.opacity) {
@@ -365,6 +386,9 @@ impl DrawingProps {
                 return Err(
                     "Ghost feed average range must be positive and noise nonnegative, both finite",
                 );
+            }
+            if !settings.position_readout.is_valid() {
+                return Err("Invalid position readout settings");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(
@@ -524,7 +548,10 @@ mod tests {
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             use DrawingToolType as T;
             let (price, time) = (
-                matches!(tool, T::HorizontalLine | T::HorizontalRay | T::CrossLine),
+                matches!(
+                    tool,
+                    T::HorizontalLine | T::HorizontalRay | T::CrossLine | T::LongPos | T::ShortPos
+                ),
                 matches!(tool, T::VerticalLine | T::CrossLine),
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
@@ -823,6 +850,46 @@ mod tests {
             let mut expected = drawings.clone();
             expected.iter_mut().for_each(change);
             assert_eq!(format!("{edits:?}"), format!("{expected:?}"), "{case}");
+        }
+        // A rate belongs to an account currency; changing the currency also replaces its rate.
+        for currency_changed in [false, true] {
+            chart.drawings_mut().drawings = [("EUR", 0.8), ("GBP", 0.6), ("EUR", 0.7)]
+                .into_iter()
+                .enumerate()
+                .map(|(id, (currency, rate))| {
+                    let mut drawing = Drawing::new(id, DrawingToolType::LongPos);
+                    drawing.position_readout.account_currency = Some(currency.into());
+                    drawing.position_readout.conversion_rate = Some(rate);
+                    drawing
+                })
+                .collect();
+            chart.drawings_mut().select_drawings([0, 1, 2]);
+            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            let readout = &mut props
+                .tool_settings
+                .as_mut()
+                .unwrap()
+                .settings
+                .position_readout;
+            readout.conversion_rate = Some(0.9);
+            if currency_changed {
+                readout.account_currency = Some("CAD".into());
+            }
+            let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+            for (id, drawing) in edits.iter().enumerate() {
+                let expected = if currency_changed {
+                    ("CAD", 0.9)
+                } else if id == 1 {
+                    ("GBP", 0.6)
+                } else {
+                    ("EUR", 0.9)
+                };
+                assert_eq!(
+                    drawing.position_readout.account_currency.as_deref(),
+                    Some(expected.0)
+                );
+                assert_eq!(drawing.position_readout.conversion_rate, Some(expected.1));
+            }
         }
         // An image's opacity is independent of its frame and of the other selected pictures.
         for opacity in [None, Some(128)] {
