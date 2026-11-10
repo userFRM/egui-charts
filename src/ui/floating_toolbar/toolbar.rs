@@ -359,6 +359,7 @@ impl FloatingSelectionToolbar {
             .constrain_to(bounds)
             .order(egui::Order::Middle)
             .show(ui.ctx(), |ui| {
+                ui.set_max_width(bounds.width());
                 egui::Frame::popup(ui.style())
                     .corner_radius(ui.active_theme().radius.md)
                     .inner_margin(egui::Margin::symmetric(
@@ -366,7 +367,6 @@ impl FloatingSelectionToolbar {
                         ui.active_theme().spacing.sm as i8,
                     ))
                     .show(ui, |ui| {
-                        ui.set_max_width(bounds.width() - 2.0 * ui.active_theme().spacing.md);
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.sm;
                             let drag = Self::render_drag_handle(ui);
