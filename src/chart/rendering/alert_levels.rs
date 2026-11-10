@@ -26,17 +26,25 @@ pub fn render_alert_levels<'a>(
 ) -> Option<Alert> {
     let mut changed = None;
     let (escape, primary_down, primary_released) = ui.input(|input| {
-        // Widgets may have consumed Escape after it cancelled the drag.
-        let escape = input.raw.events.iter().any(|event| {
-            matches!(
-                event,
+        // Preserve event order even when another widget consumed the key.
+        let escape = input
+            .raw
+            .events
+            .iter()
+            .find_map(|event| match event {
                 egui::Event::Key {
                     key: egui::Key::Escape,
                     pressed: true,
                     ..
-                }
-            )
-        });
+                } => Some(true),
+                egui::Event::PointerButton {
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false);
         (
             escape,
             input.pointer.primary_down(),
@@ -663,16 +671,17 @@ mod tests {
         alert.id = Some(AlertId("1".into()));
         alert.extend_line = true;
         // x = 408 is the marker and x = 100 the line.
-        for (button, x, from, to, level, menu) in [
-            (Primary, 408.0, 120.0, 124.0, Some(99.6), false),
-            (Primary, 100.0, 120.0, 124.0, Some(99.6), false),
+        for (button, x, from, to, level, menu, escape_after_release) in [
+            (Primary, 408.0, 120.0, 124.0, Some(99.6), false, false),
+            (Primary, 408.0, 120.0, 124.0, Some(99.6), false, true),
+            (Primary, 100.0, 120.0, 124.0, Some(99.6), false, false),
             // A press beside the level keeps its distance from the pointer, without a jump.
-            (Primary, 408.0, 123.0, 127.0, Some(99.6), false),
-            (Primary, 408.0, 123.0, 123.0, None, false),
-            (Secondary, 408.0, 120.0, 120.0, None, true),
-            (Secondary, 100.0, 120.0, 120.0, None, true),
+            (Primary, 408.0, 123.0, 127.0, Some(99.6), false, false),
+            (Primary, 408.0, 123.0, 123.0, None, false, false),
+            (Secondary, 408.0, 120.0, 120.0, None, true, false),
+            (Secondary, 100.0, 120.0, 120.0, None, true, false),
             // A hand moving during a secondary click opens the menu and leaves the level.
-            (Secondary, 408.0, 120.0, 123.0, None, true),
+            (Secondary, 408.0, 120.0, 123.0, None, true, false),
         ] {
             let ctx = egui::Context::default();
             let (start, end) = (pos2(x, from), pos2(x, to));
@@ -682,11 +691,21 @@ mod tests {
                 pressed,
                 modifiers: Default::default(),
             };
+            let mut released = vec![press(end, false)];
+            if escape_after_release {
+                released.push(egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                });
+            }
             let steps = [
                 vec![egui::Event::PointerMoved(start)],
                 vec![press(start, true)],
                 vec![egui::Event::PointerMoved(end)],
-                vec![press(end, false)],
+                released,
                 vec![],
             ];
             let mut changed = None;
