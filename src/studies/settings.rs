@@ -1200,7 +1200,12 @@ impl Indicator for ConfiguredStudy {
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
         // Close-wait applies before clearing its interval; both precede the study's own inputs.
-        if edited.runs_on_other_bars() {
+        if (edited.study.source().is_none() && edited.runs_on_other_bars())
+            || edited.calculation_timeframe.is_some()
+            || inputs.iter().any(|(id, value)| {
+                id == "source" && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
+            })
+        {
             inputs.sort_by_key(|(id, _)| match id.as_str() {
                 "wait_for_close" => 0,
                 "calculation_symbol" | "calculation_timeframe" => 1,
@@ -1710,6 +1715,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pivots.data_requests()[0].timeframe, Some(Timeframe::Hour1));
+
+        // Switching back to price first makes a separate calculation interval available.
+        let mut average = ConfiguredStudy::new(Box::new(super::super::SMA::new(1)));
+        average.set_timeframe(Timeframe::Day1);
+        average
+            .set_input(
+                "source",
+                InputValue::Source(super::super::StudySource::Study { id: 1, plot: 0 }),
+            )
+            .unwrap();
+        let settings = average.settings();
+        average
+            .apply_settings(
+                &[
+                    (
+                        "source".into(),
+                        InputValue::Source(super::super::StudySource::Price(
+                            crate::model::PriceSource::Close,
+                        )),
+                    ),
+                    (
+                        "calculation_timeframe".into(),
+                        InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    ),
+                ],
+                settings,
+            )
+            .unwrap();
+        assert_eq!(average.data_requests()[0].timeframe, Some(Timeframe::Hour1));
     }
 
     #[test]
