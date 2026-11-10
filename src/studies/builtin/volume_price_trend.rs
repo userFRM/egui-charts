@@ -410,6 +410,12 @@ mod tests {
             panic!("no value: {:?}", vpt.values.to_rows()[0]);
         };
         assert_eq!(v, 0.0);
+        // Hand VPT: 1200*(105-100)/100 = 60;
+        // then 60 + 800*(102-105)/105 = 260/7.
+        for (bar, want) in [(1, 60.0), (2, 260.0 / 7.0)] {
+            let got = vpt.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
     }
 
     /// Index and signal line against the published definition. On a bar whose volume fell (NVI)
