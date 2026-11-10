@@ -1017,12 +1017,11 @@ mod tests {
         // At bar 5: (1 + 4)/2 - (3 + 1 + 4)/3 = -1/6, rising from -2/3.
         assert!((study.values().value(0, 5).unwrap() + 1.0 / 6.0).abs() < 1e-12);
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
-        for same_color in [false, true] {
-            let alternate_color = if same_color {
-                Color32::from_rgb(17, 71, 191)
-            } else {
-                Color32::from_rgb(191, 71, 17)
-            };
+        for alternate_color in [
+            Color32::from_rgb(17, 71, 191),
+            Color32::from_rgb(191, 71, 17),
+            Color32::from_rgb_additive(191, 71, 17),
+        ] {
             for (tagged, visible, enabled, missing, offset, last, expected) in [
                 (true, true, true, false, 0, 4.0, Some(-1.0 / 6.0)),
                 (false, true, true, false, 1, 4.0, Some(-1.0 / 6.0)),

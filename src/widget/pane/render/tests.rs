@@ -186,7 +186,7 @@ fn maximized_panes_keep_pointer_navigation() {
         for event in [
             Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, -20.0),
+                delta: egui::vec2(0.0, 20.0),
                 phase: egui::TouchPhase::Move,
                 source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
@@ -1345,7 +1345,7 @@ fn collapsed_price_pane_keeps_pointer_navigation_in_the_visible_pane() {
                 Event::PointerMoved(pos),
                 Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(0.0, -20.0),
+                    delta: egui::vec2(0.0, 20.0),
                     phase: egui::TouchPhase::Move,
                     source: egui::MouseWheelSource::Unknown,
                     modifiers: Modifiers::NONE,

@@ -11,8 +11,8 @@
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
     FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
-    VwapConfig,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, RegressionTrendConfig,
+    TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -215,6 +215,9 @@ pub struct Drawing {
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
     pub position_sizing: PositionSizing,
+    /// Statistics, account currency and quantity precision of position tools.
+    #[serde(default = "PositionReadout::legacy")]
+    pub position_readout: PositionReadout,
     /// Target zone and level colour of position tools; `None` keeps the default green.
     #[serde(default)]
     pub position_target_color: Option<[u8; 4]>,
@@ -529,6 +532,7 @@ impl Drawing {
             line_measurements: LineMeasurements::for_tool(tool_type),
             position_size: None,
             position_sizing: PositionSizing::default(),
+            position_readout: PositionReadout::default(),
             position_target_color: None,
             position_stop_color: None,
             fib_config: matches!(
