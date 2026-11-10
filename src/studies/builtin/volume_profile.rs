@@ -1395,6 +1395,37 @@ mod tests {
             let mut fresh = study.clone_box();
             fresh.calculate(&corrected);
             assert_eq!(levels(fresh.as_ref(), 0..7), wanted);
+            // Correcting a finished profile changes its own levels; moving a boundary bar
+            // into the earlier session changes both profiles' spans.
+            for (from, replacement, first) in [
+                (
+                    1,
+                    Bar::new(bars[1].time, 99.0, 99.0, 99.0, 99.0, 4.0),
+                    vec![(P, 99.0, 3..7), (H, 100.0, 3..7), (V, 98.0, 3..7)],
+                ),
+                (
+                    3,
+                    Bar {
+                        time: bars[2].time + TimeDelta::hours(1),
+                        ..bars[3].clone()
+                    },
+                    vec![(P, 101.0, 4..6), (H, 104.0, 4..5), (V, 100.0, 4..6)],
+                ),
+            ] {
+                study.calculate(&bars);
+                assert_eq!(levels(study.as_ref(), 0..7), expected);
+                let mut corrected = bars.clone();
+                corrected[from] = replacement;
+                study.update(&corrected, from);
+                let wanted: Vec<_> = first
+                    .into_iter()
+                    .chain(expected[3..].iter().cloned())
+                    .collect();
+                assert_eq!(levels(study.as_ref(), 0..7), wanted);
+                let mut fresh = study.clone_box();
+                fresh.calculate(&corrected);
+                assert_eq!(levels(fresh.as_ref(), 0..7), wanted);
+            }
             study.calculate(&bars);
             let visible: Vec<_> = expected
                 .iter()
@@ -2202,23 +2233,62 @@ mod rendering_tests {
             false,
         );
         let coords = ChartMapping::new(rect, 200.0, 0, 1, 0.0, price);
+        #[derive(Clone)]
+        struct Guides(VolProfileSession, bool);
+        impl Indicator for Guides {
+            fn name(&self) -> &str {
+                self.0.name()
+            }
+            fn calculate(&mut self, bars: &[Bar]) {
+                self.0.calculate(bars);
+            }
+            fn values(&self) -> &IndicatorValues {
+                self.0.values()
+            }
+            fn colors(&self) -> Vec<Color32> {
+                self.0.colors()
+            }
+            fn set_colors(&mut self, colors: Vec<Color32>) {
+                self.0.set_colors(colors);
+            }
+            fn set_visible(&mut self, visible: bool) {
+                self.0.set_visible(visible);
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+            fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
+                let mut plots = self.0.volume_profiles(visible);
+                for plot in &mut plots {
+                    plot.config.show_value_area_lines = self.1;
+                }
+                plots
+            }
+        }
         // Rows 0 and 1 hold 60 each, the rest 22.5 each. The 70% area is rows 0 to 5,
         // prices 10 to 16; POC is 10.5. Every row ends at or before x=120.
-        for (x, value, expected) in [
-            (390.0, 10.0, false),
-            (390.0, 16.0, false),
-            (390.0, 10.5, true),
-            (20.0, 12.5, true),
-        ] {
-            let hit = crate::chart::indicators::hit_test_indicator(
-                egui::pos2(x, price.price_to_y(value)),
-                &study,
-                0,
-                0..3,
-                &coords,
-                |value| price.price_to_y(value),
-            );
-            assert_eq!(hit.is_some(), expected, "selection at ({x}, {value})");
+        for shown in [false, true] {
+            let study = Guides(study.clone(), shown);
+            for (x, value, expected) in [
+                (390.0, 10.0, shown),
+                (390.0, 16.0, shown),
+                (390.0, 10.5, true),
+                (20.0, 12.5, true),
+            ] {
+                let hit = crate::chart::indicators::hit_test_indicator(
+                    egui::pos2(x, price.price_to_y(value)),
+                    &study,
+                    0,
+                    0..3,
+                    &coords,
+                    |value| price.price_to_y(value),
+                );
+                assert_eq!(
+                    hit.is_some(),
+                    expected,
+                    "guides {shown}, selection at ({x}, {value})"
+                );
+            }
         }
     }
 
@@ -2230,7 +2300,14 @@ mod rendering_tests {
         let light = crate::theme::Theme::light();
         let dark = crate::theme::Theme::dark();
         let saved = Color32::from_rgb(41, 98, 255);
-        for (theme, color) in [(&light, None), (&dark, None), (&light, Some(saved))] {
+        for (theme, color, plot_width) in [
+            (&light, None, 400.0),
+            (&dark, None, 400.0),
+            (&light, Some(saved), 400.0),
+            (&dark, Some(saved), 400.0),
+            (&light, None, 120.0),
+            (&dark, None, 120.0),
+        ] {
             let mut study = VolProfileSession::new(24);
             study
                 .set_input("row_size", InputValue::Number(2.0))
@@ -2242,7 +2319,7 @@ mod rendering_tests {
                 study.set_colors(vec![color]);
             }
             study.calculate(&bars);
-            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(plot_width, 200.0));
             let price = PriceMap::new(
                 PriceTransform::default(),
                 PriceRange::new(96.0, 106.0),
@@ -2267,13 +2344,16 @@ mod rendering_tests {
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::LineSegment { points, stroke } => Some((
-                        points[0].x,
-                        points[1].x,
-                        points[0].y,
-                        stroke.width,
-                        stroke.color,
-                    )),
+                    egui::Shape::LineSegment { points, stroke } => {
+                        assert_eq!(shape.clip_rect, rect);
+                        Some((
+                            points[0].x,
+                            points[1].x,
+                            points[0].y,
+                            stroke.width,
+                            stroke.color,
+                        ))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -2281,21 +2361,24 @@ mod rendering_tests {
             let color = color.unwrap_or(theme.ui.text);
             let [r, g, b, _] = color.to_srgba_unmultiplied();
             let va = Color32::from_rgba_unmultiplied(r, g, b, 200);
-            let expected = vec![
+            let expected: Vec<_> = [
                 (199.0, 324.0, 100.0, 1.0, color),
                 (199.0, 224.0, 40.0, 1.0, va),
                 (199.0, 374.0, 160.0, 1.0, va),
                 (299.0, 374.0, 60.0, 1.0, color),
                 (299.0, 374.0, 40.0, 1.0, va),
                 (299.0, 374.0, 80.0, 1.0, va),
-            ];
+            ]
+            .into_iter()
+            .filter(|(_, right, _, _, _)| right + plot_width - 400.0 >= 0.0)
+            .collect();
             assert_eq!(lines.len(), expected.len());
             for ((x0, x1, y, width, color), (left, right, price_y, stroke, ink)) in
                 lines.into_iter().zip(expected)
             {
                 assert!(
-                    (x0 - left).abs() < 1e-3
-                        && (x1 - right).abs() < 1e-3
+                    (x0 - (left + plot_width - 400.0)).abs() < 1e-3
+                        && (x1 - (right + plot_width - 400.0)).abs() < 1e-3
                         && (y - price_y).abs() < 1e-3
                 );
                 assert_eq!((width, color), (stroke, ink));

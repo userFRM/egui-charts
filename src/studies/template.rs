@@ -647,19 +647,21 @@ mod tests {
                     ("extend_val", Toggle(false)),
                 ],
             ),
+        ];
+        let factory = IndicatorFactory::new();
+        let periods = (0..7).map(|period| {
             (
                 "Vol Profile Periodic",
-                vec![("period", Choice(2))],
+                vec![("period", Choice(period))],
                 vec![
-                    ("period", Choice(2)),
+                    ("period", Choice(period)),
                     ("extend_poc", Toggle(false)),
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
                 ],
-            ),
-        ];
-        let factory = IndicatorFactory::new();
-        for (name, saved, restored) in rows {
+            )
+        });
+        for (name, saved, restored) in rows.into_iter().chain(periods) {
             let mut settings = factory.create(name).unwrap().settings();
             for plot in &mut settings.plots {
                 plot.visible = true;
