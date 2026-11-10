@@ -233,32 +233,6 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
-    #[test]
-    fn test_true_range_calculation() {
-        let bar = Bar {
-            time: Utc::now(),
-            open: 100.0,
-            high: 105.0,
-            low: 98.0,
-            close: 103.0,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        };
-
-        // Case 1: Normal range (high - low is largest)
-        let tr = ATR::true_range(&bar, 100.0);
-        assert!((tr - 7.0).abs() < 0.001); // high - low = 105 - 98 = 7
-
-        // Case 2: Gap up (high - prev_close is largest)
-        let tr = ATR::true_range(&bar, 95.0);
-        assert!((tr - 10.0).abs() < 0.001); // high - prev = 105 - 95 = 10
-
-        // Case 3: Gap down (|low - prev_close| is largest)
-        let tr = ATR::true_range(&bar, 110.0);
-        assert!((tr - 12.0).abs() < 0.001); // |low - prev| = |98 - 110| = 12
-    }
-
     /// Wilder's ATR worked by hand. A bar's ATR does not depend on whether a later bar exists:
     /// with length 1 the first bar has its range. A bar with a non-finite price has no value,
     /// and the next true range uses the close before it.
@@ -289,8 +263,20 @@ mod tests {
         };
         let skipped = vec![None, Some(3.5), None, Some(4.75), Some(3.375)];
         // Ranges by hand: 102 - 98 = 4; for the second bar max(103 - 99, |103 - 100|, |99 - 100|) = 4.
-        let cases: [(usize, Vec<Bar>, Vec<Option<f64>>); 4] = [
+        let cases: [(usize, Vec<Bar>, Vec<Option<f64>>); 5] = [
             (1, vec![first.clone()], vec![Some(4.0)]),
+            // Normal, upward gap, downward gap: max(7,5,2)=7, max(2,8,6)=8,
+            // then max(2,12,14)=14. Length 1 exposes the true range itself.
+            (
+                1,
+                vec![
+                    first.clone(),
+                    bar(105.0, 98.0, 103.0),
+                    bar(111.0, 109.0, 110.0),
+                    bar(98.0, 96.0, 97.0),
+                ],
+                vec![Some(4.0), Some(7.0), Some(8.0), Some(14.0)],
+            ),
             (
                 1,
                 vec![first.clone(), bar(103.0, 99.0, 101.0)],

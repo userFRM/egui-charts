@@ -1265,9 +1265,9 @@ impl DemoApp {
             self.chart.end_user_action();
         }
 
-        if let Some(edit) = self
-            .indicator_settings
-            .show_for_chart(ctx, &self.theme, &self.chart)
+        if let Some(edit) =
+            self.indicator_settings
+                .show_preview_for_chart(ctx, &self.theme, &mut self.chart)
         {
             self.chart.begin_user_action();
             let result = self
@@ -6990,11 +6990,32 @@ mod tests {
         let shading = egui::Color32::from_rgb(201, 37, 180);
         // 07:00 in New York on a Tuesday: outside regular hours.
         let now = "2026-11-03T12:00:00Z".parse().unwrap();
-        for (saved, legacy, opened) in [
-            (SessionType::Full24x7, false, SessionType::Full24x7),
-            (SessionType::RTH, false, SessionType::RTH),
-            (SessionType::ETH, false, SessionType::ETH),
-            (SessionType::Full24x7, true, SessionType::Full24x7),
+        for (saved, switched, legacy, opened) in [
+            (
+                SessionType::Full24x7,
+                SessionType::RTH,
+                false,
+                SessionType::Full24x7,
+            ),
+            (
+                SessionType::Full24x7,
+                SessionType::ETH,
+                false,
+                SessionType::Full24x7,
+            ),
+            (SessionType::RTH, SessionType::ETH, false, SessionType::RTH),
+            (
+                SessionType::ETH,
+                SessionType::Full24x7,
+                false,
+                SessionType::ETH,
+            ),
+            (
+                SessionType::Full24x7,
+                SessionType::RTH,
+                true,
+                SessionType::Full24x7,
+            ),
         ] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new_at(
@@ -7031,7 +7052,11 @@ mod tests {
             app.timeframe_toolbar.set_session(saved);
             app.apply_session();
             app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
-            assert_eq!(shaded(&mut app), saved == SessionType::ETH, "{saved:?}");
+            assert_eq!(
+                shaded(&mut app),
+                saved == SessionType::ETH,
+                "saved {saved:?}, switched to {switched:?}"
+            );
 
             app.handle_layout_action(LayoutAction::Save);
             app.poll_storage(&ctx);
@@ -7043,17 +7068,30 @@ mod tests {
                 let groups = serde_json::from_value(groups).unwrap();
                 app.storage.save_layout_groups(&name, &groups).unwrap();
             }
+            app.timeframe_toolbar.set_session(switched);
+            app.apply_session();
             app.handle_layout_action(LayoutAction::Open(name));
             app.poll_storage(&ctx);
             assert_eq!(
                 shaded(&mut app),
                 opened == SessionType::ETH,
-                "{saved:?} legacy {legacy}"
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
             );
-            assert_eq!(app.timeframe_toolbar.state.session_type, opened);
-            assert_eq!(app.live.view(app.chart.extended_hours()).0, opened);
+            assert_eq!(
+                app.timeframe_toolbar.state.session_type, opened,
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
+            );
+            assert_eq!(
+                app.live.view(app.chart.extended_hours()).0,
+                opened,
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
+            );
             let extra = &app.extra_charts[0];
-            assert_eq!(extra.live.view(extra.chart.extended_hours()).0, opened);
+            assert_eq!(
+                extra.live.view(extra.chart.extended_hours()).0,
+                opened,
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
+            );
         }
     }
 
