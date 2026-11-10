@@ -19,7 +19,7 @@ pub struct ChartMapping {
     pub numeric_positions: Option<crate::model::NumericPositions>,
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Points per spacing unit: one custom rank, otherwise an ordinal slot or mean key gap.
+    /// Points per ordinal slot, or per initial mean numeric key gap.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,

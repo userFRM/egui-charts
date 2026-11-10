@@ -80,9 +80,10 @@ A finite requested endpoint is capped at 12,000 months before comparison with
 not capped, so keep host ranges bounded.
 
 Logical indices still address rows, including fractional positions between
-samples. Bar spacing and scroll offsets use the mean key gap as one unit, or
-one key unit for a single sample. See the [time-scale guide](time-scale.mdx) for
-logical coordinates, fitting and screen conversions.
+samples. Bar spacing and scroll offsets use the initial mean key gap as one unit, or
+one key unit for a single sample. Updates retain this unit so new or inserted
+keys keep the zoom and a scrolled-back view in place. See the
+[time-scale guide](time-scale.mdx) for logical coordinates, fitting and screen conversions.
 
 ## Categorical and structured keys
 

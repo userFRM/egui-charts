@@ -100,10 +100,6 @@ impl<K: Ord + Send + Sync> HorizontalScale for CustomHorizontalScale<K> {
         true
     }
 
-    fn is_categorical(&self) -> bool {
-        true
-    }
-
     fn tick_marks(
         &self,
         points: &[(DateTime<Utc>, usize)],
@@ -160,12 +156,6 @@ pub trait HorizontalScale: Send + Sync {
     /// The default retains ordinal time slots. Numeric scales use key units for
     /// [`TickMarkLayout::bar_spacing`].
     fn is_numeric(&self) -> bool {
-        false
-    }
-
-    /// Whether numeric keys encode ordered ranks, with one rank per spacing unit.
-    /// The default uses the mean loaded key gap. Ignored for ordinal scales.
-    fn is_categorical(&self) -> bool {
         false
     }
 

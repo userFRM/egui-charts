@@ -16,7 +16,7 @@ use std::sync::Arc;
 ///
 /// Obtained from the chart's time scale or rendering mapping. Logical indices still address
 /// rows; their positions are proportional to the encoded numeric keys. One spacing unit is
-/// one rank on custom key domains, otherwise the mean key gap or one unit for a single point.
+/// the initial mean key gap, or one numeric unit for a single point, retained across updates.
 #[derive(Debug, Clone)]
 pub struct NumericPositions {
     // Two edge slots retain both the first step and the later cadence of key interpolation.
@@ -24,23 +24,15 @@ pub struct NumericPositions {
     #[cfg(feature = "widget")]
     pub(crate) unit: f64,
     #[cfg(feature = "widget")]
-    categorical: bool,
-    #[cfg(feature = "widget")]
     origin: DateTime<Utc>,
 }
 
 impl NumericPositions {
     #[cfg(feature = "widget")]
-    pub(crate) fn new(
-        points: Vec<f64>,
-        unit: f64,
-        origin: DateTime<Utc>,
-        categorical: bool,
-    ) -> Self {
+    pub(crate) fn new(points: Vec<f64>, unit: f64, origin: DateTime<Utc>) -> Self {
         Self {
             points: points.into(),
             unit,
-            categorical,
             origin,
         }
     }
@@ -304,19 +296,17 @@ impl TimeScale {
         if let Some(old) = &self.numeric_positions
             && self.numeric_revision != Some(key)
         {
-            let new = crate::model::numeric_positions(bars, old.categorical);
+            let unit = (!old.points.is_empty()).then_some(old.unit);
+            let new = crate::model::numeric_positions(bars, unit);
             if !old.points.is_empty() && !bars.is_empty() {
-                let ratio = old.unit / new.unit;
-                let shift = new.position_at(old.origin) - old.position(0.0) * ratio;
+                let shift = new.position_at(old.origin) - old.position(0.0);
                 let base = self.base_idx() as f64;
                 let last = (bars.len() - 1) as f64;
-                // Pixel spacing is the inverse conversion; retain the half-slot edge too.
-                self.bar_spacing = self.clamp_spacing(self.bar_spacing / ratio);
-                self.right_offset = (base + self.right_offset + 0.5) * ratio + shift - last - 0.5;
+                self.right_offset += base + shift - last;
                 if let Some((left, right)) = &mut self.content_range {
-                    *left = (*left * ratio + shift).min(new.position(0.0));
+                    *left = (*left + shift).min(new.position(0.0));
                     // set_bar_cnt moves this cached edge by the row-count change next.
-                    *right = (*right * ratio + shift).max(last) - (last - base);
+                    *right = (*right + shift).max(last) - (last - base);
                 }
             }
             self.numeric_positions = Some(new);

@@ -225,19 +225,16 @@ impl Chart {
     ///
     /// Session breaks and extended-hours shading are periods of time, drawn on the time scale
     /// only. Numeric scales space actual samples proportionally, retaining row indices for
-    /// data access; spacing and scroll offsets use the mean numeric gap as one unit.
-    /// Categorical scales use one rank instead.
+    /// data access; spacing and scroll offsets use the initial mean numeric gap as one unit.
     /// [`CustomHorizontalScale`](crate::scales::CustomHorizontalScale) accepts categorical and
-    /// structured keys directly, using one ordered rank per spacing unit. New data retains
-    /// the pixel distance per key and a scrolled-back view's keys even when the mean gap changes.
+    /// structured keys directly, using their ordered ranks for positions. New data retains
+    /// that unit, the pixel distance per key and a scrolled-back view's keys.
     pub fn set_horizontal_scale(
         &mut self,
         scale: Option<std::sync::Arc<dyn crate::scales::HorizontalScale>>,
     ) {
         let numeric = scale.as_ref().is_some_and(|scale| scale.is_numeric());
-        let categorical = scale.as_ref().is_some_and(|scale| scale.is_categorical());
-        let positions =
-            numeric.then(|| crate::model::numeric_positions(self.state.shown(), categorical));
+        let positions = numeric.then(|| crate::model::numeric_positions(self.state.shown(), None));
         self.state.time_scale_mut().set_numeric_positions(positions);
         self.horizontal_scale = scale;
     }
@@ -1249,7 +1246,7 @@ mod tests {
             Arc::new(PriceHorizontalScale::default()),
             Arc::new(MaturityScale::default()),
         ];
-        for (kind, scale) in scales.into_iter().enumerate() {
+        for scale in scales {
             for added_only in [false, true] {
                 for (follow, offset) in [false, true].into_iter().flat_map(|follow| {
                     [Some(-20.0), Some(-30.0), Some(-50.0), None].map(|offset| (follow, offset))
@@ -1278,6 +1275,7 @@ mod tests {
                     chart.set_data(series, (20..=80).map(|key| bar(key.into())).collect());
                     let mut options = chart.chart_options().clone();
                     options.time_scale.bar_spacing = 20.0;
+                    options.time_scale.max_bar_spacing = 20.0;
                     options.time_scale.shift_visible_range_on_new_bar = follow;
                     chart.set_chart_options(options);
                     frame(&ctx, &mut chart, 0.0, vec![]);
@@ -1303,9 +1301,7 @@ mod tests {
                             chart.update(series, bar(key));
                         }
                         let painted = shapes(&ctx, &mut chart, 0.2 + step as f64 * 0.1, vec![]);
-                        if kind == 0 {
-                            assert_eq!(chart.get_time_scale_state().0, 20.0);
-                        }
+                        assert_eq!(chart.get_time_scale_state().0, 20.0);
                         let after = chart.visible_time_range().unwrap();
                         assert!(
                             (after.from - before.from).abs() < Duration::microseconds(100)
@@ -1390,7 +1386,7 @@ mod tests {
             [custom, Arc::new(PriceHorizontalScale::default())];
         let color = egui::Color32::from_rgb(177, 52, 210);
         for theme in [Theme::light(), Theme::dark()] {
-            for (kind, scale) in scales.iter().enumerate() {
+            for scale in &scales {
                 for (chart_type, added) in [ChartType::Columns, ChartType::Candles]
                     .into_iter()
                     .flat_map(|chart_type| [false, true].map(|added| (chart_type, added)))
@@ -1438,8 +1434,8 @@ mod tests {
                         .collect();
                     bodies.sort_by(|a, b| a.left().total_cmp(&b.left()));
                     assert_eq!(bodies.len(), 3, "{chart_type:?}");
-                    // Custom ranks: 30 * 0.6 = 18. Numeric mean gap 3: 30 / 3 * 0.6 = 6.
-                    let gap = if kind == 0 { 30.0 } else { 10.0 };
+                    // Mean gap 3: 30 / 3 * 0.6 = 6, including custom domains.
+                    let gap = 10.0;
                     for body in &bodies {
                         assert_close(body.width().into(), gap * 0.6, "numeric body width");
                     }

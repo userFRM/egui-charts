@@ -252,22 +252,19 @@ pub(crate) fn index_at_with_timeframe(
 }
 
 /// Positions share the same interpolation and edge cadence as keys mapped through row indices.
-pub(crate) fn numeric_positions(bars: &[Bar], categorical: bool) -> crate::model::NumericPositions {
+pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model::NumericPositions {
     let Some(first) = bars.first() else {
-        return crate::model::NumericPositions::new(
-            Vec::new(),
-            1.0,
-            DateTime::UNIX_EPOCH,
-            categorical,
-        );
+        return crate::model::NumericPositions::new(Vec::new(), 1.0, DateTime::UNIX_EPOCH);
     };
     let last = bars.len() - 1;
     let span = seconds(bars[last].time - first.time);
-    let unit = if !categorical && last > 0 && span > 0.0 {
-        span / last as f64
-    } else {
-        1.0
-    };
+    let unit = unit.unwrap_or_else(|| {
+        if last > 0 && span > 0.0 {
+            span / last as f64
+        } else {
+            1.0
+        }
+    });
     let mut points = Vec::with_capacity(bars.len() + 4);
     // Keep the last sample at the row anchor even when a fixed unit leaves missing ranks.
     let offset = last as f64 - span / unit;
@@ -282,5 +279,5 @@ pub(crate) fn numeric_positions(bars: &[Bar], categorical: bool) -> crate::model
         last as f64 + near / unit,
         last as f64 + (near + step) / unit,
     ]);
-    crate::model::NumericPositions::new(points, unit, first.time, categorical)
+    crate::model::NumericPositions::new(points, unit, first.time)
 }

@@ -962,12 +962,11 @@ impl Chart {
         self.stop_at_oldest_bar(right_edge);
     }
 
-    /// Retain the view bounds and oldest key across a change of numeric spacing units.
+    /// Retain the view's right edge and oldest key across data updates.
     pub(super) fn right_edge(&self) -> ViewEdge {
         let scale = self.state.time_scale();
         ViewEdge {
             right: scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0),
-            full: f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0,
             first: self.state.shown().first().map(|bar| bar.time),
         }
     }
@@ -980,7 +979,7 @@ impl Chart {
         if self.state.shows_elements() || self.state.shown().is_empty() {
             return;
         }
-        // A change of numeric units cannot evict keys that are still loaded.
+        // A numeric refresh cannot evict keys that are still loaded.
         if self.state.time_scale().numeric_positions().is_some()
             && before
                 .first
@@ -988,12 +987,13 @@ impl Chart {
         {
             return;
         }
-        let ViewEdge { right, full, .. } = self.right_edge();
+        let right = self.right_edge().right;
         let scale = self.state.time_scale_mut();
+        let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
         let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
         let stop = full.clamp(0.0, last);
         // The right edge a stop leaves at `full` can read back a rounding error short of it.
-        let was_full = before.right + 1e-6 >= before.full;
+        let was_full = before.right + 1e-6 >= full;
         if right < stop && (was_full || right < 0.0 && before.right + 1e-6 >= 0.0) {
             scale.set_right_offset(scale.right_offset_precise() + stop - right);
         }
@@ -1003,7 +1003,6 @@ impl Chart {
 /// The viewport and oldest loaded key before bars change.
 pub(super) struct ViewEdge {
     right: f64,
-    full: f64,
     first: Option<DateTime<Utc>>,
 }
 
