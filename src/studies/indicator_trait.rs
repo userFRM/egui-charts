@@ -202,6 +202,12 @@ pub trait Indicator: Send {
         1.0
     }
 
+    /// Colour of an enabled dotted value line at a pane guide. Off by default, independent of
+    /// plot value tags and guide visibility. Hidden guides retain their value-line colour.
+    fn level_price_line(&self, _index: usize) -> Option<Color32> {
+        None
+    }
+
     /// Pattern and width for a level by its position in the pane's levels. The value is the
     /// drawn value, including a host's zone override. Defaults to the value-based methods.
     fn level_stroke(&self, _index: usize, value: f64) -> (crate::model::LineStyle, f32) {
