@@ -281,6 +281,7 @@ pub struct StudySettings {
     pub show_legend_values: bool,
     /// Allow user edits through settings, legend and context controls. Host APIs remain writable.
     /// `None` keeps the permission declared by the study.
+    /// Read the effective permission through [`Indicator::user_edit_enabled`].
     #[serde(default)]
     pub user_edit_enabled: Option<bool>,
     /// Help article requested through the host. None uses the underlying study's metadata.
