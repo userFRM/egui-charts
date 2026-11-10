@@ -10,7 +10,8 @@
 //!   bar's own true range, or Wilder's average of the bar's high minus low over the middle
 //!   line's length.
 //!
-//! A bar with a non-finite high, low, close or source price is skipped and changes nothing.
+//! A bar with a non-finite high, low or close is skipped. A missing source leaves a gap in
+//! the basis while the band distance continues to read the original bars.
 //!
 //! # Interpretation
 //! - Price above upper band: Strong uptrend or overbought
@@ -67,6 +68,7 @@ pub struct KeltnerChannels {
 
 #[derive(Clone, Default)]
 struct State {
+    bar: usize,
     previous: Option<f64>,
     middle: Mean,
     band: Smoothing,
@@ -128,6 +130,45 @@ impl KeltnerChannels {
         self.band = band;
         self
     }
+
+    fn update_prices(&mut self, data: &[Bar], from: usize, source: Option<&[f64]>) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bar;
+                state.bar += 1;
+                let price = source.map_or_else(
+                    || self.source.compute(bar.open, bar.high, bar.low, bar.close),
+                    |source| source.get(index).copied().unwrap_or(f64::NAN),
+                );
+                if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let tr = state
+                    .previous
+                    .map_or(bar.high - bar.low, |close| ATR::true_range(bar, close));
+                state.previous = Some(bar.close);
+                let middle = state.middle.next(self.average, price, self.ema_period);
+                let band = match self.band {
+                    KeltnerBand::AverageTrueRange => {
+                        state
+                            .band
+                            .next(tr, self.atr_period, 1.0 / self.atr_period as f64)
+                    }
+                    KeltnerBand::TrueRange => tr,
+                    KeltnerBand::Range => state.band.next(
+                        bar.high - bar.low,
+                        self.ema_period,
+                        1.0 / self.ema_period as f64,
+                    ),
+                };
+                // Only NaN is missing here: infinite bands from a huge multiplier keep the middle line.
+                if middle.is_nan() || band.is_nan() {
+                    return IndicatorValue::None;
+                }
+                let width = self.multiplier * band;
+                IndicatorValue::Multiple(vec![middle, middle + width, middle - width])
+            });
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -138,6 +179,15 @@ impl Default for KeltnerChannels {
 }
 
 impl Indicator for KeltnerChannels {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
+
+    /// Only the basis uses the aligned source; ranges retain the bars' own high, low and close.
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.update_prices(data, from, Some(source));
+    }
+
     crate::studies::inputs::study_inputs!(self;
         ema_period: length("Length", 1, usize::MAX),
         multiplier: number("Multiplier", 0.0, f64::MAX),
@@ -169,40 +219,7 @@ impl Indicator for KeltnerChannels {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                let price = self.source.compute(bar.open, bar.high, bar.low, bar.close);
-                if ![bar.high, bar.low, bar.close, price]
-                    .iter()
-                    .all(|v| v.is_finite())
-                {
-                    return IndicatorValue::None;
-                }
-                let tr = state
-                    .previous
-                    .map_or(bar.high - bar.low, |close| ATR::true_range(bar, close));
-                state.previous = Some(bar.close);
-                let middle = state.middle.next(self.average, price, self.ema_period);
-                let band = match self.band {
-                    KeltnerBand::AverageTrueRange => {
-                        state
-                            .band
-                            .next(tr, self.atr_period, 1.0 / self.atr_period as f64)
-                    }
-                    KeltnerBand::TrueRange => tr,
-                    KeltnerBand::Range => state.band.next(
-                        bar.high - bar.low,
-                        self.ema_period,
-                        1.0 / self.ema_period as f64,
-                    ),
-                };
-                // Only NaN is missing here: infinite bands from a huge multiplier keep the middle line.
-                if middle.is_nan() || band.is_nan() {
-                    return IndicatorValue::None;
-                }
-                let width = self.multiplier * band;
-                IndicatorValue::Multiple(vec![middle, middle + width, middle - width])
-            });
+        self.update_prices(data, from, None);
     }
 
     fn is_incremental(&self) -> bool {
