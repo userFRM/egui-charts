@@ -22,14 +22,14 @@ pub struct NumericPositions {
     // Two edge slots retain both the first step and the later cadence of key interpolation.
     points: Arc<[f64]>,
     #[cfg(feature = "widget")]
-    pub(crate) unit: f64,
+    pub(crate) unit: Option<f64>,
     #[cfg(feature = "widget")]
     origin: DateTime<Utc>,
 }
 
 impl NumericPositions {
     #[cfg(feature = "widget")]
-    pub(crate) fn new(points: Vec<f64>, unit: f64, origin: DateTime<Utc>) -> Self {
+    pub(crate) fn new(points: Vec<f64>, unit: Option<f64>, origin: DateTime<Utc>) -> Self {
         Self {
             points: points.into(),
             unit,
@@ -46,7 +46,7 @@ impl NumericPositions {
     pub(crate) fn position_at(&self, time: DateTime<Utc>) -> f64 {
         let elapsed = time - self.origin;
         let seconds = elapsed.num_seconds() as f64 + f64::from(elapsed.subsec_nanos()) / 1e9;
-        self.position(0.0) + seconds / self.unit
+        self.position(0.0) + seconds / self.unit.unwrap_or(1.0)
     }
 
     #[cfg(feature = "widget")]
@@ -296,8 +296,7 @@ impl TimeScale {
         if let Some(old) = &self.numeric_positions
             && self.numeric_revision != Some(key)
         {
-            let unit = (!old.points.is_empty()).then_some(old.unit);
-            let new = crate::model::numeric_positions(bars, unit);
+            let new = crate::model::numeric_positions(bars, old.unit);
             if !old.points.is_empty() && !bars.is_empty() {
                 let shift = new.position_at(old.origin) - old.position(0.0);
                 let base = self.base_idx() as f64;

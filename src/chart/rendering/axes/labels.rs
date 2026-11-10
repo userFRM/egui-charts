@@ -331,7 +331,7 @@ pub(crate) fn time_axis_marks(
             .numeric_positions
             .as_ref()
             .map_or(coords.bar_spacing, |positions| {
-                (f64::from(coords.bar_spacing) / positions.unit) as f32
+                (f64::from(coords.bar_spacing) / positions.unit.unwrap_or(1.0)) as f32
             }),
         min_spacing: min_time_label_spacing(options),
         uniform_distribution: options.uniform_distribution,

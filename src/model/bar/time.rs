@@ -254,7 +254,7 @@ pub(crate) fn index_at_with_timeframe(
 /// Positions share the same interpolation and edge cadence as keys mapped through row indices.
 pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model::NumericPositions {
     let Some(first) = bars.first() else {
-        return crate::model::NumericPositions::new(Vec::new(), 1.0, DateTime::UNIX_EPOCH);
+        return crate::model::NumericPositions::new(Vec::new(), unit, DateTime::UNIX_EPOCH);
     };
     let last = bars.len() - 1;
     let span = seconds(bars[last].time - first.time);
@@ -279,5 +279,5 @@ pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model
         last as f64 + near / unit,
         last as f64 + (near + step) / unit,
     ]);
-    crate::model::NumericPositions::new(points, unit, first.time)
+    crate::model::NumericPositions::new(points, Some(unit), first.time)
 }

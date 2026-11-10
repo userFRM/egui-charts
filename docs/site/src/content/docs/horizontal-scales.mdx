@@ -85,6 +85,10 @@ one key unit for a single sample. Updates retain this unit so new or inserted
 keys keep the zoom and a scrolled-back view in place. See the
 [time-scale guide](time-scale.mdx) for logical coordinates, fitting and screen conversions.
 
+Snapshots retain the numeric unit alongside the view. Install the horizontal scale
+before restoring a numeric snapshot. Older snapshots without a unit keep the
+restoring chart's unit. Complete `ChartSnapshot` literals add `numeric_unit: None`.
+
 ## Categorical and structured keys
 
 [`CustomHorizontalScale::new(keys, format)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.CustomHorizontalScale.html)
