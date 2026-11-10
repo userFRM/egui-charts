@@ -523,8 +523,10 @@ impl ConfiguredStudy {
 
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
     /// alone, without data of its own to request or order flow it cannot do without.
+    /// An accepted interval stays available if calculating on it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
-        self.study.source().is_some()
+        self.calculation_timeframe.is_some()
+            || self.study.source().is_some()
             || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
     }
     /// The bars evicted since the study was last calculated, by which the bars of its kept values
@@ -1197,13 +1199,10 @@ impl Indicator for ConfiguredStudy {
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
-        if inputs.iter().any(|(id, value)| {
-            id == "source" && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
-        }) {
-            inputs.sort_by_key(|(id, _)| {
-                !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
-            });
-        }
+        // Calculation inputs precede inputs that can change the study's own data requests.
+        inputs.sort_by_key(|(id, _)| {
+            !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
+        });
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
@@ -1596,6 +1595,92 @@ mod tests {
                 "added on {added_on:?}, dialog {dialog}"
             );
         }
+    }
+
+    /// A study on a daily chart keeps the Interval it accepted once it has run on those bars,
+    /// though on them it requests data of its own: the input stays listed, a template saved from
+    /// the study keeps it, and it can be cleared.
+    #[test]
+    fn calculation_interval_stays_listed_and_clears_after_a_run() {
+        use crate::model::BarClock;
+        let hour = |h: i64| chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(h);
+        let flat = |time| Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0);
+        let days: Vec<_> = (0..21).map(|day| flat(hour(24 * day))).collect();
+        // Each study, the Interval set on it, and the hours between the bars of that Interval.
+        let cases: [(Box<dyn Indicator>, Timeframe, i64); 3] = [
+            (
+                Box::new(super::super::Performance::new()),
+                Timeframe::Hour1,
+                1,
+            ),
+            (
+                Box::new(super::super::PivotPoints::new().with_daily_bars(true)),
+                Timeframe::Hour1,
+                1,
+            ),
+            (
+                Box::new(super::super::Volume24h::new()),
+                Timeframe::Week1,
+                168,
+            ),
+        ];
+        let (mut observed, mut expected) = (Vec::new(), Vec::new());
+        for (inner, interval, step) in cases {
+            let name = inner.name().to_owned();
+            let mut study = ConfiguredStudy::new(inner);
+            study.set_timeframe(Timeframe::Day1);
+            study.set_bar_clock(&BarClock::new(Timeframe::Day1));
+            let chart_requests = study.data_requests();
+            let chosen = InputValue::Timeframe(Some(interval));
+            study
+                .set_input("calculation_timeframe", chosen.clone())
+                .unwrap();
+            let bars: Vec<_> = (0..21 * 24 / step)
+                .map(|at| flat(hour(at * step)))
+                .collect();
+            let request = study.data_requests().pop().unwrap();
+            study.update_data(
+                &days,
+                0,
+                &[super::super::StudyData {
+                    request,
+                    bars: &bars,
+                    clock: BarClock::new(interval),
+                    instrument: None,
+                    timeframe: interval,
+                }],
+            );
+            let listed = study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "calculation_timeframe")
+                .map(|input| input.value);
+            let template = crate::studies::StudyTemplate::from_study(&study);
+            let restored = template.create().unwrap();
+            assert!(
+                restored
+                    .inputs()
+                    .iter()
+                    .any(|input| { input.id == "calculation_timeframe" && input.value == chosen })
+            );
+            let saved = template
+                .inputs
+                .into_iter()
+                .find(|(id, _)| id == "calculation_timeframe")
+                .map(|(_, value)| value);
+            let cleared = study
+                .set_input("calculation_timeframe", InputValue::Timeframe(None))
+                .map_err(|error| error.to_string());
+            assert_eq!(study.data_requests(), chart_requests, "{name}");
+            observed.push((name.clone(), listed, saved, cleared));
+            expected.push((
+                name,
+                Some(chosen.clone()),
+                Some(chosen),
+                Ok::<(), String>(()),
+            ));
+        }
+        assert_eq!(observed, expected);
     }
 
     #[test]
