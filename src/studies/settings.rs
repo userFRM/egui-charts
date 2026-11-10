@@ -280,8 +280,9 @@ pub struct StudySettings {
     #[serde(default = "enabled_by_default")]
     pub show_legend_values: bool,
     /// Allow user edits through settings, legend and context controls. Host APIs remain writable.
-    #[serde(default = "enabled_by_default")]
-    pub user_edit_enabled: bool,
+    /// `None` keeps the permission declared by the study.
+    #[serde(default)]
+    pub user_edit_enabled: Option<bool>,
     /// Help article requested through the host. None uses the underlying study's metadata.
     #[serde(default)]
     pub help_url: Option<String>,
@@ -563,7 +564,9 @@ impl Indicator for ConfiguredStudy {
     }
 
     fn user_edit_enabled(&self) -> bool {
-        self.settings.user_edit_enabled
+        self.settings
+            .user_edit_enabled
+            .unwrap_or_else(|| self.study.user_edit_enabled())
     }
     fn help_url(&self) -> Option<&str> {
         self.settings
@@ -1140,6 +1143,7 @@ impl Indicator for ConfiguredStudy {
     }
     fn settings(&self) -> StudySettings {
         let mut settings = self.settings.clone();
+        settings.user_edit_enabled = Some(self.user_edit_enabled());
         // A study can declare a band after its settings were last applied.
         match_declared_styles(self.study.as_ref(), &mut settings);
         settings

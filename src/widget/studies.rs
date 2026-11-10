@@ -196,7 +196,7 @@ impl Chart {
             return false;
         };
         let mut settings = study.settings();
-        settings.user_edit_enabled = enabled;
+        settings.user_edit_enabled = Some(enabled);
         study.apply_settings(&[], settings).is_ok()
     }
 
@@ -1332,7 +1332,7 @@ mod tests {
         let legacy: StudySettings = serde_json::from_value(legacy).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["show_legend_values"], true);
-        assert_eq!(legacy["user_edit_enabled"], true);
+        assert!(legacy["user_edit_enabled"].is_null());
         assert!(legacy["help_url"].is_null());
         // The metadata is part of the same presentation snapshot as the plot styles.
         chart.user_action(|chart| {
