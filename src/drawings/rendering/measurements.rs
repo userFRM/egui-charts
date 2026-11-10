@@ -520,20 +520,18 @@ impl Drawing {
                 rect.center_bottom() + egui::vec2(0.0, 6.0),
             )
         };
-        stats_card(painter, align, pos, text);
+        let galley = painter.layout_no_wrap(
+            text,
+            self.annotation_font(),
+            painter.ctx().active_theme().chart.axis_text,
+        );
+        let size = galley.size() + CARD_PADDING * 2.0;
+        paint_stats_card(painter, align, pos, galley, size);
     }
 }
 
 /// Padding between a stats card's border and its text.
 const CARD_PADDING: egui::Vec2 = egui::vec2(8.0, 6.0);
-
-/// Paints `text` on a card in the theme's tooltip colours, placed at `pos` by `align` and
-/// moved inside the painter's clip rect.
-fn stats_card(painter: &egui::Painter, align: Align2, pos: Pos2, text: String) -> Rect {
-    let galley = stats_galley(painter, text);
-    let size = galley.size() + CARD_PADDING * 2.0;
-    paint_stats_card(painter, align, pos, galley, size)
-}
 
 fn stats_galley(painter: &egui::Painter, text: String) -> std::sync::Arc<egui::Galley> {
     painter.layout_no_wrap(

@@ -320,8 +320,8 @@ Drawings,Drawings,Cross line,unverified,library,src/drawings/rendering/lines.rs;
 Drawings,Drawings,Curve,incomplete,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs;src/drawings/rendering/style.rs;src/drawings/rendering/outline.rs,
 Drawings,Drawings,Cyclic lines,unverified,library,src/drawings/rendering/cycles.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/style.rs,
 Drawings,Drawings,Cypher pattern,incomplete,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs,141;2536
-Drawings,Drawings,Date and price range,incomplete,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/persistence.rs,2516
-Drawings,Drawings,Date range,incomplete,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/drawings/persistence.rs,2516
+Drawings,Drawings,Date and price range,incomplete,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/persistence.rs,2516;141
+Drawings,Drawings,Date range,incomplete,library,src/drawings/rendering/measurements.rs;src/drawings/rendering/mod.rs;src/drawings/persistence.rs,2516;141
 Drawings,Drawings,Demonstration and magic cursors,incomplete,library,src/config/crosshair.rs;src/widget/tool_interaction/cursor_modes/mod.rs;src/ui/drawing_toolbar/categories/cursors.rs;src/widget/frame/mod.rs,
 Drawings,Drawings,Disjoint channel,incomplete,library,src/drawings/rendering/channels.rs;src/drawings/rendering/mod.rs;src/drawings/services/handle.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs,
 Drawings,Drawings,Double curve,incomplete,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs;src/drawings/rendering/style.rs;src/drawings/rendering/outline.rs,

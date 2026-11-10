@@ -2213,6 +2213,11 @@ mod tests {
                 if tool == T::Measure {
                     assert_eq!(drawing.color, [tint[0], tint[1], tint[2], 150]);
                     assert_eq!(drawing.stroke_width, 1.5);
+                }
+                if matches!(
+                    tool,
+                    T::Measure | T::PriceRange | T::DateRange | T::DateAndPriceRange
+                ) {
                     let restored = restore(&storage.drawings[0], 1);
                     let view = crate::drawings::rendering::ChartView {
                         instrument: None,
@@ -2229,16 +2234,51 @@ mod tests {
                         y_to_price: &|y| (500.0 - f64::from(y)) / 2.0,
                         time_axis: false,
                     };
-                    let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                        restored.render_measure(ui.painter(), &view);
-                    });
-                    if prices[0] != prices[1] {
-                        assert!(output.shapes.iter().any(|s| matches!(&s.shape,
-                            egui::Shape::Rect(r) if r.fill == restored.fill_color32().unwrap())));
+                    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                        let ctx = egui::Context::default();
+                        crate::theme::apply_to_egui(&ctx, &theme);
+                        let pane =
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 500.0));
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(pane),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                if tool == T::Measure {
+                                    restored.render_measure(ui.painter(), &view);
+                                } else {
+                                    restored.render_range(
+                                        ui.painter(),
+                                        pane,
+                                        restored.stroke(),
+                                        &view,
+                                    );
+                                }
+                            },
+                        );
+                        let shapes = std::mem::take(&mut output.shapes);
+                        output.drop_without_applying_deltas();
+                        if tool == T::Measure && prices[0] != prices[1] {
+                            assert!(shapes.iter().any(|s| matches!(&s.shape,
+                                egui::Shape::Rect(r) if r.fill == restored.fill_color32().unwrap())));
+                        }
+                        assert!(shapes.iter().any(|s| matches!(&s.shape,
+                            egui::Shape::LineSegment { stroke, .. } if *stroke == restored.stroke())));
+                        let text = shapes
+                            .iter()
+                            .find_map(|s| match &s.shape {
+                                egui::Shape::Text(text) => Some(text),
+                                _ => None,
+                            })
+                            .expect("range readout");
+                        assert_eq!(
+                            text.galley.job.sections[0].format.font_id.size,
+                            font.unwrap(),
+                            "{tool:?}"
+                        );
+                        assert!(pane.contains_rect(text.visual_bounding_rect()), "{tool:?}");
                     }
-                    assert!(output.shapes.iter().any(|s| matches!(&s.shape,
-                        egui::Shape::LineSegment { stroke, .. } if *stroke == restored.stroke())));
-                    output.drop_without_applying_deltas();
                 }
             }
         }
