@@ -196,6 +196,9 @@ impl StoredDrawing {
         if !d.position_readout.is_valid() {
             return Some("position_readout".into());
         }
+        if !d.position_style.is_valid() {
+            return Some("position_style".into());
+        }
         let sizing = d.position_sizing;
         if [
             sizing.point_value,
@@ -2066,7 +2069,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 34] = [
+        let cases: [(Spoil, &str); 35] = [
             (
                 |s| {
                     first(s)
@@ -2116,6 +2119,10 @@ mod tests {
             (
                 |s| first(s).drawing.position_readout.quantity_decimals = Some(9),
                 "invalid position_readout",
+            ),
+            (
+                |s| first(s).drawing.position_style.font_size = f32::NAN,
+                "invalid position_style",
             ),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,

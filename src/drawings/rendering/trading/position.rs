@@ -32,15 +32,30 @@ impl Drawing {
 
         let ctx = painter.ctx();
         let theme = ctx.active_theme();
-        let [profit_color, loss_color] = self.position_colors();
-        // Opaque, deeper label fills keep white text legible on a light chart too.
+        let style = self.position_style;
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        // Zones take the colours' opacity; labels and the covered part take them opaque.
+        let [target_zone, stop_zone] = self.position_colors();
+        let [profit_color, loss_color] =
+            [target_zone, stop_zone].map(|[r, g, b, _]| Color32::from_rgb(r, g, b));
+        // Opaque, deeper label fills keep white text legible on a light chart too; a chosen
+        // plate colour is drawn as chosen.
         let label_color = |color: Color32| {
-            color.lerp_to_gamma(Color32::BLACK, if theme.dark { 0.08 } else { 0.18 })
+            style.label_background.then(|| {
+                style.label_color.map_or_else(
+                    || color.lerp_to_gamma(Color32::BLACK, if theme.dark { 0.08 } else { 0.18 }),
+                    rgba,
+                )
+            })
         };
-        let entry_color = theme.chart.axis_text_secondary;
-        let zone_alpha = if theme.dark { 0.20 } else { 0.12 };
+        let text_color = style.text_color.map_or(Color32::WHITE, rgba);
+        let muted = theme.chart.axis_text_secondary;
+        let entry_color = style
+            .line_color
+            .map_or_else(|| muted.gamma_multiply(0.65), rgba);
         let covered_alpha = if theme.dark { 0.14 } else { 0.10 };
-        let line_width = 1.0 / painter.pixels_per_point();
+        let line_width = style.line_width;
+        let font_size = style.font_size;
 
         let (entry_price, target_price) = (entry_at.price, target_at.price);
         // The stop anchor is added when the tool is placed; until then (while
@@ -67,20 +82,19 @@ impl Drawing {
         let exit = position_exit(after_entry, entry_price, target_price, stop_price, is_long);
         let right = Self::position_right(entry, target);
 
-        self.draw_zone(
-            painter,
-            entry,
-            target.y,
-            right,
-            profit_color.gamma_multiply(zone_alpha),
-        );
-        self.draw_zone(
-            painter,
-            entry,
-            stop_y,
-            right,
-            loss_color.gamma_multiply(zone_alpha),
-        );
+        for (level_y, color) in [(target.y, target_zone), (stop_y, stop_zone)] {
+            if style.fill {
+                self.draw_zone(painter, entry, level_y, right, rgba(color));
+            }
+            if style.border {
+                painter.rect_stroke(
+                    Rect::from_two_pos(entry, Pos2::new(right, level_y)),
+                    0.0,
+                    Stroke::new(line_width, rgba(style.border_color)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
 
         // The trade's path from the entry to its exit, over the part of the zone it covered.
         if let Some((exit_price, _, exit_bar)) = exit {
@@ -89,18 +103,20 @@ impl Drawing {
             });
             let exit_at = Pos2::new(exit_x, (view.price_to_y)(exit_price));
             let won = side * (exit_price - entry_price) >= 0.0;
-            self.draw_zone(
-                painter,
-                entry,
-                exit_at.y,
-                exit_x,
-                (if won { profit_color } else { loss_color }).gamma_multiply(covered_alpha),
-            );
+            if style.fill {
+                self.draw_zone(
+                    painter,
+                    entry,
+                    exit_at.y,
+                    exit_x,
+                    (if won { profit_color } else { loss_color }).gamma_multiply(covered_alpha),
+                );
+            }
             draw_dashed_line(
                 painter,
                 entry,
                 exit_at,
-                Stroke::new(line_width, entry_color.gamma_multiply(0.45)),
+                Stroke::new(line_width, entry_color.gamma_multiply(0.7)),
                 4.0,
                 5.0,
             );
@@ -109,7 +125,7 @@ impl Drawing {
         painter.hline(
             entry.x..=right,
             entry.y,
-            Stroke::new(line_width, entry_color.gamma_multiply(0.65)),
+            Stroke::new(line_width, entry_color),
         );
 
         if !selected && !self.position_readout.persistent {
@@ -198,7 +214,7 @@ impl Drawing {
                 } else {
                     loss_color
                 };
-                (summary, label_color(fill), Color32::WHITE)
+                (summary, label_color(fill), text_color)
             }
             None => (
                 l10n::format_text(
@@ -210,8 +226,10 @@ impl Drawing {
                     },
                     &[("quantity", qty_text.as_str())],
                 ),
-                theme.chart.bg_axis,
-                entry_color,
+                style
+                    .label_background
+                    .then(|| style.label_color.map_or(theme.chart.bg_axis, rgba)),
+                style.text_color.map_or(muted, rgba),
             ),
         };
         let level_text = |price: f64, target: bool| {
@@ -288,8 +306,8 @@ impl Drawing {
             summary,
             summary_fill,
             summary_text,
-            center_x,
-            entry.y,
+            font_size,
+            Pos2::new(center_x, entry.y),
             stop_below,
         );
         if selected && let Some(stats) = stats {
@@ -309,24 +327,25 @@ impl Drawing {
             painter,
             target_label,
             label_color(profit_color),
-            Color32::WHITE,
-            center_x,
-            target.y,
+            text_color,
+            font_size,
+            Pos2::new(center_x, target.y),
             target.y > entry.y,
         );
         draw_pill(
             painter,
             stop_label,
             label_color(loss_color),
-            Color32::WHITE,
-            center_x,
-            stop_edge,
+            text_color,
+            font_size,
+            Pos2::new(center_x, stop_edge),
             stop_below,
         );
     }
 
-    /// Target and stop colours, preserving the presentation of saved drawings without overrides.
-    pub(crate) fn position_colors(&self) -> [Color32; 2] {
+    /// Target and stop colours as unmultiplied RGBA whose alpha is the zone opacity, preserving
+    /// the presentation of saved drawings without overrides.
+    pub(crate) fn position_colors(&self) -> [[u8; 4]; 2] {
         [
             (
                 self.position_target_color,
@@ -338,10 +357,13 @@ impl Drawing {
             ),
         ]
         .map(|(saved, default)| {
-            saved.map_or_else(
-                || default.lerp_to_gamma(Color32::from_gray(128), 0.35),
-                |[r, g, b, a]| Color32::from_rgba_unmultiplied(r, g, b, a),
-            )
+            saved.unwrap_or_else(|| {
+                let [r, g, b, _] = default
+                    .lerp_to_gamma(Color32::from_gray(128), 0.35)
+                    .to_srgba_unmultiplied();
+                // 20% opacity.
+                [r, g, b, 51]
+            })
         })
     }
 
@@ -359,7 +381,15 @@ impl Drawing {
         let [entry, target, rest @ ..] = self.chart_points.as_slice() else {
             return Vec::new();
         };
-        let [profit, loss] = self.position_colors();
+        let [profit, loss] = self
+            .position_colors()
+            .map(|[r, g, b, _]| Color32::from_rgb(r, g, b));
+        let entry_color = self
+            .position_style
+            .line_color
+            .map_or(entry_color, |[r, g, b, a]| {
+                Color32::from_rgba_unmultiplied(r, g, b, a)
+            });
         [
             (entry.price, entry_color),
             (target.price, profit),
@@ -401,16 +431,17 @@ impl Drawing {
     }
 }
 
-/// Paints `text`, centred on `center_x`, in a pill filled with `fill` whose near edge sits a
-/// small gap beyond `edge_y`: below it when `below`, otherwise above. A pill partly outside the
-/// plot is moved inside it; one wholly outside is not painted. Returns the painted pill.
+/// Paints `text` at `font_size`, centred on `at.x`, in a pill filled with `fill`, if any, whose
+/// near edge sits a small gap beyond `at.y`: below it when `below`, otherwise above. A pill
+/// partly outside the plot is moved inside it; one wholly outside is not painted. Returns the
+/// painted pill.
 fn draw_pill(
     painter: &egui::Painter,
     text: String,
-    fill: Color32,
+    fill: Option<Color32>,
     text_color: Color32,
-    center_x: f32,
-    edge_y: f32,
+    font_size: f32,
+    at: Pos2,
     below: bool,
 ) -> Option<Rect> {
     let clip = painter.clip_rect();
@@ -421,7 +452,7 @@ fn draw_pill(
     let gap = DESIGN_TOKENS.spacing.lg;
     let mut job = egui::text::LayoutJob::simple(
         text,
-        egui::FontId::proportional(typography::SM),
+        egui::FontId::proportional(typography::font_size(font_size)),
         text_color,
         (clip.width() - 2.0 * padding.x).max(1.0),
     );
@@ -429,11 +460,11 @@ fn draw_pill(
     let galley = painter.layout_job(job);
     let size = galley.size() + 2.0 * padding;
     let top = if below {
-        edge_y + gap
+        at.y + gap
     } else {
-        edge_y - gap - size.y
+        at.y - gap - size.y
     };
-    let pill = Rect::from_min_size(Pos2::new(center_x - size.x / 2.0, top), size);
+    let pill = Rect::from_min_size(Pos2::new(at.x - size.x / 2.0, top), size);
     if !clip.intersects(pill) {
         return None;
     }
@@ -441,7 +472,9 @@ fn draw_pill(
         (clip.right() - pill.right()).min(0.0) + (clip.left() - pill.left()).max(0.0),
         (clip.bottom() - pill.bottom()).min(0.0) + (clip.top() - pill.top()).max(0.0),
     ));
-    painter.rect_filled(pill, 3.0, fill);
+    if let Some(fill) = fill {
+        painter.rect_filled(pill, 3.0, fill);
+    }
     painter.galley(
         Pos2::new(pill.center().x, pill.top() + padding.y),
         galley,
@@ -532,8 +565,9 @@ mod tests {
             ] {
                 assert_eq!(Drawing::axis_labels_of(tool), (true, false));
                 let mut drawing = Drawing::new(1, tool);
-                drawing.position_target_color = Some([40, 100, 220, 255]);
-                drawing.position_stop_color = Some([220, 140, 40, 255]);
+                // Each colour's alpha is the opacity of its zone alone.
+                drawing.position_target_color = Some([40, 100, 220, 51]);
+                drawing.position_stop_color = Some([220, 140, 40, 102]);
                 drawing.position_sizing = crate::drawings::PositionSizing {
                     point_value: 50.0,
                     lot_size: 10.0,
@@ -597,15 +631,20 @@ mod tests {
                             "missing axis tag {label}"
                         );
                     }
-                    for fill in [
-                        Color32::from_rgb(40, 100, 220),
-                        Color32::from_rgb(220, 140, 40),
+                    for (fill, zone) in [
+                        (
+                            Color32::from_rgb(40, 100, 220),
+                            Color32::from_rgba_unmultiplied(40, 100, 220, 51),
+                        ),
+                        (
+                            Color32::from_rgb(220, 140, 40),
+                            Color32::from_rgba_unmultiplied(220, 140, 40, 102),
+                        ),
                     ] {
-                        let alpha = if dark { 0.20 } else { 0.12 };
                         assert!(
                             output.shapes.iter().any(|shape| matches!(&shape.shape,
-                            egui::Shape::Rect(rect) if rect.fill == fill.gamma_multiply(alpha))),
-                            "configured zone colour {fill:?}"
+                            egui::Shape::Rect(rect) if rect.fill == zone)),
+                            "configured zone colour {zone:?}"
                         );
                         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                             egui::Shape::Rect(rect) if rect.fill == fill && rect.rect.left() >= plot.right())),
@@ -710,8 +749,8 @@ mod tests {
                             }
                             assert!(
                                 output.shapes.iter().any(|s| matches!(&s.shape,
-                                egui::Shape::Rect(r) if r.fill == Color32::from_rgb(40,100,220)
-                                    .gamma_multiply(if dark {0.20} else {0.12}))),
+                                egui::Shape::Rect(r)
+                                    if r.fill == Color32::from_rgba_unmultiplied(40, 100, 220, 51))),
                                 "statistics visibility does not remove zones"
                             );
                             output.drop_without_applying_deltas();
@@ -753,6 +792,81 @@ mod tests {
                         );
                         output.drop_without_applying_deltas();
                         chart.reverse_position_drawing(1).unwrap();
+
+                        // Lines, text, plates, fill and border each follow their own setting.
+                        let plate = Color32::from_rgb(1, 2, 3);
+                        let line = Color32::from_rgb(10, 20, 30);
+                        let border = Color32::from_rgb(200, 210, 0);
+                        let zones = [
+                            Color32::from_rgba_unmultiplied(40, 100, 220, 51),
+                            Color32::from_rgba_unmultiplied(220, 140, 40, 102),
+                        ];
+                        let mut style = crate::drawings::PositionStyle {
+                            line_color: Some([10, 20, 30, 255]),
+                            line_width: 3.0,
+                            text_color: Some([200, 0, 200, 255]),
+                            font_size: 20.0,
+                            label_color: Some([1, 2, 3, 255]),
+                            border: true,
+                            border_color: [200, 210, 0, 255],
+                            ..Default::default()
+                        };
+                        for shown in [true, false] {
+                            style.label_background = shown;
+                            style.fill = shown;
+                            chart
+                                .set_position_style(
+                                    1,
+                                    style,
+                                    drawing.position_target_color,
+                                    drawing.position_stop_color,
+                                )
+                                .unwrap();
+                            let output = render(&mut chart);
+                            let shapes = || output.shapes.iter().map(|s| &s.shape);
+                            assert!(shapes().any(|s| matches!(s,
+                                egui::Shape::LineSegment { stroke, .. }
+                                    if stroke.color == line && stroke.width == 3.0)));
+                            assert!(shapes().any(|s| matches!(s,
+                                egui::Shape::Rect(r) if r.fill == line && r.rect.left() >= plot.right())),
+                                "the entry tag takes the line colour");
+                            assert!(shapes().any(|s| matches!(s, egui::Shape::Text(t)
+                                if t.galley.text().starts_with("Target:")
+                                    && t.galley.job.sections[0].format.font_id.size == 20.0
+                                    && t.galley.job.sections[0].format.color
+                                        == Color32::from_rgb(200, 0, 200))));
+                            assert_eq!(
+                                shapes().any(|s| matches!(s,
+                                    egui::Shape::Rect(r) if r.fill == plate)),
+                                shown,
+                                "label plates"
+                            );
+                            for zone in zones {
+                                assert_eq!(
+                                    shapes().any(|s| matches!(s,
+                                        egui::Shape::Rect(r) if r.fill == zone)),
+                                    shown,
+                                    "zone fill {zone:?}"
+                                );
+                            }
+                            assert_eq!(
+                                shapes()
+                                    .filter(|s| matches!(s,
+                                        egui::Shape::Rect(r) if r.stroke.color == border))
+                                    .count(),
+                                2,
+                                "a border around each zone"
+                            );
+                            output.drop_without_applying_deltas();
+                        }
+                        chart
+                            .set_position_style(
+                                1,
+                                Default::default(),
+                                drawing.position_target_color,
+                                drawing.position_stop_color,
+                            )
+                            .unwrap();
                     }
                     if size == PositionSize::RiskAmount(230.0) && !dark && width == 800.0 {
                         crate::localization::mark_keys(&ctx);
