@@ -36,6 +36,7 @@ struct CachedProfile {
     volume_available: bool,
     interest_available: bool,
     pain_available: bool,
+    awaiting_chain: bool,
 }
 
 /// How an input the chain decides on is listed while it waits for the chain, or `None` for any
@@ -281,7 +282,7 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         self.refresh_cache();
-        if self.waiting_inputs.borrow().is_empty() {
+        if self.waiting_inputs.borrow().is_empty() || self.cache.borrow().awaiting_chain {
             return;
         }
         // In saved order, since the measure decides which levels are offered.
@@ -469,6 +470,7 @@ impl OptionsVolumeProfile {
                             .map(|(_, strike)| strike)
                     })
                 });
+                cache.awaiting_chain = selected.is_empty() && supplied.is_none();
                 cache.supplied = supplied;
                 cache.volume_available =
                     !selected.is_empty() && selected.iter().all(|row| row.volume.is_some());
