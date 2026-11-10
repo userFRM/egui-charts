@@ -52,6 +52,25 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::LongPos | DrawingToolType::ShortPos
+                ) {
+                    for (label, value) in [
+                        (
+                            "Keep position statistics visible",
+                            &mut settings.position_readout.persistent,
+                        ),
+                        (
+                            "Condensed statistics",
+                            &mut settings.position_readout.condensed,
+                        ),
+                    ] {
+                        ui.label("");
+                        ui.checkbox(value, l10n::text(ui.ctx(), label));
+                        ui.end_row();
+                    }
+                }
                 if settings.tool_type.supports_line_ends() {
                     for (label, style) in [
                         ("Line start", &mut settings.arrow_start_style),
