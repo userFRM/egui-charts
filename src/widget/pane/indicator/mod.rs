@@ -687,13 +687,23 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
+        self.value_range(indicator, visible_range)
+            .unwrap_or((0.0, 100.0))
+    }
+
+    /// The study's fitted range, without the empty-pane drawing fallback.
+    pub(in crate::widget) fn value_range(
+        &self,
+        indicator: &dyn Indicator,
+        visible_range: &Range<usize>,
+    ) -> Option<(f64, f64)> {
         if indicator.is_volume()
             && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
         {
-            return crate::widget::volume::range(indicator, visible_range, None);
+            return Some(crate::widget::volume::range(indicator, visible_range, None));
         }
         if let Some((min, max)) = self.config.y_range {
-            return (min, max);
+            return Some((min, max));
         }
 
         // Auto-scale based on visible indicator values
@@ -784,11 +794,11 @@ impl IndicatorPane {
         }
 
         if min_val == f64::MAX {
-            (0.0, 100.0) // Default fallback
+            None
         } else {
             // Add 10% padding
             let padding = crate::scales::auto_scale_span(min_val, max_val) * 0.1;
-            (min_val - padding, max_val + padding)
+            Some((min_val - padding, max_val + padding))
         }
     }
 }
