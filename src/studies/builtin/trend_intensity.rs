@@ -369,21 +369,21 @@ mod tests {
     #[test]
     fn test_qstick() {
         let mut qs = Qstick::new(5);
-
-        // Bullish candles (close > open)
-        let data: Vec<Bar> = (0..10)
-            .map(|i| make_bar(100.0 + i as f64, 102.0 + i as f64))
-            .collect();
-
+        // Hand means of close-open: five bodies of +2 average 2; replacing the
+        // newest body with -3 gives (2+2+2+2-3)/5 = 1.
+        let data = [
+            make_bar(100.0, 102.0),
+            make_bar(101.0, 103.0),
+            make_bar(102.0, 104.0),
+            make_bar(103.0, 105.0),
+            make_bar(104.0, 106.0),
+            make_bar(105.0, 102.0),
+        ];
         qs.calculate(&data);
-
-        assert_eq!(qs.values.len(), 10);
-
-        // Should be positive for bullish candles
-        let rows = qs.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", qs.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 0.0);
+        for bar in 0..4 {
+            assert_eq!(qs.values().value(0, bar), None);
+        }
+        assert_eq!(qs.values().value(0, 4), Some(2.0));
+        assert_eq!(qs.values().value(0, 5), Some(1.0));
     }
 }

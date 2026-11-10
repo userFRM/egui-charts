@@ -209,33 +209,40 @@ impl Indicator for PercentageVolumeOscillator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::studies::PriceOscillator;
 
-    /// The PVO of a volume series is the PPO of the same series as closes, for a chosen formula.
+    /// Hand SMA(2) volumes are 11.5,12,13.5 and SMA(3) are 11,12,38/3.
+    /// PVO = 100*(short-long)/long gives 50/11,0,125/19. EMA(2) signal
+    /// seeds at 25/11, then adds 2/3 of the step to 125/19, giving 1075/209.
     #[test]
     fn chosen_averages_apply_to_volume() {
-        let volumes = [10.0, 12.0, 11.0, 13.0, 14.0];
-        let data: Vec<Bar> = volumes
+        let data: Vec<Bar> = [10.0, 12.0, 11.0, 13.0, 14.0]
             .into_iter()
             .map(|v| Bar::new(chrono::Utc::now(), 100.0, 100.0, 100.0, 100.0, v))
             .collect();
-        let prices: Vec<Bar> = volumes
-            .into_iter()
-            .map(crate::studies::test_support::make_bar)
-            .collect();
-        let averages = (OscillatorAverage::Simple, OscillatorAverage::Exponential);
-        let mut pvo =
-            PercentageVolumeOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
-        let mut ppo = PriceOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
+        let mut pvo = PercentageVolumeOscillator::new(2, 3, 2)
+            .with_averages(OscillatorAverage::Simple, OscillatorAverage::Exponential);
         pvo.calculate(&data);
-        ppo.calculate(&prices);
-        for bar in 2..data.len() {
-            for line in 0..3 {
-                assert_eq!(
-                    pvo.values().value(line, bar),
-                    ppo.values().value(line, bar),
-                    "line {line}, bar {bar}"
-                );
+        for (bar, expected) in [
+            (2, [Some(50.0 / 11.0), None, None]),
+            (3, [Some(0.0), Some(25.0 / 11.0), Some(-25.0 / 11.0)]),
+            (
+                4,
+                [
+                    Some(125.0 / 19.0),
+                    Some(1075.0 / 209.0),
+                    Some(300.0 / 209.0),
+                ],
+            ),
+        ] {
+            for (line, want) in expected.into_iter().enumerate() {
+                let got = pvo.values().value(line, bar);
+                match want {
+                    Some(want) => assert!(
+                        (got.unwrap() - want).abs() < 1e-12,
+                        "line {line}, bar {bar}: {got:?}"
+                    ),
+                    None => assert_eq!(got, None, "line {line}, bar {bar}"),
+                }
             }
         }
     }

@@ -252,13 +252,18 @@ impl Chart {
     ///
     /// Bar series accept this; unknown ids and study ids are ignored with a warning.
     pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
+        let clock = self.clock();
         let present = series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series);
         let removed = if present && self.replay_retains(series) {
             self.replay_pop(series, count)
         } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.revision = crate::model::next_revision();
-            item.bars.split_off(item.bars.len().saturating_sub(count))
+            let removed = item.bars.split_off(item.bars.len().saturating_sub(count));
+            if let Some(marks) = &mut item.change_marks {
+                marks.retain_bars(&item.bars, &clock);
+            }
+            removed
         } else if self.main_bars_live() && holds_bars(series, "pop_bars") {
             let before = self.edge();
             #[cfg(feature = "drawings")]
@@ -274,7 +279,10 @@ impl Chart {
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
-            self.bars_changed(before, first_changed, &self.clock());
+            if let Some(marks) = &mut self.change_marks {
+                marks.retain_bars(&self.state.data().bars, &clock);
+            }
+            self.bars_changed(before, first_changed, &clock);
             removed
         } else {
             return Vec::new();
@@ -869,12 +877,14 @@ impl Chart {
         // either, since the bar indices and the base index both grow by their count.
         let appended =
             tail.is_some_and(|(old, new)| clock.bar_open(new.time) > clock.bar_open(old.time));
-        let whitespace_replaced =
-            tail.is_some_and(|(old, new)| old.is_whitespace() && !new.is_whitespace());
+        let whitespace_replaced = tail.is_some_and(|(old, new)| {
+            old.is_whitespace()
+                && !new.is_whitespace()
+                && clock.bar_open(new.time) == clock.bar_open(old.time)
+        });
         let options = &self.chart_options.time_scale;
-        let shift_for_whitespace = whitespace_replaced
-            && !appended
-            && options.allow_shift_visible_range_on_whitespace_replacement;
+        let shift_for_whitespace =
+            whitespace_replaced && options.allow_shift_visible_range_on_whitespace_replacement;
         let follow = options.shift_visible_range_on_new_bar
             && before.near_live
             && (appended || shift_for_whitespace);

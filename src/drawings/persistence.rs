@@ -193,6 +193,9 @@ impl StoredDrawing {
         if d.ghost_feed.is_some_and(|c| !c.is_valid()) {
             return Some("ghost_feed".into());
         }
+        if !d.position_readout.is_valid() {
+            return Some("position_readout".into());
+        }
         let sizing = d.position_sizing;
         if [
             sizing.point_value,
@@ -222,6 +225,16 @@ impl StoredDrawing {
                 || c.level_width > super::validation::MAX_STROKE_WIDTH
         }) {
             return Some("fib_config.level_width".into());
+        }
+        if d.fib_config.as_ref().is_some_and(|c| {
+            !(1.0..=256.0).contains(&c.label_size)
+                || c.levels.iter().any(|level| {
+                    level.width.is_some_and(|width| {
+                        !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
+                    })
+                })
+        }) {
+            return Some("fib_config".into());
         }
         for (name, values) in [
             (
@@ -1007,6 +1020,7 @@ mod v1 {
         let Color { r, g, b, a } = stored.color;
         let mut drawing = Drawing::with_color(0, tool_type, [r, g, b, a]);
         drawing.fib_config = None;
+        drawing.position_readout.persistent = true;
         drawing.stroke_width = stored.line_width;
         drawing.locked = stored.locked;
         drawing.visible = stored.visible;
@@ -1189,6 +1203,9 @@ mod tests {
                 color: [9, 10, 11, 12],
                 visible: false,
                 show_price: false,
+                text: String::new(),
+                width: None,
+                line_style: None,
             }],
             level_width: 3.5,
             level_style: LineStyle::Dashed,
@@ -1462,6 +1479,7 @@ mod tests {
             let mut want = Drawing::with_color(1, tool, [33, 150, 243, 255]);
             // Old files without Fibonacci settings retain their absent config.
             want.fib_config = None;
+            want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
             want.stroke_width = 3.0;
@@ -1486,6 +1504,7 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
             // Earlier files show their axis labels.
             want.price_axis_label = true;
@@ -2047,7 +2066,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 26] = [
+        let cases: [(Spoil, &str); 34] = [
             (
                 |s| {
                     first(s)
@@ -2089,6 +2108,14 @@ mod tests {
                         .width = Some(0.0)
                 },
                 "invalid pitchfork.levels[0].width",
+            ),
+            (
+                |s| first(s).drawing.position_readout.conversion_rate = Some(f64::NAN),
+                "invalid position_readout",
+            ),
+            (
+                |s| first(s).drawing.position_readout.quantity_decimals = Some(9),
+                "invalid position_readout",
             ),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
@@ -2143,6 +2170,30 @@ mod tests {
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 101.0,
                 "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = 0.0,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = f32::NAN,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = 257.0,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(0.0),
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(f32::NAN),
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(101.0),
+                "invalid fib_config",
             ),
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,

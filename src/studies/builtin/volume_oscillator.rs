@@ -169,11 +169,11 @@ mod tests {
 
         vo.calculate(&data);
 
-        // Last value should be positive (rising volume)
-        let rows = vo.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", vo.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 0.0, "Oscillator should be positive for rising volume");
+        // EMA(2) seeds at 150, then 250,350,450,550; EMA(4) seeds at 250,
+        // then 350,450. Hand percentages: 100*(450-350)/350 and 100*(550-450)/450.
+        for (bar, want) in [(4, 200.0 / 7.0), (5, 200.0 / 9.0)] {
+            let got = vo.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
     }
 }

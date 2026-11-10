@@ -275,21 +275,31 @@ mod tests {
 
     #[test]
     fn test_squeeze_calculation() {
-        let mut squeeze = SqueezeMomentum::new();
-
-        let data: Vec<Bar> = (0..50)
-            .map(|i| make_bar(102.0 + i as f64, 98.0 + i as f64, 100.0 + i as f64))
-            .collect();
-
+        let mut squeeze = SqueezeMomentum::new()
+            .with_bb_params(3, 2.0)
+            .with_kc_params(3, 1.5);
+        squeeze.momentum_period = 3;
+        let data = [
+            make_bar(102.0, 98.0, 100.0),
+            make_bar(103.0, 99.0, 101.0),
+            make_bar(104.0, 100.0, 102.0),
+            make_bar(105.0, 101.0, 103.0),
+            make_bar(106.0, 102.0, 104.0),
+            make_bar(121.0, 119.0, 120.0),
+        ];
         squeeze.calculate(&data);
-
-        assert_eq!(squeeze.values.len(), 50);
-
-        // Should have momentum and squeeze state
-        let rows = squeeze.values.to_rows();
-        let IndicatorValue::Multiple(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", squeeze.values.to_rows().last().unwrap());
-        };
-        assert_eq!(v.len(), 2);
+        // By hand: deviations close-SMA(HL2,3) at bars 2..5 are 1,1,1,11.
+        // Regression endpoints on [1,1,1] and [1,1,11] are 1 and 28/3.
+        // Bar 4: BB half-width 2*sqrt(2/3) < KC 1.5*4 (squeezed).
+        // Bar 5: BB half-width 2*sqrt(182/3) > KC 1.5*(4+4+17)/3 (released).
+        assert_eq!(squeeze.values().len(), 6);
+        for bar in 0..4 {
+            assert_eq!(squeeze.values().value(0, bar), None);
+        }
+        for (bar, momentum, flag) in [(4, 1.0, 1.0), (5, 28.0 / 3.0, 0.0)] {
+            let got = squeeze.values().value(0, bar).unwrap();
+            assert!((got - momentum).abs() < 1e-12, "bar {bar}: {got}");
+            assert_eq!(squeeze.values().value(1, bar), Some(flag));
+        }
     }
 }

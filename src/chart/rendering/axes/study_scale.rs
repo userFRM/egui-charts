@@ -65,6 +65,10 @@ pub(crate) fn fit_study_mapping(
             high = high.max(0.0);
         }
     }
+    for price in crate::studies::plots::gradient_prices(study, start..end) {
+        low = low.min(price);
+        high = high.max(price);
+    }
     for plot in study.volume_profiles(crate::chart::rendering::volume_profile::profile_range(
         coords,
     )) {

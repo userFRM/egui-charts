@@ -1632,3 +1632,355 @@ fn drawing_drag_hides_the_value_readout() {
         );
     }
 }
+
+fn touch_events(phase: egui::TouchPhase, pos: Pos2) -> Vec<Event> {
+    use egui::TouchPhase::{Cancel, End, Move, Start};
+    let mut events = vec![
+        Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(1),
+            phase,
+            pos,
+            force: None,
+        },
+        Event::PointerMoved(pos),
+    ];
+    if phase != Move {
+        events.push(Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: phase == Start,
+            modifiers: Default::default(),
+        });
+    }
+    if matches!(phase, End | Cancel) {
+        events.push(Event::PointerGone);
+    }
+    events
+}
+
+#[test]
+fn touch_hold_released_before_the_click_limit_is_not_a_click() {
+    use crate::config::TouchTrackingExitMode;
+    use crate::widget::{ChartElementId, ChartEvent, SeriesId};
+    use egui::TouchPhase::{End, Start};
+    for pane in [false, true] {
+        for mode in [
+            TouchTrackingExitMode::OnTouchEnd,
+            TouchTrackingExitMode::OnNextTap,
+        ] {
+            for duration in [0.1, 0.7] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[100.0], &[110.0, 120.0]);
+                chart.config.show_volume = false;
+                chart.chart_options.tooltip.on_long_press = true;
+                chart.chart_options.tooltip.touch_exit_mode = mode;
+                let selected = if pane {
+                    let id = chart.add_series(Default::default());
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                    ChartElementId::Indicator(id)
+                } else {
+                    ChartElementId::Series(SeriesId::MAIN)
+                };
+                chart.selection.select(selected, Some(50));
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.apply_synced_time_scale(6.0, -10.0);
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                let map = chart.get_chart_mapping();
+                let y = if pane {
+                    chart.pane_layout.panes.last().unwrap().rect.center().y
+                } else {
+                    map.rect.center().y
+                };
+                let pos = Pos2::new(map.idx_to_x(50), y);
+                chart.drain_events().for_each(drop);
+                frame(&ctx, &mut chart, 2.0, touch_events(Start, pos));
+                if duration > 0.5 {
+                    frame(&ctx, &mut chart, 2.6, vec![]);
+                    assert!(chart.hover_time().is_some());
+                }
+                frame(&ctx, &mut chart, 2.0 + duration, touch_events(End, pos));
+                let clicks = chart
+                    .drain_events()
+                    .filter(|event| matches!(event, ChartEvent::Click { .. }))
+                    .count();
+                assert_eq!(
+                    clicks,
+                    usize::from(duration < 0.5),
+                    "pane={pane}, {mode:?}, duration={duration}"
+                );
+                if duration > 0.5 {
+                    assert_eq!(chart.selected_element(), Some(selected));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn moving_a_touch_readout_keeps_live_edge_following() {
+    use egui::TouchPhase::{End, Move, Start};
+    for pane in [false, true] {
+        for move_time in [0.1, 0.7, 1.0]
+            .into_iter()
+            .filter(|time| !pane || *time > 0.5)
+        {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.on_long_press = true;
+            if pane {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.enable_tracking_mode();
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let y = if pane {
+                chart.pane_layout.panes.last().unwrap().rect.center().y
+            } else {
+                map.rect.center().y
+            };
+            let pos = Pos2::new(map.idx_to_x(50), y);
+            let end = pos + egui::vec2(24.0, 0.0);
+            frame(&ctx, &mut chart, 2.0, touch_events(Start, pos));
+            if move_time > 0.5 {
+                frame(&ctx, &mut chart, 2.6, vec![]);
+            }
+            frame(&ctx, &mut chart, 2.0 + move_time, touch_events(Move, end));
+            assert_eq!(
+                chart.is_tracking_mode_active(),
+                move_time > 0.5,
+                "pane={pane}, move={move_time}"
+            );
+            frame(&ctx, &mut chart, 3.2, touch_events(End, end));
+            assert_eq!(chart.is_tracking_mode_active(), move_time > 0.5);
+        }
+    }
+}
+
+fn touch_frame(
+    ctx: &egui::Context,
+    chart: &mut crate::widget::Chart,
+    time: f64,
+    events: Vec<Event>,
+    size: egui::Vec2,
+    focused: bool,
+) {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, size)),
+            time: Some(time),
+            events,
+            focused,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+        },
+    )
+    .drop_without_applying_deltas();
+}
+
+#[test]
+fn touch_readout_activates_without_keyboard_focus() {
+    use egui::TouchPhase::{End, Start};
+    for cancel in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = true;
+        let size = egui::vec2(800.0, 600.0);
+        touch_frame(&ctx, &mut chart, 0.0, vec![], size, false);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        touch_frame(&ctx, &mut chart, 0.1, vec![], size, false);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        let time = chart.state.shown()[50].time;
+        touch_frame(&ctx, &mut chart, 1.0, touch_events(Start, pos), size, false);
+        touch_frame(
+            &ctx,
+            &mut chart,
+            1.2,
+            if cancel {
+                vec![Event::WindowFocused(false)]
+            } else {
+                vec![]
+            },
+            size,
+            false,
+        );
+        touch_frame(&ctx, &mut chart, 1.6, vec![], size, false);
+        assert_eq!(chart.hover_time(), (!cancel).then_some(time));
+        touch_frame(&ctx, &mut chart, 1.7, touch_events(End, pos), size, false);
+    }
+}
+
+#[test]
+fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
+    use egui::TouchPhase::{End, Move, Start};
+    for (width, held) in [(300.0, false), (780.0, false), (300.0, true), (780.0, true)] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = true;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        frame(&ctx, &mut chart, 1.6, vec![]);
+        if !held {
+            frame(&ctx, &mut chart, 1.7, touch_events(End, pos));
+        }
+        let size = egui::vec2(width, 600.0);
+        touch_frame(&ctx, &mut chart, 2.0, vec![], size, true);
+        let inside = chart.last_rendered_price_rect.contains(pos);
+        assert_eq!(inside, width > 300.0);
+        let start = chart.last_rendered_price_rect.center();
+        let end = start + egui::vec2(60.0, 0.0);
+        let viewport = chart.get_time_scale_state();
+        if !held {
+            touch_frame(
+                &ctx,
+                &mut chart,
+                2.1,
+                touch_events(Start, start),
+                size,
+                true,
+            );
+        }
+        touch_frame(&ctx, &mut chart, 2.2, touch_events(Move, end), size, true);
+        touch_frame(&ctx, &mut chart, 2.3, touch_events(End, end), size, true);
+        assert_eq!(
+            chart.get_time_scale_state() == viewport,
+            inside || held,
+            "width={width}, held={held}"
+        );
+        assert_eq!(chart.hover_time().is_some(), inside || held);
+    }
+}
+
+#[cfg(feature = "icons")]
+#[test]
+fn tapping_the_price_button_of_a_latched_touch_readout_opens_its_action() {
+    use egui::TouchPhase::{End, Start};
+    for button in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = true;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        frame(&ctx, &mut chart, 1.6, vec![]);
+        frame(&ctx, &mut chart, 1.7, touch_events(End, pos));
+        let (readout, tag) = chart.axis_hover.expect("latched price tag");
+        let price = chart.last_price_map.y_to_price(readout.y);
+        let tap = if button {
+            crate::chart::rendering::axes::crosshair_price_button_rect(tag).center()
+        } else {
+            pos
+        };
+        frame(&ctx, &mut chart, 2.0, touch_events(Start, tap));
+        frame(&ctx, &mut chart, 2.1, touch_events(End, tap));
+        if button {
+            let Some(crate::widget::RightClickTarget::Background { price: actual, .. }) =
+                chart.take_right_click()
+            else {
+                panic!("price action was lost")
+            };
+            assert!((actual - price).abs() < 1e-8);
+        } else {
+            assert!(chart.take_right_click().is_none());
+            assert!(chart.hover_time().is_none());
+        }
+    }
+}
+
+#[test]
+fn latched_touch_readout_is_the_reported_crosshair() {
+    use crate::widget::ChartEvent;
+    use egui::TouchPhase::{End, Move, Start};
+    for enabled in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = enabled;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        let time = chart.state.shown()[50].time;
+        let moved = pos + egui::vec2(1.0, 1.0);
+        let mut movement = touch_events(Move, moved);
+        if let Event::Touch { force, .. } = &mut movement[0] {
+            *force = Some(0.6);
+        }
+        movement.insert(0, Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        movement.push(Event::ModifiersChanged(egui::Modifiers::NONE));
+        let mut reported = None;
+        for (t, events, expected) in [
+            (1.0, touch_events(Start, pos), (!enabled).then_some(time)),
+            (1.6, vec![], Some(time)),
+            (1.8, movement, Some(time)),
+            (2.0, touch_events(End, moved), enabled.then_some(time)),
+            (2.1, vec![], enabled.then_some(time)),
+            (2.2, touch_events(Start, pos), Some(time)),
+            (2.3, touch_events(End, pos), None),
+        ] {
+            let origin = events
+                .iter()
+                .find(|event| matches!(event, Event::Touch { .. }))
+                .cloned();
+            frame(&ctx, &mut chart, t, events);
+            for event in chart.drain_events() {
+                if let ChartEvent::CrosshairMoved(pointer) = event {
+                    if t == 1.8 {
+                        let pointer = pointer.as_ref().expect("moved readout");
+                        assert_eq!(pointer.origin, origin);
+                        assert_eq!(pointer.modifiers, egui::Modifiers::SHIFT);
+                        if enabled {
+                            assert!((pointer.pos.x - pos.x).abs() < 0.01);
+                        }
+                    }
+                    reported = pointer.and_then(|pointer| pointer.time);
+                }
+            }
+            assert_eq!(reported, expected, "enabled={enabled}, time={t}");
+            if enabled {
+                assert_eq!(reported, chart.hover_time());
+            }
+        }
+    }
+    for on_long_press in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(Default::default());
+        chart.chart_options.tooltip.on_long_press = on_long_press;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let pos = chart.last_rendered_price_rect.center();
+        chart.drain_events().for_each(drop);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        assert_eq!(
+            chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(_)))),
+            !on_long_press,
+            "an empty plot has no held readout"
+        );
+    }
+}

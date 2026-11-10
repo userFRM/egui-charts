@@ -202,7 +202,7 @@ pub fn render_floating_tooltip(
                         .map_or(2, usize::from)
                 )
             },
-            |formatter| formatter.format(change),
+            |formatter| formatter.format_change(change),
         );
         let percent = formatters.percentage.map_or_else(
             || format!("{change_pct:+.2}%"),
@@ -349,7 +349,7 @@ pub fn render_floating_tooltip(
         );
     }
 
-    let border_color = if candle.is_bullish() {
+    let border_color = if candle.close >= candle.open {
         options.border_color_bullish
     } else {
         options.border_color_bearish
