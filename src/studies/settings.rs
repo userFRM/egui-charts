@@ -1199,10 +1199,12 @@ impl Indicator for ConfiguredStudy {
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
-        // Keep an accepted interval before inputs that can change the study's data requests.
+        // Close-wait applies before clearing its interval; both precede the study's own inputs.
         if edited.runs_on_other_bars() {
-            inputs.sort_by_key(|(id, _)| {
-                !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
+            inputs.sort_by_key(|(id, _)| match id.as_str() {
+                "wait_for_close" => 0,
+                "calculation_symbol" | "calculation_timeframe" => 1,
+                _ => 2,
             });
         }
         for (id, value) in inputs {
@@ -1587,7 +1589,12 @@ mod tests {
             );
             if dialog {
                 let settings = study.settings();
-                study.apply_settings(&[cleared], settings).unwrap();
+                study
+                    .apply_settings(
+                        &[cleared, ("wait_for_close".into(), InputValue::Toggle(true))],
+                        settings,
+                    )
+                    .unwrap();
             } else {
                 study.set_input(&cleared.0, cleared.1).unwrap();
             }
