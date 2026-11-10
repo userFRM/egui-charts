@@ -726,6 +726,11 @@ impl IndicatorPane {
             }
         }
 
+        for price in crate::studies::plots::gradient_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
+        }
+
         for candle in indicator.candles().iter().filter(|candle| {
             candle.bars.end > visible_range.start
                 && candle.bars.start < visible_range.end
