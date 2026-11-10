@@ -77,11 +77,16 @@ impl DrawingManager {
                     && if self.owns_pane(drawing) {
                         painted
                             .iter()
-                            .find(|p| p.id == drawing.id && p.points == drawing.points)
+                            .find(|p| p.id == drawing.id)
                             .is_some_and(|p| {
-                                crate::drawings::services::SelectionService::intersects_painted(
-                                    ctx, &p.shapes, rect,
-                                )
+                                if p.points == drawing.points {
+                                    crate::drawings::services::SelectionService::intersects_painted(
+                                        ctx, &p.shapes, rect,
+                                    )
+                                } else {
+                                    // Painting follows input, so retain membership until it catches up.
+                                    self.selection.is_selected(drawing.id)
+                                }
                             })
                     } else {
                         drawing.reaches_other_panes()

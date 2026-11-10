@@ -1628,4 +1628,86 @@ mod tests {
             );
         }
     }
+
+    /// A live bar with the same range arrives on the release frame, moving the line one bar
+    /// left but keeping it well inside the rectangle (20 points of slack on each side, 100
+    /// above and below). The line must stay selected.
+    #[test]
+    fn area_selection_survives_a_live_bar_on_release() {
+        use crate::widget::test_frames::frame;
+        use egui::{Modifiers, vec2};
+        for during_drag in [false, true] {
+            let (ctx, mut chart) = area_chart();
+            let line = chart.drawings().drawings[0].points.clone();
+            let from = line[0] + vec2(-20.0, -100.0);
+            let to = line[1] + vec2(20.0, 100.0);
+            let width = chart.measured_axis_width;
+            let ctrl = Modifiers::CTRL;
+            frame(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![Event::ModifiersChanged(ctrl), Event::PointerMoved(from)],
+            );
+            frame(&ctx, &mut chart, 0.2, vec![button(from, true, ctrl)]);
+            frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(to)]);
+            frame(
+                &ctx,
+                &mut chart,
+                0.4,
+                vec![Event::PointerMoved(to + vec2(-1.0, 0.0))],
+            );
+            let selected: Vec<_> = chart.drawings().selected_ids().collect();
+            assert_eq!(
+                selected,
+                vec![7],
+                "precondition: the preview selects the line"
+            );
+            if during_drag {
+                let t =
+                    chrono::TimeZone::timestamp_opt(&chrono::Utc, 1_700_000_000 + 100 * 86_400, 0)
+                        .unwrap();
+                chart.update(
+                    crate::widget::SeriesId::MAIN,
+                    crate::model::Bar::new(t, 10.0, 20.0, 10.0, 20.0, 1.0),
+                );
+                frame(&ctx, &mut chart, 0.45, vec![Event::PointerMoved(to)]);
+                assert!(
+                    chart.drawings().is_selected(7),
+                    "the moving preview retains the line"
+                );
+            }
+            let index = if during_drag { 101 } else { 100 };
+            let t =
+                chrono::TimeZone::timestamp_opt(&chrono::Utc, 1_700_000_000 + index * 86_400, 0)
+                    .unwrap();
+            chart.update(
+                crate::widget::SeriesId::MAIN,
+                crate::model::Bar::new(t, 10.0, 20.0, 10.0, 20.0, 1.0),
+            );
+            frame(
+                &ctx,
+                &mut chart,
+                0.5,
+                vec![button(to + vec2(-1.0, 0.0), false, ctrl)],
+            );
+            let moved = chart.drawings().drawings[0].points.clone();
+            assert_ne!(moved, line, "precondition: the live bar moved the line");
+            let area = Rect::from_two_pos(from, to + vec2(-1.0, 0.0));
+            assert!(
+                moved.iter().all(|point| area.contains(*point)),
+                "precondition: the current line remains inside the area"
+            );
+            assert_eq!(
+                chart.measured_axis_width, width,
+                "precondition: the pane kept its width"
+            );
+            let selected: Vec<_> = chart.drawings().selected_ids().collect();
+            assert_eq!(
+                selected,
+                vec![7],
+                "the line inside the released rectangle stays selected"
+            );
+        }
+    }
 }
