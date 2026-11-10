@@ -2803,6 +2803,48 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
 #[test]
 fn series_scales_fit_visible_members_and_reserve_their_axes() {
     let ctx = egui::Context::default();
+    // Gradient fills keep their scale contribution when their plot strokes are hidden.
+    #[cfg(feature = "studies")]
+    for secondary in [false, true] {
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            let mut chart = crate::widget::test_frames::chart(&[10.0; 2], &[20.0; 2]);
+            let id = chart.add_indicator(Box::new(crate::studies::StochasticMomentumIndex::new(
+                1, 1, 1, 1,
+            )));
+            if !secondary {
+                assert!(chart.move_series_to_pane(id, PaneId::MAIN));
+            }
+            let pane = chart.series_pane(id).unwrap();
+            assert!(
+                chart.set_indicator_scale(
+                    id,
+                    crate::studies::StudyScale::Shared(SeriesScale::Right)
+                )
+            );
+            let study = chart.indicator_mut(id).unwrap();
+            let mut settings = study.settings();
+            for plot in &mut settings.plots {
+                plot.visible = false;
+            }
+            for level in &mut settings.levels {
+                level.visible = false;
+            }
+            settings.fill_between_levels = false;
+            study.apply_settings(&[], settings).unwrap();
+            let host = chart.add_series(SeriesOptions::default());
+            chart.set_data(host, bars(&[10.0, 20.0]));
+            assert!(chart.move_series_to_pane(host, pane));
+            chart
+                .pane_price_scale_mut(pane, SeriesScale::Right)
+                .options_mut()
+                .mode = mode;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            let top = map.transform().to_price(map.range().max);
+            assert!(top >= 100.0, "secondary={secondary} {mode:?}: {top}");
+        }
+    }
     for key in [SeriesScale::Right, SeriesScale::Separate(2)] {
         let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
         assert!(chart.set_series_scale(SeriesId::MAIN, key));
