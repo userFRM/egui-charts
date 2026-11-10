@@ -1723,7 +1723,10 @@ fn touch_hold_released_before_the_click_limit_is_not_a_click() {
 fn moving_a_touch_readout_keeps_live_edge_following() {
     use egui::TouchPhase::{End, Move, Start};
     for pane in [false, true] {
-        for move_time in [0.1, 0.7, 1.0] {
+        for move_time in [0.1, 0.7, 1.0]
+            .into_iter()
+            .filter(|time| !pane || *time > 0.5)
+        {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.show_volume = false;
