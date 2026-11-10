@@ -375,10 +375,22 @@ impl Svg {
                 let family = match &format.font_id.family {
                     egui::FontFamily::Proportional => "sans-serif".to_owned(),
                     egui::FontFamily::Monospace => "monospace".to_owned(),
-                    egui::FontFamily::Name(name) => format!(
-                        "'{}', sans-serif",
-                        name.replace('\\', "\\\\").replace('\'', "\\'")
-                    ),
+                    egui::FontFamily::Name(name) => {
+                        let mut family = String::from("'");
+                        for ch in name.chars() {
+                            if ch.is_control() || matches!(ch, '\u{fffe}' | '\u{ffff}') {
+                                // CSS escapes preserve whitespace and keep forbidden XML characters out.
+                                let _ = write!(family, "\\{:x} ", ch as u32);
+                            } else {
+                                if matches!(ch, '\\' | '\'') {
+                                    family.push('\\');
+                                }
+                                family.push(ch);
+                            }
+                        }
+                        family.push_str("', sans-serif");
+                        family
+                    }
                 };
                 let x = origin.x + glyph.pos.x;
                 let y = origin.y + glyph.pos.y;

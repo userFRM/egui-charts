@@ -1136,55 +1136,62 @@ mod tests {
         use crate::widget::{ChartLayoutMode, SavedLayout, test_frames};
         use egui::FontFamily;
 
-        let ctx = egui::Context::default();
-        let name = r#"R&D "Mono" <x> it's \ here"#;
-        let family = FontFamily::Name(name.into());
-        let control = FontFamily::Name("Host Mono".into());
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.families.insert(
-            family.clone(),
-            fonts.families[&FontFamily::Monospace].clone(),
-        );
-        fonts
-            .families
-            .insert(control.clone(), fonts.families[&family].clone());
-        ctx.set_fonts(fonts);
-        let mut chart = test_frames::chart(&[100.0], &[110.0]);
-        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
-        let options = ImageExportOptions {
-            size: [480, 320],
-            include_title: false,
-            include_timestamp: false,
-            include_watermark: false,
-            ..Default::default()
-        };
-        chart.config_mut().axis_font_family = family.clone();
-        let json = SavedLayout {
-            mode: ChartLayoutMode::Single,
-            charts: vec![chart.snapshot().unwrap()],
-        }
-        .to_json()
-        .unwrap();
-        let saved = SavedLayout::from_json(&json).unwrap();
-        chart.config_mut().axis_font_family = FontFamily::Proportional;
-        chart.restore(&saved.charts[0]).unwrap();
-        assert_eq!(chart.config().axis_font_family, family);
-        test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+        for (name, escaped) in [
+            (
+                r#"R&D "Mono" <x> it's \ here"#,
+                r#"R&amp;D &quot;Mono&quot; &lt;x&gt; it\'s \\ here"#,
+            ),
+            ("Line\nfeed\rreturn\ttab", r"Line\a feed\d return\9 tab"),
+            ("Control\0\u{1}\u{b}\u{c}\u{1f}", r"Control\0 \1 \b \c \1f "),
+            ("Unicode\u{fffe}\u{ffff}", r"Unicode\fffe \ffff "),
+        ] {
+            let ctx = egui::Context::default();
+            let family = FontFamily::Name(name.into());
+            let control = FontFamily::Name("Host Mono".into());
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.families.insert(
+                family.clone(),
+                fonts.families[&FontFamily::Monospace].clone(),
+            );
+            fonts
+                .families
+                .insert(control.clone(), fonts.families[&family].clone());
+            ctx.set_fonts(fonts);
+            let mut chart = test_frames::chart(&[100.0], &[110.0]);
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let options = ImageExportOptions {
+                size: [480, 320],
+                include_title: false,
+                include_timestamp: false,
+                include_watermark: false,
+                ..Default::default()
+            };
+            chart.config_mut().axis_font_family = family.clone();
+            let json = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+            }
+            .to_json()
+            .unwrap();
+            let saved = SavedLayout::from_json(&json).unwrap();
+            chart.config_mut().axis_font_family = FontFamily::Proportional;
+            chart.restore(&saved.charts[0]).unwrap();
+            assert_eq!(chart.config().axis_font_family, family);
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
 
-        chart.config_mut().axis_font_family = control;
-        let text_count = chart
-            .export_svg(&ctx, &options)
-            .unwrap()
-            .matches("<text ")
-            .count();
-        assert!(text_count > 0);
-        chart.config_mut().axis_font_family = family;
-        let svg = chart.export_svg(&ctx, &options).unwrap();
-        resvg::usvg::Tree::from_str(&svg, &Default::default()).unwrap();
-        assert!(svg.contains(
-            r#"font-family="'R&amp;D &quot;Mono&quot; &lt;x&gt; it\'s \\ here', sans-serif""#
-        ));
-        assert_eq!(svg.matches("<text ").count(), text_count);
+            chart.config_mut().axis_font_family = control;
+            let text_count = chart
+                .export_svg(&ctx, &options)
+                .unwrap()
+                .matches("<text ")
+                .count();
+            assert!(text_count > 0);
+            chart.config_mut().axis_font_family = family;
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            resvg::usvg::Tree::from_str(&svg, &Default::default()).unwrap();
+            assert!(svg.contains(&format!("font-family=\"'{escaped}', sans-serif\"")));
+            assert_eq!(svg.matches("<text ").count(), text_count);
+        }
     }
 
     #[test]
