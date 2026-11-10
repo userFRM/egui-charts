@@ -101,7 +101,8 @@ impl Chart {
     /// Between bars time is interpolated; outside them the known timeframe duration or most
     /// common positive spacing among the outermost 16 bars is extended (shorter spacing breaks
     /// ties, one second if none), retaining repeated-edge ranks. Known month and year intervals
-    /// step by calendar months in the display time zone. Empty charts export retained
+    /// step by calendar months in the display time zone. Numeric and custom axes use key
+    /// spacing regardless of the chart timeframe. Empty charts export retained
     /// anchors; an index with no loaded mapping returns an error rather than clamping or
     /// inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
@@ -246,7 +247,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
-    fn whitespace_anchors_keep_their_slots_and_axis_dates() {
+    fn custom_key_drawing_anchors_ignore_the_timeframe() {
         use crate::model::Timeframe;
         use chrono::Duration;
 
@@ -510,6 +511,11 @@ mod tests {
                 }
             }
             chart.update(SeriesId::MAIN, bar(next));
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index,
+                "custom={custom}, {timeframe:?}, before save/load"
+            );
             assert_eq!(
                 chart.drawing_points(7).unwrap()[1].0,
                 expected_right,

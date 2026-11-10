@@ -653,7 +653,7 @@ mod tests {
     /// at minute 2 completes the bars of minutes 0 and 1; on a custom axis, cutoff key 3
     /// admits keys 0, 1 and 2 regardless of the displayed calendar interval.
     #[test]
-    fn undoing_a_series_removal_across_replay_keeps_its_history_and_the_cutoff() {
+    fn custom_key_replay_cutoff_ignores_the_timeframe() {
         let scale = Arc::new(crate::scales::CustomHorizontalScale::new(0..6_u8, |key| {
             key.to_string()
         }));
