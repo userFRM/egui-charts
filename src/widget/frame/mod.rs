@@ -689,15 +689,22 @@ impl Chart {
                 || self.state.data().is_empty(),
         );
         let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
+        let mut readout_flags = egui::response::Flags::empty();
         if self.chart_options.tooltip.on_long_press
             && self.chart_options.tooltip.enabled
             && touch_readout.touch_input
             && !is_drawing_interaction
             && !eraser_mode
         {
-            // The readout owns a touch hold, including when its delay differs from egui's.
-            response.flags.remove(egui::response::Flags::LONG_TOUCHED);
-            shown.flags.remove(egui::response::Flags::LONG_TOUCHED);
+            // A contact that activated the readout owns its release as well as its moves.
+            readout_flags |= egui::response::Flags::LONG_TOUCHED;
+            if touch_readout.owns_gesture {
+                readout_flags |= egui::response::Flags::CLICKED
+                    | egui::response::Flags::DRAGGED
+                    | egui::response::Flags::DRAG_STARTED;
+            }
+            response.flags.remove(readout_flags);
+            shown.flags.remove(readout_flags);
         }
         if navigation_interaction || realtime_interaction || axis_interaction {
             response = ui.interact(
@@ -711,6 +718,7 @@ impl Chart {
         // The visible pane drives time navigation even while the price pane has no height.
         let mut time_response =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
+        time_response.flags.remove(readout_flags);
         // Handle tracking mode
         self.handle_tracking_mode(ui, &time_response);
 

@@ -945,6 +945,13 @@ impl Chart {
                         pane_response
                             .flags
                             .remove(egui::response::Flags::LONG_TOUCHED);
+                        if touch_readout.owns_gesture {
+                            pane_response.flags.remove(
+                                egui::response::Flags::CLICKED
+                                    | egui::response::Flags::DRAGGED
+                                    | egui::response::Flags::DRAG_STARTED,
+                            );
+                        }
                     }
 
                     // A click on the legend's close "x" removes this study or series.

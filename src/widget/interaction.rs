@@ -24,6 +24,7 @@ pub(super) struct TouchCrosshair {
     contact: Option<TouchContact>,
     pub(super) position: Option<Pos2>,
     pub(super) touch_input: bool,
+    pub(super) owns_gesture: bool,
 }
 
 pub(super) fn touch_crosshair(ui: &Ui, id: Id) -> TouchCrosshair {
@@ -47,6 +48,10 @@ impl Chart {
         let options = &self.chart_options.tooltip;
         let mut state = touch_crosshair(ui, id);
         let was_active = state.position.is_some();
+        let owned_gesture = state
+            .contact
+            .as_ref()
+            .is_some_and(|contact| contact.tracking);
         let pointer_in_plot = ui.rect_contains_pointer(plot);
         let mut repaint_after = None;
         let slop = ui
@@ -170,6 +175,11 @@ impl Chart {
         if let Some(delay) = repaint_after {
             ui.ctx().request_repaint_after(delay);
         }
+        state.owns_gesture = owned_gesture
+            || state
+                .contact
+                .as_ref()
+                .is_some_and(|contact| contact.tracking);
         let owns_drag = state.touch_input
             && (was_active || state.position.is_some() || state.contact.is_some());
         if owns_drag {
