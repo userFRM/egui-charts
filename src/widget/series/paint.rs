@@ -44,8 +44,10 @@ impl Chart {
             item.bars.partition_point(|bar| bar.time < time)
         };
         let tolerance = item.options.style.hit_tolerance;
-        let column_half_width =
-            self.state.time_scale().bar_spacing() * self.config.candle_width / 2.0;
+        let column_half_width = self.state.time_scale().bar_spacing()
+            * self.series_slot_gap(&item.bars) as f32
+            * self.config.candle_width
+            / 2.0;
         let near = at.saturating_sub(1)..(at + 2).min(item.bars.len());
         let mut range = near.clone();
         if columns {
@@ -190,7 +192,9 @@ impl Chart {
             },
             &rendering::ChartTypeParams::new(
                 rendering::BarDimensions::new(
-                    self.state.time_scale().bar_spacing() * self.config.candle_width,
+                    self.state.time_scale().bar_spacing()
+                        * self.series_slot_gap(&item.bars) as f32
+                        * self.config.candle_width,
                     self.config.wick_width,
                 ),
                 rendering::VolumeSettings::new(

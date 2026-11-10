@@ -19,7 +19,7 @@ pub struct ChartMapping {
     pub numeric_positions: Option<crate::model::NumericPositions>,
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Points per ordinal slot, or per mean numeric key gap.
+    /// Points per spacing unit: one custom rank, otherwise an ordinal slot or mean key gap.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
@@ -33,6 +33,17 @@ pub struct ChartMapping {
 }
 
 impl ChartMapping {
+    /// Automatic bar widths share the closest numeric key slots without changing coordinates.
+    pub(crate) fn bar_spacing_for_width(&self) -> f32 {
+        self.numeric_positions
+            .as_ref()
+            .map_or(self.bar_spacing, |positions| {
+                let right = self.base_idx as f64 + self.right_offset + 0.5;
+                let left = right - f64::from(self.rect.width()) / f64::from(self.bar_spacing);
+                self.bar_spacing * positions.min_gap(left, right) as f32
+            })
+    }
+
     /// Create a new ChartMapping with all parameters.
     pub fn new(
         rect: Rect,
