@@ -3137,7 +3137,8 @@ impl Chart {
                         background: *background,
                     })
                     .collect();
-                legend.formatters = self.value_formatters();
+                let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
+                legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.instrument = self.instrument();
                 legend.badge = self.legend_badge.clone();
@@ -3549,7 +3550,10 @@ impl Chart {
                             .map(|(_, row)| row)
                             .collect::<Vec<_>>(),
                         self.instrument().or(heading.as_ref()),
-                        self.value_formatters(),
+                        self.value_formatters(
+                            self.series_price_formatter(super::SeriesId::MAIN)
+                                .as_deref(),
+                        ),
                     );
                 }
             }

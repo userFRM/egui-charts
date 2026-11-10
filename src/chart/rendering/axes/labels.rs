@@ -573,6 +573,129 @@ mod tests {
     use crate::widget::Chart;
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{DateTime, TimeZone, Utc};
+
+    #[test]
+    fn display_format_keeps_thousands_grouping_and_change_sign() {
+        use crate::model::{Instrument, SeriesDisplayFormat, SeriesFormat};
+        use crate::scales::CustomPriceFormatter;
+        use crate::widget::{SeriesId, SeriesOptions};
+        use std::sync::Arc;
+
+        for (kind, separator, host, close, change) in [
+            (
+                SeriesFormat::Price,
+                Some(','),
+                false,
+                "1,234,568.14",
+                "+0.25",
+            ),
+            (
+                SeriesFormat::Price,
+                Some(' '),
+                false,
+                "1 234 568.14",
+                "+0.25",
+            ),
+            (SeriesFormat::Price, None, false, "1234568.14", "+0.25"),
+            (
+                SeriesFormat::Percentage,
+                Some(','),
+                false,
+                "1,234,568.14%",
+                "+0.25%",
+            ),
+            (
+                SeriesFormat::Price,
+                Some(','),
+                true,
+                "host 1234568.14",
+                "host 0.25",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[1_234_500.0], &[1_234_567.89, 1_234_568.14]);
+            chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
+            chart.config_mut().show_volume = false;
+            chart.config_mut().thousands_sep = separator;
+            chart
+                .series_style_mut(SeriesId::MAIN)
+                .unwrap()
+                .display_format = Some(SeriesDisplayFormat {
+                kind,
+                ..Default::default()
+            });
+            if host {
+                chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("host {value:.2}")
+                }))));
+            }
+            let id = chart.add_series(SeriesOptions {
+                name: "Peer".into(),
+                ..Default::default()
+            });
+            chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+            chart.series_style_mut(id).unwrap().display_format =
+                chart.series_style(SeriesId::MAIN).unwrap().display_format;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert!(texts.contains(&close), "tag: {texts:?}");
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text.contains(&format!("C {close}"))),
+                "legend close: {texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text.starts_with(&format!("{change} ("))),
+                "legend change: {texts:?}"
+            );
+            assert!(
+                texts.iter().any(|text| text == &format!("Peer  {close}")),
+                "added legend: {texts:?}"
+            );
+            for id in [SeriesId::MAIN, id] {
+                assert_eq!(
+                    chart.format_series_price(id, 1_234_568.14).as_deref(),
+                    Some(close)
+                );
+            }
+            chart.chart_options.tooltip.on_long_press = false;
+            let plot = chart.get_rendered_price_rect();
+            let pointer = egui::Pos2::new(chart.get_chart_mapping().idx_to_x(99), plot.center().y);
+            let hovered = shapes(
+                &ctx,
+                &mut chart,
+                0.2,
+                vec![egui::Event::PointerMoved(pointer)],
+            );
+            assert!(
+                hovered.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.galley.text() == format!("{change} (+0.00%)")
+                        && text.pos.y > plot.top() + 50.0
+                )),
+                "tooltip change"
+            );
+            #[cfg(feature = "ui")]
+            {
+                let data =
+                    crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(&chart);
+                assert_eq!(data.formatted_prices.as_ref().unwrap()[3], close);
+                assert_eq!(
+                    data.formatted_change.as_deref(),
+                    Some(format!("{change} (+0.00%)").as_str())
+                );
+            }
+        }
+    }
     use egui::{Context, Event, Pos2, Rect, Shape};
 
     #[test]
