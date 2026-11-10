@@ -15,6 +15,19 @@ impl Chart {
 
     /// Resolves the shared crosshair position without changing the stored time slots.
     pub(super) fn crosshair_position(&self, mut pos: Pos2, coords: &ChartMapping) -> Option<Pos2> {
+        let (time, index) = self.pointer_time(pos)?;
+        if time.is_some() {
+            pos.x = coords.index_to_x(index);
+        }
+        Some(pos)
+    }
+
+    /// Finds a main-slot candidate before comparing independently keyed series points.
+    pub(super) fn main_crosshair_position(
+        &self,
+        mut pos: Pos2,
+        coords: &ChartMapping,
+    ) -> Option<Pos2> {
         let options = &self.chart_options.time_scale;
         if !options.ignore_whitespace_indices && !options.ignore_hidden_indices {
             return Some(pos);

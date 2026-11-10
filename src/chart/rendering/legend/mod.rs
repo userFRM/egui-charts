@@ -406,7 +406,7 @@ impl<'a> Legend<'a> {
                         self.thousands_sep,
                     )
                 },
-                |formatter| formatter.format(change),
+                |formatter| formatter.format_change(change),
             );
             let percent = self
                 .formatters

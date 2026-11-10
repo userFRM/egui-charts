@@ -347,10 +347,13 @@ impl Drawing {
 
     /// Entry, target and stop for the price axis, including the mirrored stop of older drawings.
     pub(crate) fn position_price_tags(&self, entry_color: Color32) -> Vec<(f64, Color32)> {
-        if !matches!(
-            self.tool_type,
-            crate::drawings::DrawingToolType::LongPos | crate::drawings::DrawingToolType::ShortPos
-        ) {
+        if !self.price_axis_label
+            || !matches!(
+                self.tool_type,
+                crate::drawings::DrawingToolType::LongPos
+                    | crate::drawings::DrawingToolType::ShortPos
+            )
+        {
             return Vec::new();
         }
         let [entry, target, rest @ ..] = self.chart_points.as_slice() else {
@@ -527,6 +530,7 @@ mod tests {
                 (PositionSize::Quantity(1e20), 0.01, "Qty: 1e20", "P&L:"),
                 (PositionSize::Quantity(1e-25), 1e-27, "Qty: 1e-25", "P&L:"),
             ] {
+                assert_eq!(Drawing::axis_labels_of(tool), (true, false));
                 let mut drawing = Drawing::new(1, tool);
                 drawing.position_target_color = Some([40, 100, 220, 255]);
                 drawing.position_stop_color = Some([220, 140, 40, 255]);
@@ -772,16 +776,18 @@ mod tests {
                         }
                     }
                     crate::localization::clear_translator(&ctx);
-                    // Hidden by the visibility flag, then by the timeframe filter alone.
-                    for (visible, timeframes) in [
-                        (false, crate::drawings::TimeframeVisibility::all()),
+                    for (visible, price_labels, timeframes) in [
+                        (false, true, crate::drawings::TimeframeVisibility::all()),
+                        (true, false, crate::drawings::TimeframeVisibility::all()),
                         (
+                            true,
                             true,
                             crate::drawings::TimeframeVisibility::specific(&["1h"]),
                         ),
                     ] {
                         let drawing = &mut chart.drawings_mut().drawings[0];
                         drawing.visible = visible;
+                        drawing.price_axis_label = price_labels;
                         drawing.timeframe_visibility = timeframes;
                         let output = render(&mut chart);
                         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
