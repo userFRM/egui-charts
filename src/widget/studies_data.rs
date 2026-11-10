@@ -23,6 +23,7 @@ struct Series {
     instrument: Option<Instrument>,
     clock: BarClock,
     error: Option<FeedError>,
+    stream_error: Option<FeedError>,
     stream: Option<Stream>,
     from_ticks: BTreeMap<chrono::DateTime<chrono::Utc>, Origin>,
 }
@@ -142,6 +143,7 @@ impl StudyDataCache {
                     instrument: series.instrument.clone(),
                     clock: series.clock.clone(),
                     error: series.error.clone(),
+                    stream_error: series.stream_error.clone(),
                     stream: None,
                     from_ticks: series.from_ticks.clone(),
                 })
@@ -259,6 +261,7 @@ impl Chart {
             instrument,
             clock,
             error: None,
+            stream_error: None,
             stream: None,
             from_ticks: BTreeMap::new(),
         });
@@ -267,15 +270,16 @@ impl Chart {
 
     /// The last error for a requested study history. Recoverable resolve and page failures retry
     /// with exponential backoff, respecting rate limits; success clears the error. An unavailable
-    /// source leaves gaps.
+    /// source leaves gaps. A live stream error does not stop history paging and clears on the
+    /// next stream update or subscription. A history error takes precedence over a stream error.
     pub fn study_data_error(&self, request: &StudyDataRequest) -> Option<&FeedError> {
         let request = resolved(request, self.symbol(), self.timeframe());
-        self.study_data
+        let series = self
+            .study_data
             .series
             .iter()
-            .find(|series| series.request == request)?
-            .error
-            .as_ref()
+            .find(|series| series.request == request)?;
+        series.error.as_ref().or(series.stream_error.as_ref())
     }
 
     pub(super) fn invalidate_study_data(&mut self) {
@@ -381,6 +385,7 @@ impl Chart {
                     instrument: None,
                     clock: clock(request, None, self.extended_hours()),
                     error: None,
+                    stream_error: None,
                     from_ticks: BTreeMap::new(),
                     stream: Some(Stream {
                         feed: Arc::clone(feed),
@@ -520,6 +525,7 @@ impl Chart {
                     series.bars.clear();
                     series.from_ticks.clear();
                     series.error = None;
+                    series.stream_error = None;
                     stream.pending = false;
                     stream.history = None;
                     stream.retry_at = None;
@@ -528,6 +534,7 @@ impl Chart {
                     changes.note(&series.request, true);
                 }
                 if !updates.bars.is_empty() {
+                    series.stream_error = None;
                     let len = series.bars.len();
                     let merged = merge(
                         &mut series.bars,
@@ -542,13 +549,14 @@ impl Chart {
                     }
                 }
                 if updates.error.is_some() {
-                    series.error = updates.error;
+                    series.stream_error = updates.error;
                 }
             }
             if stream.subscription.is_none()
                 && series.instrument.is_some()
                 && series.error.is_none()
             {
+                series.stream_error = None;
                 let tf = series.request.timeframe.unwrap();
                 let sink = stream.inbox.subscribe(
                     series.request.symbol.clone(),
@@ -1074,9 +1082,13 @@ pub(super) mod tests {
                     feed.answer(metric, Ok(HistoryPage::new(newest, false))).0,
                     None
                 );
+                let live_error = FeedError::Network("stream dropped".into());
+                feed.sinks.lock().unwrap()[0].report_error(live_error.clone());
                 pump(&mut chart, now + 0.25);
+                assert_eq!(chart.study_data_error(&request), Some(&live_error));
                 let failed = feed.answer(metric, Err(error.clone()));
                 pump(&mut chart, now + 0.5);
+                assert_eq!(chart.study_data_error(&request), Some(&error));
                 feed.sinks.lock().unwrap()[0].push_bar(Bar::new(
                     DateTime::UNIX_EPOCH + Duration::hours(1),
                     55.0,
@@ -1086,6 +1098,8 @@ pub(super) mod tests {
                     1.0,
                 ));
                 pump(&mut chart, now + 0.5 + delay - 0.01);
+                assert_eq!(chart.study_data_error(&request), Some(&error));
+                assert!(chart.study_data.series[0].stream_error.is_none());
                 assert_eq!(feed.pending(metric), 0);
                 pump(&mut chart, now + 0.5 + delay);
                 assert_eq!(feed.pending(metric), 1);
@@ -1121,6 +1135,12 @@ pub(super) mod tests {
                 assert_eq!(chart.study_data_error(&request), None);
                 assert_eq!(chart.study_data.series[0].bars[0].close, 99.0);
                 assert_eq!(feed.pending(metric), 0);
+                feed.sinks.lock().unwrap()[0].report_error(live_error.clone());
+                pump(&mut chart, now + 14.0);
+                assert_eq!(chart.study_data_error(&request), Some(&live_error));
+                chart.study_data.pause();
+                pump(&mut chart, now + 15.0);
+                assert_eq!(chart.study_data_error(&request), None);
             }
         }
     }
@@ -1951,6 +1971,23 @@ pub(super) mod tests {
                     .all(|(got, want)| got.is_some_and(|got| (got - want).abs() < 1e-9))),
             "(study, [P, R1, S1], pages) {observed:?}, want {want:?}"
         );
+    }
+
+    /// An error on the daily bars' live stream leaves their history paging as it was: a feed
+    /// that serves daily history but reports its daily stream failing still fills 1Y.
+    #[test]
+    fn live_error_does_not_end_daily_history_paging() {
+        let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
+        let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+        let error = FeedError::Network("stream dropped".into());
+        let pages = page_daily(&mut chart, &daily, 250, Some(error.clone()));
+        let request = chart.study_data_requests().pop().unwrap();
+        assert_eq!(chart.study_data_error(&request), Some(&error));
+        let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
+        let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
+        // Every period starts from a close of 50: 100 * (100 - 50) / 50 = 100; two pages reach
+        // the 1Y target, 2023-03-15, as without the error.
+        assert_eq!((changes, pages), (vec![Some(100.0); 6], 2));
     }
 
     /// Performance on a price-based chart type of one-minute bars pages its daily bars back to

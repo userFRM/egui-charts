@@ -76,6 +76,9 @@ fn supply_snapshots(
 
 A response replaces the prior snapshot. The chart sorts, deduplicates and validates it through
 its shared study-data path; a connected [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) loads and subscribes automatically.
+A live stream failure is available through `Chart::study_data_error` while older study history
+keeps paging. A new live bar, a stream reset or a renewed subscription clears that stream
+error; an outstanding history error takes precedence and keeps its existing retry policy.
 The fixed range and anchored volume profile drawings add the finer interval that
 [`Instrument::profile_resolutions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.profile_resolutions) suggests for their span to these requests. A connected feed
 loads it back to the first bar of the span. Profiles still estimate volume from those bars;
