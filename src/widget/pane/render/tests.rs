@@ -4,6 +4,60 @@ use crate::ui::context_menu::ChartMenus;
 use crate::widget::test_frames::chart;
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
+#[cfg(feature = "drawings")]
+#[test]
+fn position_tags_in_a_series_pane_follow_its_display_format() {
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::model::{SeriesDisplayFormat, SeriesFormat};
+    use crate::scales::CustomPriceFormatter;
+    use crate::widget::test_frames::{frame, shapes};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use std::sync::Arc;
+
+    for host in [false, true] {
+        let ctx = Context::default();
+        let mut chart = chart(&[90.0], &[110.0]);
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+        chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+            kind: SeriesFormat::Price,
+            precision: 2,
+            min_move: 0.25,
+        });
+        let pane = chart.add_pane();
+        assert!(chart.move_series_to_pane(id, pane));
+        if host {
+            chart.set_series_formatter(
+                id,
+                Some(Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("host {value:.2}")
+                }))),
+            );
+        }
+        let mut drawing = Drawing::new(1, DrawingToolType::LongPos);
+        drawing.chart_points = vec![ChartPoint::new(30.0, 100.1), ChartPoint::new(60.0, 106.0)];
+        drawing.completed = true;
+        drawing.pane = Some(pane.0);
+        chart.drawings_mut().drawings.push(drawing);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.series_price_map(id).unwrap();
+        let plot = chart.get_rendered_price_rect();
+        for (price, expected) in [(100.1, "100.00"), (106.0, "106.00"), (94.2, "94.25")] {
+            let expected = if host {
+                format!("host {price:.2}")
+            } else {
+                expected.into()
+            };
+            assert!(painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.pos.x >= plot.right()
+                    && (text.pos.y + text.galley.size().y / 2.0 - map.price_to_y(price)).abs() < 1.0
+                    && text.galley.text() == expected
+            )), "{expected} position tag");
+        }
+    }
+}
+
 fn pointer(
     ctx: &Context,
     chart: &mut crate::widget::Chart,
