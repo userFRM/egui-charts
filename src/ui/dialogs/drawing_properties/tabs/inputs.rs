@@ -1320,6 +1320,13 @@ mod tests {
         drawing.chart_points = [(2.0, 100.0), (8.0, 200.0), (14.0, 150.0)]
             .map(|(x, y)| ChartPoint::new(x, y))
             .to_vec();
+        // A restored drawing already carries authoritative times for its anchors.
+        for point in &mut drawing.chart_points {
+            let time =
+                chrono::DateTime::from_timestamp(1_700_000_000 + point.bar_idx as i64 * 60, 0)
+                    .unwrap();
+            point.time_anchor = Some((time, point.bar_idx));
+        }
         let original = drawing.fib_config.clone();
         chart.drawings_mut().drawings.push(drawing);
         let mut dialog = DrawingPropertiesDialog::new();
@@ -1334,6 +1341,22 @@ mod tests {
                 .center();
             click(dialog, chart, &ctx, pos);
         };
+        // Previewing an older drawing retains its absent config; confirmation and undo do too.
+        chart.drawings_mut().select(7);
+        chart.drawings_mut().drawings[0].fib_config = None;
+        for tab in [PropertiesTab::Style, PropertiesTab::Text] {
+            dialog.open_for_chart(&chart, DrawingId(7));
+            dialog.active_tab = tab;
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert!(!chart.can_undo());
+            press(&mut dialog, &mut chart, "Ok");
+            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert!(chart.undo());
+            assert!(chart.drawings().drawings[0].fib_config.is_none());
+            assert!(!chart.can_undo());
+        }
+        chart.drawings_mut().drawings[0].fib_config = original.clone();
         for confirm in [false, true] {
             dialog.open_for_chart(&chart, DrawingId(7));
             dialog.active_tab = PropertiesTab::Style;

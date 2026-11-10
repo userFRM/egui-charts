@@ -53,8 +53,8 @@ impl StyleTab {
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
                 if settings.tool_type == DrawingToolType::FibonacciExtension {
-                    let effective = settings.fibonacci_config().into_owned();
-                    let config = settings.fib_config.get_or_insert(effective);
+                    let mut config = settings.fibonacci_config().into_owned();
+                    let original = config.clone();
                     ui.label("");
                     ui.checkbox(
                         &mut config.show_trend,
@@ -64,7 +64,10 @@ impl StyleTab {
                     let label = ui.label(l10n::text(ui.ctx(), "Level width"));
                     ui.label_inputs_by(label.id, |ui| line_width_row(ui, &mut config.level_width));
                     ui.end_row();
-                    super::text::fibonacci_text_controls(ui, config);
+                    super::text::fibonacci_text_controls(ui, &mut config);
+                    if config != original {
+                        settings.fib_config = Some(config);
+                    }
                 }
                 if matches!(
                     settings.tool_type,

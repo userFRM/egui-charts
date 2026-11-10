@@ -70,10 +70,10 @@ impl TextTab {
         if let Some(template) = &mut props.tool_settings
             && template.settings.tool_type == DrawingToolType::FibonacciExtension
         {
-            let effective = template.settings.fibonacci_config().into_owned();
-            let config = template.settings.fib_config.get_or_insert(effective);
+            let mut config = template.settings.fibonacci_config().into_owned();
+            let original = config.clone();
             FormGrid::new("extension_text").show(ui, |ui| {
-                fibonacci_text_controls(ui, config);
+                fibonacci_text_controls(ui, &mut config);
                 for (index, level) in config.levels.iter_mut().enumerate() {
                     let label = ui.label(format!(
                         "{} {} ({})",
@@ -86,6 +86,9 @@ impl TextTab {
                     ui.end_row();
                 }
             });
+            if config != original {
+                template.settings.fib_config = Some(config);
+            }
             return;
         }
 
