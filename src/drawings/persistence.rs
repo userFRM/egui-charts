@@ -2129,41 +2129,41 @@ mod tests {
     #[test]
     fn version_1_profile_drawings_restore_without_a_config() {
         use DrawingToolType as T;
-        for (tool, prices) in [
-            (T::Rect, [100.0, 110.0]),
-            (T::Circle, [100.0, 110.0]),
-            (T::Ellipse, [100.0, 110.0]),
-            (T::Arc, [100.0, 110.0]),
-            (T::Polyline, [100.0, 110.0]),
-            (T::PriceRange, [100.0, 110.0]),
-            (T::Pitchfork, [100.0, 110.0]),
-            (T::SchiffPitchfork, [100.0, 110.0]),
-            (T::ModifiedSchiffPitchfork, [100.0, 110.0]),
-            (T::InsidePitchfork, [100.0, 110.0]),
-            (T::Pitchfan, [100.0, 110.0]),
-            (T::FixedRangeVolumeProfile, [100.0, 110.0]),
-            (T::AnchoredVolumeProfile, [100.0, 110.0]),
-            (T::FibonacciRetracement, [100.0, 110.0]),
-            (T::ParallelChannel, [100.0, 110.0]),
-            (T::TextLabel, [100.0, 110.0]),
-            (T::AnchoredText, [100.0, 110.0]),
-            (T::Callout, [100.0, 110.0]),
-            (T::TrendAngle, [100.0, 110.0]),
-            (T::InfoLine, [100.0, 110.0]),
-            (T::Comment, [100.0, 110.0]),
-            (T::DateRange, [100.0, 110.0]),
-            (T::DateAndPriceRange, [100.0, 110.0]),
-            (T::PriceLabel, [100.0, 110.0]),
-            (T::PriceNote, [100.0, 110.0]),
-            (T::Signpost, [100.0, 110.0]),
-            (T::Note, [100.0, 110.0]),
-            (T::AnchoredNote, [100.0, 110.0]),
-            (T::FlagNote, [100.0, 110.0]),
-            (T::FontIcon, [100.0, 110.0]),
-            (T::ArrowMarker, [100.0, 110.0]),
-            (T::Measure, [110.0, 100.0]),
-            (T::Measure, [100.0, 110.0]),
-            (T::Measure, [100.0, 100.0]),
+        for (tool, prices, font) in [
+            (T::Rect, [100.0, 110.0], None),
+            (T::Circle, [100.0, 110.0], None),
+            (T::Ellipse, [100.0, 110.0], None),
+            (T::Arc, [100.0, 110.0], None),
+            (T::Polyline, [100.0, 110.0], None),
+            (T::PriceRange, [100.0, 110.0], Some(11.0)),
+            (T::Pitchfork, [100.0, 110.0], None),
+            (T::SchiffPitchfork, [100.0, 110.0], None),
+            (T::ModifiedSchiffPitchfork, [100.0, 110.0], None),
+            (T::InsidePitchfork, [100.0, 110.0], None),
+            (T::Pitchfan, [100.0, 110.0], None),
+            (T::FixedRangeVolumeProfile, [100.0, 110.0], None),
+            (T::AnchoredVolumeProfile, [100.0, 110.0], None),
+            (T::FibonacciRetracement, [100.0, 110.0], None),
+            (T::ParallelChannel, [100.0, 110.0], None),
+            (T::TextLabel, [100.0, 110.0], Some(14.0)),
+            (T::AnchoredText, [100.0, 110.0], Some(14.0)),
+            (T::Callout, [100.0, 110.0], Some(13.0)),
+            (T::TrendAngle, [100.0, 110.0], Some(13.0)),
+            (T::InfoLine, [100.0, 110.0], Some(10.0)),
+            (T::Comment, [100.0, 110.0], Some(11.0)),
+            (T::DateRange, [100.0, 110.0], Some(11.0)),
+            (T::DateAndPriceRange, [100.0, 110.0], Some(10.0)),
+            (T::PriceLabel, [100.0, 110.0], Some(11.0)),
+            (T::PriceNote, [100.0, 110.0], Some(11.0)),
+            (T::Signpost, [100.0, 110.0], Some(11.0)),
+            (T::Note, [100.0, 110.0], Some(10.0)),
+            (T::AnchoredNote, [100.0, 110.0], Some(11.0)),
+            (T::FlagNote, [100.0, 110.0], Some(10.0)),
+            (T::FontIcon, [100.0, 110.0], Some(24.0)),
+            (T::ArrowMarker, [100.0, 110.0], None),
+            (T::Measure, [110.0, 100.0], Some(11.0)),
+            (T::Measure, [100.0, 110.0], Some(11.0)),
+            (T::Measure, [100.0, 100.0], Some(11.0)),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v1.json")).unwrap();
@@ -2202,23 +2202,6 @@ mod tests {
                 assert!(drawing.pitchfork.is_none(), "{tool:?}");
                 assert!(drawing.volume_profile.is_none(), "{tool:?}");
                 assert_eq!(drawing.line_style, LineStyle::Solid, "{tool:?}");
-                // Fixed rendered sizes in v0.2.0, independent of its constructor defaults.
-                let font = match tool {
-                    T::TextLabel | T::AnchoredText => Some(14.0),
-                    T::Callout | T::TrendAngle => Some(13.0),
-                    T::Measure
-                    | T::PriceRange
-                    | T::DateRange
-                    | T::PriceLabel
-                    | T::PriceNote
-                    | T::Signpost
-                    | T::Comment
-                    | T::AnchoredNote => Some(11.0),
-                    T::InfoLine | T::DateAndPriceRange | T::Note | T::FlagNote => Some(10.0),
-                    // The fixture's width is 3: max(24, min(72, 3 * 8)) = 24.
-                    T::FontIcon => Some(24.0),
-                    _ => None,
-                };
                 if let Some(font) = font {
                     assert_eq!(drawing.font_size, font, "{tool:?}");
                 }
@@ -2322,9 +2305,20 @@ mod tests {
             let want = if version < 7 { old } else { new };
             let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
             assert!(skipped.is_empty(), "{skipped:?}");
-            let (twice, _) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            let want_flags = if version < 7 && old != new {
+                (flags.1, flags.0)
+            } else {
+                flags
+            };
             for (load, loaded) in [(1, &once), (2, &twice)] {
                 let restored = restore(&loaded.drawings[0], 1);
+                assert_eq!(
+                    (restored.extend_left, restored.extend_right),
+                    want_flags,
+                    "{tool:?} {anchors:?} v{version} load {load}"
+                );
                 let (a, b) = restored.trend_line_ends(rect).unwrap();
                 let painted = (near(a, want[0]) && near(b, want[1]))
                     || (near(a, want[1]) && near(b, want[0]));
@@ -2400,6 +2394,18 @@ mod tests {
             (reversed, RIGHT, to_right, to_left),
             (reversed, LEFT, to_left, to_right),
             (reversed, (true, true), across, across),
+            (
+                reversed,
+                (false, false),
+                [(180.0, 300.0), (124.0, 280.0)],
+                [(180.0, 300.0), (124.0, 280.0)],
+            ),
+            (
+                bottom_up,
+                (false, false),
+                [(140.0, 300.0), (140.0, 280.0)],
+                [(140.0, 300.0), (140.0, 280.0)],
+            ),
             (forward, RIGHT, to_right, to_right),
             (forward, LEFT, to_left, to_left),
             (bottom_up, RIGHT, down, up),

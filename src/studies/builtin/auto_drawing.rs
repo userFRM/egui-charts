@@ -929,7 +929,6 @@ mod tests {
         let (reversed, forward) = ([(9.0, 118.0), (3.0, 113.0)], [(3.0, 113.0), (9.0, 118.0)]);
         let vertical = [(5.0, 113.0), (5.0, 118.0)];
         let (right, left) = ((false, true), (true, false));
-        let mut wrong = Vec::new();
         // Counted in bars 0..2 and in bars 20..30: for the lines, then for the rectangle.
         for (anchors, flags, lines, sides) in [
             (reversed, right, (true, false), (false, true)),
@@ -956,21 +955,18 @@ mod tests {
                 drawing.completed = true;
                 let mut study = AutoDrawing::new(AutoDrawingKind::TrendLine, 5.0, 3);
                 study.drawings = vec![drawing];
-                let counted = |bars: std::ops::Range<usize>| {
-                    crate::studies::plots::drawing_prices(&study, bars)
-                        .next()
-                        .is_some()
-                };
                 let (before, after) = if tool == T::Rect { sides } else { lines };
-                let got = (counted(0..2), counted(4..6), counted(20..30));
-                if got != (before, true, after) {
-                    wrong.push(format!(
-                        "{tool:?} {anchors:?} {flags:?}: counted {got:?}, want {:?}",
-                        (before, true, after)
-                    ));
+                for (bars, visible) in [(0..2, before), (4..6, true), (20..30, after)] {
+                    let prices: Vec<_> =
+                        crate::studies::plots::drawing_prices(&study, bars.clone()).collect();
+                    let want = if visible {
+                        anchors.map(|(_, price)| price).to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(prices, want, "{tool:?} {anchors:?} {flags:?} {bars:?}");
                 }
             }
         }
-        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 }
