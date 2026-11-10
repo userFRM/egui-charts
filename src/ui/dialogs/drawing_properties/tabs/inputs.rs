@@ -1355,6 +1355,7 @@ mod tests {
             for tab in [PropertiesTab::Style, PropertiesTab::Text] {
                 dialog.open_for_chart(&chart, DrawingId(7));
                 dialog.active_tab = tab;
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
                 let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert!(chart.drawings().drawings[0].fib_config.is_none());
                 let pos = texts
