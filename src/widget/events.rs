@@ -240,8 +240,9 @@ pub enum ChartEvent {
         /// Location of the second click.
         position: ChartPointer,
     },
-    /// A primary click on a bar mark with a host ID. Of overlapping marks the one painted on
-    /// top is reported, and the click selects nothing else.
+    /// A primary click on the top annotation when it is a bar mark with a host ID.
+    /// Uses the same target as `Click`; a covered or unnamed mark emits no notification,
+    /// and clicking an uncovered mark selects nothing else.
     MarkClick {
         /// The [`Marker::id`](crate::model::Marker::id) the host gave the mark.
         id: String,
@@ -997,7 +998,7 @@ impl Chart {
                     button,
                 });
                 if button == PointerButton::Primary {
-                    self.click_mark(position.pos);
+                    self.click_mark(&position);
                     // The second click of a double click edits the card; the first opened it.
                     #[cfg(feature = "drawings")]
                     if !response.double_clicked() && !response.triple_clicked() {

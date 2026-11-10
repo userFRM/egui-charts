@@ -2,6 +2,7 @@
 //! together.
 
 use super::ChartLayout;
+use crate::chart::overlays::BubbleGrouping;
 use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType};
 use crate::scales::instrument_price_precision;
@@ -24,7 +25,11 @@ pub enum LayoutCopy {
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
     /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
-    /// the precision of its instrument unless the source was given another one.
+    /// its bubble grouping when the source uses a price step. It keeps the precision of its
+    /// instrument unless the source was given another one. A chart without a feed has no order
+    /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
+    /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
+    /// locks that view.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -45,9 +50,10 @@ pub enum LayoutCopyIssueKind {
     /// The chart holds no bars yet. It takes the copy, and its studies draw once bars arrive.
     NoHistory,
     /// The chart's bars, or the elements of its price-based chart type, are too few for this study
-    /// to draw, though it draws on the source. A study waiting for a history the chart asks for
-    /// once it has the study, and a price-based chart that has not painted yet, are not reported.
-    /// The chart takes the copy.
+    /// to draw, though it draws on the source, on its elements for a price-based chart type. A
+    /// price-based source that has not painted since its studies changed draws none yet. A study
+    /// waiting for a history the chart asks for once it has the study, and a price-based chart
+    /// that has not painted yet, are not reported. The chart takes the copy.
     ShortHistory(String),
     /// The chart is skipped: this study reads another study's output, which a copy of it alone
     /// would not have. Copy the whole set with [`LayoutCopy::Studies`] instead.
@@ -112,7 +118,13 @@ impl CopiedStudies {
     /// `None` for a copy of settings, or of a study the chart does not have.
     fn new(source: &Chart, copy: &LayoutCopy) -> Option<Self> {
         let set = source.study_template_set();
-        let draws: Vec<_> = source.indicators().map(|(_, study)| draws(study)).collect();
+        // A price-based chart builds its element results when it paints; until it repaints after
+        // a study change, the held results do not describe its current studies.
+        let rendered = source.rendered_studies().indicators();
+        let current = !source.chart_type().is_time_independent() || !source.element_studies.dirty;
+        let draws: Vec<_> = (0..source.indicators().count())
+            .map(|at| current && rendered.get(at).is_some_and(|study| draws(study.as_ref())))
+            .collect();
         match copy {
             LayoutCopy::Study(id) => {
                 let at = source.indicators().position(|(study, _)| study == *id)?;
@@ -226,9 +238,10 @@ impl CopiedStudies {
 /// Applies the settings of the chart with `from` as its configuration and `from_decimals` as its
 /// instrument's precision to another chart. That chart keeps the parameters of its chart type,
 /// whose sizes and base prices suit its own prices, its own price-to-bar ratio when the settings
-/// lock it, and its quantity unit and order-flow sizes, which suit its own instrument. It takes
-/// the colours of `from` for its candles when the settings describe another style of candles and
-/// so do not hold them.
+/// lock it, its quantity unit and order-flow sizes, and its bubble grouping when the source uses
+/// a price step, which suit its own instrument. It keeps all its order-flow settings when
+/// `from_feed` is false, since a chart without a feed holds none. It takes the colours of `from`
+/// for its candles when the settings describe another style of candles and so do not hold them.
 ///
 /// shortcut: a precision chosen equal to the source instrument's follows each chart's instrument,
 /// as a chart does not keep whether its precision was chosen; keep that choice to tell them apart.
@@ -236,6 +249,7 @@ fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
     from_decimals: Option<u8>,
+    from_feed: bool,
     chart: &mut Chart,
 ) {
     let mut settings = settings.clone();
@@ -250,16 +264,31 @@ fn apply_to_other_chart(
             chart.set_chart_type_params(own);
         }
     }
-    // Order-flow sizes and the quantity unit are in the source's sizes: each chart keeps its own.
     let own = ChartSettingsState::from_chart(chart).order_flow;
-    let flow = &mut settings.order_flow;
-    flow.heatmap.lower_cutoff = own.heatmap.lower_cutoff;
-    flow.heatmap.full_intensity_size = own.heatmap.full_intensity_size;
-    flow.order_book.quantity_unit = own.order_book.quantity_unit;
-    flow.order_book.tiers = own.order_book.tiers;
-    flow.order_book.filter.min_size = own.order_book.filter.min_size;
-    flow.volume_bubbles.min_size_filter = own.volume_bubbles.min_size_filter;
+    if !from_feed {
+        // A chart without a feed holds no order flow: each chart keeps all of its own.
+        settings.order_flow = own;
+    } else {
+        // Order-flow sizes and the quantity unit are in the source's sizes: each chart keeps its own.
+        let flow = &mut settings.order_flow;
+        flow.heatmap.lower_cutoff = own.heatmap.lower_cutoff;
+        flow.heatmap.full_intensity_size = own.heatmap.full_intensity_size;
+        flow.order_book.quantity_unit = own.order_book.quantity_unit;
+        flow.order_book.tiers = own.order_book.tiers;
+        flow.order_book.filter.min_size = own.order_book.filter.min_size;
+        flow.volume_bubbles.min_size_filter = own.volume_bubbles.min_size_filter;
+        // A price step is in the source's prices too; other groupings reach every chart.
+        if matches!(flow.volume_bubbles.grouping, BubbleGrouping::PriceStep(_)) {
+            flow.volume_bubbles.grouping = own.volume_bubbles.grouping;
+        }
+    }
     let own_ratio = chart.state().price_scale().bar_ratio();
+    // A chart not drawn yet holds the scale's placeholder range, not a view of its own.
+    // shortcut: a chart drawn before its bars changed counts as drawn; track a fit since the last
+    // data change if hidden tabs switch symbols.
+    let unfitted = chart.last_rendered_price_rect.is_negative()
+        && own_ratio.is_none()
+        && !chart.state().price_scale().is_manual();
     if settings.apply_to_chart(chart).is_err() {
         return;
     }
@@ -268,6 +297,10 @@ fn apply_to_other_chart(
         // its own view on its next frame.
         chart.price_scale_mut().set_bar_ratio(own_ratio);
         chart.last_ratio_lock = own_ratio.is_some();
+    }
+    if unfitted {
+        // Its first frame fits its bars, and a lock then locks that view.
+        chart.price_scale_mut().reset();
     }
     if matches!(
         settings.chart_type,
@@ -343,6 +376,7 @@ impl ChartLayout {
         }
         let from_config = from.config().clone();
         let from_decimals = from.instrument().and_then(instrument_price_precision);
+        let from_feed = from.feed_link.is_some();
         let edit = self.edits.start();
         let mut reached = false;
         let count = self.preset_charts(charts);
@@ -360,7 +394,13 @@ impl ChartLayout {
                 // The issues above already refused what would fail here.
                 match (copy, &studies) {
                     (LayoutCopy::Settings(settings), _) => {
-                        apply_to_other_chart(settings, &from_config, from_decimals, chart);
+                        apply_to_other_chart(
+                            settings,
+                            &from_config,
+                            from_decimals,
+                            from_feed,
+                            chart,
+                        );
                     }
                     (_, Some(studies)) => {
                         chart
@@ -742,8 +782,9 @@ mod tests {
         assert_eq!(charts[1].state.price_scale().bar_ratio(), own_lock);
     }
 
-    /// Order-flow sizes and the quantity unit describe the source's instrument: a chart of another
-    /// symbol keeps its own, and takes the rest, such as the heatmap's brightness.
+    /// Order-flow sizes, the quantity unit and a bubble price step describe the source's
+    /// instrument: a chart of another symbol keeps its own, and takes the rest, such as the
+    /// heatmap's brightness and a bubble grouping that holds no price.
     #[test]
     fn settings_copy_keeps_each_symbols_order_flow_sizes() {
         use crate::chart::overlays::{LiquidityHeatmapConfig, OrderBookView, VolumeBubblesConfig};
@@ -780,10 +821,17 @@ mod tests {
             lower_cutoff: 50.0,
             full_intensity_size: Some(1000.0),
         });
+        // A bubble level of 1 in ES prices; BTCUSD groups its own trades by 0.5.
         a.set_volume_bubbles(Some(VolumeBubblesConfig {
             min_size_filter: Some(10.0),
+            grouping: BubbleGrouping::PriceStep(1.0),
             ..VolumeBubblesConfig::default()
         }));
+        let own_step = || VolumeBubblesConfig {
+            grouping: BubbleGrouping::PriceStep(0.5),
+            ..VolumeBubblesConfig::default()
+        };
+        b.set_volume_bubbles(Some(own_step()));
         b.set_order_book_view(OrderBookView {
             quantity_unit: Some("BTC".into()),
             ..OrderBookView::default()
@@ -801,10 +849,49 @@ mod tests {
                 flow.heatmap.lower_cutoff,
                 flow.heatmap.full_intensity_size,
                 flow.volume_bubbles.min_size_filter,
+                flow.volume_bubbles.grouping,
             ),
-            (Some("BTC"), None, 0.0, 0.0, None, None),
+            (
+                Some("BTC"),
+                None,
+                0.0,
+                0.0,
+                None,
+                None,
+                BubbleGrouping::PriceStep(0.5)
+            ),
         );
         assert_eq!(flow.heatmap.brightness, 0.5);
+
+        let no_price = [
+            BubbleGrouping::Automatic,
+            BubbleGrouping::Ungrouped,
+            BubbleGrouping::TimeWindow(Duration::seconds(5)),
+            BubbleGrouping::Executions(5),
+        ];
+        // A source price step preserves every destination grouping, including one without a price.
+        for grouping in no_price {
+            charts[1].set_volume_bubbles(Some(VolumeBubblesConfig {
+                grouping,
+                ..VolumeBubblesConfig::default()
+            }));
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+            assert_eq!(flow.volume_bubbles.grouping, grouping);
+        }
+
+        // A grouping that holds no price reaches every chart.
+        for grouping in no_price {
+            charts[0].set_volume_bubbles(Some(VolumeBubblesConfig {
+                grouping,
+                ..VolumeBubblesConfig::default()
+            }));
+            charts[1].set_volume_bubbles(Some(own_step()));
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(charts[0])));
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+            assert_eq!(flow.volume_bubbles.grouping, grouping);
+        }
     }
 
     /// A study that reads another study's output and needs more bars than a chart has is reported,
@@ -991,5 +1078,192 @@ mod tests {
         assert!(charts[0].redo());
         show(&mut layout, &mut charts);
         assert_eq!([state(charts[0]), state(charts[1])], [applied, applied]);
+    }
+
+    /// A chart without a feed holds no order flow, so settings from it leave the order-flow
+    /// layers and settings of a chart on a feed as they were. A source on a feed with its layers
+    /// off still switches them off on the others.
+    #[test]
+    fn settings_from_a_chart_without_a_feed_keep_the_order_flow_of_others() {
+        use crate::chart::overlays::{LiquidityHeatmapConfig, VolumeBubblesConfig};
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+                reply.send(Ok(crate::data::HistoryPage::new(Vec::new(), true)));
+            }
+        }
+        let build = |symbol: &str| {
+            crate::widget::ChartBuilder::new()
+                .with_feed(std::sync::Arc::new(Feed))
+                .with_symbol(symbol)
+                .with_timeframe(Timeframe::Min1)
+                .build()
+        };
+        // Heatmap, book profile and bubbles shown, at brightness 0.5 and opacity 200.
+        let shown = || {
+            let mut chart = build("ES");
+            chart.set_liquidity_heatmap(true);
+            chart.set_liquidity_heatmap_config(LiquidityHeatmapConfig {
+                brightness: 0.5,
+                ..LiquidityHeatmapConfig::default()
+            });
+            chart.set_order_book_visible(true);
+            chart.set_volume_bubbles(Some(VolumeBubblesConfig {
+                opacity: 200,
+                ..VolumeBubblesConfig::default()
+            }));
+            chart
+        };
+        // All three layers off, at brightness 0.8 and opacity 90.
+        let mut off = build("NQ");
+        off.set_liquidity_heatmap_config(LiquidityHeatmapConfig {
+            brightness: 0.8,
+            ..LiquidityHeatmapConfig::default()
+        });
+        off.set_order_book_visible(false);
+        off.set_volume_bubbles(Some(VolumeBubblesConfig {
+            opacity: 90,
+            ..VolumeBubblesConfig::default()
+        }));
+        off.set_volume_bubbles(None);
+        let factory = IndicatorFactory::new();
+        for (mut source, expected) in [
+            // Host bars, no feed.
+            (chart(50), (true, true, true, 0.5, 200)),
+            (off, (false, false, false, 0.8, 90)),
+        ] {
+            let mut other = shown();
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&source)));
+            let mut charts = [&mut source, &mut other];
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+            let seen = (
+                flow.show_heatmap,
+                flow.show_order_book,
+                flow.show_volume_bubbles,
+                flow.heatmap.brightness,
+                flow.volume_bubbles.opacity,
+            );
+            assert_eq!(seen, expected);
+        }
+    }
+
+    /// A chart that has not painted holds the scale's placeholder range, not a view of its own:
+    /// settings that lock the ratio or keep a manual scale let it fit its bars first. A chart that
+    /// has painted keeps the range it shows.
+    #[test]
+    fn settings_copy_lets_an_unpainted_chart_fit_its_bars() {
+        use crate::widget::test_frames::frame;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for (locked, painted) in [(true, false), (false, false), (false, true)] {
+            let mut a = chart(50);
+            let ctx_a = egui::Context::default();
+            frame(&ctx_a, &mut a, 0.0, vec![]);
+            if locked {
+                let (spacing, height) = (
+                    a.state.time_scale().bar_spacing(),
+                    a.get_rendered_price_rect().height(),
+                );
+                a.state
+                    .price_scale_mut()
+                    .set_bar_ratio_locked(true, spacing, height);
+            } else {
+                // A scale the user dragged.
+                a.state.price_scale_mut().set_range(8.0, 17.0);
+            }
+            // Bars from 4809 to 4816, in a tab shown or not shown yet.
+            let mut b = Chart::new(BarData::from_bars(
+                (0..50)
+                    .map(|i| {
+                        let close = 4810.0 + (i % 5) as f64;
+                        let time = start + Duration::minutes(i);
+                        Bar::new(time, close, 4816.0, 4809.0, close, 1.0)
+                    })
+                    .collect(),
+            ));
+            b.set_timeframe(Timeframe::Min1);
+            b.config_mut().show_volume = false;
+            let ctx_b = egui::Context::default();
+            if painted {
+                frame(&ctx_b, &mut b, 0.0, vec![]);
+            }
+            let shown = b.state.price_scale().range();
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&a)));
+            let factory = IndicatorFactory::new();
+            let mut charts = [&mut a, &mut b];
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            frame(&ctx_b, charts[1], 1.0, vec![]);
+            frame(&ctx_b, charts[1], 2.0, vec![]);
+            let scale = charts[1].state.price_scale();
+            let range = scale.range();
+            if painted {
+                assert!(scale.is_manual(), "painted: keeps the range it shows");
+                assert_eq!((range.min, range.max), (shown.min, shown.max));
+            } else {
+                // A fit holds 4809 to 4816, and ten times their span is 70.
+                assert!(
+                    range.min <= 4809.0 && range.max >= 4816.0 && range.max - range.min < 70.0,
+                    "locked {locked}: {range:?}"
+                );
+                assert_eq!(scale.bar_ratio_locked(), locked, "{range:?}");
+            }
+        }
+    }
+
+    /// A price-based source draws its studies on its elements, which can outnumber its bars or
+    /// fall short of them, so the history check follows what it draws. A source that has not
+    /// painted has built no elements, so none of its studies draws and nothing is checked.
+    #[test]
+    fn short_history_follows_what_a_price_based_source_draws() {
+        use crate::widget::test_frames::frame;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let short = LayoutCopyIssue {
+            slot: 1,
+            kind: LayoutCopyIssueKind::ShortHistory("SMA".into()),
+        };
+        // 20 bars rising by 10 with the default brick of 1 make 190 bricks, enough for an SMA of
+        // 30, which 20 bars are not. 50 bars rising by 0.1 make 4 bricks, at 11, 12, 13 and 14,
+        // too few for an SMA of 7.
+        let mut seen = Vec::new();
+        for (bars, rise, length, other_bars, painted) in [
+            (20, 10.0, 30, 20, true),
+            (50, 0.1, 7, 3, true),
+            (20, 10.0, 30, 20, false),
+        ] {
+            let mut source = Chart::new(BarData::from_bars(
+                (0..bars)
+                    .map(|i| {
+                        let close = 10.0 + rise * i as f64;
+                        let time = start + Duration::minutes(i);
+                        Bar::new(time, close, close + 0.05, close - 0.05, close, 1.0)
+                    })
+                    .collect(),
+            ));
+            source.set_timeframe(Timeframe::Min1);
+            source.config_mut().show_volume = false;
+            source.set_chart_type(ChartType::Renko);
+            let sma = source.add_indicator(Box::new(SMA::new(length)));
+            let ctx = egui::Context::default();
+            let frames = if painted { 3 } else { 0 };
+            for time in 0..frames {
+                frame(&ctx, &mut source, time as f64, vec![]);
+            }
+            let shown = source
+                .rendered_studies()
+                .indicators()
+                .iter()
+                .any(|study| draws(study.as_ref()));
+            let mut other = chart(other_bars);
+            let factory = IndicatorFactory::new();
+            let charts = [&mut source, &mut other];
+            let issues = pair().copy_issues(&charts, 0, &LayoutCopy::Study(sma), &factory);
+            seen.push((shown, issues));
+        }
+        let expected = [(true, vec![short]), (false, vec![]), (false, vec![])];
+        assert_eq!(seen, expected);
     }
 }
