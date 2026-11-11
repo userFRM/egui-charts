@@ -104,6 +104,7 @@ pub struct AutoDrawing {
     atr: ATR,
     fibonacci: FibonacciConfig,
     fork_colors: [Color32; 2],
+    fork_transparency: usize,
     drawings: Vec<Drawing>,
     values: IndicatorValues,
 }
@@ -132,6 +133,7 @@ impl AutoDrawing {
                 crate::studies::palette::GREEN,
                 crate::studies::palette::BLUE,
             ],
+            fork_transparency: 85,
             drawings: Vec::new(),
             values: IndicatorValues::new(),
         }
@@ -169,7 +171,8 @@ impl AutoDrawing {
             }]
             .to_srgba_unmultiplied();
         }
-        config.background_opacity = 38;
+        // Convert percent transparency to the nearest byte of opacity.
+        config.background_opacity = (((100 - self.fork_transparency) * 255 + 50) / 100) as u8;
         config
     }
 
@@ -204,7 +207,7 @@ impl Indicator for AutoDrawing {
 
     /// The swing size, ATR multiple and period, the Zig Zag deviation and depth and, for a
     /// Fibonacci construction, its options, its number of levels and each level's visibility,
-    /// ratio, label, colour and price label.
+    /// ratio, label, colour and price label, or the pitchfork's background transparency.
     fn inputs(&self) -> Vec<StudyInput> {
         let mut inputs = vec![
             StudyInput::new(
@@ -235,6 +238,17 @@ impl Indicator for AutoDrawing {
                 .into_iter()
                 .filter(|input| matches!(input.id.as_str(), "deviation_percent" | "depth")),
         );
+        if self.kind == AutoDrawingKind::Pitchfork {
+            inputs.push(
+                StudyInput::new(
+                    "fork_transparency",
+                    "Background transparency",
+                    InputValue::Length(self.fork_transparency),
+                    InputKind::Length(0, 100),
+                )
+                .with_default(InputValue::Length(85)),
+            );
+        }
         if !self.kind.fibonacci() {
             return inputs;
         }
@@ -399,6 +413,9 @@ impl Indicator for AutoDrawing {
         let config = &mut self.fibonacci;
         match (id, value) {
             ("swing_size", InputValue::Choice(index)) => self.atr_swings = index == 0,
+            ("fork_transparency", InputValue::Length(transparency)) => {
+                self.fork_transparency = transparency;
+            }
             ("atr_multiple", InputValue::Number(multiple)) => self.atr_multiple = multiple,
             ("atr_period", InputValue::Length(period)) => {
                 self.atr_period = period;
@@ -654,6 +671,22 @@ mod tests {
                 .set_input("swing_size", InputValue::Choice(1))
                 .unwrap();
             study.set_input("depth", InputValue::Length(3)).unwrap();
+            if kind == AutoDrawingKind::Pitchfork {
+                let input = study
+                    .inputs()
+                    .into_iter()
+                    .find(|i| i.id == "fork_transparency")
+                    .unwrap();
+                assert_eq!(input.value, InputValue::Length(85));
+                assert!(
+                    study
+                        .set_input("fork_transparency", InputValue::Length(101))
+                        .is_err()
+                );
+                study
+                    .set_input("fork_transparency", InputValue::Length(50))
+                    .unwrap();
+            }
             let check = |study: &ConfiguredStudy, expected: &[(usize, f64)]| {
                 assert_eq!(study.drawings().len(), 1, "{name}");
                 let drawing = &study.drawings()[0];
@@ -664,6 +697,9 @@ mod tests {
                     .map(|p| (p.bar_idx as usize, p.price))
                     .collect();
                 assert_eq!(points, expected, "{name}");
+                if kind == AutoDrawingKind::Pitchfork {
+                    assert_eq!(drawing.pitchfork.as_ref().unwrap().background_opacity, 128);
+                }
                 if kind.fibonacci() {
                     let config = drawing.fib_config.as_ref().unwrap();
                     assert_eq!(config.levels.len(), 24, "{name}: listed levels");

@@ -229,10 +229,18 @@ fn fit_content_includes_added_series_across_panes() {
             assert_eq!(chart.time_at_index(0), Some(data[10].time));
             chart.remove_series(id);
             chart.fit_content();
+            // Numeric spacing keeps the initial 15-minute unit when main bars arrive.
+            let slots = if case == "added only numeric" {
+                10.0 / 15.0 + 1.0
+            } else {
+                11.0
+            };
             assert!(
-                (chart.get_time_scale_state().0 - chart.get_rendered_price_rect().width() / 14.0)
+                (chart.get_time_scale_state().0
+                    - chart.get_rendered_price_rect().width() / (slots + 3.0))
                     .abs()
-                    < 0.001
+                    < 0.001,
+                "{case}: fit after replacing the fallback domain"
             );
         }
     }
@@ -2803,46 +2811,70 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
 #[test]
 fn series_scales_fit_visible_members_and_reserve_their_axes() {
     let ctx = egui::Context::default();
-    // Gradient fills keep their scale contribution when their plot strokes are hidden.
+    // Fills keep their scale contribution when their plot strokes are hidden.
     #[cfg(feature = "studies")]
     for secondary in [false, true] {
-        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
-            let mut chart = crate::widget::test_frames::chart(&[10.0; 2], &[20.0; 2]);
-            let id = chart.add_indicator(Box::new(crate::studies::StochasticMomentumIndex::new(
-                1, 1, 1, 1,
-            )));
-            if !secondary {
-                assert!(chart.move_series_to_pane(id, PaneId::MAIN));
-            }
-            let pane = chart.series_pane(id).unwrap();
-            assert!(
-                chart.set_indicator_scale(
+        for name in ["SMI", "BB", "Envelopes", "Keltner"] {
+            for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+                let mut chart = crate::widget::test_frames::chart(&[10.0, 15.0], &[20.0, 25.0]);
+                let mut study = crate::studies::IndicatorFactory::new()
+                    .create(name)
+                    .unwrap();
+                for input in study.inputs() {
+                    if matches!(input.value, crate::studies::InputValue::Length(_)) {
+                        study
+                            .set_input(&input.id, crate::studies::InputValue::Length(1))
+                            .unwrap();
+                    }
+                }
+                if name == "BB" {
+                    study
+                        .set_input("period", crate::studies::InputValue::Length(2))
+                        .unwrap();
+                    study
+                        .set_input("std_dev", crate::studies::InputValue::Number(40.0))
+                        .unwrap();
+                } else if name == "Envelopes" {
+                    study
+                        .set_input("percent", crate::studies::InputValue::Number(1000.0))
+                        .unwrap();
+                } else if name == "Keltner" {
+                    study
+                        .set_input("multiplier", crate::studies::InputValue::Number(40.0))
+                        .unwrap();
+                }
+                let id = chart.add_indicator(study);
+                if !secondary {
+                    assert!(chart.move_series_to_pane(id, PaneId::MAIN));
+                }
+                let pane = chart.series_pane(id).unwrap();
+                assert!(chart.set_indicator_scale(
                     id,
                     crate::studies::StudyScale::Shared(SeriesScale::Right)
-                )
-            );
-            let study = chart.indicator_mut(id).unwrap();
-            let mut settings = study.settings();
-            for plot in &mut settings.plots {
-                plot.visible = false;
+                ));
+                let study = chart.indicator_mut(id).unwrap();
+                let mut settings = study.settings();
+                for plot in &mut settings.plots {
+                    plot.visible = false;
+                }
+                for level in &mut settings.levels {
+                    level.visible = false;
+                }
+                settings.fill_between_levels = false;
+                study.apply_settings(&[], settings).unwrap();
+                let host = chart.add_series(SeriesOptions::default());
+                chart.set_data(host, bars(&[10.0, 20.0]));
+                assert!(chart.move_series_to_pane(host, pane));
+                chart
+                    .pane_price_scale_mut(pane, SeriesScale::Right)
+                    .options_mut()
+                    .mode = mode;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                let map = chart.series_price_map(id).unwrap();
+                let top = map.transform().to_price(map.range().max);
+                assert!(top >= 100.0, "{name} secondary={secondary} {mode:?}: {top}");
             }
-            for level in &mut settings.levels {
-                level.visible = false;
-            }
-            settings.fill_between_levels = false;
-            study.apply_settings(&[], settings).unwrap();
-            let host = chart.add_series(SeriesOptions::default());
-            chart.set_data(host, bars(&[10.0, 20.0]));
-            assert!(chart.move_series_to_pane(host, pane));
-            chart
-                .pane_price_scale_mut(pane, SeriesScale::Right)
-                .options_mut()
-                .mode = mode;
-            frame(&ctx, &mut chart, 0.0, vec![]);
-            frame(&ctx, &mut chart, 0.1, vec![]);
-            let map = chart.series_price_map(id).unwrap();
-            let top = map.transform().to_price(map.range().max);
-            assert!(top >= 100.0, "secondary={secondary} {mode:?}: {top}");
         }
     }
     for key in [SeriesScale::Right, SeriesScale::Separate(2)] {

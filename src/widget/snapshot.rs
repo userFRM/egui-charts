@@ -152,6 +152,10 @@ pub struct ChartSnapshot {
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
     pub bar_spacing: f32,
+    /// Numeric key units per spacing unit. Absent in older layouts, on time charts and
+    /// before the numeric keys differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_unit: Option<f64>,
     /// The space after the last bar, in bars.
     pub right_offset: f32,
     /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
@@ -346,6 +350,11 @@ impl Chart {
                 })
                 .collect(),
             bar_spacing,
+            numeric_unit: self
+                .state
+                .time_scale()
+                .numeric_positions()
+                .and_then(|positions| positions.unit),
             right_offset,
             drawings,
         };
@@ -635,6 +644,14 @@ impl Chart {
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
+        if self.state.time_scale().numeric_positions().is_some() {
+            let positions =
+                crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);
+            self.state
+                .time_scale_mut()
+                .set_numeric_positions(Some(positions));
+            self.refresh_time_scale_content();
+        }
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
             Some(json) => {
@@ -828,6 +845,7 @@ fn check(
             .is_finite()
         || !snapshot.bar_spacing.is_finite()
         || snapshot.bar_spacing <= 0.0
+        || snapshot.numeric_unit.is_some_and(|unit| !unit.is_finite() || unit <= 0.0)
         || !snapshot.right_offset.is_finite()
         || snapshot
             .maximized
@@ -1278,10 +1296,16 @@ mod tests {
         restored.restore(&snapshot).unwrap();
         assert_eq!(restored.timeframe(), None);
         for bad in [0.0, f32::NAN, f32::INFINITY] {
-            snapshot.bar_spacing = bad;
-            snapshot.symbol = "Invalid".into();
-            assert!(restored.restore(&snapshot).is_err());
-            assert_eq!(restored.symbol(), "A");
+            for (spacing, unit) in [
+                (bad, None),
+                (layout.charts[0].bar_spacing, Some(f64::from(bad))),
+            ] {
+                snapshot.bar_spacing = spacing;
+                snapshot.numeric_unit = unit;
+                snapshot.symbol = "Invalid".into();
+                assert!(restored.restore(&snapshot).is_err());
+                assert_eq!(restored.symbol(), "A");
+            }
         }
         for key in ["price_scale", "panes"] {
             let mut invalid: serde_json::Value = serde_json::from_str(&json).unwrap();

@@ -979,6 +979,58 @@ impl PositionReadout {
     }
 }
 
+/// Lines, labels, zone fill and border of long and short position drawings. The target and
+/// stop colours, whose opacity is that of their zones, are
+/// [`Drawing::position_target_color`](crate::drawings::Drawing::position_target_color) and
+/// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionStyle {
+    /// Colour of the entry line, its price tag and the trade's path; `None` draws the lines in a
+    /// translucent shade of the theme's secondary text colour and the tag in that colour.
+    pub line_color: Option<[u8; 4]>,
+    /// Width of the entry line, the trade's path and the zone border, in points.
+    pub line_width: f32,
+    /// Colour of the label text; `None` is white on a plate and the level or result colour
+    /// without one, or the theme's secondary text on a label without a result.
+    pub text_color: Option<[u8; 4]>,
+    /// Size of the label text, in points.
+    pub font_size: f32,
+    /// Whether the labels sit on filled plates.
+    pub label_background: bool,
+    /// Plate colour of every label; `None` takes the target, stop or result colour.
+    pub label_color: Option<[u8; 4]>,
+    /// Whether the target and stop zones are filled.
+    pub fill: bool,
+    /// Whether the target and stop zones are outlined in [`Self::border_color`].
+    pub border: bool,
+    /// Colour of the zone outline.
+    pub border_color: [u8; 4],
+}
+
+impl Default for PositionStyle {
+    fn default() -> Self {
+        Self {
+            line_color: None,
+            line_width: 1.0,
+            text_color: None,
+            font_size: 12.0,
+            label_background: true,
+            label_color: None,
+            fill: true,
+            border: false,
+            border_color: [102, 123, 139, 255],
+        }
+    }
+}
+
+impl PositionStyle {
+    /// Whether the line width lies in 1 to 100 points and the font size in 1 to 256 points.
+    pub fn is_valid(&self) -> bool {
+        (1.0..=100.0).contains(&self.line_width) && (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
 /// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineMeasurementPosition {

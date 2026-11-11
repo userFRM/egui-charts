@@ -45,12 +45,17 @@ pub(super) fn render_candles(
             bar.close >= bar.open
         };
         rendering::render_candle(price_ctx, bar, rising, price_scale, colors, &params, style);
-
-        if show_volume {
-            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-        }
+    }
+    if show_volume {
+        render_volume_bars(
+            volume_ctx,
+            visible_data,
+            start_idx,
+            max_volume,
+            colors,
+            chart_rect_min_x,
+            idx_to_coord,
+        );
     }
 }
 
@@ -79,12 +84,17 @@ pub(super) fn render_ohlc_bars(
             bar.close >= bar.open
         };
         rendering::render_ohlc_bar(price_ctx, bar, rising, price_scale, colors, &params, style);
-
-        if show_volume {
-            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-        }
+    }
+    if show_volume {
+        render_volume_bars(
+            volume_ctx,
+            visible_data,
+            start_idx,
+            max_volume,
+            colors,
+            chart_rect_min_x,
+            idx_to_coord,
+        );
     }
 }
 
@@ -146,15 +156,15 @@ pub(super) fn render_hollow_candles(
     price_ctx.painter.extend(shapes);
 
     if show_volume {
-        for (i, bar) in visible_data.iter().enumerate() {
-            if bar.is_whitespace() {
-                continue;
-            }
-            let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-        }
+        render_volume_bars(
+            volume_ctx,
+            visible_data,
+            start_idx,
+            max_volume,
+            colors,
+            chart_rect_min_x,
+            idx_to_coord,
+        );
     }
 }
 

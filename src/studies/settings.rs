@@ -302,8 +302,10 @@ pub struct StudySettings {
     #[serde(default = "enabled_by_default")]
     pub show_legend_values: bool,
     /// Allow user edits through settings, legend and context controls. Host APIs remain writable.
-    #[serde(default = "enabled_by_default")]
-    pub user_edit_enabled: bool,
+    /// `None` keeps the permission declared by the study.
+    /// Read the effective permission through [`Indicator::user_edit_enabled`].
+    #[serde(default)]
+    pub user_edit_enabled: Option<bool>,
     /// Help article requested through the host. None uses the underlying study's metadata.
     #[serde(default)]
     pub help_url: Option<String>,
@@ -369,7 +371,7 @@ fn enabled_by_default() -> bool {
 #[derive(Clone)]
 pub struct StudySettingsSnapshot {
     inputs: Vec<(String, InputValue)>,
-    settings: StudySettings,
+    pub(crate) settings: StudySettings,
     timeframe: Option<Timeframe>,
     colors: Vec<Color32>,
     visible: bool,
@@ -591,7 +593,9 @@ impl Indicator for ConfiguredStudy {
     }
 
     fn user_edit_enabled(&self) -> bool {
-        self.settings.user_edit_enabled
+        self.settings
+            .user_edit_enabled
+            .unwrap_or_else(|| self.study.user_edit_enabled())
     }
     fn help_url(&self) -> Option<&str> {
         self.settings
@@ -1126,6 +1130,8 @@ impl Indicator for ConfiguredStudy {
         let mut snapshot =
             StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
         snapshot.settings = self.settings.clone();
+        // As `settings` returns it, so applying unchanged settings adds no history step.
+        snapshot.settings.user_edit_enabled = Some(self.user_edit_enabled());
         snapshot.timeframe = self.timeframe;
         snapshot.overlay = self.overlay;
         snapshot.scale = self.scale;
@@ -1185,6 +1191,7 @@ impl Indicator for ConfiguredStudy {
     }
     fn settings(&self) -> StudySettings {
         let mut settings = self.settings.clone();
+        settings.user_edit_enabled = Some(self.user_edit_enabled());
         // A study can declare a band after its settings were last applied.
         match_declared_styles(self.study.as_ref(), &mut settings);
         settings
@@ -1419,6 +1426,24 @@ impl Indicator for ConfiguredStudy {
             .filter_map(|mut plot| {
                 plot.bars = chart_bars(&self.spans, &plot.bars)?;
                 Some(plot)
+            })
+            .collect()
+    }
+    fn profile_levels(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::ProfileLevel> {
+        // Kept levels would index the evicted bars too.
+        if self.kept.is_some() {
+            return Vec::new();
+        }
+        if self.aligned.is_none() {
+            return self.study.profile_levels(visible);
+        }
+        // Source bars of a study on another interval or symbol are not chart bars.
+        self.study
+            .profile_levels(source_bars(&self.spans, &visible))
+            .into_iter()
+            .filter_map(|mut level| {
+                level.bars = chart_bars(&self.spans, &level.bars)?;
+                Some(level)
             })
             .collect()
     }
@@ -2043,7 +2068,7 @@ mod tests {
                 })
                 .collect()
         };
-        for (name, [chart, other], sessions, (view, visible), markers, zones) in [
+        for (name, [chart, other], sessions, (view, visible), markers, zones, levels) in [
             (
                 "finer",
                 [(4, Timeframe::Min5), (20, Timeframe::Min1)],
@@ -2054,6 +2079,7 @@ mod tests {
                 (1..3, (1..3, 105.0, 115.0, vec![10.0])),
                 vec![0, 3],
                 0..4,
+                (2..4, 105.0),
             ),
             (
                 "coarser",
@@ -2065,6 +2091,7 @@ mod tests {
                 (3..12, (0..15, 100.0, 103.0, vec![3.0])),
                 vec![9],
                 5..20,
+                (10..20, 101.0),
             ),
         ] {
             let (interval, source_interval) = (chart.1, other.1);
@@ -2084,12 +2111,22 @@ mod tests {
                 study.update_data(&chart, 0, &[data]);
                 study
             };
+            let mut session = VolProfileSession::new(1);
+            session
+                .set_input("extend_poc", InputValue::Toggle(true))
+                .unwrap();
             let mut studies = [
-                calculated(Box::new(VolProfileSession::new(1))),
+                calculated(Box::new(session)),
                 calculated(Box::new(VolProfileVisible::new(1))),
                 calculated(Box::<Marks>::default()),
             ];
             assert_eq!(profiles(&studies[0], 0..chart.len()), sessions, "{name}");
+            let extended: Vec<_> = studies[0]
+                .profile_levels(0..chart.len())
+                .into_iter()
+                .map(|level| (level.bars, level.price))
+                .collect();
+            assert_eq!(extended, [levels], "{name}");
             assert_eq!(profiles(&studies[1], view), [visible], "{name}");
             let marked: Vec<_> = studies[2]
                 .markers()
@@ -2109,6 +2146,7 @@ mod tests {
             }
             for study in &studies {
                 assert!(profiles(study, 0..chart.len()).is_empty(), "{name}");
+                assert!(study.profile_levels(0..chart.len()).is_empty(), "{name}");
                 assert!(
                     study.markers().is_empty() && study.zones().is_empty(),
                     "{name}"
