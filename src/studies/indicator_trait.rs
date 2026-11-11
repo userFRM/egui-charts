@@ -719,9 +719,9 @@ pub trait Indicator: Send {
     }
 
     /// Levels of finished price-row profiles carried right past their own bars, each to the
-    /// first later bar that trades in its row or to the last bar: those whose bars intersect the
-    /// half-open visible source-bar range, including levels of profiles left of it. Empty by
-    /// default.
+    /// first later bar that trades at its price or in its row, or to the last bar: those whose
+    /// bars intersect the half-open visible source-bar range, including levels of profiles left
+    /// of it. Empty by default.
     fn profile_levels(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::ProfileLevel> {
         let _ = visible;
         Vec::new()

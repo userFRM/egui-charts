@@ -132,7 +132,8 @@ struct LevelCache {
 struct Level {
     kind: ProfileLevelKind,
     price: f64,
-    /// The profile row in which a trade ends the level.
+    /// The prices at which a trade ends the level: its profile row, and for the value area high
+    /// also the row's top edge, where its line lies.
     row: Range<f64>,
     /// The first bar after the profile that trades in `row`, once found.
     touch: Option<usize>,
@@ -919,7 +920,7 @@ impl ProfileStudy {
     }
 
     /// The levels of finished profiles that reach into `visible`, each from the bar after its
-    /// profile to the first later bar that trades in its row, or to the last bar.
+    /// profile to the first later bar that trades at its price or in its row, or to the last bar.
     fn levels(&self, visible: Range<usize>) -> Vec<ProfileLevel> {
         let len = self.data.len();
         if !self.extend.contains(&true) {
@@ -1019,8 +1020,10 @@ impl ProfileStudy {
                     ProfileLevelKind::PointOfControl => {
                         (low + (poc as f64 + 0.5) * height, row(poc))
                     }
+                    // The line lies on its row's top edge, so a trade at its price ends it too.
                     ProfileLevelKind::ValueAreaHigh => {
-                        (low + (va_high + 1) as f64 * height, row(va_high))
+                        let row = row(va_high);
+                        (row.end, row.start..row.end.next_up())
                     }
                     ProfileLevelKind::ValueAreaLow => (low + va_low as f64 * height, row(va_low)),
                 };
@@ -1386,11 +1389,14 @@ mod tests {
                 fresh.calculate(&bars[..len]);
                 assert_eq!(levels(fresh.as_ref(), 0..len), wanted);
             }
+            // Bar 5 now trades only at 104: clear of day one's POC row, and on day two's VAH
+            // line, the top edge of its row, which ends that line.
             let mut corrected = bars.clone();
-            corrected[5] = Bar::new(bars[5].time, 105.0, 105.0, 105.0, 105.0, 1.0);
+            corrected[5] = Bar::new(bars[5].time, 104.0, 104.0, 104.0, 104.0, 1.0);
             study.update(&corrected, 5);
             let mut wanted = expected.clone();
             wanted[0].2 = 3..7;
+            wanted[4].2 = 5..6;
             assert_eq!(levels(study.as_ref(), 0..7), wanted);
             let mut fresh = study.clone_box();
             fresh.calculate(&corrected);

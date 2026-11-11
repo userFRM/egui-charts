@@ -26,12 +26,13 @@ pub struct StudyProfile {
 }
 
 /// A level of a finished study profile carried right past the profile's bars: from the bar
-/// after its last to the first later bar that trades in the level's row, or to the last bar.
+/// after its last to the first later bar that trades at the level's price or in its row, or to
+/// the last bar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProfileLevel {
     /// Chart bars the line spans. It starts at the left edge of the first, which follows the
-    /// profile, and ends at the centre of the last: the bar that trades in the level's row, or
-    /// the last bar when none has.
+    /// profile, and ends at the centre of the last: the bar that trades at the level's price or
+    /// in its row, or the last bar when none has.
     pub bars: Range<usize>,
     /// Price of the line: the middle of the point of control row, or the top or bottom edge of
     /// the value area.
