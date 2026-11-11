@@ -855,6 +855,10 @@ impl OrderFlowInput {
                 for (trade, open, size) in parts {
                     state.push_footprint(clock, trade, Some((open, size)));
                 }
+                // The executions still queued in the sink continue the chart's grouping.
+                if let Some(flow) = &mut state.footprint {
+                    flow.trade_bars = bars.clone();
+                }
                 state.trade_bars = bars;
             } else {
                 // In arrival order, as the chart's footprint is built.
@@ -1817,10 +1821,12 @@ mod tests {
                 .trades
                 .iter()
                 .for_each(|trade| held.push(trade.clone()));
+            let bars: Vec<_> = drained.bars.into_values().map(|(bar, _)| bar).collect();
             let footprint = OrderFlowInput::footprint();
             footprint.set_tick_size(Some(1.0));
-            // As the chart connects a new source: rebuilt from its store, then given the queue.
-            footprint.replace_trades(&clock, &held, &[]);
+            // As the chart connects a new source: rebuilt from its store along its bars, then
+            // given the queue.
+            footprint.replace_trades(&clock, &held, &bars);
             sink.push_tick(buy(1));
             inbox.study_inputs(sink.id, vec![footprint.clone()]);
             sink.push_tick(buy(2));
