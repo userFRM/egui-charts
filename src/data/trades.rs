@@ -145,6 +145,9 @@ pub(crate) struct Trades {
     retained_until: Option<DateTime<Utc>>,
     /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
     lost_until: Option<DateTime<Utc>>,
+    /// Time of the oldest live trades when a page left out its trades at that time, as ids did not
+    /// tell them from the live ones: the page may lack trades of that instant.
+    left_out_at: Option<DateTime<Utc>>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
 }
@@ -161,6 +164,7 @@ impl Trades {
             paged_without_id_until: None,
             retained_until: None,
             lost_until: None,
+            left_out_at: None,
             revision: next_revision(),
         }
     }
@@ -181,6 +185,16 @@ impl Trades {
     )]
     pub(crate) fn lost_until(&self) -> Option<DateTime<Utc>> {
         self.lost_until
+    }
+
+    /// Time of the oldest live trades, while a page left out its trades at that time because ids
+    /// did not tell them from the live ones.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn left_out_at(&self) -> Option<DateTime<Utc>> {
+        self.left_out_at
     }
 
     /// Held executions that arrived live, including those sharing a page's boundary time.
@@ -204,6 +218,8 @@ impl Trades {
             .map(|trade| trade.ts)
             .max();
         self.retained_until = self.paged_until;
+        // The trades it compared are no longer the live ones.
+        self.left_out_at = None;
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -262,6 +278,9 @@ impl Trades {
                 self.ids.remove(&id);
             }
             self.lost_until = self.lost_until.max(Some(evicted.ts));
+            if self.left_out_at == Some(evicted.ts) {
+                self.left_out_at = None;
+            }
             changed(&evicted, false);
         }
     }
@@ -315,9 +334,11 @@ impl Trades {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
                 .all(|held| held.id.is_some());
-            page.retain(|trade| {
-                trade.ts < oldest || (trade.ts == oldest && trade.id.is_some() && ids_at_oldest)
-            });
+            let kept = |trade: &Tick| trade.id.is_some() && ids_at_oldest;
+            if self.paged == 0 && page.iter().any(|trade| trade.ts == oldest && !kept(trade)) {
+                self.left_out_at = Some(oldest);
+            }
+            page.retain(|trade| trade.ts < oldest || (trade.ts == oldest && kept(trade)));
         }
         let mut room = self.capacity.saturating_sub(self.trades.len());
         let mut added = Vec::new();
