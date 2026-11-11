@@ -28,6 +28,7 @@ fn shared_prices(
     study: &dyn Indicator,
     range: std::ops::Range<usize>,
 ) -> impl Iterator<Item = f64> + '_ {
+    let gradients = crate::studies::plots::gradient_prices(study, range.clone());
     (0..study.line_count())
         .filter(move |line| {
             let plot = study.plot_style(*line);
@@ -50,6 +51,7 @@ fn shared_prices(
                     )
                 }))
         })
+        .chain(gradients)
 }
 
 impl Chart {

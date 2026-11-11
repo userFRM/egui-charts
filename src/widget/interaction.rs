@@ -24,6 +24,7 @@ pub(super) struct TouchCrosshair {
     contact: Option<TouchContact>,
     pub(super) position: Option<Pos2>,
     pub(super) touch_input: bool,
+    pub(super) owns_gesture: bool,
 }
 
 pub(super) fn touch_crosshair(ui: &Ui, id: Id) -> TouchCrosshair {
@@ -40,12 +41,21 @@ impl Chart {
         ui: &Ui,
         id: Id,
         plot: Rect,
+        price_button: bool,
         blocked: bool,
     ) -> bool {
         use crate::config::TouchTrackingExitMode;
 
         let options = &self.chart_options.tooltip;
         let mut state = touch_crosshair(ui, id);
+        let owned_gesture = state
+            .contact
+            .as_ref()
+            .is_some_and(|contact| contact.tracking);
+        if !owned_gesture && state.position.is_some_and(|pos| !plot.contains(pos)) {
+            state.position = None;
+            state.contact = None;
+        }
         let was_active = state.position.is_some();
         let pointer_in_plot = ui.rect_contains_pointer(plot);
         let mut repaint_after = None;
@@ -72,11 +82,15 @@ impl Chart {
             if !options.enabled
                 || !options.on_long_press
                 || blocked
-                || !input.focused
+                || input.events.contains(&Event::WindowFocused(false))
                 || input.multi_touch().is_some()
             {
                 state.contact = None;
                 state.position = None;
+                return;
+            }
+            // Keep the latched tag registered until its button consumes the release.
+            if price_button && state.position.is_some() && state.contact.is_none() {
                 return;
             }
             if options.touch_exit_mode == TouchTrackingExitMode::OnTouchEnd
@@ -170,6 +184,11 @@ impl Chart {
         if let Some(delay) = repaint_after {
             ui.ctx().request_repaint_after(delay);
         }
+        state.owns_gesture = owned_gesture
+            || state
+                .contact
+                .as_ref()
+                .is_some_and(|contact| contact.tracking);
         let owns_drag = state.touch_input
             && (was_active || state.position.is_some() || state.contact.is_some());
         if owns_drag {

@@ -72,6 +72,10 @@ pub enum DrawingContextMenuAction {
     Lock,
     /// Toggle drawing visibility
     Hide,
+    /// Exchange a position's target and stop and switch between long and short.
+    /// Applied by the mounted chart menu and floating toolbar through
+    /// [`Chart::reverse_position_drawing`]. Standalone hosts call that method themselves.
+    ReversePosition,
     /// Clone drawing with offset
     Clone,
     /// Delete drawing
@@ -244,6 +248,13 @@ impl DrawingContextMenu {
         .collect()
     }
 
+    pub(crate) fn position_direction_available(&self) -> bool {
+        use crate::drawings::DrawingToolType as T;
+        [T::LongPos, T::ShortPos]
+            .iter()
+            .any(|tool| tool.as_str() == self.drawing_type)
+    }
+
     /// Build menu items for the drawing context menu
     pub(crate) fn build_menu_items(
         &self,
@@ -307,6 +318,14 @@ impl DrawingContextMenu {
                         })
                         .collect(),
                 }
+            }))
+            .chain(self.position_direction_available().then(|| {
+                let mut item = MenuItem::new(
+                    "Reverse position",
+                    DrawingContextMenuAction::ReversePosition,
+                );
+                item.enabled = !self.is_locked;
+                MenuEntry::Item(item)
             }))
             .chain([
                 MenuEntry::Separator,

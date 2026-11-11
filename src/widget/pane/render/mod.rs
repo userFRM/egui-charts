@@ -356,7 +356,6 @@ impl Chart {
             }
         }
 
-        let horizontal = coords.to_mapping(plot, 0.0, 1.0);
         // The plot column of every pane, where the pointer drives their shared crosshair.
         let hover_rect = Rect::from_min_max(
             Pos2::new(
@@ -596,6 +595,12 @@ impl Chart {
                         self.series_label_formatter(id, member_map.transform().mode)
                     });
                     panel.axis_options.show_study_values = false;
+                } else if matches!(
+                    member_map.transform().mode,
+                    crate::scales::PriceScaleMode::Percentage
+                        | crate::scales::PriceScaleMode::IndexedTo100
+                ) {
+                    panel.price_formatter = self.percentage_formatter.clone();
                 }
                 panel.axis_rect = axes
                     .iter()
@@ -689,23 +694,15 @@ impl Chart {
                     })
                 };
                 let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
-                let target_pane = self
-                    .synced_crosshair_series
-                    .is_some_and(|target| members.contains(&target));
+                let target_pane = self.synced_crosshair_series.is_some_and(|target| {
+                    members.contains(&target) && self.is_series_visible(target)
+                });
                 let target_panel = target_pane && id == self.synced_crosshair_series;
                 let mut hover = pointer
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
                             .map(|index| {
-                                let index =
-                                    if self.chart_options.time_scale.ignore_whitespace_indices
-                                        || self.chart_options.time_scale.ignore_hidden_indices
-                                    {
-                                        index
-                                    } else {
-                                        index.round()
-                                    };
                                 Pos2::new(
                                     pane_mapping.index_to_x(index),
                                     if target_panel {
@@ -720,6 +717,12 @@ impl Chart {
                     })
                     .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
                     .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
+                if let Some(pos) = hover {
+                    panel.bar_index = panel.bar_index.filter(|index| {
+                        self.pointer_time(pos).and_then(|(time, _)| time)
+                            == self.state.shown().get(*index).map(|bar| bar.time)
+                    });
+                }
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
                 if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
@@ -945,6 +948,13 @@ impl Chart {
                         pane_response
                             .flags
                             .remove(egui::response::Flags::LONG_TOUCHED);
+                        if touch_readout.owns_gesture {
+                            pane_response.flags.remove(
+                                egui::response::Flags::CLICKED
+                                    | egui::response::Flags::DRAGGED
+                                    | egui::response::Flags::DRAG_STARTED,
+                            );
+                        }
                     }
 
                     // A click on the legend's close "x" removes this study or series.
@@ -1271,10 +1281,7 @@ impl Chart {
                 let painter = ui
                     .painter()
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
-                if !collapsed && let Some((mut pos, options)) = series_crosshair {
-                    if let Some(index) = hovered {
-                        pos.x = horizontal.idx_to_x(index);
-                    }
+                if !collapsed && let Some((pos, options)) = series_crosshair {
                     crate::chart::rendering::render_crosshair_lines(
                         &crate::chart::rendering::RenderContext::new(&painter, chart_rect),
                         pos,
@@ -1292,6 +1299,7 @@ impl Chart {
                                 item,
                                 self.series_map(item, chart_rect),
                                 index,
+                                |_| ui.active_theme().chart.bg,
                             );
                         }
                     }
@@ -1321,6 +1329,15 @@ impl Chart {
                     let label_rect = super::super::series::axis_label_rect(chart_rect, axis);
                     let map = drawing_map;
                     let axis_tags = scale_tags.entry(drawing_key).or_default();
+                    let formatter = members.first().map_or_else(
+                        || self.price_formatter.clone(),
+                        |id| {
+                            self.series_label_formatter(
+                                self.series_axis_owner(*id),
+                                map.transform().mode,
+                            )
+                        },
+                    );
                     for (value, fill) in self
                         .drawings
                         .drawings
@@ -1341,7 +1358,7 @@ impl Chart {
                                 &map,
                                 map.price_to_y(value),
                             ),
-                            self.price_formatter.as_deref(),
+                            formatter.as_deref(),
                         );
                         axis_tags.push(crate::chart::rendering::axes::render_axis_value(
                             &painter,

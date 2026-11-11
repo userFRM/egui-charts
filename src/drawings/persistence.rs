@@ -193,6 +193,9 @@ impl StoredDrawing {
         if d.ghost_feed.is_some_and(|c| !c.is_valid()) {
             return Some("ghost_feed".into());
         }
+        if !d.position_readout.is_valid() {
+            return Some("position_readout".into());
+        }
         let sizing = d.position_sizing;
         if [
             sizing.point_value,
@@ -222,6 +225,16 @@ impl StoredDrawing {
                 || c.level_width > super::validation::MAX_STROKE_WIDTH
         }) {
             return Some("fib_config.level_width".into());
+        }
+        if d.fib_config.as_ref().is_some_and(|c| {
+            !(1.0..=256.0).contains(&c.label_size)
+                || c.levels.iter().any(|level| {
+                    level.width.is_some_and(|width| {
+                        !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
+                    })
+                })
+        }) {
+            return Some("fib_config".into());
         }
         for (name, values) in [
             (
@@ -322,8 +335,10 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 8 extends a trend line past the anchor its Left or
-    /// Right names; those saved before that change load with the reach they were drawn with.
+    /// Current storage format version. Version 9 draws a callout's border at its stored width;
+    /// those saved before that change load with the 1 px border they were drawn with. Version 8
+    /// extends a trend line past the anchor its Left or Right names; those saved before that
+    /// change load with the reach they were drawn with.
     /// Version 7 does the same for rays, extended lines, info lines and trend angles.
     /// Version 6 draws arrow marks in their own colour; earlier versions load in the colour they
     /// were drawn in. Version 5 gives Elliott double and triple combinations an unlabelled start
@@ -333,7 +348,7 @@ impl DrawingStorage {
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 8;
+    pub const CURRENT_VERSION: u32 = 9;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -592,6 +607,11 @@ impl DrawingStorage {
                                     settings.color = [242, 54, 69, 255];
                                 }
                             }
+                        }
+                        if version < 9 && tool == T::Callout {
+                            // Earlier renderers drew a callout's border 1 px wide whatever its
+                            // width.
+                            drawing.drawing.stroke_width = 1.0;
                         }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
@@ -1076,6 +1096,7 @@ mod v1 {
         } else {
             LineMeasurements::default()
         };
+        drawing.position_readout.persistent = true;
         // Rays and extended lines get their former reach from the version 3 step. Arrow and
         // path heads keep their geometry; the other creation fields are unset or tool-neutral.
         drawing.stroke_width = stored.line_width;
@@ -1278,6 +1299,9 @@ mod tests {
                 color: [9, 10, 11, 12],
                 visible: false,
                 show_price: false,
+                text: String::new(),
+                width: None,
+                line_style: None,
             }],
             level_width: 3.5,
             level_style: LineStyle::Dashed,
@@ -1559,6 +1583,7 @@ mod tests {
             want.background = true;
             want.border = true;
             want.border_color = None;
+            want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
             want.stroke_width = 3.0;
@@ -1583,6 +1608,7 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
             // Earlier files show their axis labels.
             want.price_axis_label = true;
@@ -1823,13 +1849,16 @@ mod tests {
         }
 
         // Strokes saved before version 4 were drawn at twice (brush) and eight times
-        // (highlighter) their width, the highlighter at alpha 100. They load as drawn, once.
+        // (highlighter) their width, the highlighter at alpha 100, and callout borders before
+        // version 9 at 1 px whatever their width. They load as drawn, once.
         for (version, tool, width, alpha, want_width, want_alpha) in [
             (2, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
             (3, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
             (3, DrawingToolType::Highlighter, 2.0, 255, 16.0, 100),
             (3, DrawingToolType::Highlighter, 20.0, 40, 100.0, 100),
             (4, DrawingToolType::Highlighter, 2.0, 40, 2.0, 40),
+            (8, DrawingToolType::Callout, 2.0, 255, 1.0, 255),
+            (9, DrawingToolType::Callout, 2.0, 255, 2.0, 255),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -2130,10 +2159,11 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let error = DrawingStorage::from_json(&current.replace("\"version\": 8", "\"version\": 9"))
-            .unwrap_err();
+        let error =
+            DrawingStorage::from_json(&current.replace("\"version\": 9", "\"version\": 10"))
+                .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 9, supported } if *supported == (1..=8)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 10, supported } if *supported == (1..=9)),
             "{error}"
         );
     }
@@ -2495,7 +2525,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 26] = [
+        let cases: [(Spoil, &str); 34] = [
             (
                 |s| {
                     first(s)
@@ -2537,6 +2567,14 @@ mod tests {
                         .width = Some(0.0)
                 },
                 "invalid pitchfork.levels[0].width",
+            ),
+            (
+                |s| first(s).drawing.position_readout.conversion_rate = Some(f64::NAN),
+                "invalid position_readout",
+            ),
+            (
+                |s| first(s).drawing.position_readout.quantity_decimals = Some(9),
+                "invalid position_readout",
             ),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
@@ -2591,6 +2629,30 @@ mod tests {
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().level_width = 101.0,
                 "invalid fib_config.level_width",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = 0.0,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = f32::NAN,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().label_size = 257.0,
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(0.0),
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(f32::NAN),
+                "invalid fib_config",
+            ),
+            (
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].width = Some(101.0),
+                "invalid fib_config",
             ),
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,

@@ -512,8 +512,22 @@ mod tests {
 
         // An edit on another chart after the copy goes back with it, and its redo returns it.
         charts[2].user_action(|chart| chart.add_indicator(Box::new(SMA::new(9))));
+        show(&mut layout, &mut charts);
+        let width = charts[0].last_rendered_price_rect.width();
+        let mut sizes = layout.sizes(layout.mode);
+        sizes.weights[1] = vec![3.0, 1.0];
+        layout.set_active(2);
+        layout.set_sizes(&[sizes], false).unwrap();
+        show(&mut layout, &mut charts);
+        assert!(charts[0].last_rendered_price_rect.width() > width);
+
         assert!(charts[1].undo(), "the target undoes the last copy");
         show(&mut layout, &mut charts);
+        assert_eq!(
+            charts[0].last_rendered_price_rect.width(),
+            width,
+            "the same frame renders the sizes restored by the queued undo"
+        );
         assert_eq!(names(charts[1]), ["SMA"]);
         assert_eq!(names(charts[2]), ["SMA", "SMA"]);
 
@@ -527,6 +541,89 @@ mod tests {
         show(&mut layout, &mut charts);
         assert_eq!(names(charts[1]), ["SMA"]);
         assert_eq!(names(charts[2]), ["SMA", "SMA"]);
+    }
+
+    /// A replacement layout follows old copies from either the source or a target. Clones
+    /// showing other charts leave those steps queued for the layout showing their owners.
+    #[test]
+    fn copy_made_before_a_layout_clone_undoes_on_every_chart() {
+        for (copy_set, busy) in [(false, false), (true, false), (false, true), (true, true)] {
+            for slot in [0, 1] {
+                let mut charts = [chart(50), chart(50), chart(50)];
+                let sma = charts[0].add_indicator(Box::new(SMA::new(7)));
+                let factory = IndicatorFactory::new();
+                let mut layout = layout();
+                let copy = if copy_set {
+                    LayoutCopy::Studies
+                } else {
+                    LayoutCopy::Study(sma)
+                };
+                assert_eq!(
+                    layout.apply_copy(&mut charts.each_mut(), 0, &copy, &factory),
+                    []
+                );
+                layout = layout.clone();
+                if busy {
+                    charts[2].begin_user_action();
+                }
+                assert!(charts[slot].undo());
+                show(&mut layout, &mut charts.each_mut());
+                if busy {
+                    charts[2].end_user_action();
+                    show(&mut layout, &mut charts.each_mut());
+                }
+                assert_eq!(
+                    charts.each_ref().map(|chart| chart.indicators().count()),
+                    [1, 0, 0],
+                    "set {copy_set}, slot {slot}"
+                );
+                assert!(charts[slot].redo());
+                show(&mut layout, &mut charts.each_mut());
+                assert_eq!(
+                    charts.each_ref().map(|chart| chart.indicators().count()),
+                    [1, 1, 1]
+                );
+            }
+        }
+
+        let mut first = [chart(50), chart(50), chart(50)];
+        let mut second = [chart(50), chart(50), chart(50)];
+        let sma = first[0].add_indicator(Box::new(SMA::new(7)));
+        let rsi = second[0].add_indicator(Box::new(RSI::new(5)));
+        let factory = IndicatorFactory::new();
+        let mut original = layout();
+        let mut clone = original.clone();
+        original.apply_copy(&mut first.each_mut(), 0, &LayoutCopy::Study(sma), &factory);
+        clone.apply_copy(&mut second.each_mut(), 0, &LayoutCopy::Study(rsi), &factory);
+        for redo in [false, true] {
+            let untouched = second.each_ref().map(|chart| chart.indicators().count());
+            assert!(if redo {
+                first[1].redo()
+            } else {
+                first[1].undo()
+            });
+            show(&mut clone, &mut second.each_mut());
+            assert_eq!(
+                second.each_ref().map(|chart| chart.indicators().count()),
+                untouched
+            );
+            assert!(if redo {
+                second[0].redo()
+            } else {
+                second[0].undo()
+            });
+            show(&mut original, &mut first.each_mut());
+            let counts = if redo { [1, 1, 1] } else { [1, 0, 0] };
+            assert_eq!(
+                first.each_ref().map(|chart| chart.indicators().count()),
+                counts
+            );
+            show(&mut clone, &mut second.each_mut());
+            assert_eq!(
+                second.each_ref().map(|chart| chart.indicators().count()),
+                counts
+            );
+        }
     }
 
     /// A copy made through a clone of the layout has its own id, so undoing it leaves the copies
@@ -1043,7 +1140,7 @@ mod tests {
     }
 
     /// Undoing a settings copy restores the precision, event markers and price line colour it
-    /// changed, on the source and on the other chart, and redo applies them again.
+    /// changed, on both charts after replacing the layout with a clone, and redo applies them again.
     #[test]
     fn settings_copy_undo_restores_precision_events_and_price_line() {
         let (mut a, mut b) = (chart(50), chart(50));
@@ -1072,6 +1169,7 @@ mod tests {
         let copy = LayoutCopy::Settings(Box::new(settings));
         assert_eq!(layout.apply_copy(&mut charts, 0, &copy, &factory), []);
         assert_eq!([state(charts[0]), state(charts[1])], [applied, applied]);
+        layout = layout.clone();
         assert!(charts[0].undo());
         show(&mut layout, &mut charts);
         assert_eq!([state(charts[0]), state(charts[1])], [before, before]);

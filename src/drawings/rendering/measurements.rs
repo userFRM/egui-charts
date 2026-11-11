@@ -122,7 +122,16 @@ impl Drawing {
         if (settings.persistent || selected || !self.completed)
             && let Some((galley, align, pos, size)) = self.line_measurement_card(painter, view)
         {
-            paint_stats_card(painter, align, pos, galley, size);
+            let card = paint_stats_card(painter, align, pos, galley.clone(), size);
+            if self.tool_type == DrawingToolType::InfoLine
+                && self.font_weight == crate::drawings::FontWeight::Bold
+            {
+                painter.galley(
+                    card.min + CARD_PADDING + egui::vec2(super::style::BOLD_OFFSET, 0.0),
+                    galley,
+                    painter.ctx().active_theme().chart.axis_text,
+                );
+            }
         }
     }
 
@@ -164,7 +173,13 @@ impl Drawing {
             return None;
         }
         let galley = if self.tool_type == DrawingToolType::InfoLine {
-            let color = self.text_box_colors(painter.ctx()).text;
+            let chart = painter.ctx().active_theme().chart;
+            let color = crate::theme::readable_color(
+                self.text_box_colors(painter.ctx()).text,
+                chart.axis_text,
+                &[chart.bg_tooltip],
+                4.5,
+            );
             self.annotation_galley(painter, text, color)
         } else {
             stats_galley(painter, text)
@@ -172,8 +187,10 @@ impl Drawing {
         let size = galley.size() + CARD_PADDING * 2.0;
         let (left, right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
-        // Side readouts sit away from the line's continuation, including horizontal lines.
+        // Side readouts sit away from the line's continuation; beside a trend angle's first
+        // right-hand anchor they take the side away from its arc instead.
         let rising = right.y < left.y;
+        let right_rising = rising != (self.tool_type == DrawingToolType::TrendAngle && a.x > b.x);
         let place = |position| match position {
             P::Left => (
                 left + egui::vec2(-gap, if rising { -gap } else { gap }),
@@ -217,8 +234,8 @@ impl Drawing {
                 (pos, Align2::CENTER_CENTER)
             }
             P::Right => (
-                right + egui::vec2(gap, if rising { gap } else { -gap }),
-                if rising {
+                right + egui::vec2(gap, if right_rising { gap } else { -gap }),
+                if right_rising {
                     Align2::LEFT_TOP
                 } else {
                     Align2::LEFT_BOTTOM
@@ -240,7 +257,8 @@ impl Drawing {
         Some((galley, align, pos, size))
     }
 
-    /// Paints each anchor's price on a small label on the side away from the other anchor.
+    /// Paints each anchor's price away from the other anchor, except a trend angle's first
+    /// right-hand anchor, whose label sits between the anchors on the side away from its arc.
     fn render_anchor_prices(&self, painter: &egui::Painter, a: Pos2, b: Pos2, view: &ChartView) {
         let [first, second, ..] = self.chart_points.as_slice() else {
             return;
@@ -251,15 +269,23 @@ impl Drawing {
             let Some(text) = super::annotations::price_text(price, view) else {
                 continue;
             };
-            let (align, away) = if point.x < other.x {
-                (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
-            } else if point.x > other.x {
-                (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
-            } else if point.y <= other.y {
-                (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
-            } else {
-                (Align2::CENTER_TOP, egui::vec2(0.0, gap))
-            };
+            let (align, away) =
+                if self.tool_type == DrawingToolType::TrendAngle && point == a && point.x > other.x
+                {
+                    if point.y >= other.y {
+                        (Align2::RIGHT_TOP, egui::vec2(-gap, gap))
+                    } else {
+                        (Align2::RIGHT_BOTTOM, egui::vec2(-gap, -gap))
+                    }
+                } else if point.x < other.x {
+                    (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
+                } else if point.x > other.x {
+                    (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
+                } else if point.y <= other.y {
+                    (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
+                } else {
+                    (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+                };
             boxed_label(
                 painter,
                 align,
@@ -327,7 +353,8 @@ impl Drawing {
         }
         let mut lines = vec![prices.join("  "), spans.join(", ")];
         if settings.inclination && delta.is_finite() {
-            let angle = (-delta.y).atan2(delta.x).to_degrees();
+            // Use the trend angle's own reading, including a level line's zero height.
+            let angle = (start.y - end.y).atan2(end.x - start.x).to_degrees();
             lines.push(format!("{:.1}°", angle + 0.0));
         }
         lines.retain(|line| !line.is_empty());
@@ -930,13 +957,20 @@ mod tests {
                         );
                         let bounds = Rect::from_min_size(text.pos, text.galley.size());
                         let side = if position == P::Right { 1.0 } else { -1.0 };
-                        for corner in [
-                            bounds.min,
-                            bounds.max,
-                            bounds.left_bottom(),
-                            bounds.right_top(),
-                        ] {
-                            assert!((corner - midpoint).dot(egui::vec2(0.8, 0.6)) * side >= 4.9);
+                        // A reversed angle's Right card clears its arc, checked by the angle
+                        // overlap regression instead of this continuation-side assertion.
+                        if !(tool == DrawingToolType::TrendAngle && reverse && position == P::Right)
+                        {
+                            for corner in [
+                                bounds.min,
+                                bounds.max,
+                                bounds.left_bottom(),
+                                bounds.right_top(),
+                            ] {
+                                assert!(
+                                    (corner - midpoint).dot(egui::vec2(0.8, 0.6)) * side >= 4.9
+                                );
+                            }
                         }
                     }
                     if !selected {
@@ -1235,7 +1269,7 @@ mod tests {
         }
     }
 
-    /// A new info line shows every readout without being selected, in its own blue 14 px text;
+    /// A new info line shows every readout without being selected, in its own 14 px text;
     /// colour, opacity, size and slant reach the card. +10 on 100 is 10%, 40 quarter-point
     /// ticks; bars 0 to 30 are 30 bars and 30 periods of 10 px plus a 10 px rise, atan(10 / 300)
     /// = 1.9 degrees.
@@ -1267,10 +1301,14 @@ mod tests {
                     false,
                 );
             });
-            let text = output.shapes.iter().find_map(|s| match &s.shape {
-                egui::Shape::Text(t) => Some(t.clone()),
-                _ => None,
-            });
+            let text = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             output.drop_without_applying_deltas();
             text
         };
@@ -1278,33 +1316,43 @@ mod tests {
         drawing.completed = true;
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 110.0)];
         drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
-        let text = card_text(&drawing).expect("readouts show without selection");
+        let text = card_text(&drawing)
+            .into_iter()
+            .next()
+            .expect("readouts show without selection");
+        // sqrt(300^2 + 10^2) / 10 = 30.02 periods.
         assert_eq!(
             text.galley.job.text,
             "+10.00 (+10.00%)  +40 ticks\n30 bars, 30.02 periods\n1.9°"
         );
         let format = &text.galley.job.sections[0].format;
-        // sqrt(300^2 + 10^2) / 10 = 30.02 periods.
-        assert_eq!(format.color, Color32::from_rgb(41, 98, 255));
         assert_eq!(format.font_id.size, 14.0);
         assert!(!format.italics);
 
         // The line's colour leaves the readouts' colour alone.
         drawing.color = [255, 0, 0, 255];
-        drawing.text_color = Some([1, 2, 3, 128]);
+        drawing.text_color = Some([255, 200, 0, 200]);
         drawing.font_size = 20.0;
         drawing.italic = true;
-        let plain = card_text(&drawing).unwrap();
+        drawing.font_weight = crate::drawings::FontWeight::Bold;
+        let texts = card_text(&drawing);
+        assert_eq!(texts.len(), 2, "info line readouts keep their own weight");
+        let plain = &texts[0];
+        assert_eq!(texts[1].galley, plain.galley);
+        assert!(
+            (texts[1].pos - plain.pos - egui::vec2(super::super::style::BOLD_OFFSET, 0.0)).length()
+                < 1e-4
+        );
         let format = &plain.galley.job.sections[0].format;
         assert_eq!(
             format.color,
-            Color32::from_rgba_unmultiplied(1, 2, 3, 128),
+            Color32::from_rgba_unmultiplied(255, 200, 0, 200),
             "opacity"
         );
         assert_eq!(format.font_id.size, 20.0);
         assert!(format.italics);
         drawing.line_measurements.persistent = false;
-        assert!(card_text(&drawing).is_none(), "selection only");
+        assert!(card_text(&drawing).is_empty(), "selection only");
     }
 
     /// On a horizontal line from x = 100 to 300 at y = 200, in either anchor order, the alignment
@@ -1373,5 +1421,303 @@ mod tests {
             assert!(label("300.00").right() < 100.0);
             assert!(label("400.00").left() > 300.0);
         }
+    }
+
+    /// A trend angle view: one point per bar and per price unit, price 0 at the
+    /// bottom of a 500 x 400 pane.
+    fn paint_trend_angle(
+        first: (f32, f64),
+        second: (f32, f64),
+        measurements: crate::drawings::LineMeasurements,
+    ) -> (Drawing, Vec<egui::Shape>) {
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let x = |bar: f32| bar;
+        let y = |price: f64| 400.0 - price as f32;
+        let inverse = |y: f32| f64::from(400.0 - y);
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars: &[],
+            revision: 0,
+            bar_to_x: &x,
+            price_to_y: &y,
+            y_to_price: &inverse,
+            time_axis: false,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        let mut angle = Drawing::new(1, DrawingToolType::TrendAngle);
+        angle.completed = true;
+        angle.chart_points = vec![
+            ChartPoint::new(first.0, first.1),
+            ChartPoint::new(second.0, second.1),
+        ];
+        angle.update_screen_coords(x, y);
+        angle.line_measurements = measurements;
+        let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+            angle.render_with_selection(ui.painter(), pane, &view, false);
+        });
+        fn flat(shapes: impl IntoIterator<Item = egui::Shape>, out: &mut Vec<egui::Shape>) {
+            for shape in shapes {
+                match shape {
+                    egui::Shape::Vec(inner) => flat(inner, out),
+                    shape => out.push(shape),
+                }
+            }
+        }
+        let mut shapes = Vec::new();
+        flat(
+            std::mem::take(&mut output.shapes)
+                .into_iter()
+                .map(|s| s.shape),
+            &mut shapes,
+        );
+        output.drop_without_applying_deltas();
+        (angle, shapes)
+    }
+
+    /// A level line from x = 300 to x = 100 points straight left, 180 degrees, as the info line
+    /// read before its readouts moved to the line tools' and as a trend angle's own label reads.
+    #[test]
+    fn level_line_drawn_right_to_left_reads_180_degrees() {
+        use crate::drawings::LineMeasurements;
+        let bars = sample_bars();
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars: &bars,
+            revision: 0,
+            bar_to_x: &|bar| 10.0 * bar,
+            price_to_y: &|price| 300.0 - price as f32,
+            y_to_price: &|y| f64::from(300.0 - y),
+            time_axis: false,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        for tool in [
+            DrawingToolType::TrendLine,
+            DrawingToolType::Ray,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::InfoLine,
+            DrawingToolType::TrendAngle,
+        ] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.line_measurements = LineMeasurements {
+                inclination: true,
+                ..Default::default()
+            };
+            for (from, to, want) in [(30.0, 10.0, "180.0°"), (10.0, 30.0, "0.0°")] {
+                drawing.chart_points =
+                    vec![ChartPoint::new(from, 100.0), ChartPoint::new(to, 100.0)];
+                drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
+                assert_eq!(drawing.line_measurement_label(&view), want, "{tool:?}");
+            }
+        }
+        let (_, shapes) = paint_trend_angle(
+            (300.0, 200.0),
+            (100.0, 200.0),
+            LineMeasurements {
+                persistent: true,
+                inclination: true,
+                ..Default::default()
+            },
+        );
+        let texts: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["180.0°", "180.0°"]);
+    }
+
+    /// A new info line's readouts sit on the theme's tooltip card. The chart keeps text at 4.5:1
+    /// or more against what it is painted on, as the theme's axis text the card used before
+    /// does: white on the dark card is 11.2:1.
+    #[test]
+    fn info_line_readouts_read_on_their_card_in_every_theme() {
+        use crate::theme::{apply_to_egui, contrast, presets};
+        // The measure agrees with WCAG 2: the default blue on the dark card is 2.28:1.
+        let blue = contrast(
+            Color32::from_rgb(41, 98, 255),
+            Color32::from_rgb(55, 59, 70),
+        );
+        assert!((blue - 2.28).abs() < 0.01, "{blue}");
+        let bars = sample_bars();
+        let ctx = egui::Context::default();
+        let mut ratios = Vec::new();
+        for (name, theme) in presets() {
+            apply_to_egui(&ctx, &theme);
+            for text_color in [Some([41, 98, 255, 255]), None] {
+                let mut drawing = Drawing::new(1, DrawingToolType::InfoLine);
+                drawing.text_color = text_color;
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 110.0)];
+                drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|bar| 10.0 * bar,
+                        price_to_y: &|price| 300.0 - price as f32,
+                        y_to_price: &|y| f64::from(300.0 - y),
+                        time_axis: false,
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                    };
+                    drawing.render_with_selection(
+                        ui.painter(),
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                        &view,
+                        false,
+                    );
+                });
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text.contains("bars") => Some((
+                            Rect::from_min_size(t.pos, t.galley.size()),
+                            t.galley.job.sections[0].format.color,
+                        )),
+                        _ => None,
+                    })
+                    .expect("readouts");
+                let card = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.rect.contains_rect(text.0) => Some(r.fill),
+                        _ => None,
+                    })
+                    .expect("card");
+                output.drop_without_applying_deltas();
+                if name == "light" {
+                    assert_eq!(text.1, Color32::from_rgb(41, 98, 255));
+                }
+                ratios.push((name, text_color, contrast(text.1, card)));
+            }
+        }
+        assert!(
+            ratios.iter().all(|&(_, _, ratio)| ratio >= 4.5),
+            "{ratios:?}"
+        );
+    }
+
+    /// In either anchor order, rising and falling trend angles keep their side readouts and first
+    /// price label off the angle text, arc, horizontal guide and line. Auto falls back to Left
+    /// when the right card cannot fit; explicit Left has enough room to avoid clamping.
+    #[test]
+    fn trend_angle_readouts_and_price_labels_clear_its_angle_in_both_orders() {
+        use crate::drawings::{LineMeasurementPosition as P, LineMeasurements};
+        use egui::Shape;
+        let measurements = LineMeasurements {
+            persistent: true,
+            price_change: true,
+            percent_change: true,
+            bar_count: true,
+            length: true,
+            inclination: true,
+            price_labels: true,
+            ..Default::default()
+        };
+        let mut observed = Vec::new();
+        for (order, mut first, mut second, position, shift) in [
+            ("left to right", (100.0, 300.0), (300.0, 200.0)),
+            ("right to left", (300.0, 200.0), (100.0, 300.0)),
+            ("left to right rising", (100.0, 200.0), (300.0, 300.0)),
+            ("right to left falling", (300.0, 300.0), (100.0, 200.0)),
+        ]
+        .into_iter()
+        .flat_map(|(order, a, b)| {
+            [
+                (P::Right, 0.0),
+                (P::Left, 100.0),
+                (P::Auto, 0.0),
+                (P::Auto, 140.0),
+            ]
+            .map(|(position, shift)| (order, a, b, position, shift))
+        }) {
+            first.0 += shift;
+            second.0 += shift;
+            let measurements = LineMeasurements {
+                position,
+                ..measurements
+            };
+            let (angle, shapes) = paint_trend_angle(first, second, measurements);
+            let text = |wanted: &dyn Fn(&str) -> bool| {
+                shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(t) if wanted(&t.galley.job.text) => {
+                            Some(Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{order}: no text in {shapes:?}"))
+            };
+            let boxed = |inside: Rect| {
+                shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Rect(r) if r.rect.contains_rect(inside) => Some(r.rect),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let angle_text = text(&|t: &str| t.ends_with('°') && !t.contains('\n'));
+            let card = boxed(text(&|t: &str| t.contains("bars")));
+            let first_price = format!("{:.2}", first.1);
+            let label = boxed(text(&|t: &str| t == first_price));
+            // The construction guides, the arc and the line, in the line colour.
+            let color = angle.color32();
+            let mut guides: Vec<Pos2> = Vec::new();
+            for shape in &shapes {
+                match shape {
+                    Shape::LineSegment { points, stroke } if stroke.color == color => {
+                        guides.extend(points)
+                    }
+                    Shape::Mesh(mesh) => guides.extend(
+                        (mesh.vertices.iter())
+                            .filter(|v| v.color == color)
+                            .map(|v| v.pos),
+                    ),
+                    _ => {}
+                }
+            }
+            let covered = card.intersect(angle_text);
+            observed.push(format!(
+                "{order}: angle text {angle_text:?}, card {card:?}, covered {:?}, \
+                 guide points in the card {}, in the first price label {label:?} {}",
+                (covered.is_positive()).then_some(covered),
+                guides.iter().filter(|p| card.contains(**p)).count(),
+                guides.iter().filter(|p| label.contains(**p)).count(),
+            ));
+            if covered.is_positive()
+                || label.intersect(angle_text).is_positive()
+                || guides
+                    .iter()
+                    .any(|p| card.contains(*p) || label.contains(*p))
+            {
+                observed.push(format!("{order}: overlaps"));
+            }
+        }
+        assert!(
+            !observed.iter().any(|line| line.ends_with("overlaps")),
+            "{observed:?}"
+        );
     }
 }

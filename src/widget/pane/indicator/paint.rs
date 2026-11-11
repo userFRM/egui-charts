@@ -505,15 +505,13 @@ impl IndicatorPane {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
-                    // The value comes from a source bar, and a transparent colour there hides
-                    // only the segment into it.
-                    let color = indicator
-                        .plot_offset(line)
-                        .checked_neg()
-                        .and_then(|back| bar.checked_add_signed(back))
-                        .and_then(|source| indicator.plot_color(line, source))
-                        .filter(|color| color.a() != 0)
-                        .unwrap_or_else(|| indicator.plot_style(line).color);
+                    let color = crate::chart::indicators::plots::plot_value_color(
+                        indicator,
+                        line,
+                        Some(bar),
+                    )
+                    .filter(|color| color.a() != 0)
+                    .unwrap_or_else(|| indicator.plot_style(line).color);
                     // A fully transparent colour holds no RGB, so it has no opaque form.
                     let color = if color.a() == 0 {
                         text_color
