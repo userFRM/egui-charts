@@ -144,7 +144,8 @@ impl Chart {
     }
 
     /// Replace a retracement's or time projection's levels, typography, label placement and
-    /// construction visibility as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    /// construction visibility as one undoable edit. Unknown ids, locked drawings and invalid
+    /// settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,

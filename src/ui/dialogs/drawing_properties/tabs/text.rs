@@ -116,28 +116,27 @@ impl TextTab {
                 {
                     config.label_position = Some(position);
                 }
-                alignment_row(
-                    ui,
-                    "Label height",
-                    if time {
-                        &mut config.time_label_vertical
-                    } else {
-                        &mut config.label_vertical
-                    },
-                    if time {
+                // Time projections run top to bottom of the pane; retracements measure from the line.
+                let (height, choices) = if time {
+                    (
+                        &mut config.time_label_vertical,
                         [
                             (V::Top, "Top"),
                             (V::Middle, "Middle"),
                             (V::Bottom, "Bottom"),
-                        ]
-                    } else {
+                        ],
+                    )
+                } else {
+                    (
+                        &mut config.label_vertical,
                         [
                             (V::Bottom, "Top"),
                             (V::Middle, "Middle"),
                             (V::Top, "Bottom"),
-                        ]
-                    },
-                );
+                        ],
+                    )
+                };
+                alignment_row(ui, "Label height", height, choices);
                 if time {
                     return;
                 }

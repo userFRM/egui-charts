@@ -929,6 +929,7 @@ impl Drawing {
         x.is_finite().then_some(x)
     }
 
+    /// Visible projection lines inside `rect`, then the construction segments when shown.
     pub(super) fn fibonacci_time_zone_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
         let config = self.fibonacci_config();
         let mut lines: Vec<_> = config
