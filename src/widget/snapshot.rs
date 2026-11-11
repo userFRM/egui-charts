@@ -1766,6 +1766,85 @@ mod tests {
         );
     }
 
+    /// Missing axis label switches inherit their saved lines through restore and resave.
+    #[test]
+    fn layout_saved_with_hidden_crosshair_lines_restores_without_labels() {
+        use crate::config::CrosshairOptions;
+        use crate::widget::{ChartLayoutMode, SavedLayout};
+        use serde::Deserialize;
+
+        for (vertical, horizontal, switches) in [
+            (true, true, (None, None)),
+            (false, false, (None, None)),
+            (false, true, (None, None)),
+            (true, false, (None, None)),
+            (false, false, (Some(true), Some(true))),
+            (true, true, (Some(false), Some(false))),
+            (false, true, (Some(true), Some(false))),
+            (false, false, (Some(true), None)),
+            (false, false, (None, Some(true))),
+        ] {
+            let expected = CrosshairOptions {
+                vert_line_visible: vertical,
+                horz_line_visible: horizontal,
+                horz_line_width: 3.0,
+                vert_label_visible: switches.0.unwrap_or(vertical),
+                horz_label_visible: switches.1.unwrap_or(horizontal),
+                ..Default::default()
+            };
+            let mut fields = vec![
+                ("vert_line_visible", vertical),
+                ("horz_line_visible", horizontal),
+            ];
+            if let Some(visible) = switches.0 {
+                fields.push(("vert_label_visible", visible));
+            }
+            if let Some(visible) = switches.1 {
+                fields.push(("horz_label_visible", visible));
+            }
+            // These values distinguish booleans from optional booleans, unlike JSON.
+            let fields = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(
+                fields.into_iter(),
+            );
+            assert_eq!(
+                CrosshairOptions::deserialize(fields).unwrap(),
+                CrosshairOptions {
+                    horz_line_width: 1.0,
+                    ..expected
+                },
+            );
+            let mut saved = serde_json::to_value(expected).unwrap();
+            let fields = saved.as_object_mut().unwrap();
+            if switches.0.is_none() {
+                fields.remove("vert_label_visible");
+            }
+            if switches.1.is_none() {
+                fields.remove("horz_label_visible");
+            }
+            assert_eq!(
+                serde_json::from_value::<CrosshairOptions>(saved.clone()).unwrap(),
+                expected
+            );
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let layout = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+            };
+            let mut document: serde_json::Value =
+                serde_json::from_str(&layout.to_json().unwrap()).unwrap();
+            document["charts"][0]["options"]["crosshair"] = saved;
+            let restored = SavedLayout::from_json(&document.to_string()).unwrap();
+            chart.restore(&restored.charts[0]).unwrap();
+            assert_eq!(chart.chart_options().crosshair, expected);
+            let saved_again = chart.snapshot().unwrap();
+            assert_eq!(saved_again.options.as_ref().unwrap().crosshair, expected);
+        }
+        assert_eq!(
+            serde_json::from_str::<CrosshairOptions>("{}").unwrap(),
+            CrosshairOptions::default()
+        );
+    }
+
     /// An HLC area layout or template saved before the style held each line and fill restores as
     /// it was drawn: fills in the saved candle colours at alpha round(0.5 * 255) = 128, the close
     /// line in the rising colour at width 4, and no line in the current default colours.
