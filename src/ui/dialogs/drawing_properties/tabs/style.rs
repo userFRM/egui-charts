@@ -74,6 +74,7 @@ impl StyleTab {
                 ui.end_row();
             }
 
+            let exact = props.color_rgba();
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
                 if matches!(
@@ -90,12 +91,19 @@ impl StyleTab {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
                     ui.label(l10n::text(ui.ctx(), "All colours"));
-                    if let Some(color) =
-                        color_swatch(ui, fill_picker, props.color, "fibonacci_color")
+                    fill_picker.sel_color = props.color;
+                    if let Some([r, g, b, a]) = ColorPicker::new(fill_picker, "fibonacci_color")
+                        .show_unmultiplied(ui, exact)
+                        .inner
                     {
-                        props.color = keep_opacity(color, props.color, fill_picker.custom_mode);
+                        let line = if fill_picker.custom_mode || props.color.a() == 0 {
+                            a
+                        } else {
+                            props.color.a()
+                        };
+                        props.color = Color32::from_rgba_unmultiplied(r, g, b, line);
+                        settings.color = [r, g, b, line];
                         for level in &mut config.levels {
-                            let [r, g, b, a] = color.to_srgba_unmultiplied();
                             let opacity = if fill_picker.custom_mode {
                                 a
                             } else {
