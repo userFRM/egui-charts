@@ -226,17 +226,14 @@ impl StoredDrawing {
         }) {
             return Some("fib_config.level_width".into());
         }
+        let bad_width = |width: f32| !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH);
         if d.fib_config.as_ref().is_some_and(|c| {
             !(1.0..=256.0).contains(&c.label_size)
-                || !(c.grid_width > 0.0 && c.grid_width <= super::validation::MAX_STROKE_WIDTH)
+                || bad_width(c.grid_width)
                 || c.levels
                     .iter()
                     .chain(c.time_levels.iter().flatten())
-                    .any(|level| {
-                        level.width.is_some_and(|width| {
-                            !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
-                        })
-                    })
+                    .any(|level| level.width.is_some_and(bad_width))
         }) {
             return Some("fib_config".into());
         }
