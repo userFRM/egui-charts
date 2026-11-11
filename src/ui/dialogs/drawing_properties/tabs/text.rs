@@ -18,7 +18,7 @@ const FONT_SIZES: &[f32] = &[8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0
 
 /// Tools whose text sits in a box drawn from the text, background and border settings; tables,
 /// posts and ideas keep the theme's colours for their text.
-fn has_text_box(tool: DrawingToolType) -> bool {
+pub(crate) fn has_text_box(tool: DrawingToolType) -> bool {
     use DrawingToolType as T;
     matches!(
         tool,

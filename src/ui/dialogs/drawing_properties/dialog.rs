@@ -309,7 +309,7 @@ impl DrawingPropertiesDialog {
     fn current_template(&self) -> Option<DrawingTemplate> {
         let mut template = self.props.tool_settings.as_deref()?.clone();
         let d = &mut template.settings;
-        d.color = self.props.color.to_srgba_unmultiplied();
+        d.color = self.props.color_rgba();
         d.stroke_width = self.props.line_width;
         d.line_style = self.props.line_style;
         d.fill_color = self.props.fill_enabled.then(|| {
@@ -486,7 +486,7 @@ impl DrawingPropertiesDialog {
                     StyleTab::show(ui, &mut self.props, &mut state.pickers);
                 }
                 PropertiesTab::Inputs => {
-                    let color = self.props.color.to_srgba_unmultiplied();
+                    let color = self.props.color_rgba();
                     if let Some(template) = &mut self.props.tool_settings {
                         template.settings.color = color;
                         InputsTab::show(
@@ -662,7 +662,7 @@ mod tests {
                 (Tool::Brush, true, false, false, true),
                 (Tool::TrendLine, false, true, true, true),
                 (Tool::TrendAngle, false, true, true, true),
-                (Tool::TextLabel, false, false, true, true),
+                (Tool::TextLabel, false, false, true, false),
                 (Tool::Highlighter, false, false, false, true),
                 (Tool::ArrowMarker, false, false, true, false),
                 (Tool::ArrowMarkDown, false, false, true, false),
