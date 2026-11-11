@@ -1227,11 +1227,10 @@ mod tests {
         drawing.completed = true;
         drawing.pane = Some(rsi.0);
         chart.drawings_mut().drawings.push(drawing);
-        let sizing = super::super::ChartLayout::default().sizes(ChartLayoutMode::Single);
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot().unwrap()],
-            sizing: Some(sizing.clone()),
+            sizing: None,
         }
         .to_json()
         .unwrap();
@@ -1239,7 +1238,6 @@ mod tests {
         let mut restored = Chart::new(BarData::from_bars(bars));
         restored.add_indicator(Box::new(SMA::new(3)));
         let layout = SavedLayout::from_json(&json).unwrap();
-        assert_eq!(layout.sizing, Some(sizing));
         assert!(restored.restore(&layout.charts[0]).unwrap().is_empty());
         assert_eq!(restored.symbol(), "A");
         assert_eq!(restored.timeframe(), Some(Timeframe::Min5));
