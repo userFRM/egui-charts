@@ -1003,7 +1003,10 @@ fn fib_row(
     inherited_width: f32,
     inherited_style: LineStyle,
 ) -> LevelRow<'_> {
-    let round = matches!(tool, Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs);
+    let round = matches!(
+        tool,
+        Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs
+    );
     let time = matches!(tool, Tool::FibonacciTimeZones | Tool::TrendBasedFibTime);
     LevelRow {
         visible: &mut level.visible,
