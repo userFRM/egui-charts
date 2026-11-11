@@ -1547,9 +1547,13 @@ enum Stream {
     Nothing,
     /// One execution, which opens a bar of its own.
     Execution(Tick),
-    /// The bars of the tape from this one on, as complete bars, after the newest history bar
-    /// again, as a feed may push it on subscribing.
-    Bars(usize),
+    /// The tape's complete bars in `pushed`, after the history page or, with `first`, before it.
+    /// The history page holds the bars of the tape's first `history` executions.
+    Bars {
+        history: usize,
+        pushed: std::ops::Range<usize>,
+        first: bool,
+    },
 }
 
 /// Runs a chart on `interval` whose history page holds the bars of `tape` before `stream`, which
@@ -1564,11 +1568,19 @@ fn paged_cells(
     let timeframe: Timeframe = interval.parse().unwrap();
     let candles = crate::data::aggregate_trades_with_tick_size(tape, timeframe, Some(1.0)).unwrap();
     let history = match stream {
-        Stream::Nothing => candles.len(),
-        Stream::Execution(trade) => candles.partition_point(|bar| bar.time < trade.ts),
-        Stream::Bars(from) => *from,
+        Stream::Nothing => candles[..].to_vec(),
+        Stream::Execution(trade) => {
+            candles[..candles.partition_point(|bar| bar.time < trade.ts)].to_vec()
+        }
+        Stream::Bars { history, .. } => {
+            crate::data::aggregate_trades_with_tick_size(&tape[..*history], timeframe, Some(1.0))
+                .unwrap()
+        }
     };
     let feed = Arc::new(Script::default());
+    let push = |pushed: &std::ops::Range<usize>| {
+        (candles[pushed.clone()].iter()).for_each(|bar| feed.sink().push_bar(bar.clone()));
+    };
     let mut chart = fed(&feed, Some("A"));
     chart.set_timeframe(timeframe);
     chart.set_chart_type(ChartType::VolumeFootprint);
@@ -1576,23 +1588,35 @@ fn paged_cells(
     frames.run(&mut chart);
     feed.resolve()
         .send(Ok(Instrument::new("A").with_tick_size(1.0)));
-    feed.page().send(page(candles[..history].to_vec(), true));
+    if let Stream::Bars {
+        pushed,
+        first: true,
+        ..
+    } = stream
+    {
+        frames.run(&mut chart);
+        push(pushed);
+        frames.run(&mut chart);
+    }
+    feed.page().send(page(history.clone(), true));
     frames.run(&mut chart);
     frames.run(&mut chart);
     match stream {
-        Stream::Nothing => {}
         Stream::Execution(trade) => feed.sink().push_tick(trade.clone()),
-        Stream::Bars(from) => candles[*from - 1..]
-            .iter()
-            .for_each(|bar| feed.sink().push_bar(bar.clone())),
+        Stream::Bars {
+            pushed,
+            first: false,
+            ..
+        } => push(pushed),
+        _ => {}
     }
     frames.run(&mut chart);
     (feed.trades.lock().unwrap().remove(0))
         .send(Ok(TradePage::new(tape[page_range].to_vec(), false)));
     frames.run(&mut chart);
     let sent = match stream {
-        Stream::Bars(_) => candles.len(),
-        _ => history,
+        Stream::Bars { pushed, .. } => pushed.end,
+        _ => history.len(),
     };
     assert_eq!(
         chart.bars(SeriesId::MAIN)[..sent],
@@ -1602,7 +1626,7 @@ fn paged_cells(
     let link = chart.feed_link.as_ref().unwrap();
     let flow = link.footprint.as_ref().unwrap();
     let complete = flow.complete_from();
-    candles[..history]
+    candles[..history.len()]
         .iter()
         .map(|bar| {
             flow.bar_at(bar.time)
@@ -1634,11 +1658,17 @@ fn paged_cells(
 /// that completes the last of them. Without ids the store leaves out the page's sell of 4, so the
 /// page lacks 1 of that bar, and a grouping from the buy at 101 again matches every bar to its
 /// end: the page's end proves nothing there, and the own cells are those of the fourth tape. The
-/// last tape's bars hold the buy of 6 at 100 and the sell of 4 at 101; the buy of 5 at 101 and
+/// pushed tape's bars hold the buy of 6 at 100 and the sell of 4 at 101; the buy of 5 at 101 and
 /// the sell of 5 at 102; the buy of 3 at 102 and the sell of 7 at 103; the buy of 4 at 104 and
-/// the sell of 6 at 105, which the host pushes as a bar after pushing the newest history bar
-/// again. Its page starts at a price the bar before closes at and ends with the bar before the
-/// new one, which proves its start.
+/// the sell of 6 at 105. Its history page holds the first three and its trade page starts at a
+/// price the bar before closes at and ends with the third. The host pushes the third bar again
+/// as it is, with or without the fourth, after the history page or before it: only the fourth
+/// is news the history lacks, so the page's end proves its start in every order. The last two
+/// rows repeat the fourth tape, whose history page holds its fourth bar while it forms, through
+/// the sell of 6 at 106 with volume 9, and whose host pushes that bar complete, after the
+/// history page or before it. The page, every execution but the first and the last, lacks the 1
+/// that completes it, and a grouping from the buy at 101 matches every bar to the page's end
+/// with the pushed bar: that bar is news, so the page's end proves nothing there.
 #[test]
 fn split_fill_boundaries_draw_only_a_bars_own_executions() {
     use crate::model::OrderSide::{Buy, Sell};
@@ -1692,6 +1722,38 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
         .filter(|cells| !cells.is_empty())
         .map(|cells| Some(cells.into_values().collect()))
         .collect();
+    let issue = tape(&[
+        (100.0, 9.0, Buy),
+        (101.0, 2.0, Buy),
+        (102.0, 5.0, Sell),
+        (103.0, 6.0, Sell),
+        (104.0, 5.0, Buy),
+        (105.0, 6.0, Buy),
+        (106.0, 6.0, Sell),
+        (106.0, 4.0, Sell),
+    ]);
+    let issue_own = vec![
+        None,
+        Some(vec![(101, 0.0, 1.0), (102, 5.0, 0.0), (103, 4.0, 0.0)]),
+        Some(vec![(103, 2.0, 0.0), (104, 0.0, 5.0), (105, 0.0, 3.0)]),
+        Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
+        None,
+    ];
+    let pushed = tape(&[
+        (100.0, 6.0, Buy),
+        (101.0, 4.0, Sell),
+        (101.0, 5.0, Buy),
+        (102.0, 5.0, Sell),
+        (102.0, 3.0, Buy),
+        (103.0, 7.0, Sell),
+        (104.0, 4.0, Buy),
+        (105.0, 6.0, Sell),
+    ]);
+    let pushed_own = vec![
+        None,
+        Some(vec![(101, 0.0, 5.0), (102, 5.0, 0.0)]),
+        Some(vec![(102, 0.0, 3.0), (103, 7.0, 0.0)]),
+    ];
     let rows = [
         (
             "10v",
@@ -1763,24 +1825,9 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
         (
             "page ending before the fill that completes its last bar",
             "10v",
-            tape(&[
-                (100.0, 9.0, Buy),
-                (101.0, 2.0, Buy),
-                (102.0, 5.0, Sell),
-                (103.0, 6.0, Sell),
-                (104.0, 5.0, Buy),
-                (105.0, 6.0, Buy),
-                (106.0, 6.0, Sell),
-                (106.0, 4.0, Sell),
-            ]),
+            issue.clone(),
             1..7,
-            vec![
-                None,
-                Some(vec![(101, 0.0, 1.0), (102, 5.0, 0.0), (103, 4.0, 0.0)]),
-                Some(vec![(103, 2.0, 0.0), (104, 0.0, 5.0), (105, 0.0, 3.0)]),
-                Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
-                None,
-            ],
+            issue_own.clone(),
             false,
             Stream::Nothing,
         ),
@@ -1796,23 +1843,9 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
         (
             "stream at the instant that completes the last bar, without ids",
             "10v",
-            tape(&[
-                (100.0, 9.0, Buy),
-                (101.0, 2.0, Buy),
-                (102.0, 5.0, Sell),
-                (103.0, 6.0, Sell),
-                (104.0, 5.0, Buy),
-                (105.0, 6.0, Buy),
-                (106.0, 6.0, Sell),
-                (106.0, 4.0, Sell),
-            ]),
+            issue.clone(),
             1..8,
-            vec![
-                None,
-                Some(vec![(101, 0.0, 1.0), (102, 5.0, 0.0), (103, 4.0, 0.0)]),
-                Some(vec![(103, 2.0, 0.0), (104, 0.0, 5.0), (105, 0.0, 3.0)]),
-                Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
-            ],
+            issue_own[..4].to_vec(),
             false,
             Stream::Execution(Tick::new(
                 start + TimeDelta::seconds(7),
@@ -1824,24 +1857,67 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
         (
             "page ending with the bar before the first new pushed bar",
             "10v",
-            tape(&[
-                (100.0, 6.0, Buy),
-                (101.0, 4.0, Sell),
-                (101.0, 5.0, Buy),
-                (102.0, 5.0, Sell),
-                (102.0, 3.0, Buy),
-                (103.0, 7.0, Sell),
-                (104.0, 4.0, Buy),
-                (105.0, 6.0, Sell),
-            ]),
+            pushed.clone(),
             2..6,
-            vec![
-                None,
-                Some(vec![(101, 0.0, 5.0), (102, 5.0, 0.0)]),
-                Some(vec![(102, 0.0, 3.0), (103, 7.0, 0.0)]),
-            ],
+            pushed_own.clone(),
             true,
-            Stream::Bars(3),
+            Stream::Bars {
+                history: 6,
+                pushed: 2..4,
+                first: false,
+            },
+        ),
+        (
+            "newest history bar pushed again before the history page",
+            "10v",
+            pushed.clone(),
+            2..6,
+            pushed_own.clone(),
+            true,
+            Stream::Bars {
+                history: 6,
+                pushed: 2..3,
+                first: true,
+            },
+        ),
+        (
+            "newest history bar and a new bar pushed before the history page",
+            "10v",
+            pushed,
+            2..6,
+            pushed_own,
+            true,
+            Stream::Bars {
+                history: 6,
+                pushed: 2..4,
+                first: true,
+            },
+        ),
+        (
+            "forming newest history bar pushed complete after the history page",
+            "10v",
+            issue.clone(),
+            1..7,
+            issue_own[..4].to_vec(),
+            false,
+            Stream::Bars {
+                history: 7,
+                pushed: 3..4,
+                first: false,
+            },
+        ),
+        (
+            "newest bar pushed complete before a history page that holds it forming",
+            "10v",
+            issue,
+            1..7,
+            issue_own[..4].to_vec(),
+            false,
+            Stream::Bars {
+                history: 7,
+                pushed: 3..4,
+                first: true,
+            },
         ),
     ];
     let mut failures = Vec::new();

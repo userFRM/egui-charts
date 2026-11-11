@@ -176,8 +176,13 @@ fn carry_closes(bars: &mut [Bar], from_ticks: &BTreeMap<DateTime<Utc>, Origin>, 
 /// Whether `a` and `b` are the same bar, with values compared bitwise so that a whitespace bar is
 /// the same as itself.
 fn same(a: &Bar, b: &Bar) -> bool {
+    same_values(a, b) && a.colors == b.colors && a.payload == b.payload
+}
+
+/// Whether two bars have the same time, prices and volume, bit for bit.
+pub(crate) fn same_values(a: &Bar, b: &Bar) -> bool {
     let bits = |bar: &Bar| [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits);
-    a.time == b.time && bits(a) == bits(b) && a.colors == b.colors && a.payload == b.payload
+    a.time == b.time && bits(a) == bits(b)
 }
 
 /// Finite values, a high at or above open and close, a low at or below them, no negative volume;

@@ -6,7 +6,7 @@ use super::{
     retry_delay,
 };
 use crate::data::inbox::Answer;
-use crate::data::merge::Origin;
+use crate::data::merge::{Origin, same_values};
 use crate::data::trades::Trades;
 use crate::data::{
     DepthHistory, DepthPage, DepthRequest, FeedCapabilities, FeedError, FeedState, HistoryPage,
@@ -275,19 +275,22 @@ impl Chart {
                         *origin != Origin::Live || link.clock.bar_open(bar.time) >= from
                     });
                 }
-                link.pushed_from = link.pushed_from.or_else(|| {
-                    // Only a trade-based interval's cut reads it, and a slot lookup can allocate.
-                    link.clock.timeframe().filter(|tf| tf.is_trade_based())?;
-                    // A bar the chart holds may come again, on subscribing or as a correction:
-                    // the stream starts with the first newer one.
-                    let newest =
-                        (self.bars(SeriesId::MAIN).last()).map(|bar| link.clock.bar_open(bar.time));
-                    (incoming.iter())
+                // Only a trade-based interval's cut reads the start, and there a bar's slot is
+                // its own time. A feed may push a bar the chart holds again, on subscribing: only
+                // a bar that changes what the chart holds is news the history lacks.
+                if link.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+                    let held = self.bars(SeriesId::MAIN);
+                    let news = (incoming.iter())
                         .filter(|(_, origin)| *origin == Origin::Live)
-                        .map(|(bar, _)| link.clock.bar_open(bar.time))
-                        .filter(|open| newest.is_none_or(|newest| *open > newest))
-                        .min()
-                });
+                        .map(|(bar, _)| bar)
+                        .filter(|bar| {
+                            !(held.binary_search_by_key(&bar.time, |held| held.time))
+                                .is_ok_and(|at| same_values(&held[at], bar))
+                        })
+                        .map(|bar| bar.time)
+                        .min();
+                    link.pushed_from = news.into_iter().chain(link.pushed_from).min();
+                }
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
                 if merged.first_changed.is_some() {
@@ -714,6 +717,19 @@ impl Chart {
         self.feed.history_complete |= (page.end_of_history
             || (empty && page.continue_before.is_none()))
             && !self.bar_limit_reached();
+        // The held bars from the start on came from pushes. One the page holds as it is is
+        // history, so the stream starts at the oldest of them the page lacks or holds otherwise.
+        link.pushed_from = link.pushed_from.and_then(|from| {
+            let held = self.bars(SeriesId::MAIN);
+            held[held.partition_point(|bar| bar.time < from)..]
+                .iter()
+                .find(|bar| {
+                    !(page.bars.iter().rev())
+                        .find(|paged| paged.time == bar.time)
+                        .is_some_and(|paged| same_values(paged, bar))
+                })
+                .map(|bar| bar.time)
+        });
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
         // Paged executions on a trade-based interval fill the bars they rebuild.

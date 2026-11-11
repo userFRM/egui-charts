@@ -23,13 +23,16 @@ at its start, or the page to end with the last bar before the live executions an
 page may start anywhere inside a bar; the bars it does not rebuild stay candles, without cells
 from another bar.
 
-A trade page proves the cells of the newest history bar only when it reaches that bar and holds
-every one of its executions. When the host pushes complete bars instead of executions, the first
-pushed bar newer than every bar the chart holds takes the place of the first live execution.
-Page executions without ids at the time of the first live execution cannot be told from the live
-ones, so the chart leaves them out; the bar before then counts as one the page does not reach,
-and bars only its end would prove draw candles. History bars newer than everything the trade page
-reaches draw candles too, so a host should answer both pages up to the same time.
+The host's trade page must reach the last execution of the newest history bar. The chart cannot
+tell a page that stops short of it from one that holds the whole bar, and the cells of that bar and
+of the bars before it may then be shifted onto executions of their neighbours. When the host pushes
+complete bars instead of executions, the oldest pushed bar that the history lacks, or that differs
+from the history bar in its slot, takes the place of the first live execution; a pushed bar equal
+to the history bar in its slot changes nothing. Page executions without ids at the time of the
+first live execution cannot be told from the live ones, so the chart leaves them out; the bar
+before then counts as one the page does not reach, and bars only its end would prove draw candles.
+History bars newer than everything the trade page reaches draw candles too, so a host should answer
+both pages up to the same time.
 
 <!-- example -->
 

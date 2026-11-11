@@ -59,8 +59,9 @@ pub(crate) struct FeedLink {
     /// Open of the last bar a resume dropped; the bars before it are kept. The new subscription
     /// drops older executions, and a latest page that starts after it replaces the kept bars.
     resumed_from: Option<chrono::DateTime<chrono::Utc>>,
-    /// On a trade-based interval, the open of the first bar this subscription pushed that is newer
-    /// than every bar the chart held, which stands for the first live execution while none is held.
+    /// On a trade-based interval, the open of the oldest bar this subscription pushed that the
+    /// history lacks or holds with other values, which stands for the first live execution while
+    /// none is held.
     pushed_from: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
@@ -207,9 +208,9 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// open before the live executions, or before the first new pushed bar without them, and that
-    /// they rebuild ([`Footprint::push_history`]). With `before`, includes only executions
-    /// strictly before that replay cutoff.
+    /// open before the live executions, or without them before the oldest pushed bar the history
+    /// lacks or holds with other values, and that they rebuild ([`Footprint::push_history`]). With
+    /// `before`, includes only executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
