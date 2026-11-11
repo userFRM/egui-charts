@@ -174,6 +174,15 @@ impl SeriesOptions {
 
     /// Explicit per-type styles, with the series colours and widths as fallbacks.
     pub(super) fn type_params(&self) -> ChartTypeParams {
+        ChartTypeParams {
+            styles: self.type_styles(),
+            columns_base: self.columns_base,
+            ..Default::default()
+        }
+    }
+
+    /// The per-type paint styles, without allocating chart construction parameters.
+    pub(super) fn type_styles(&self) -> ChartTypeStyles {
         let line = |color| LinePlotStyle {
             color,
             width: self.width,
@@ -206,59 +215,55 @@ impl SeriesOptions {
         if let Some(radius) = self.marker_radius {
             area.marker_radius = radius;
         }
-        ChartTypeParams {
-            styles: ChartTypeStyles {
-                line: line_style.clone(),
-                step_line: line_style.clone(),
-                line_with_markers: line_style,
-                marker_radius: self.marker_radius.unwrap_or(3.0),
-                area,
-                hollow: crate::model::HollowStyle {
-                    body_up: self.up_color,
-                    body_down: self.down_color,
-                    border_up: self.up_color,
-                    border_down: self.down_color,
-                    wick_up: self.up_color,
-                    wick_down: self.down_color,
-                    ..Default::default()
-                },
-                volume_candles: crate::model::VolumeCandlesStyle {
-                    body_up: self.up_color,
-                    body_down: self.down_color,
-                    border_up: self.up_color,
-                    border_down: self.down_color,
-                    wick_up: self.up_color,
-                    wick_down: self.down_color,
-                    border_visible: self.candle_border_width > 0.0,
-                    ..Default::default()
-                },
-                hlc_area: crate::model::HlcAreaStyle::with_colors(self.up_color, self.down_color),
-                heikin: crate::model::HeikinStyle {
-                    body_up: self.up_color,
-                    body_down: self.down_color,
-                    border_up: self.up_color,
-                    border_down: self.down_color,
-                    wick_up: self.up_color,
-                    wick_down: self.down_color,
-                    border_visible: self.candle_border_width > 0.0,
-                    ..Default::default()
-                },
-                bars: self.bars_style.clone(),
-                high_low: crate::model::HighLowStyle {
-                    bar_color: self.color,
-                    labels_visible: false,
-                    label_color: self.color,
-                    ..Default::default()
-                },
-                last_price_animation: self.last_price_animation,
-                baseline,
-                crosshair_marker_radius: self.crosshair_marker_radius,
-                crosshair_marker_fill: self.crosshair_marker_fill,
-                crosshair_marker_border_color: self.crosshair_marker_border_color,
-                crosshair_marker_border_width: self.crosshair_marker_border_width,
+        ChartTypeStyles {
+            line: line_style.clone(),
+            step_line: line_style.clone(),
+            line_with_markers: line_style,
+            marker_radius: self.marker_radius.unwrap_or(3.0),
+            area,
+            hollow: crate::model::HollowStyle {
+                body_up: self.up_color,
+                body_down: self.down_color,
+                border_up: self.up_color,
+                border_down: self.down_color,
+                wick_up: self.up_color,
+                wick_down: self.down_color,
                 ..Default::default()
             },
-            columns_base: self.columns_base,
+            volume_candles: crate::model::VolumeCandlesStyle {
+                body_up: self.up_color,
+                body_down: self.down_color,
+                border_up: self.up_color,
+                border_down: self.down_color,
+                wick_up: self.up_color,
+                wick_down: self.down_color,
+                border_visible: self.candle_border_width > 0.0,
+                ..Default::default()
+            },
+            hlc_area: crate::model::HlcAreaStyle::with_colors(self.up_color, self.down_color),
+            heikin: crate::model::HeikinStyle {
+                body_up: self.up_color,
+                body_down: self.down_color,
+                border_up: self.up_color,
+                border_down: self.down_color,
+                wick_up: self.up_color,
+                wick_down: self.down_color,
+                border_visible: self.candle_border_width > 0.0,
+                ..Default::default()
+            },
+            bars: self.bars_style.clone(),
+            high_low: crate::model::HighLowStyle {
+                bar_color: self.color,
+                labels_visible: false,
+                label_color: self.color,
+                ..Default::default()
+            },
+            last_price_animation: self.last_price_animation,
+            baseline,
+            crosshair_marker_radius: self.crosshair_marker_radius,
+            crosshair_marker_fill: self.crosshair_marker_fill,
+            crosshair_marker_border_color: self.crosshair_marker_border_color,
+            crosshair_marker_border_width: self.crosshair_marker_border_width,
             ..Default::default()
         }
     }

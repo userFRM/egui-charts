@@ -65,17 +65,23 @@ impl Drawing {
         } else {
             Align2::CENTER_TOP
         };
-        self.render_aligned_line_text(painter, a, b, anchor);
+        if let Some(galley) = self.text_galley(painter) {
+            self.render_aligned_line_text(painter, a, b, anchor, galley);
+        }
     }
 
     /// Paints the drawing's text as [`Self::render_line_text`] does, with the point of the text
     /// that `anchor` names on the segment: its left, middle or right at the end of the segment
     /// that reads first, the middle or the end that reads last, and its top below the line, its
     /// middle on the line or its bottom above the line.
-    fn render_aligned_line_text(&self, painter: &egui::Painter, a: Pos2, b: Pos2, anchor: Align2) {
-        let Some(galley) = self.text_galley(painter) else {
-            return;
-        };
+    fn render_aligned_line_text(
+        &self,
+        painter: &egui::Painter,
+        a: Pos2,
+        b: Pos2,
+        anchor: Align2,
+        galley: std::sync::Arc<egui::Galley>,
+    ) {
         if !(a.is_finite() && b.is_finite()) {
             return;
         }
@@ -118,19 +124,24 @@ impl Drawing {
         }
     }
 
-    /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. A trend line, ray, extended line, info line or
-    /// trend angle extends left past its first anchor and right past its second, whichever way it
-    /// was drawn; other lines extend towards the pane's sides.
-    pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
+    /// Whether Left and Right extend past the first and second anchors, in drawing order.
+    /// Painting, hit testing and study price scales use the same rule.
+    pub(crate) fn extends_past_anchors(&self) -> bool {
         use crate::drawings::DrawingToolType as T;
+        matches!(
+            self.tool_type,
+            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
+        )
+    }
+
+    /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
+    /// as configured; `None` below two anchors. Left and Right extend past the anchors when
+    /// `extends_past_anchors` holds, and towards the pane's sides otherwise.
+    pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
-        if matches!(
-            self.tool_type,
-            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
-        ) {
+        if self.extends_past_anchors() {
             let first = if self.extend_left {
                 ray_end(b, a, rect)
             } else {
@@ -189,8 +200,10 @@ impl Drawing {
     ) {
         if let Some((left, right)) = self.trend_line_ends(rect) {
             self.styled_segment(painter, left, right, stroke);
-            if let &[a, b, ..] = self.points.as_slice() {
-                self.render_aligned_line_text(painter, a, b, self.line_text_anchor());
+            if let &[a, b, ..] = self.points.as_slice()
+                && let Some(galley) = self.text_galley(painter)
+            {
+                self.render_aligned_line_text(painter, a, b, self.line_text_anchor(), galley);
             }
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -207,15 +220,17 @@ impl Drawing {
         let margin = DESIGN_TOKENS.spacing.sm;
         let text_start = start.x.max(rect.min.x) + margin;
         let text_end = (rect.max.x - margin).max(text_start);
-        let gap = self
-            .text_galley(painter)
-            .filter(|_| anchor.y() == Align::Center)
-            .map(|galley| {
+        let galley = self.text_galley(painter);
+        let gap = if anchor.y() == Align::Center {
+            galley.as_ref().map(|galley| {
                 anchor
                     .x()
                     .align_size_within_range(galley.size().x, text_start..=text_end)
                     .expand(margin)
-            });
+            })
+        } else {
+            None
+        };
         self.interrupted_segment(
             painter,
             egui::Rangef::new(start.x, rect.max.x),
@@ -223,12 +238,15 @@ impl Drawing {
             |x| Pos2::new(x, y),
             stroke,
         );
-        self.render_aligned_line_text(
-            painter,
-            Pos2::new(text_start, y),
-            Pos2::new(text_end, y),
-            anchor,
-        );
+        if let Some(galley) = galley {
+            self.render_aligned_line_text(
+                painter,
+                Pos2::new(text_start, y),
+                Pos2::new(text_end, y),
+                anchor,
+                galley,
+            );
+        }
     }
 
     /// Render horizontal line, across the pane whichever bar its anchor is on.
@@ -279,8 +297,9 @@ impl Drawing {
             Align::Center => Align::Center,
             Align::Max => Align::Min,
         };
-        let gap = self
-            .text_galley(painter)
+        let galley = self.text_galley(painter);
+        let gap = galley
+            .as_ref()
             .filter(|_| anchor.y() == Align::Center)
             .map(|galley| {
                 let size = galley.size();
@@ -302,8 +321,14 @@ impl Drawing {
                 Pos2::new(text_x, text_y),
                 Align2([across, down_the_pane]),
             );
-        } else {
-            self.render_aligned_line_text(painter, Pos2::new(x, start), Pos2::new(x, end), anchor);
+        } else if let Some(galley) = galley {
+            self.render_aligned_line_text(
+                painter,
+                Pos2::new(x, start),
+                Pos2::new(x, end),
+                anchor,
+                galley,
+            );
         }
     }
 
@@ -377,7 +402,6 @@ impl Drawing {
             galley,
             text_color,
         );
-        self.render_line_measurements(painter, view, selected);
         self.finish_style(painter, first_shape, rect);
 
         // Construction guides stay thin and dotted regardless of the main line's style.
@@ -400,6 +424,7 @@ impl Drawing {
                 gap,
             );
         }
+        self.render_line_measurements(painter, view, selected);
     }
 
     /// Rectangle border and fill bounds, including its configured extensions.
@@ -1738,5 +1763,139 @@ mod tests {
         assert_eq!(texts(&manager), 0);
         manager.select(1);
         assert_eq!(texts(&manager), 2);
+    }
+
+    /// All five line tools keep a solid 1 pt card border and single price labels under bold and
+    /// dashed styles. Own text stays bold and lines stay dashed; only an info line's card takes
+    /// its text weight too.
+    #[test]
+    fn trend_angle_text_and_line_style_leave_its_readouts_alone() {
+        use crate::drawings::{ChartPoint, DrawingToolType, FontWeight, LineMeasurements};
+        use crate::model::LineStyle;
+        use egui::Shape;
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let x = |bar: f32| bar;
+        let y = |price: f64| 400.0 - price as f32;
+        let inverse = |y: f32| f64::from(400.0 - y);
+        let readouts = |tool: DrawingToolType, weight: FontWeight, style: LineStyle| {
+            let view = ChartView {
+                instrument: None,
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
+                bars: &[],
+                revision: 0,
+                bar_to_x: &x,
+                price_to_y: &y,
+                y_to_price: &inverse,
+                time_axis: false,
+                executions: None,
+                timeframe: None,
+                finer: &[],
+            };
+            let mut angle = Drawing::new(1, tool);
+            angle.completed = true;
+            angle.chart_points = vec![ChartPoint::new(100.0, 300.0), ChartPoint::new(300.0, 200.0)];
+            angle.update_screen_coords(x, y);
+            angle.text = Some("Own text".into());
+            angle.font_weight = weight;
+            angle.line_style = style;
+            angle.line_measurements = LineMeasurements {
+                persistent: true,
+                bar_count: true,
+                price_labels: true,
+                ..Default::default()
+            };
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                angle.render_with_selection(ui.painter(), pane, &view, false);
+            });
+            fn flat(shapes: impl IntoIterator<Item = Shape>, out: &mut Vec<Shape>) {
+                for shape in shapes {
+                    match shape {
+                        Shape::Vec(inner) => flat(inner, out),
+                        shape => out.push(shape),
+                    }
+                }
+            }
+            let mut shapes = Vec::new();
+            flat(
+                std::mem::take(&mut output.shapes)
+                    .into_iter()
+                    .map(|s| s.shape),
+                &mut shapes,
+            );
+            output.drop_without_applying_deltas();
+            let card_fill = crate::theme::Theme::default().chart.bg_tooltip;
+            let texts: Vec<String> = (shapes.iter())
+                .filter_map(|shape| match shape {
+                    Shape::Text(t)
+                        if matches!(
+                            t.galley.job.text.as_str(),
+                            "200 bars" | "300.00" | "200.00"
+                        ) =>
+                    {
+                        Some(t.galley.job.text.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let borders: Vec<f32> = (shapes.iter())
+                .filter_map(|shape| match shape {
+                    Shape::Rect(r) if r.fill == card_fill => Some(r.stroke.width),
+                    _ => None,
+                })
+                .collect();
+            let own_texts = shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, Shape::Text(t) if t.galley.job.text == "Own text"
+                    || t.galley.job.text.ends_with('°'))
+                })
+                .count();
+            assert_eq!(
+                own_texts,
+                if weight == FontWeight::Bold { 2 } else { 1 },
+                "{tool:?}: own text keeps its weight"
+            );
+            assert_eq!(borders, [0.0, 0.0, 1.0], "labels and solid card border");
+            if style == LineStyle::Dashed {
+                assert!(
+                    !shapes.iter().any(|shape| matches!(shape,
+                    Shape::LineSegment { points, .. } if points[0].distance(points[1]) > 20.0)),
+                    "{tool:?}: no continuous line under the dashes"
+                );
+                assert!(
+                    shapes.iter().any(|shape| match shape {
+                        Shape::LineSegment { stroke, .. } => *stroke == angle.stroke(),
+                        Shape::Mesh(mesh) =>
+                            mesh.vertices.iter().any(|v| v.color == angle.color32()),
+                        _ => false,
+                    }),
+                    "{tool:?}: line dashes remain visible"
+                );
+            }
+            (texts, borders)
+        };
+        for tool in [
+            DrawingToolType::TrendAngle,
+            DrawingToolType::TrendLine,
+            DrawingToolType::Ray,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::InfoLine,
+        ] {
+            for (weight, style) in [
+                (FontWeight::Normal, LineStyle::Solid),
+                (FontWeight::Bold, LineStyle::Solid),
+                (FontWeight::Normal, LineStyle::Dashed),
+                (FontWeight::Bold, LineStyle::Dashed),
+            ] {
+                let (texts, _) = readouts(tool, weight, style);
+                let mut expected = vec!["300.00", "200.00", "200 bars"];
+                if tool == DrawingToolType::InfoLine && weight == FontWeight::Bold {
+                    expected.push("200 bars");
+                }
+                assert_eq!(texts, expected, "{tool:?} {weight:?} {style:?}");
+            }
+        }
     }
 }

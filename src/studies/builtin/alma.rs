@@ -6,12 +6,12 @@
 //!
 //! # Formula
 //! ALMA = Σ(weight[i] * price[i]) / Σ(weight[i])
-//! Where weight[i] = exp(-((i - offset * (period - 1))^2) / (2 * sigma^2 * period^2))
+//! Where weight[i] = exp(-((i - offset * (period - 1))^2) / (2 * (period / sigma)^2))
 //!
 //! # Params
 //! - period: Lookback period (typically 9)
 //! - offset: Weight offset 0-1 (typically 0.85, higher = more weight to recent)
-//! - sigma: Gaussian sigma (typically 6, higher = smoother)
+//! - sigma: Gaussian sigma (typically 6, higher = narrower weights)
 //!
 //! # Example
 //! ```
@@ -236,9 +236,13 @@ mod tests {
             assert!(matches!(alma.values().to_rows()[i], IndicatorValue::None));
         }
 
-        // Check valid values exist
-        for value in alma.values().to_rows().iter().skip(8) {
-            assert!(matches!(value, IndicatorValue::Single(_)));
+        // Gaussian weighted mean by hand with m=.85*8=6.8 and s=9/6=1.5:
+        // sum(w)=3.293589792995462, sum(w*close)=350.5788036250547.
+        // Evaluating exp(-(i-6.8)^2/4.5) independently at 60 digits gives
+        // 106.442764782255831; shifting each close by 1 shifts the mean by 1.
+        for (bar, want) in [(8, 106.44276478225583), (9, 107.44276478225583)] {
+            let got = alma.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
         }
     }
 }
