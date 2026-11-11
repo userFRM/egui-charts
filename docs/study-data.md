@@ -52,8 +52,11 @@ input chooses another interval; one that is not shorter than the chart's or does
 reads the automatic one. Subsecond and tick-count charts have no request. 24-hour Volume
 requests the automatic interval only where chart bars cannot hold exactly 24 hours, on intervals
 longer than a day or that do not divide one, and sums chart bars until it is supplied. Its Units input sums the supplied volume (default) or, for
-volume in base units, an estimate of the quote amount: each candle's volume times its own close,
-labelled with [`Instrument::currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.currency), which the host must set. Without it, or with a non-finite or
+volume in base units, an estimate of the quote amount: each candle's volume times its own price,
+close unless the Price source input says otherwise, labelled with [`Instrument::currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.currency), which the host must set.
+The Target currency input converts each candle's amount at the rate in effect at its open; the
+chart then requests the dated rates [`StudyDataRequest::exchange_rate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyDataRequest.html#method.exchange_rate) names, which the host supplies
+like any metric. Without the currency or a rate, or with a non-finite or
 negative value in the window, the quote amount is missing. Supply
 the same symbol and session as the chart. Read the request again after a symbol, interval or
 input change:

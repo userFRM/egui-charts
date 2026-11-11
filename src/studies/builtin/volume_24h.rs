@@ -413,7 +413,7 @@ impl Indicator for Volume24h {
                 "Target currency",
                 InputValue::Choice(self.target),
                 InputKind::Choice(
-                    std::iter::once("Symbol currency")
+                    std::iter::once("Default")
                         .chain(Self::CURRENCIES)
                         .map(Into::into)
                         .collect(),
