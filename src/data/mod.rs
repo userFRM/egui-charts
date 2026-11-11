@@ -83,7 +83,7 @@ pub use option_chain::{
 pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
 #[cfg(feature = "studies")]
-pub(crate) use volume_profile::{ExposureProfile, StrikeExposure};
+pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -105,7 +105,8 @@ pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
 pub use volume_profile::{
-    ProfileDisplay, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig,
+    ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
+    VolumeProfileConfig,
 };
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.

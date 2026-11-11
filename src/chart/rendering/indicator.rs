@@ -330,7 +330,7 @@ impl IndicatorRenderer {
             return;
         }
         let visible = crate::chart::rendering::volume_profile::profile_range(coords);
-        for plot in indicator.volume_profiles(visible) {
+        for plot in indicator.volume_profiles(visible.clone()) {
             crate::painting::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),
                 &plot.profile,
@@ -341,6 +341,15 @@ impl IndicatorRenderer {
                     right_aligned: plot.right_aligned,
                     width: plot.width,
                 },
+                &|price| price_scale.price_to_y(price),
+            );
+        }
+        // Levels lie over every profile they cross.
+        for level in indicator.profile_levels(visible) {
+            crate::painting::volume_profile::paint_level(
+                &painter,
+                &level,
+                crate::chart::rendering::volume_profile::level_span(&level, coords),
                 &|price| price_scale.price_to_y(price),
             );
         }

@@ -1,6 +1,9 @@
 //! Price-row profile painting shared by studies and drawing tools.
 
-use crate::data::{ProfileDisplay, ProfileSource, VolumeProfile, VolumeProfileConfig};
+use crate::data::{
+    ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, VolumeProfile,
+    VolumeProfileConfig,
+};
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -28,6 +31,44 @@ pub(crate) enum ProfileStyle {
     Drawing { anchored: bool },
 }
 
+/// `color`, or the active theme's foreground for `Color32::PLACEHOLDER`, which follows the
+/// theme until a colour is chosen.
+fn shown_color(painter: &egui::Painter, color: [u8; 4]) -> [u8; 4] {
+    if color == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+        painter.ctx().active_theme().ui.text.to_srgba_unmultiplied()
+    } else {
+        color
+    }
+}
+
+/// A level carried past its profile, a hairline over `span`: the point of control in the
+/// profile's colour, the value area high and low at the opacity of its value area lines.
+pub(crate) fn paint_level(
+    painter: &egui::Painter,
+    level: &ProfileLevel,
+    span: Range<f32>,
+    price_to_y: &dyn Fn(f64) -> f32,
+) {
+    let y = price_to_y(level.price);
+    if span.start >= span.end || !y.is_finite() {
+        return;
+    }
+    let [r, g, b, a] = shown_color(painter, level.color);
+    let alpha = if level.kind == ProfileLevelKind::PointOfControl {
+        a
+    } else {
+        200
+    };
+    painter.hline(
+        span.start..=span.end,
+        y,
+        Stroke::new(
+            stroke::HAIRLINE,
+            Color32::from_rgba_unmultiplied(r, g, b, alpha),
+        ),
+    );
+}
+
 pub(crate) fn paint_profile(
     painter: &egui::Painter,
     profile: &VolumeProfile,
@@ -49,12 +90,7 @@ pub(crate) fn paint_profile(
         return;
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
-    // `Color32::PLACEHOLDER` follows the active theme until a colour is chosen.
-    let color = if color == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
-        painter.ctx().active_theme().ui.text.to_srgba_unmultiplied()
-    } else {
-        color
-    };
+    let color = shown_color(painter, color);
     let (drawing, right_aligned, share) = match style {
         ProfileStyle::Study {
             right_aligned,
