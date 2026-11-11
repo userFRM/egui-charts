@@ -619,6 +619,16 @@ impl Chart {
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
         let is_drawing_interaction = false;
+        #[cfg(feature = "drawings")]
+        if self.drawings.selection_area().is_some_and(|area| {
+            area.pane
+                .is_some_and(|id| self.pane_index(super::PaneId(id)).is_none())
+        }) {
+            self.drawings.cancel_curr_drawing();
+            if !ui.input(|i| i.pointer.primary_down()) {
+                self.drawings.end_selection_area();
+            }
+        }
         // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.box_selection_input(ui)
