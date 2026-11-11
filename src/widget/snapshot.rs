@@ -1,7 +1,7 @@
 //! A chart's state as a serializable snapshot, and named layouts of charts as versioned
 //! documents.
 
-use super::{Chart, ChartLayoutMode, PaneId, SeriesOptions};
+use super::{Chart, ChartLayoutMode, ChartLayoutSizing, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{
     ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, SeriesStyle, Timeframe,
@@ -964,14 +964,20 @@ fn check_source_links(
     Ok(())
 }
 
-/// A named arrangement of charts: the [`ChartLayoutMode`] and a [`ChartSnapshot`] of each chart,
-/// as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts) documents.
+/// A named arrangement of charts: the [`ChartLayoutMode`], a [`ChartSnapshot`] of each chart and
+/// the chart sizes, as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts)
+/// documents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedLayout {
     /// How the charts are arranged.
     pub mode: ChartLayoutMode,
     /// The charts in the order of their slots.
     pub charts: Vec<ChartSnapshot>,
+    /// The chart sizes of the arrangement, as [`ChartLayout::sizes`](super::ChartLayout::sizes)
+    /// gives them; `None`, also read from documents saved before sizes were kept, stands for the
+    /// preset proportions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sizing: Option<ChartLayoutSizing>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1073,6 +1079,7 @@ mod tests {
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot_with(&factory).unwrap()],
+            sizing: None,
         }
         .to_json()
         .unwrap();
@@ -1220,9 +1227,11 @@ mod tests {
         drawing.completed = true;
         drawing.pane = Some(rsi.0);
         chart.drawings_mut().drawings.push(drawing);
+        let sizing = super::super::ChartLayout::default().sizes(ChartLayoutMode::Single);
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot().unwrap()],
+            sizing: Some(sizing.clone()),
         }
         .to_json()
         .unwrap();
@@ -1230,6 +1239,7 @@ mod tests {
         let mut restored = Chart::new(BarData::from_bars(bars));
         restored.add_indicator(Box::new(SMA::new(3)));
         let layout = SavedLayout::from_json(&json).unwrap();
+        assert_eq!(layout.sizing, Some(sizing));
         assert!(restored.restore(&layout.charts[0]).unwrap().is_empty());
         assert_eq!(restored.symbol(), "A");
         assert_eq!(restored.timeframe(), Some(Timeframe::Min5));
@@ -1419,6 +1429,7 @@ mod tests {
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![original.snapshot().unwrap()],
+            sizing: None,
         }
         .to_json()
         .unwrap();
@@ -1491,6 +1502,7 @@ mod tests {
                 let json = SavedLayout {
                     mode: ChartLayoutMode::Single,
                     charts: vec![snapshot],
+                    sizing: None,
                 }
                 .to_json()
                 .unwrap();
@@ -1853,6 +1865,7 @@ mod tests {
             let layout = SavedLayout {
                 mode: ChartLayoutMode::Single,
                 charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
             };
             let mut document: serde_json::Value =
                 serde_json::from_str(&layout.to_json().unwrap()).unwrap();

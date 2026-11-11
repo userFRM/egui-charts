@@ -955,6 +955,7 @@ mod tests {
             let saved = SavedLayout {
                 mode: ChartLayoutMode::Single,
                 charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
             };
             let saved = SavedLayout::from_json(&saved.to_json().unwrap()).unwrap();
             let mut restored = Chart::new(BarData::from_bars(data.to_vec()));
