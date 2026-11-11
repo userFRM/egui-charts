@@ -165,13 +165,6 @@ impl ChartSettingsState {
         settings.candle_colors.show_border = config.candle_border_width > 0.0;
         settings.candle_colors.show_wick = candles.wick_visible;
         settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
-        if chart.chart_type() == crate::model::ChartType::Bars {
-            settings.candle_colors.color_by_previous_close = chart
-                .chart_type_params()
-                .styles
-                .bars
-                .color_by_previous_close;
-        }
         if chart.chart_type() == crate::model::ChartType::HollowCandles {
             let style = &chart.chart_type_params().styles.hollow;
             settings.candle_colors = super::CandleColorConfig {
@@ -190,7 +183,7 @@ impl ChartSettingsState {
         if chart.chart_type() == crate::model::ChartType::VolumeCandles {
             let style = &chart.chart_type_params().styles.volume_candles;
             settings.candle_colors = super::CandleColorConfig {
-                color_by_previous_close: style.color_by_previous_close,
+                color_by_previous_close: candles.color_by_previous_close,
                 show_body: style.body_visible,
                 show_border: style.border_visible,
                 show_wick: style.wick_visible,
@@ -205,7 +198,7 @@ impl ChartSettingsState {
         if chart.chart_type() == crate::model::ChartType::Heikin {
             let style = &chart.chart_type_params().styles.heikin;
             settings.candle_colors = super::CandleColorConfig {
-                color_by_previous_close: style.color_by_previous_close,
+                color_by_previous_close: candles.color_by_previous_close,
                 show_body: style.body_visible,
                 show_border: style.border_visible,
                 show_wick: style.wick_visible,
@@ -672,7 +665,6 @@ impl ChartSettingsState {
             style.body_visible = colors.show_body;
             style.border_visible = colors.show_border;
             style.wick_visible = colors.show_wick;
-            style.color_by_previous_close = colors.color_by_previous_close;
             style.body_up = colors.body_up;
             style.body_down = colors.body_down;
             style.border_up = colors.border_up;
@@ -717,7 +709,6 @@ impl ChartSettingsState {
                 style.body_visible = colors.show_body;
                 style.border_visible = colors.show_border;
                 style.wick_visible = colors.show_wick;
-                style.color_by_previous_close = colors.color_by_previous_close;
                 style.body_up = colors.body_up;
                 style.body_down = colors.body_down;
                 style.border_up = colors.border_up;
@@ -728,13 +719,7 @@ impl ChartSettingsState {
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }
-        } else if self.chart_type == crate::model::ChartType::Bars {
-            let mut params = chart.chart_type_params().clone();
-            params.styles.bars.color_by_previous_close = self.candle_colors.color_by_previous_close;
-            if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
-            }
-        } else {
+        } else if self.chart_type != crate::model::ChartType::Bars {
             let candles = CandlesStyle {
                 body_visible: self.candle_colors.show_body,
                 wick_visible: self.candle_colors.show_wick,
@@ -954,11 +939,17 @@ mod tests {
                     }
                     let before = ChartSettingsState::from_chart(&chart);
                     let mut settings = before.clone();
+                    settings
+                        .chart_type_params
+                        .as_mut()
+                        .unwrap()
+                        .styles
+                        .heikin
+                        .color_by_previous_close = previous;
                     let c = &mut settings.candle_colors;
                     c.show_body = flags & 1 != 0;
                     c.show_border = flags & 2 != 0;
                     c.show_wick = flags & 4 != 0;
-                    c.color_by_previous_close = previous;
                     [
                         c.body_up,
                         c.body_down,
@@ -1343,12 +1334,17 @@ mod tests {
                 chart.config_mut().show_volume = false;
                 let before = ChartSettingsState::from_chart(&chart);
                 let mut settings = before.clone();
+                settings
+                    .chart_type_params
+                    .as_mut()
+                    .unwrap()
+                    .styles
+                    .volume_candles
+                    .color_by_previous_close = by_previous && kind == ChartType::VolumeCandles;
                 let c = &mut settings.candle_colors;
                 c.show_body = flags & 1 != 0;
                 c.show_border = flags & 2 != 0;
                 c.show_wick = flags & 4 != 0;
-                // Hollow candles colour by the previous close whatever the candles' hidden switch holds.
-                c.color_by_previous_close = by_previous && kind != ChartType::HollowCandles;
                 [
                     c.body_up,
                     c.body_down,
@@ -1449,6 +1445,57 @@ mod tests {
         template.apply_to_chart(&mut candles).unwrap();
         let styles = &candles.chart_type_params().styles;
         assert!(!styles.candles.color_by_previous_close);
+    }
+
+    /// Templates keep the previous-close rule of each style, in either direction, including
+    /// when the source and destination use the same chart type and after serialization.
+    #[test]
+    fn bars_template_keeps_the_candles_colour_rule() {
+        use crate::model::ChartType;
+        let make = |kind| {
+            let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )]));
+            chart.set_chart_type(kind);
+            chart
+        };
+        for kind in [ChartType::Bars, ChartType::VolumeCandles, ChartType::Heikin] {
+            for candle_rule in [false, true] {
+                for source in [kind, ChartType::Candles] {
+                    let mut chart = make(source);
+                    let mut params = chart.chart_type_params().clone();
+                    params.styles.candles.color_by_previous_close = candle_rule;
+                    params.styles.bars.color_by_previous_close = !candle_rule;
+                    params.styles.volume_candles.color_by_previous_close = !candle_rule;
+                    params.styles.heikin.color_by_previous_close = !candle_rule;
+                    chart.set_chart_type_params(params);
+                    let template: ChartSettingsState = serde_json::from_str(
+                        &serde_json::to_string(&ChartSettingsState::from_chart(&chart)).unwrap(),
+                    )
+                    .unwrap();
+                    for destination in [ChartType::Candles, kind] {
+                        let mut loaded = template.clone();
+                        loaded.chart_type = destination;
+                        let mut restored = make(destination);
+                        loaded.apply_to_chart(&mut restored).unwrap();
+                        let styles = &restored.chart_type_params().styles;
+                        assert_eq!(
+                            styles.candles.color_by_previous_close, candle_rule,
+                            "{source:?} to {destination:?}"
+                        );
+                        assert_eq!(styles.bars.color_by_previous_close, !candle_rule);
+                        assert_eq!(styles.volume_candles.color_by_previous_close, !candle_rule);
+                        assert_eq!(styles.heikin.color_by_previous_close, !candle_rule);
+                        assert_eq!(loaded.candle_colors.color_by_previous_close, candle_rule);
+                    }
+                }
+            }
+        }
     }
 
     /// A Heikin-Ashi layout without the chart type's style, or without any chart type styles,
@@ -1754,11 +1801,23 @@ mod tests {
                     "{what} {colors:?}"
                 );
                 assert_eq!(wicks, [up, up, down, down, down, down], "{what} {colors:?}");
+                // Settings that predate chart types also retain the plain candles' switch.
+                let candle_rule =
+                    colors.color_by_previous_close && matches!(what, "settings" | "version 1");
+                let styles = &restored.chart_type_params().styles;
+                assert_eq!(
+                    (
+                        styles.candles.color_by_previous_close,
+                        styles.volume_candles.color_by_previous_close,
+                    ),
+                    (candle_rule, false),
+                    "{what} {colors:?}"
+                );
                 let shown = ChartSettingsState::from_chart(&restored).candle_colors;
                 assert_eq!(
                     shown,
                     CandleColorConfig {
-                        color_by_previous_close: false,
+                        color_by_previous_close: candle_rule,
                         show_body: true,
                         show_border: false,
                         show_wick: true,

@@ -1,20 +1,30 @@
-use super::over_finite_bars;
+use super::{ATR, smoothing::Smoothing};
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::{update_window, usable_behind};
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
 
 /// Pretty Good Oscillator (PGO)
-/// Measures price distance from moving avg in ATR units
+/// Measures (close - SMA of closes) / EMA of true range over the same period.
+/// The EMA starts at the mean of the first `period` true ranges.
 /// Values > 3 or < -3 indicate potential reversal
 #[derive(Clone)]
 pub struct PrettyGoodOscillator {
     /// Period for calculations (typically 14)
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<f64>,
+    closes: VecDeque<f64>,
+    range: Smoothing,
 }
 
 impl PrettyGoodOscillator {
@@ -23,6 +33,7 @@ impl PrettyGoodOscillator {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::PURPLE,
             visible: true,
         }
@@ -38,57 +49,6 @@ impl PrettyGoodOscillator {
 impl Default for PrettyGoodOscillator {
     fn default() -> Self {
         Self::new(14)
-    }
-}
-
-impl PrettyGoodOscillator {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate True Range
-        let mut tr = Vec::with_capacity(data.len());
-        tr.push(data[0].high - data[0].low);
-
-        for i in 1..data.len() {
-            let high_low = data[i].high - data[i].low;
-            let high_close = (data[i].high - data[i - 1].close).abs();
-            let low_close = (data[i].low - data[i - 1].close).abs();
-            tr.push(high_low.max(high_close).max(low_close));
-        }
-
-        // Calculate SMA of closes and EMA of TR (ATR)
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                // SMA of closes
-                let sma: f64 = data[i + 1 - self.period..=i]
-                    .iter()
-                    .map(|b| b.close)
-                    .sum::<f64>()
-                    / self.period as f64;
-
-                // SMA of TR (ATR)
-                let atr: f64 = tr[i + 1 - self.period..=i].iter().sum::<f64>() / self.period as f64;
-
-                if atr == 0.0 {
-                    values.push(IndicatorValue::None);
-                } else {
-                    // PGO = (Close - SMA) / ATR
-                    let pgo = (data[i].close - sma) / atr;
-                    values.push(IndicatorValue::Single(pgo));
-                }
-            }
-        }
-
-        values
     }
 }
 
@@ -110,23 +70,28 @@ impl Indicator for PrettyGoodOscillator {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let mut values = std::mem::take(&mut self.values);
-        update_window(
-            &mut values,
-            data,
-            from,
-            usable_behind(self.period, |b| {
-                b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
-            }),
-            |data| {
-                over_finite_bars(
-                    data,
-                    |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-                    |data| self.compute(data),
-                )
-            },
-        );
-        self.values = values;
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|p| p.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let tr = state
+                    .previous
+                    .map_or(bar.high - bar.low, |close| ATR::true_range(bar, close));
+                state.previous = Some(bar.close);
+                let range = state
+                    .range
+                    .next(tr, self.period, 2.0 / (self.period as f64 + 1.0));
+                state.closes.push_back(bar.close);
+                if state.closes.len() > self.period {
+                    state.closes.pop_front();
+                }
+                if state.closes.len() < self.period || range == 0.0 {
+                    return IndicatorValue::None;
+                }
+                let mean = state.closes.iter().sum::<f64>() / self.period as f64;
+                IndicatorValue::Single((bar.close - mean) / range)
+            });
     }
 
     fn is_incremental(&self) -> bool {
@@ -183,18 +148,22 @@ mod tests {
             make_bar(104.0, 100.0, 102.0),
             make_bar(105.0, 101.0, 103.0),
             make_bar(106.0, 102.0, 104.0),
-            make_bar(110.0, 105.0, 109.0), // Big move up
+            make_bar(110.0, 105.0, 109.0),
+            make_bar(110.0, 106.0, 108.0),
         ];
 
         pgo.calculate(&data);
 
-        assert_eq!(pgo.values.len(), 6);
-
-        // Last value should be positive (price above avg)
-        let rows = pgo.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", pgo.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 0.0, "PGO should be positive after upward move");
+        assert_eq!(pgo.values().len(), data.len());
+        // Mark Johnson's PGO by hand: (close-SMA(5))/EMA(5) of true range.
+        // Ranges 4,4,4,4,4,6,4 seed at 4, then alpha=1/3 gives 14/3,40/9.
+        // Close minus mean is 2,26/5,14/5, giving 1/2,39/35,63/100.
+        for bar in 0..4 {
+            assert_eq!(pgo.values().value(0, bar), None);
+        }
+        for (bar, want) in [(4, 0.5), (5, 39.0 / 35.0), (6, 0.63)] {
+            let got = pgo.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
     }
 }

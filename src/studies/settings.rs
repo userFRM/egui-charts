@@ -145,6 +145,16 @@ impl FillStyle {
     }
 }
 
+/// Independent colours and visibility of a declared vertical gradient.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct GradientStyle {
+    /// Colours at the two values in the declared ramp, including their opacity.
+    pub colors: [Color32; 2],
+    /// Whether the fill is drawn, independently of its plot and guides.
+    pub visible: bool,
+}
+
 /// Editable presentation of one reference level in a study's pane, such as 70 for RSI.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -159,8 +169,11 @@ pub struct LevelStyle {
     /// Stroke width in logical pixels, from 0.5 to 10. Older settings use one pixel.
     #[serde(default = "default_level_width")]
     pub width: f32,
-    /// Whether the line is drawn. A hidden boundary still bounds the fill.
+    /// Whether the guide stroke is drawn. A hidden boundary still bounds the fill.
     pub visible: bool,
+    /// Draw a dotted value line independently of guide visibility. Off in older settings.
+    #[serde(default)]
+    pub price_line: bool,
 }
 
 fn default_level_width() -> f32 {
@@ -184,6 +197,7 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
                 pattern,
                 width,
                 visible: true,
+                price_line: study.level_price_line(index).is_some(),
             }
         })
         .collect();
@@ -193,7 +207,12 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
 /// Missing style lists inherit the study's declared presentation.
 fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     let (levels, fill, color) = declared_levels(study);
-    if settings.levels.len() != levels.len() {
+    if study.name() == "Stochastic" && settings.levels.len() == 2 && levels.len() == 3 {
+        // Keep the two saved guides and the old appearance when adding the middle guide.
+        let mut middle = levels[2];
+        middle.visible = false;
+        settings.levels.push(middle);
+    } else if settings.levels.len() != levels.len() {
         settings.levels = levels;
         settings.fill_between_levels = fill;
         settings.level_fill_color = color;
@@ -215,6 +234,14 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     }
     // Saved band styles are kept whatever the study declares so far, since a study can declare
     // a band only once it has data. Bands beyond them start with the study's own style.
+    let gradients = study.gradients();
+    let saved = settings.gradients.len().min(gradients.len());
+    settings
+        .gradients
+        .extend(gradients[saved..].iter().map(|fill| GradientStyle {
+            colors: fill.colors,
+            visible: true,
+        }));
     let fills = study.fills();
     let saved = settings.fills.len().min(fills.len());
     settings
@@ -327,6 +354,10 @@ pub struct StudySettings {
     /// does not declare yet are kept for when it does.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
+    /// Independent styles for [`Indicator::gradients`], in declaration order.
+    /// Older settings inherit the study's declared ramps.
+    #[serde(default)]
+    pub gradients: Vec<GradientStyle>,
 }
 
 fn enabled_by_default() -> bool {
@@ -1072,6 +1103,23 @@ impl Indicator for ConfiguredStudy {
             })
             .collect()
     }
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        self.study
+            .gradients()
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut fill)| {
+                if let Some(style) = self.settings.gradients.get(index) {
+                    fill.colors = if style.visible {
+                        style.colors
+                    } else {
+                        [Color32::TRANSPARENT; 2]
+                    };
+                }
+                fill
+            })
+            .collect()
+    }
     fn snapshot_settings(&self) -> StudySettingsSnapshot {
         let mut snapshot =
             StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
@@ -1418,6 +1466,13 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
         self.study.level_fill_indices()
+    }
+    fn level_price_line(&self, index: usize) -> Option<Color32> {
+        self.settings
+            .levels
+            .get(index)
+            .filter(|style| style.price_line)
+            .map(|style| style.color)
     }
     fn level_stroke(&self, index: usize, value: f64) -> (LineStyle, f32) {
         self.settings
@@ -2056,6 +2111,38 @@ mod tests {
                 Err(super::super::StudyError::InvalidLevelWidth { level: 0, .. })
             ));
             assert_eq!(study.settings(), declared);
+        }
+        // Adding a middle guide keeps the two saved Stochastic guides and their band.
+        for name in ["Stochastic", "StochRSI"] {
+            let mut study = ConfiguredStudy::new(
+                crate::studies::IndicatorFactory::new()
+                    .create(name)
+                    .unwrap(),
+            );
+            let defaults = study.settings();
+            assert_eq!(values(&study), [80.0, 20.0, 50.0]);
+            assert!(defaults.fill_between_levels);
+            assert_eq!(study.level_fill_indices(), Some([0, 1]));
+            assert_eq!(
+                defaults.level_fill_color,
+                palette::LIGHT_BLUE.gamma_multiply_u8(26)
+            );
+            let mut older = defaults.clone();
+            older.levels.truncate(2);
+            older.levels[0].value = Some(85.0);
+            older.levels[0].width = 4.0;
+            older.levels[1].visible = false;
+            older.fill_between_levels = false;
+            study.apply_settings(&[], older.clone()).unwrap();
+            if name == "Stochastic" {
+                assert_eq!(&study.settings().levels[..2], older.levels);
+                assert!(!study.settings().levels[2].visible);
+                assert!(!study.pane().fill_between_levels);
+            }
+            let mut absent = defaults.clone();
+            absent.levels.clear();
+            study.apply_settings(&[], absent).unwrap();
+            assert_eq!(study.settings(), defaults);
         }
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
