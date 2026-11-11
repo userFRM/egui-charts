@@ -207,7 +207,7 @@ impl Indicator for AutoDrawing {
 
     /// The swing size, ATR multiple and period, the Zig Zag deviation and depth and, for a
     /// Fibonacci construction, its options, its number of levels and each level's visibility,
-    /// ratio, label, colour and price label, or the pitchfork's band transparency.
+    /// ratio, label, colour and price label, or the pitchfork's background transparency.
     fn inputs(&self) -> Vec<StudyInput> {
         let mut inputs = vec![
             StudyInput::new(
@@ -242,7 +242,7 @@ impl Indicator for AutoDrawing {
             inputs.push(
                 StudyInput::new(
                     "fork_transparency",
-                    "Band transparency (%)",
+                    "Background transparency",
                     InputValue::Length(self.fork_transparency),
                     InputKind::Length(0, 100),
                 )

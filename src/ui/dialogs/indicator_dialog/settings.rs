@@ -714,7 +714,7 @@ mod tests {
                 } else {
                     assert!(
                         harness
-                            .query_all_by_label("Band transparency (%)")
+                            .query_all_by_label("Background transparency")
                             .next()
                             .is_some()
                     );
