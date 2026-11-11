@@ -4245,7 +4245,8 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
     let held = [40.0, 41.0, 42.0, 43.0, 44.0, 45.0];
     // The change, whether it comes before the removal, and the closes from undo to the reply,
     // without and with a live bar of 50 in the last slot.
-    let rows: [(&str, bool, fn(&mut Chart), &[f64], &[f64]); 5] = [
+    type Row<'a> = (&'a str, bool, fn(&mut Chart), &'a [f64], &'a [f64]);
+    let rows: [Row; 5] = [
         (
             "none",
             false,
