@@ -1141,7 +1141,8 @@ impl Indicator for OptionsVolumeProfile {
                 || unavailable_label
                 || !input.as_ref().is_some_and(|input| input.accepts(&value)))
         {
-            if id == "measure_label" {
+            // A held measure shows the default until it applies, as before quotes arrive.
+            if matches!(id, "measure" | "measure_label") {
                 self.open_interest.set(false);
                 self.gamma.set(false);
             }
@@ -2492,6 +2493,42 @@ mod tests {
                 "position {position}"
             );
         }
+    }
+    /// A saved measure position the chain does not list waits and shows the default measure,
+    /// also when an undo brings it back after another measure was shown.
+    #[test]
+    fn held_measure_shows_the_default_after_an_undo() {
+        let feed = ChainFeed::default();
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        // Without the put's volume the chain lists Open interest (calls 4, puts 2) and Gamma
+        // exposure, so position 2 is held.
+        let rows = [OptionKind::Call, OptionKind::Put].map(|kind| {
+            let call = kind == OptionKind::Call;
+            let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+            row.volume = call.then_some(10.0);
+            row.open_interest = Some(if call { 4.0 } else { 2.0 });
+            row.gamma = Some(0.05);
+            row.multiplier = Some(100.0);
+            row.underlying_price = Some(100.0);
+            row
+        });
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        sink.push(rows.to_vec()).unwrap();
+        let profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile));
+        let calls = |study: &dyn Indicator| study.volume_profiles(0..1)[0].profile.up().to_vec();
+        study.set_input("measure", InputValue::Choice(2)).unwrap();
+        assert_eq!(calls(&study), [4.0]);
+        let before = study.snapshot_settings();
+        study
+            .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
+            .unwrap();
+        assert_ne!(calls(&study), [4.0]);
+        study.restore_settings(&before).unwrap();
+        assert_eq!(calls(&study), [4.0]);
     }
     #[test]
     fn historical_fallback_close_known_at_as_of() {
