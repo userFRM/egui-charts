@@ -86,8 +86,8 @@ keys keep the zoom and a scrolled-back view in place. See the
 [time-scale guide](time-scale.mdx) for logical coordinates, fitting and screen conversions.
 
 Snapshots retain the numeric unit alongside the view. Install the horizontal scale
-before restoring a numeric snapshot. Older snapshots without a unit use the
-loaded mean gap. Complete `ChartSnapshot` literals add `numeric_unit: None`.
+before restoring a numeric snapshot. A snapshot saved before the keys differ,
+and an older snapshot without a unit, use the loaded mean gap. Complete `ChartSnapshot` literals add `numeric_unit: None`.
 
 ## Categorical and structured keys
 
