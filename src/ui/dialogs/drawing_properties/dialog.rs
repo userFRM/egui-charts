@@ -662,7 +662,7 @@ mod tests {
                 (Tool::Brush, true, false, false, true),
                 (Tool::TrendLine, false, true, true, true),
                 (Tool::TrendAngle, false, true, true, true),
-                (Tool::TextLabel, false, false, true, true),
+                (Tool::TextLabel, false, false, true, false),
                 (Tool::Highlighter, false, false, false, true),
                 (Tool::ArrowMarker, false, false, true, false),
                 (Tool::ArrowMarkDown, false, false, true, false),

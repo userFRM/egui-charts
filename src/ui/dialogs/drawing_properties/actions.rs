@@ -326,6 +326,8 @@ impl DrawingProps {
                     line_measurements.position,
                     line_measurements.text_horizontal_align,
                     line_measurements.text_vertical_align,
+                    line_measurements.text_orientation,
+                    line_measurements.across_panes,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
