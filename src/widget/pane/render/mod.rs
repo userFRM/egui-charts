@@ -595,6 +595,12 @@ impl Chart {
                         self.series_label_formatter(id, member_map.transform().mode)
                     });
                     panel.axis_options.show_study_values = false;
+                } else if matches!(
+                    member_map.transform().mode,
+                    crate::scales::PriceScaleMode::Percentage
+                        | crate::scales::PriceScaleMode::IndexedTo100
+                ) {
+                    panel.price_formatter = self.percentage_formatter.clone();
                 }
                 panel.axis_rect = axes
                     .iter()
@@ -688,9 +694,9 @@ impl Chart {
                     })
                 };
                 let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
-                let target_pane = self
-                    .synced_crosshair_series
-                    .is_some_and(|target| members.contains(&target));
+                let target_pane = self.synced_crosshair_series.is_some_and(|target| {
+                    members.contains(&target) && self.is_series_visible(target)
+                });
                 let target_panel = target_pane && id == self.synced_crosshair_series;
                 let mut hover = pointer
                     .or_else(|| {
@@ -1293,6 +1299,7 @@ impl Chart {
                                 item,
                                 self.series_map(item, chart_rect),
                                 index,
+                                |_| ui.active_theme().chart.bg,
                             );
                         }
                     }

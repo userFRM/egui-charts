@@ -329,6 +329,11 @@ pub trait Indicator: Send {
         Vec::new()
     }
 
+    /// Vertical colour ramps beneath the plots. Missing values break the filled area.
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        Vec::new()
+    }
+
     /// Value at a displayed bar, accounting for the plot's displacement.
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         let source = bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?;
@@ -360,6 +365,14 @@ pub trait Indicator: Send {
                 .collect(),
             plot_variants: (0..self.line_count())
                 .map(|line| self.plot_variants(line))
+                .collect(),
+            gradients: self
+                .gradients()
+                .iter()
+                .map(|fill| super::GradientStyle {
+                    colors: fill.colors,
+                    visible: true,
+                })
                 .collect(),
             background: self.background(),
             background_visible: true,

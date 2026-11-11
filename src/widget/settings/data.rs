@@ -14,7 +14,8 @@ use egui::Color32;
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CandleColorConfig {
-    /// Colour each candle by its close against the previous close instead of its open.
+    /// Colour plain candles by their close against the previous close instead of their open.
+    /// Bars, volume candles and Heikin Ashi keep their rule in `ChartSettingsState::chart_type_params`.
     pub color_by_previous_close: bool,
     /// Whether candle bodies are filled.
     pub show_body: bool,

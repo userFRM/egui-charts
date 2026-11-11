@@ -619,6 +619,16 @@ impl Chart {
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
         let is_drawing_interaction = false;
+        #[cfg(feature = "drawings")]
+        if self.drawings.selection_area().is_some_and(|area| {
+            area.pane
+                .is_some_and(|id| self.pane_index(super::PaneId(id)).is_none())
+        }) {
+            self.drawings.cancel_curr_drawing();
+            if !ui.input(|i| i.pointer.primary_down()) {
+                self.drawings.end_selection_area();
+            }
+        }
         // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.box_selection_input(ui)
@@ -1618,7 +1628,7 @@ impl Chart {
         );
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
-        let plot_background = self.plot_background();
+        let plot_background = self.plot_background(rect, rect.center());
         let host_config = footprint
             .filter(|_| time_based)
             .map(|(_, config)| FootprintConfig {
@@ -3453,12 +3463,15 @@ impl Chart {
                             value,
                             bar,
                         ) {
+                            let point =
+                                Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value));
                             rendering::candles::render_crosshair_marker(
                                 &painter.with_clip_rect(price_rect),
-                                Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
+                                point,
                                 &self.chart_type_params.styles,
                                 color,
-                                self.config.background_color,
+                                self.plot_background(rect, point)
+                                    .unwrap_or(self.config.background_color),
                             );
                         }
                     }
@@ -3469,6 +3482,10 @@ impl Chart {
                             item,
                             self.series_map(item, price_rect),
                             index,
+                            |point| {
+                                self.plot_background(rect, point)
+                                    .unwrap_or(self.config.background_color)
+                            },
                         );
                     }
                 }
@@ -3497,7 +3514,7 @@ impl Chart {
                         pos,
                         &map,
                         &options,
-                        axis_edge,
+                        price_axis_rect.x_range(),
                         None,
                         Some(
                             crate::scales::StudyFormat::Volume
@@ -3663,19 +3680,19 @@ impl Chart {
                         let target_axis = target.and_then(|id| {
                             let key = self.series_scale(id)?;
                             if key == self.main_series_scale {
-                                show_price_axis.then_some(axis_edge)
+                                show_price_axis.then_some(price_axis_rect)
                             } else {
                                 self.secondary_axes(rect, price_rect)
                                     .into_iter()
                                     .find(|(scale, _)| *scale == key)
-                                    .map(|(_, axis)| axis.right())
+                                    .map(|(_, axis)| axis)
                             }
                         });
                         let formatter = target
                             .and_then(|id| self.series_label_formatter(id, map.transform().mode));
                         let mut main_options = options;
-                        // A scale without a visible axis still gets its line and time label.
-                        if target.is_some() && target_axis.is_none() {
+                        // A targeted price label is painted in its own axis column below.
+                        if target.is_some() {
                             main_options.horz_label_visible = false;
                         }
                         crosshair_tags = rendering::render_crosshair_at_time(
@@ -3685,16 +3702,29 @@ impl Chart {
                             &map,
                             &main_options,
                             time_axis_top,
-                            target_axis.unwrap_or(axis_edge),
+                            target_axis.map_or(axis_edge, |axis| axis.right()),
                             last_price_tag,
                             scale,
                             bar_seconds,
-                            if target.is_some() {
-                                formatter.as_deref()
-                            } else {
+                            if target.is_none() {
                                 price_formatter.as_deref()
+                            } else {
+                                None
                             },
                         );
+                        if let Some(axis) = target_axis {
+                            crosshair_tags[0] = rendering::render_crosshair_price_tag(
+                                &price_ctx,
+                                Pos2::new(x, y),
+                                &map,
+                                &options.resolved(ui.ctx()),
+                                axis.x_range(),
+                                last_price_tag,
+                                formatter.as_deref().map(|formatter| {
+                                    map.transform().label(map.y_to_scale(y), 2, Some(formatter))
+                                }),
+                            );
+                        }
                     }
                 }
             }
