@@ -21,6 +21,18 @@ pub(crate) fn profile_span(plot: &StudyProfile, coords: &super::ChartMapping) ->
     }
 }
 
+/// From the left edge of a level's first bar to the centre of its last.
+pub(crate) fn level_span(
+    level: &crate::data::ProfileLevel,
+    coords: &super::ChartMapping,
+) -> Range<f32> {
+    if level.bars.is_empty() {
+        return 0.0..0.0;
+    }
+    coords.idx_to_x(level.bars.start) - coords.bar_spacing * 0.5
+        ..coords.idx_to_x(level.bars.end - 1)
+}
+
 pub(crate) fn hit_profile(
     point: Pos2,
     study: &dyn crate::studies::Indicator,
@@ -61,7 +73,9 @@ pub(crate) fn hit_profile(
         let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
         let on_poc = (point.y - (y_at(poc) + y_at(poc + 1)) * 0.5).abs() <= tolerance;
-        let on_value_area = in_span
+        // Value area lines select only where they are painted.
+        let on_value_area = plot.config.show_value_area_lines
+            && in_span
             && [y_at(va_low), y_at(va_high + 1)]
                 .into_iter()
                 .any(|y| (point.y - y).abs() <= tolerance);

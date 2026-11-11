@@ -115,6 +115,15 @@ impl Indicator for DonchianChannels {
         offset: integer("Offset", i32::MIN, i32::MAX)
     ; {});
 
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(1),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: Color32::from_rgba_unmultiplied(33, 150, 243, 13),
+            inverted_color: None,
+        }]
+    }
+
     fn plot_offset(&self, _line: usize) -> isize {
         self.offset as isize
     }
@@ -236,6 +245,22 @@ mod tests {
                     .unwrap();
                 for mut study in [build(offset), typed] {
                     study.calculate(&bars);
+                    if study.name() == "Donchian" {
+                        let fills = study.fills();
+                        assert_eq!(fills.len(), 1);
+                        assert!(matches!(
+                            fills[0].first,
+                            crate::studies::FillBoundary::Plot(1)
+                        ));
+                        assert!(matches!(
+                            fills[0].second,
+                            crate::studies::FillBoundary::Plot(2)
+                        ));
+                        assert_eq!(
+                            fills[0].color,
+                            Color32::from_rgba_unmultiplied(33, 150, 243, 13)
+                        );
+                    }
                     for line in 0..3 {
                         assert_eq!(study.plot_offset(line), offset as isize);
                     }

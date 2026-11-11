@@ -162,6 +162,10 @@ impl Indicator for ProjectedPivotPoints {
         self.pivots.data_requests()
     }
 
+    fn data_start(&self, request: &StudyDataRequest) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.pivots.data_start(request)
+    }
+
     fn update_data(
         &mut self,
         data: &[Bar],
