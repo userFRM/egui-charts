@@ -110,9 +110,12 @@ fn render_profiles(
             let start = mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5;
             let mut extend = |price: f64, level: i64, stroke: Stroke| {
                 // Trading anywhere in the level's row touches it, as for footprint POC revisits.
+                // A candle without volume, such as the one a heartbeat opens, traded nowhere.
                 let row =
                     level as f64 * step - tick * 0.5..(level as f64 + 1.0) * step - tick * 0.5;
-                let last = crate::studies::first_trade_in(&bars[end..], &row)
+                let last = bars[end..]
+                    .iter()
+                    .position(|bar| bar.volume > 0.0 && bar.low < row.end && row.start <= bar.high)
                     .map_or(mapping.rect.right(), |i| mapping.idx_to_x(end + i));
                 let left = start.max(mapping.rect.left());
                 let right = last.min(mapping.rect.right());

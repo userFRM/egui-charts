@@ -152,7 +152,10 @@ impl Level {
         let high = grid_row(self.grid.0, self.grid.1, bar.high).0;
         bar.volume > 0.0
             && (low <= self.row && self.row <= high
-                || self.kind == ProfileLevelKind::ValueAreaHigh && on_edge && low == self.row + 1.0)
+                || self.kind == ProfileLevelKind::ValueAreaHigh
+                    && on_edge
+                    && low == self.row + 1.0
+                    && self.row < high)
     }
 }
 
@@ -1534,16 +1537,41 @@ mod tests {
         }
         // With cent rows, a row edge computed from the profile's low can round a few steps off
         // the traded price it stands for. Day one trades only at its first price and day two
-        // only at its second, which ends day one's levels in that row or on that line.
-        for (first, second, wanted) in [
-            (32.01, 32.02, vec![(P, 1..3), (H, 1..2), (V, 1..3)]),
-            (32.16, 32.16, vec![(P, 1..2), (H, 1..2), (V, 1..2)]),
+        // only at its second, which ends day one's levels in that row or on that line. A second
+        // bar without volume or with a NaN high trades nowhere.
+        for (first, (low, high, volume), wanted) in [
+            (
+                32.01,
+                (32.02, 32.02, 1.0),
+                vec![(P, 1..3), (H, 1..2), (V, 1..3)],
+            ),
+            (
+                32.16,
+                (32.16, 32.16, 1.0),
+                vec![(P, 1..2), (H, 1..2), (V, 1..2)],
+            ),
+            (
+                32.16,
+                (32.16, 32.16, 0.0),
+                vec![(P, 1..3), (H, 1..3), (V, 1..3)],
+            ),
+            (
+                32.01,
+                (32.02, f64::NAN, 1.0),
+                vec![(P, 1..3), (H, 1..3), (V, 1..3)],
+            ),
         ] {
-            let bars: Vec<_> = [first, second, 40.0]
-                .into_iter()
-                .zip([0, 3, 5])
-                .map(|(price, i)| Bar::new(bars[i].time, price, price, price, price, 1.0))
-                .collect();
+            let bars: Vec<_> = [
+                (first, first, first, 1.0),
+                (low, high, low, volume),
+                (40.0, 40.0, 40.0, 1.0),
+            ]
+            .into_iter()
+            .zip([0, 3, 5])
+            .map(|((low, high, close, volume), i)| {
+                Bar::new(bars[i].time, close, high, low, close, volume)
+            })
+            .collect();
             let mut study = VolProfileSession::new(24);
             study
                 .set_input("row_size", InputValue::Number(0.01))
@@ -1558,7 +1586,10 @@ mod tests {
                 .filter(|level| level.bars.start == 1)
                 .map(|level| (level.kind, level.bars))
                 .collect();
-            assert_eq!(got, wanted, "{first} then {second}");
+            assert_eq!(
+                got, wanted,
+                "{first} then {low}..{high} with volume {volume}"
+            );
         }
     }
 
