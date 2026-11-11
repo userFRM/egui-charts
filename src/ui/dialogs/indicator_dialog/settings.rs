@@ -684,7 +684,10 @@ mod tests {
             edited.fills[0].color = egui::Color32::from_rgba_unmultiplied(80, 120, 160, 64);
             edited.fills[0].visible = false;
             let mut dialog = IndicatorSettingsDialog::default();
-            for action in ["Cancel", "Apply"] {
+            for (action, theme, size) in [
+                ("Cancel", Theme::dark(), egui::vec2(1440.0, 900.0)),
+                ("Apply", Theme::light(), egui::vec2(420.0, 640.0)),
+            ] {
                 assert!(dialog.open_for_chart(&chart, id));
                 dialog.edit.as_mut().unwrap().settings = edited.clone();
                 for input in &mut dialog.inputs {
@@ -696,12 +699,11 @@ mod tests {
                         _ => input.value.clone(),
                     };
                 }
-                let theme = Theme::dark();
                 let mut applied = None;
                 let mut harness = Harness::builder()
                     .allow_missing_glyphs()
                     .with_context_setup(egui_extras::install_image_loaders)
-                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_size(size)
                     .build_ui(|ui| {
                         chart.show(ui);
                         if let Some(edit) =
@@ -731,7 +733,7 @@ mod tests {
                 let mut harness = Harness::builder()
                     .allow_missing_glyphs()
                     .with_context_setup(egui_extras::install_image_loaders)
-                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_size(size)
                     .build_ui(|ui| {
                         if let Some(edit) =
                             dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)

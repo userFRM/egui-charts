@@ -135,7 +135,7 @@ mod tests {
         // A missing bar or a view beyond the data must not pull shared scales to zero.
         for range in [2..3, 4..8] {
             assert!(
-                crate::studies::plots::gradient_prices(&study, range)
+                crate::studies::plots::fill_prices(&study, range)
                     .next()
                     .is_none()
             );

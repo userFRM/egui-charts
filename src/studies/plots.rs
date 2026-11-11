@@ -5,7 +5,7 @@ use egui::Color32;
 /// One boundary of a study band, in the study's value scale.
 #[derive(Clone, Copy, Debug)]
 pub enum FillBoundary {
-    /// A zero-based output line, including its offset and visibility.
+    /// A zero-based output line, including its offset. Its visibility does not hide the fill.
     Plot(usize),
     /// A constant level across the pane.
     Level(f64),
@@ -40,27 +40,54 @@ pub struct StudyGradient {
     pub colors: [Color32; 2],
 }
 
-/// Prices of visible ramps, including their baselines even when their plots are hidden.
+/// Prices of visible bands and ramps, even when their boundary plots are hidden.
 #[cfg(feature = "widget")]
-pub(crate) fn gradient_prices(
+pub(crate) fn fill_prices(
     study: &dyn super::Indicator,
     bars: std::ops::Range<usize>,
 ) -> impl Iterator<Item = f64> + '_ {
-    study
-        .gradients()
+    let bands = study
+        .fills()
         .into_iter()
         .filter(|fill| {
-            fill.colors
-                .iter()
-                .any(|color| *color != Color32::TRANSPARENT)
+            fill.color != Color32::TRANSPARENT
+                || fill
+                    .inverted_color
+                    .is_some_and(|color| color != Color32::TRANSPARENT)
         })
-        .flat_map(move |fill| {
-            bars.clone()
-                .filter_map(move |bar| study.plot_value(fill.plot, bar))
-                .filter(|value| value.is_finite())
-                .flat_map(move |value| [fill.baseline, value])
-        })
-        .filter(|value| value.is_finite())
+        .flat_map({
+            let bars = bars.clone();
+            move |fill| {
+                bars.clone()
+                    .filter_map(move |bar| {
+                        let value = |boundary| match boundary {
+                            FillBoundary::Plot(line) => study.plot_value(line, bar),
+                            FillBoundary::Level(value) => Some(value),
+                        };
+                        let a = value(fill.first)?;
+                        let b = value(fill.second)?;
+                        (a.is_finite() && b.is_finite()).then_some([a, b])
+                    })
+                    .flatten()
+            }
+        });
+    bands.chain(
+        study
+            .gradients()
+            .into_iter()
+            .filter(|fill| {
+                fill.colors
+                    .iter()
+                    .any(|color| *color != Color32::TRANSPARENT)
+            })
+            .flat_map(move |fill| {
+                bars.clone()
+                    .filter_map(move |bar| study.plot_value(fill.plot, bar))
+                    .filter(|value| value.is_finite())
+                    .flat_map(move |value| [fill.baseline, value])
+            })
+            .filter(|value| value.is_finite()),
+    )
 }
 
 /// One OHLCV candle spanning an exclusive range of source bar indices.
