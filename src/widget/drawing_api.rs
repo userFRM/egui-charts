@@ -143,8 +143,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a retracement's, extension's, channel's or wedge's levels, typography, text placement
-    /// and construction visibility as one undoable edit. Unknown ids, locked drawings and invalid
+    /// Replace a retracement's, extension's, channel's, wedge's or time projection's levels,
+    /// typography, label placement and construction visibility as one undoable edit. Unknown ids,
+    /// locked drawings and invalid
     /// settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
@@ -166,9 +167,11 @@ impl Chart {
                 | crate::drawings::DrawingToolType::FibonacciExtension
                 | crate::drawings::DrawingToolType::FibonacciChannel
                 | crate::drawings::DrawingToolType::FibonacciWedge
+                | crate::drawings::DrawingToolType::FibonacciTimeZones
+                | crate::drawings::DrawingToolType::TrendBasedFibTime
         ) {
             return Err(DrawingError::Invalid(
-                "Drawing is not a Fibonacci retracement, extension, channel or wedge",
+                "Drawing is not a Fibonacci retracement, extension, channel, wedge or time projection",
             ));
         }
         if !config.is_valid() {

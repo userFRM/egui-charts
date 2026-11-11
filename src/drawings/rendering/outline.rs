@@ -216,7 +216,9 @@ impl Drawing {
             }
             T::FlatTopBottom | T::DisjointChannel => return self.wedge_channel_outline(rect),
             T::ParallelChannel => return self.parallel_channel_outline(rect),
-            T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),
+            T::FibonacciTimeZones | T::TrendBasedFibTime => {
+                outline.lines = self.fibonacci_time_zone_lines(rect);
+            }
             T::FibonacciWedge => return self.fibonacci_wedge_outline(clip),
             T::FibonacciSpeedFan => outline.lines = self.fibonacci_speed_fan_lines(rect),
             _ => return None,

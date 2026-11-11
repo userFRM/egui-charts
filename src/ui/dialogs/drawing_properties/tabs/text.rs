@@ -57,8 +57,8 @@ fn alignment_row<T: Copy + PartialEq, const N: usize>(
 pub struct TextTab;
 
 impl TextTab {
-    /// Tools with text to write, and the trend angle, Fibonacci and position tools, whose own
-    /// labels have a font and a colour.
+    /// Tools with text to write, and the trend angle, Fibonacci, Fibonacci time and position
+    /// tools, whose own labels have a font and a colour.
     pub(crate) fn available(tool: DrawingToolType) -> bool {
         tool.supports_text()
             || matches!(
@@ -67,6 +67,8 @@ impl TextTab {
                     | DrawingToolType::FibonacciRetracement
                     | DrawingToolType::FibonacciExtension
                     | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
                     | DrawingToolType::LongPos
                     | DrawingToolType::ShortPos
             )
@@ -80,8 +82,14 @@ impl TextTab {
                 DrawingToolType::FibonacciRetracement
                     | DrawingToolType::FibonacciExtension
                     | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
             )
         {
+            let time = matches!(
+                template.settings.tool_type,
+                DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime
+            );
             let mut config = template.settings.fibonacci_config().into_owned();
             let original = config.clone();
             FormGrid::new("fibonacci_text").show(ui, |ui| {
@@ -119,17 +127,28 @@ impl TextTab {
                 {
                     config.label_position = Some(position);
                 }
-                alignment_row(
-                    ui,
-                    "Label height",
-                    &mut config.label_vertical,
-                    [
-                        (V::Bottom, "Top"),
-                        (V::Middle, "Middle"),
-                        (V::Top, "Bottom"),
-                    ],
-                );
-                if template.settings.tool_type == DrawingToolType::FibonacciChannel {
+                // Time projections run top to bottom of the pane; retracements measure from the line.
+                let (height, choices) = if time {
+                    (
+                        &mut config.time_label_vertical,
+                        [
+                            (V::Top, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Bottom, "Bottom"),
+                        ],
+                    )
+                } else {
+                    (
+                        &mut config.label_vertical,
+                        [
+                            (V::Bottom, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Top, "Bottom"),
+                        ],
+                    )
+                };
+                alignment_row(ui, "Label height", height, choices);
+                if time || template.settings.tool_type == DrawingToolType::FibonacciChannel {
                     return;
                 }
                 ui.label("");
