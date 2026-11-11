@@ -1232,14 +1232,11 @@ mod tests {
                     .apply_settings(&[], edited.clone())
                     .unwrap();
             });
-            assert!(chart.set_indicator_user_edit_enabled(id, enabled));
-            for (redo, expected) in [(false, &before), (true, &edited)] {
+            // The host changes the permission again before each step.
+            for (redo, expected, host) in [(false, &before, enabled), (true, &edited, !enabled)] {
+                assert!(chart.set_indicator_user_edit_enabled(id, host));
                 assert!(if redo { chart.redo() } else { chart.undo() });
-                assert_eq!(
-                    chart.indicator_user_edit_enabled(id),
-                    enabled,
-                    "redo={redo}"
-                );
+                assert_eq!(chart.indicator_user_edit_enabled(id), host, "redo={redo}");
                 let restored = chart.indicators().next().unwrap().1.settings();
                 assert_eq!(restored.precision, expected.precision);
                 assert_eq!(restored.show_legend_values, expected.show_legend_values);
