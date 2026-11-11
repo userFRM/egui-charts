@@ -198,9 +198,12 @@ pub(super) fn show_editor(
                 color: egui::Color32::TRANSPARENT,
                 ..section.format.clone()
             };
+            // The draft wraps where the drawing wraps it, so the caret stays on the painted text.
+            let wrap = galley.job.wrap.clone();
             let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-                let job =
+                let mut job =
                     egui::text::LayoutJob::simple_format(text.as_str().to_owned(), format.clone());
+                job.wrap = wrap.clone();
                 ui.fonts_mut(|fonts| fonts.layout_job(job))
             };
             egui::Area::new(id)

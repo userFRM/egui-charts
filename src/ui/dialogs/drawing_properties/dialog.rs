@@ -248,6 +248,7 @@ impl DrawingPropertiesDialog {
                 drawing.position_readout = old.position_readout;
                 drawing.position_target_color = old.position_target_color;
                 drawing.position_stop_color = old.position_stop_color;
+                drawing.position_style = old.position_style;
                 drawing.volume_profile = old.volume_profile;
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
@@ -258,6 +259,8 @@ impl DrawingPropertiesDialog {
                 drawing.elliott_degree = old.elliott_degree;
                 drawing.font_weight = old.font_weight;
                 drawing.italic = old.italic;
+                drawing.text_wrap = old.text_wrap;
+                drawing.text_wrap_width = old.text_wrap_width;
                 drawing.text_color = old.text_color;
                 drawing.background = old.background;
                 drawing.border = old.border;
@@ -802,9 +805,12 @@ mod tests {
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
+                settings.position_style.border = true;
                 settings.price_axis_label = false;
                 settings.time_axis_label = false;
                 settings.italic = true;
+                settings.text_wrap = true;
+                settings.text_wrap_width = 120.0;
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
                 dialog.coordinates.points[1].price = "125".into();
@@ -818,8 +824,10 @@ mod tests {
                 let preview = &chart.drawings().drawings[0];
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
+                assert!(preview.position_style.border);
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
+                assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
@@ -863,11 +871,17 @@ mod tests {
             let restored = &chart.drawings().drawings[0];
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
+            assert!(!restored.position_style.border, "{finish}");
             assert!(
                 restored.price_axis_label && restored.time_axis_label,
                 "{finish}"
             );
             assert!(!restored.italic, "{finish}");
+            assert_eq!(
+                (restored.text_wrap, restored.text_wrap_width),
+                (false, 200.0),
+                "{finish}"
+            );
             assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");

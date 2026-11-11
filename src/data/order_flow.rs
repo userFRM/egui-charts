@@ -787,10 +787,12 @@ impl OrderFlowInput {
     /// bar that lost an execution to the store's limit is left out, and a rolling window gives no
     /// value while it reaches back to the loss, as when the window overflows. On a trade-based
     /// interval it rebuilds only a source the sink has not allocated an execution to yet, from the
-    /// executions that arrived live. A footprint source that lost some of those waits for the
-    /// sink's allocations, leaving out the executions still queued: they open no bar of their own.
-    /// Any other source that lost some is grouped along `history`, the chart's bars, from the
-    /// oldest bar whose executions are all held.
+    /// executions that arrived live, grouped along `history`, the chart's bars, from the oldest
+    /// bar whose executions are all held. A page's copy of a live execution the store dropped as
+    /// a repeat counts in its place. A footprint source that lost some live executions waits for
+    /// the sink's allocations, leaving out the executions still queued: they open no bar of their
+    /// own. Without a loss, a source whose executions do not match the chart's bars groups them
+    /// from the oldest live one.
     #[cfg(feature = "widget")]
     pub(crate) fn replace_trades(
         &self,
@@ -818,19 +820,60 @@ impl OrderFlowInput {
         let as_of = self.state().last;
         self.clear();
         let lost = trades.lost_until();
+        // Groups the executions the sink allocated along the chart's bars: the live ones, after
+        // a loss only those after it. Without a loss a page's copy stands in for a live execution
+        // the store dropped as a repeat, so paged ones from the open of the chart bar holding the
+        // oldest live one join them. A bar the sink opened a nanosecond after the one before
+        // starts with an execution no later than that one's open, so a run of such bars counts
+        // from the open of its first. Older paged ones belong to history bars, which the chart
+        // did not fold from them.
+        let chart_run = || {
+            let timeframe = clock.timeframe().filter(|_| trade_based)?;
+            let paged = trades.iter().count() - trades.live().count();
+            let oldest = trades.live().map(|trade| trade.ts).min();
+            let from = oldest.filter(|_| lost.is_none()).and_then(|oldest| {
+                let bars = &history[..history.partition_point(|bar| bar.time <= oldest)];
+                let chained = (bars.windows(2).rev())
+                    .take_while(|pair| pair[1].time - pair[0].time == TimeDelta::nanoseconds(1))
+                    .count();
+                Some(bars[..bars.len() - chained].last()?.time)
+            });
+            let live = trades
+                .live()
+                .filter(|trade| lost.is_none_or(|lost| trade.ts > lost));
+            let mut held: Vec<_> = (trades.iter().take(paged))
+                .filter(|trade| from.is_some_and(|from| trade.ts >= from))
+                .chain(live)
+                .collect();
+            held.sort_by_key(|trade| trade.ts);
+            let tick_size = self.state().tick_size;
+            super::footprint::live_run(timeframe, tick_size, &held, history)
+        };
         if footprint {
             // Without the original live anchor, wait for allocations from the sink.
             if trade_based && lost.is_some() {
                 self.state().awaits_sink = trades.live().next().is_some();
                 return;
             }
-            // In arrival order, as the chart's footprint is built.
-            for trade in trades.iter().skip(if trade_based {
-                trades.iter().count() - trades.live().count()
+            if let Some((parts, bars)) = chart_run() {
+                let mut state = self.state();
+                for (trade, open, size) in parts {
+                    state.push_footprint(clock, trade, Some((open, size)));
+                }
+                // The executions still queued in the sink continue the chart's grouping.
+                if let Some(flow) = &mut state.footprint {
+                    flow.trade_bars = bars.clone();
+                }
+                state.trade_bars = bars;
             } else {
-                0
-            }) {
-                self.push_trade(clock, trade);
+                // In arrival order, as the chart's footprint is built.
+                for trade in trades.iter().skip(if trade_based {
+                    trades.iter().count() - trades.live().count()
+                } else {
+                    0
+                }) {
+                    self.push_trade(clock, trade);
+                }
             }
             let mut state = self.state();
             if let (Some(lost), Some(flow)) = (lost, &mut state.footprint) {
@@ -845,30 +888,23 @@ impl OrderFlowInput {
                     distinct.lost_until = lost;
                 }
             }
-            // Paged executions belong to history bars, which the chart did not fold from them.
-            let mut sorted: Vec<_> = if trade_based {
-                // A gap left by executions dropped before the store ends at the loss's time.
-                trades
-                    .live()
-                    .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
-                    .collect()
-            } else {
-                trades.iter().collect()
-            };
-            sorted.sort_by_key(|trade| trade.ts);
-            if let Some(timeframe) = clock.timeframe().filter(|_| trade_based && lost.is_some()) {
+            if let Some((parts, bars)) = chart_run() {
                 let mut state = self.state();
-                let run = super::footprint::live_run(timeframe, state.tick_size, &sorted, history);
-                if let Some((parts, bars)) = run {
-                    let mut previous: Option<&Tick> = None;
-                    for (trade, open, size) in parts {
-                        let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
-                        state.add_trade(trade, open, size, first);
-                        previous = Some(trade);
-                    }
-                    state.trade_bars = bars;
+                let mut previous: Option<&Tick> = None;
+                for (trade, open, size) in parts {
+                    let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
+                    state.add_trade(trade, open, size, first);
+                    previous = Some(trade);
                 }
-            } else {
+                state.trade_bars = bars;
+            } else if !trade_based || lost.is_none() {
+                // Paged executions belong to history bars, which the chart did not fold from them.
+                let mut sorted: Vec<_> = if trade_based {
+                    trades.live().collect()
+                } else {
+                    trades.iter().collect()
+                };
+                sorted.sort_by_key(|trade| trade.ts);
                 for trade in sorted {
                     self.push_trade(clock, trade);
                 }
@@ -1790,10 +1826,12 @@ mod tests {
                 .trades
                 .iter()
                 .for_each(|trade| held.push(trade.clone()));
+            let bars: Vec<_> = drained.bars.into_values().map(|(bar, _)| bar).collect();
             let footprint = OrderFlowInput::footprint();
             footprint.set_tick_size(Some(1.0));
-            // As the chart connects a new source: rebuilt from its store, then given the queue.
-            footprint.replace_trades(&clock, &held, &[]);
+            // As the chart connects a new source: rebuilt from its store along its bars, then
+            // given the queue.
+            footprint.replace_trades(&clock, &held, &bars);
             sink.push_tick(buy(1));
             inbox.study_inputs(sink.id, vec![footprint.clone()]);
             sink.push_tick(buy(2));

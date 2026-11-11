@@ -618,6 +618,8 @@ impl Chart {
                 options: series.options.clone(),
                 visible: series.visible,
                 fed: series.fed,
+                filled: None,
+                restored: false,
                 bars: series.bars.clone(),
                 revision: series.revision,
                 last_price_pulse: std::cell::Cell::new(None),

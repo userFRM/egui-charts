@@ -29,8 +29,8 @@ pub use image::ImageConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
     LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign, LineTextOrientation,
-    LineTextVerticalAlign, PositionReadout, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility,
+    LineTextVerticalAlign, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;

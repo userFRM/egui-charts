@@ -1457,10 +1457,15 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
 /// of the sell of 4 (-1); its last unit, the buy of 2 and 2 of the sell of 6 (-1); its other 4 and
 /// 1 of the buy of 5 (-3); its other 4 (4). One study is away for the last two executions and
 /// another joins at the undo. Holding the last executions before the newest, they lack the first
-/// two bars and match the study that stayed on the others.
+/// two bars and match the study that stayed on the others. In the last two rows nothing is lost,
+/// but a trade page answered in the drain that streams them without an id stands in for the first
+/// executions: the buy of 1, or the buys of 1, 2 and 4 at one instant, so that the bar of 4 and 8
+/// opens a nanosecond after the first. 2t bars of 1 and 2 (3), 4 and 8 (12), 16 and 32 (48), which
+/// the rebuilt studies and an added footprint source, buying 3, 12 and 48, match on every bar.
 #[cfg(feature = "studies")]
 #[test]
-fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
+fn restored_order_flow_study_keeps_the_chart_bars() {
+    use crate::data::OrderFlowInput;
     use crate::model::OrderSide::{Buy, Sell};
     use crate::studies::OrderFlowStudy;
     let rows = [
@@ -1476,6 +1481,7 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
                 (64.0, Buy),
             ],
             vec![3.0, 12.0, 48.0, 64.0],
+            0,
         ),
         (
             "5v",
@@ -1488,6 +1494,33 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
                 (5.0, Buy),
             ],
             vec![5.0, -1.0, -1.0, -3.0, 4.0],
+            0,
+        ),
+        (
+            "2t",
+            vec![
+                (1.0, Buy),
+                (2.0, Buy),
+                (4.0, Buy),
+                (8.0, Buy),
+                (16.0, Buy),
+                (32.0, Buy),
+            ],
+            vec![3.0, 12.0, 48.0],
+            1,
+        ),
+        (
+            "2t",
+            vec![
+                (1.0, Buy),
+                (2.0, Buy),
+                (4.0, Buy),
+                (8.0, Buy),
+                (16.0, Buy),
+                (32.0, Buy),
+            ],
+            vec![3.0, 12.0, 48.0],
+            3,
         ),
     ];
     let start = bars(1)[0].time;
@@ -1497,7 +1530,7 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
             .map(|value| (!value.is_nan()).then_some(*value))
             .collect::<Vec<_>>()
     };
-    for (interval, fills, stayed_values) in rows {
+    for (interval, fills, stayed_values, paged) in rows {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe(interval.parse().unwrap());
@@ -1509,8 +1542,11 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
         feed.page().send(page(Vec::new(), true));
         frames.run(&mut chart);
-        chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
+        if paged == 0 {
+            chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
+        }
         let sink = feed.sink();
+        let footprint = OrderFlowInput::footprint();
         let mut added = None;
         for (i, &(size, side)) in fills.iter().enumerate() {
             if i + 2 == fills.len() {
@@ -1520,11 +1556,26 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
             if i + 1 == fills.len() {
                 assert!(chart.undo());
                 added = Some(chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false))));
+                if paged > 0 {
+                    chart.add_indicator(Box::new(PocAndBid {
+                        inputs: [footprint.clone(), OrderFlowInput::book(1)],
+                        clock: BarClock::exact(),
+                        values: crate::studies::IndicatorValues::new(),
+                    }));
+                }
                 frames.run(&mut chart);
             }
-            let at = start + TimeDelta::seconds(i as i64);
-            sink.push_tick(Tick::new(at, 100.0, size, Some(side)));
-            frames.run(&mut chart);
+            // The paged executions share the first instant and drain with the page.
+            let at = start + TimeDelta::seconds(i.saturating_sub(paged.max(1) - 1) as i64);
+            let tick = |&(size, side)| Tick::new(at, 100.0, size, Some(side));
+            if i + 1 == paged {
+                let trades = fills[..paged].iter().map(tick).collect();
+                (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(trades, false)));
+            }
+            sink.push_tick(tick(&(size, side)));
+            if i + 1 >= paged {
+                frames.run(&mut chart);
+            }
         }
         for _ in 0..8 {
             frames.run(&mut chart);
@@ -1532,10 +1583,19 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
         let all: Vec<_> = stayed_values.iter().copied().map(Some).collect();
         assert_eq!(values(&chart, stayed), all, "{interval}");
         let held: Vec<_> = (all.iter().enumerate())
-            .map(|(bar, value)| value.filter(|_| bar >= 2))
+            .map(|(bar, value)| value.filter(|_| paged > 0 || bar >= 2))
             .collect();
         assert_eq!(values(&chart, restored), held, "{interval}, restored");
         assert_eq!(values(&chart, added.unwrap()), held, "{interval}, added");
+        if paged > 0 {
+            let bought: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
+                .iter()
+                .map(|(open, bar)| (*open, bar.ask))
+                .collect();
+            let opens = chart.bars(SeriesId::MAIN).iter().map(|bar| bar.time);
+            let expected: Vec<_> = opens.zip(stayed_values.iter().copied()).collect();
+            assert_eq!(bought, expected, "{interval}, footprint");
+        }
     }
 }
 
@@ -4397,6 +4457,170 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
         ..Default::default()
     });
     assert!(!manual.is_fed(id));
+}
+
+/// Undo of a removed feed-backed series shows the bars it held over the frames before its history
+/// reply, merges a live bar into them and then leaves the series to the reply. A candle replay
+/// entered before the reply windows the held bars with the live bar merged. Bars held under
+/// another interval, hours, conversion or adjustment than the chart's are not shown, also when the
+/// interval changed just before the removal, while the series still had its old bars, and neither
+/// are the live feed's bars under a market replay, whether the series left before or during it.
+#[test]
+fn undo_of_a_removed_fed_series_keeps_its_bars() {
+    // MSFT closes at 40 plus the index of the one-minute bar.
+    let msft = |range: std::ops::Range<usize>| -> Vec<Bar> {
+        bars(7)[range]
+            .iter()
+            .map(|bar| {
+                let close = bar.close - 60.0;
+                Bar::new(bar.time, close, close, close, close, 1.0)
+            })
+            .collect()
+    };
+    let held = [40.0, 41.0, 42.0, 43.0, 44.0, 45.0];
+    let merged = [40.0, 41.0, 42.0, 43.0, 44.0, 50.0];
+    // A market replay in the fifth minute of a recording that lacks MSFT, run for a frame.
+    let market = |chart: &mut Chart| {
+        use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        let time = bars(5)[4].time + TimeDelta::seconds(30);
+        let fill = Tick::new(time, 70.0, 1.0, None).with_id(0);
+        let events = vec![ReplayEvent::new("A", time, 0, MarketEvent::Trade(fill))];
+        let driver = ReplayDriver::new(events, vec![Instrument::new("A")]).unwrap();
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time);
+        chart.set_market_replay(Some(Arc::new(driver)));
+        chart.pump(&egui::Context::default());
+    };
+    // How a row ends once a live bar has merged: the history reply arrives, a candle replay
+    // starts before it, or a market replay drives the series and no reply comes.
+    #[derive(PartialEq)]
+    enum End {
+        Reply,
+        CandleReplay,
+        MarketReplay,
+    }
+    // The change, whether it comes before the removal, the closes from undo to the reply,
+    // without and with a live bar of 50 in the last slot, and how the row ends.
+    type Row<'a> = (&'a str, bool, fn(&mut Chart), &'a [f64], &'a [f64], End);
+    let rows: [Row; 8] = [
+        ("none", false, |_| {}, &held, &merged, End::Reply),
+        (
+            "candle replay",
+            false,
+            |_| {},
+            &held,
+            &merged,
+            End::CandleReplay,
+        ),
+        (
+            "interval",
+            true,
+            |chart| chart.set_timeframe(Timeframe::Sec30),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        (
+            "hours",
+            false,
+            |chart| chart.set_extended_hours(true),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        (
+            "conversion",
+            false,
+            |chart| chart.set_conversion(Some("EUR".into())),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        (
+            "adjustment",
+            false,
+            |chart| chart.set_dividend_adjusted(true),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        ("market replay", false, market, &[], &[], End::MarketReplay),
+        (
+            "removed in a market replay",
+            true,
+            market,
+            &[],
+            &[],
+            End::MarketReplay,
+        ),
+    ];
+    for (change, before_removal, apply, shown, live, end) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, None);
+        let id = chart.add_feed_series(crate::widget::SeriesOptions {
+            name: "MSFT".into(),
+            ..Default::default()
+        });
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve().send(Ok(Instrument::new("MSFT")));
+        frames.run(&mut chart);
+        feed.page().send(page(msft(0..6), true));
+        frames.run(&mut chart);
+        assert_eq!(closes(&chart, id), held);
+
+        if before_removal {
+            apply(&mut chart);
+        }
+        assert!(chart.user_action(|chart| chart.remove_series(id)));
+        if !before_removal {
+            apply(&mut chart);
+        }
+        frames.run(&mut chart);
+        assert!(chart.undo());
+        assert_eq!(closes(&chart, id), shown, "{change}: right after undo");
+        frames.run(&mut chart);
+        if end != End::MarketReplay {
+            feed.resolve().send(Ok(Instrument::new("MSFT")));
+        }
+        for frame in 0..3 {
+            frames.run(&mut chart);
+            assert_eq!(
+                closes(&chart, id),
+                shown,
+                "{change}: frame {frame} before the reply"
+            );
+        }
+        let last = msft(5..6)[0].time;
+        feed.sink()
+            .push_bar(Bar::new(last, 50.0, 50.0, 50.0, 50.0, 1.0));
+        frames.run(&mut chart);
+        assert_eq!(
+            closes(&chart, id),
+            live,
+            "{change}: a live bar before the reply"
+        );
+        match end {
+            End::Reply => {}
+            End::CandleReplay => {
+                chart.set_replay_time(Some(msft(3..4)[0].time));
+                frames.run(&mut chart);
+                assert_eq!(closes(&chart, id), [40.0, 41.0, 42.0], "{change}: entered");
+                chart.set_replay_time(Some(msft(6..7)[0].time));
+                frames.run(&mut chart);
+                assert_eq!(closes(&chart, id), merged, "{change}: sought past the bars");
+                continue;
+            }
+            End::MarketReplay => continue,
+        }
+        feed.page().send(page(msft(1..7), true));
+        frames.run(&mut chart);
+        assert_eq!(
+            closes(&chart, id),
+            [41.0, 42.0, 43.0, 44.0, 50.0, 46.0],
+            "{change}: the reply replaces the held bars"
+        );
+    }
 }
 
 /// Dividend adjustment is asked of the feed for the main series and the comparisons, and

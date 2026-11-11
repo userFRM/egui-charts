@@ -23,10 +23,15 @@ impl StyleTab {
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 2]) {
         let tool = props.tool_settings.as_ref().map(|t| t.settings.tool_type);
         let [color_picker, fill_picker] = pickers;
+        // Positions style their lines, labels and zones from their own settings below.
+        let position = matches!(
+            tool,
+            Some(DrawingToolType::LongPos | DrawingToolType::ShortPos)
+        );
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
-            if tool != Some(DrawingToolType::FibonacciChannel) {
+            if tool != Some(DrawingToolType::FibonacciChannel) && !position {
                 ui.label(l10n::text(ui.ctx(), "Color"));
                 if let Some(color) =
                     color_swatch(ui, color_picker, props.color, "drawing_props_color")
@@ -48,8 +53,10 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if tool
-                .is_none_or(|tool| tool.draws_line() && tool != DrawingToolType::FibonacciChannel)
+            if !position
+                && tool.is_none_or(|tool| {
+                    tool.draws_line() && tool != DrawingToolType::FibonacciChannel
+                })
             {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
@@ -72,9 +79,13 @@ impl StyleTab {
                 if matches!(
                     settings.tool_type,
                     DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
                         | DrawingToolType::FibonacciExtension
                         | DrawingToolType::FibonacciChannel
                         | DrawingToolType::FibonacciWedge
+                        | DrawingToolType::FibonacciTimeZones
+                        | DrawingToolType::TrendBasedFibTime
                 ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
@@ -100,7 +111,14 @@ impl StyleTab {
                     }
                     ui.end_row();
                     if settings.tool_type != DrawingToolType::FibonacciChannel {
-                        ui.label(l10n::text(ui.ctx(), "Trend line"));
+                        ui.label(l10n::text(
+                            ui.ctx(),
+                            if settings.tool_type == DrawingToolType::FibonacciTimeZones {
+                                "Initial line"
+                            } else {
+                                "Trend line"
+                            },
+                        ));
                         ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
                             .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
                         ui.end_row();
@@ -112,10 +130,76 @@ impl StyleTab {
                         settings.fib_config = Some(config);
                     }
                 }
-                if matches!(
-                    settings.tool_type,
-                    DrawingToolType::LongPos | DrawingToolType::ShortPos
-                ) {
+                if settings.tool_type == DrawingToolType::FibonacciSpiral {
+                    let mut config = settings.fibonacci_config().into_owned();
+                    ui.label("");
+                    if ui
+                        .checkbox(
+                            &mut config.spiral_counterclockwise,
+                            l10n::text(ui.ctx(), "Counterclockwise"),
+                        )
+                        .changed()
+                    {
+                        settings.fib_config = Some(config);
+                    }
+                    ui.end_row();
+                }
+                if position {
+                    let style = &mut settings.position_style;
+                    let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+                    let shown = style.line_color.map_or_else(
+                        || {
+                            ui.active_theme()
+                                .chart
+                                .axis_text_secondary
+                                .gamma_multiply(0.65)
+                        },
+                        rgba,
+                    );
+                    ui.label(l10n::text(ui.ctx(), "Lines"));
+                    if let Some(picked) =
+                        color_swatch(ui, color_picker, shown, "position_line_color")
+                    {
+                        // The theme's line is translucent; a colour picked over it starts opaque.
+                        let current = style.line_color.map_or(Color32::WHITE, rgba);
+                        style.line_color = Some(
+                            keep_opacity(picked, current, color_picker.custom_mode)
+                                .to_srgba_unmultiplied(),
+                        );
+                    }
+                    ui.end_row();
+
+                    ui.label(l10n::text(ui.ctx(), "Line width"));
+                    line_width_row(ui, &mut style.line_width);
+                    ui.end_row();
+
+                    let label = ui.label(l10n::text(ui.ctx(), "Background"));
+                    ui.checkbox(&mut style.fill, l10n::text(ui.ctx(), "Show background"))
+                        .labelled_by(label.id);
+                    ui.end_row();
+
+                    let label = ui.label(l10n::text(ui.ctx(), "Border"));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut style.border, l10n::text(ui.ctx(), "Show border"))
+                            .labelled_by(label.id);
+                        if style.border
+                            && let Some(picked) = color_swatch(
+                                ui,
+                                fill_picker,
+                                rgba(style.border_color),
+                                "position_border_color",
+                            )
+                        {
+                            style.border_color = keep_opacity(
+                                picked,
+                                rgba(style.border_color),
+                                fill_picker.custom_mode,
+                            )
+                            .to_srgba_unmultiplied();
+                        }
+                    });
+                    ui.end_row();
+
                     for (label, value) in [
                         (
                             "Keep position statistics visible",
@@ -207,7 +291,7 @@ impl StyleTab {
                 }
             }
 
-            if let Some(tool) = tool.filter(|tool| tool.supports_fill()) {
+            if let Some(tool) = tool.filter(|tool| tool.supports_fill() && !position) {
                 let label = ui.label(l10n::text(ui.ctx(), "Fill"));
                 ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
                     .labelled_by(label.id);
