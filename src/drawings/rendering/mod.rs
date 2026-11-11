@@ -388,12 +388,20 @@ impl Drawing {
             let &[start, end, ..] = self.points.as_slice() else {
                 return None;
             };
-            let ratio = self
-                .fibonacci_config()
+            let config = self.fibonacci_config();
+            let ratio = config
                 .visible_levels()
                 .map(|l| l.value)
                 .filter(|v| v.is_finite() && *v >= 0.0)
                 .fold(0.0_f32, f32::max);
+            // Level labels sit just outside their circle, as wide as the font allows.
+            let label = config
+                .visible_levels()
+                .map(|l| config.label_text(l, None).chars().count())
+                .max()
+                .unwrap_or(0) as f32
+                * 1.5
+                * crate::styles::typography::font_size(config.label_size);
             let (center, size) = if self.tool_type == T::FibonacciCircles {
                 (start.lerp(end, 0.5), (end - start).abs() * ratio)
             } else {
@@ -402,7 +410,7 @@ impl Drawing {
             return size.is_finite().then(|| {
                 Rect::from_center_size(center, size)
                     .union(Rect::from_two_pos(start, end))
-                    .expand(PAINT_MARGIN)
+                    .expand(PAINT_MARGIN + label)
             });
         }
         if self.tool_type == T::GannFixed {
@@ -806,6 +814,17 @@ mod tests {
                         size: Some([1500.0, 800.0]),
                         ..Default::default()
                     });
+                }
+                // The largest label size, whose text reaches far past a circle, on closed arcs.
+                if matches!(
+                    tool,
+                    DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
+                ) && i == 2
+                {
+                    let config = drawing.fib_config.as_mut().unwrap();
+                    config.label_size = 256.0;
+                    config.close_arcs = true;
                 }
                 let Some(bounds) = drawing.paint_bounds() else {
                     continue;

@@ -143,10 +143,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a retracement's, extension's, channel's, wedge's or time projection's levels,
-    /// typography, label placement and construction visibility as one undoable edit. Unknown ids,
-    /// locked drawings and invalid
-    /// settings change nothing.
+    /// Replace a retracement's, extension's, channel's, wedge's, circle's, resistance arc's, spiral's
+    /// or time projection's Fibonacci settings as one undoable edit. Unknown ids, locked drawings
+    /// and invalid settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
@@ -164,6 +163,9 @@ impl Chart {
         if !matches!(
             drawing.tool_type,
             crate::drawings::DrawingToolType::FibonacciRetracement
+                | crate::drawings::DrawingToolType::FibonacciCircles
+                | crate::drawings::DrawingToolType::FibonacciSpeedResistanceArcs
+                | crate::drawings::DrawingToolType::FibonacciSpiral
                 | crate::drawings::DrawingToolType::FibonacciExtension
                 | crate::drawings::DrawingToolType::FibonacciChannel
                 | crate::drawings::DrawingToolType::FibonacciWedge
@@ -171,7 +173,7 @@ impl Chart {
                 | crate::drawings::DrawingToolType::TrendBasedFibTime
         ) {
             return Err(DrawingError::Invalid(
-                "Drawing is not a Fibonacci retracement, extension, channel, wedge or time projection",
+                "Drawing is not a Fibonacci retracement, circle, resistance arc, spiral, extension, channel, wedge or time projection",
             ));
         }
         if !config.is_valid() {
@@ -537,6 +539,65 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
     use crate::studies::{CustomIndicator, IndicatorValue};
+
+    /// Round-family host updates share the saved config, reject invalid widths and remain one
+    /// undoable edit.
+    #[test]
+    fn round_fibonacci_host_edits_are_one_undoable_step() {
+        use crate::drawings::{DrawingToolType as T, FibonacciConfig};
+        for tool in [
+            T::FibonacciCircles,
+            T::FibonacciSpeedResistanceArcs,
+            T::FibonacciSpiral,
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 200.0)];
+            drawing.completed = true;
+            chart.drawings_mut().drawings.push(drawing.clone());
+            let mut saved = serde_json::to_value(FibonacciConfig::for_tool(tool)).unwrap();
+            saved["spiral_counterclockwise"] = true.into();
+            saved["close_arcs"] = true.into();
+            if tool != T::FibonacciSpiral {
+                for (i, level) in saved["levels"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .enumerate()
+                {
+                    level["width"] = ((i + 1) as f32).into();
+                    level["line_style"] = if i % 2 == 0 { "Dotted" } else { "Dashed" }.into();
+                }
+            }
+            let config: FibonacciConfig = serde_json::from_value(saved).unwrap();
+            chart.set_fibonacci_config(7, config.clone()).unwrap();
+            chart.set_fibonacci_config(7, config.clone()).unwrap();
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
+            assert!(!chart.can_undo());
+            assert!(chart.redo());
+            let id = chart.drawings().drawings[0].id;
+            let mut invalid = config.clone();
+            invalid.label_size = f32::NAN;
+            assert!(chart.set_fibonacci_config(id, invalid).is_err());
+            if !config.levels.is_empty() {
+                let mut invalid = config.clone();
+                invalid.levels[0].width = Some(0.0);
+                assert!(chart.set_fibonacci_config(id, invalid).is_err());
+            }
+            assert!(chart.undo());
+            assert!(!chart.can_undo(), "rejected edits add no history");
+            chart.drawings_mut().drawings[0].locked = true;
+            assert_eq!(
+                chart.set_fibonacci_config(id, config.clone()),
+                Err(DrawingError::Locked(id))
+            );
+            assert_eq!(
+                chart.set_fibonacci_config(99, config),
+                Err(DrawingError::UnknownDrawing(99))
+            );
+        }
+    }
 
     /// Extension settings retain every level through templates, persistence and one undo step;
     /// invalid fonts, locked drawings and wrong tools leave the drawing and history intact.

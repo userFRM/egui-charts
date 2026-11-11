@@ -399,8 +399,17 @@ impl Drawing {
                 continue;
             }
             let axes = egui::vec2(radius, if end.y >= start.y { radius } else { -radius });
-            let angles = [0.0, std::f64::consts::PI];
-            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let angles = [
+                0.0,
+                if config.close_arcs {
+                    std::f64::consts::TAU
+                } else {
+                    std::f64::consts::PI
+                },
+            ];
+            let clip = painter
+                .clip_rect()
+                .expand(effective_width(&config, level) + 2.0);
             let ppp = painter.pixels_per_point();
             let points = if config.show_background {
                 let (inner, outer) = sampled_band(
@@ -430,18 +439,17 @@ impl Drawing {
             };
             previous = radius;
             paint_level_path(painter, points, &config, level);
-            let at = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
-            paint_ratio_label(
-                painter,
-                &config,
-                level,
-                at,
-                if end.y <= start.y {
-                    egui::Align2::CENTER_BOTTOM
-                } else {
-                    egui::Align2::CENTER_TOP
-                },
-            );
+            let (near, far) = if end.y <= start.y {
+                (egui::Align2::CENTER_BOTTOM, egui::Align2::CENTER_TOP)
+            } else {
+                (egui::Align2::CENTER_TOP, egui::Align2::CENTER_BOTTOM)
+            };
+            let top = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
+            paint_ratio_label(painter, &config, level, top, near);
+            if config.close_arcs {
+                let bottom = speed_arc_point(start, end, radius, -std::f32::consts::FRAC_PI_2);
+                paint_ratio_label(painter, &config, level, bottom, far);
+            }
         }
         self.render_fib_trend(painter);
     }
@@ -602,7 +610,9 @@ impl Drawing {
             if !radii.is_finite() {
                 continue;
             }
-            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let clip = painter
+                .clip_rect()
+                .expand(effective_width(&config, level) + 2.0);
             let ppp = painter.pixels_per_point();
             let angles = [0.0, std::f64::consts::TAU];
             let mut points = if config.show_background {
@@ -622,10 +632,15 @@ impl Drawing {
                 continue;
             }
             points.pop();
-            if config.level_style.dash_pattern().is_none() {
+            if level
+                .line_style
+                .unwrap_or(config.level_style)
+                .dash_pattern()
+                .is_none()
+            {
                 painter.add(egui::Shape::closed_line(
                     points,
-                    Stroke::new(level_width(&config), level_color(level)),
+                    Stroke::new(effective_width(&config, level), level_color(level)),
                 ));
             } else {
                 points.push(points[0]);
@@ -711,6 +726,7 @@ impl Drawing {
         }
         let center = self.points[0];
         let edge = self.points[1];
+        let config = self.fibonacci_config();
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
             self.color[1],
@@ -743,15 +759,15 @@ impl Drawing {
                     y: bound,
                     length: bound,
                 },
-                painter.clip_rect().expand(2.0),
+                painter.clip_rect().expand(self.stroke_width + 2.0),
                 painter.pixels_per_point(),
-                |theta| fib_spiral_point(center, edge, theta),
+                |theta| fib_spiral_point(center, edge, theta, config.spiral_counterclockwise),
             );
             points.extend(span.into_iter().skip(usize::from(quarter != -8)));
         }
         painter.add(egui::Shape::line(
             points,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         ));
     }
 
@@ -1255,13 +1271,13 @@ fn speed_fan_line_end(start: Pos2, end: Pos2, ratio: f32, chart_rect: Rect) -> P
 
 /// The point of the golden spiral around `center` that passes through `edge`,
 /// `theta` radians past it: the radius grows by the golden ratio every quarter turn.
-fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64) -> Pos2 {
+fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64, counterclockwise: bool) -> Pos2 {
     if theta == 0.0 {
         return edge;
     }
     let growth = std::f64::consts::GOLDEN_RATIO.ln() / std::f64::consts::FRAC_PI_2;
     let factor = (growth * theta).exp();
-    let (s, c) = theta.sin_cos();
+    let (s, c) = if counterclockwise { -theta } else { theta }.sin_cos();
     let dx = f64::from(edge.x) - f64::from(center.x);
     let dy = f64::from(edge.y) - f64::from(center.y);
     Pos2::new(
@@ -1796,6 +1812,191 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
             }
+        }
+    }
+
+    /// Assigned patterns and widths survive anchor reversal and logarithmic mapping. Closing an
+    /// arc fills the other half too, while hidden construction and spare levels paint nothing.
+    #[test]
+    fn round_controls_keep_independent_strokes_and_geometry() {
+        use crate::drawings::ChartPoint;
+        let rect = Rect::from_min_max(Pos2::new(-800.0, -800.0), Pos2::new(1200.0, 1200.0));
+        for tool in [Tool::FibonacciCircles, Tool::FibonacciSpeedResistanceArcs] {
+            for (reverse, log, closed) in [
+                (false, false, false),
+                (true, false, true),
+                (false, true, true),
+                (true, true, false),
+            ] {
+                let mut drawing = Drawing::new(0, tool);
+                drawing.chart_points = vec![
+                    ChartPoint::new(200.0, 100.0),
+                    ChartPoint::new(400.0, 1000.0),
+                ];
+                if reverse {
+                    drawing.chart_points.reverse();
+                }
+                drawing.update_screen_coords(
+                    |b| b,
+                    |p| {
+                        if log {
+                            (1100.0 / p).ln() as f32 * 200.0
+                        } else {
+                            (1100.0 - p) as f32 / 2.0
+                        }
+                    },
+                );
+                let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+                saved["levels"] = serde_json::json!([
+                    {"value":0.25,"label":"","color":[255,0,0,255],"visible":true,"show_price":false,"width":4.0,"line_style":"Dashed"},
+                    {"value":0.5,"label":"","color":[0,255,0,255],"visible":true,"show_price":false,"width":6.0,"line_style":"Solid"},
+                    {"value":0.75,"label":"","color":[0,0,255,255],"visible":false,"show_price":false,"width":8.0,"line_style":"Dotted"}
+                ]);
+                saved["show_levels"] = true.into();
+                saved["show_prices"] = false.into();
+                saved["level_style"] = "Dotted".into();
+                saved["trend_visible"] = false.into();
+                saved["close_arcs"] = closed.into();
+                saved["label_size"] = 20.0.into();
+                drawing.fib_config = Some(serde_json::from_value(saved).unwrap());
+                let mut output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let painter = ui.painter().with_clip_rect(rect);
+                        if tool == Tool::FibonacciCircles {
+                            drawing.render_fibonacci_circles(&painter);
+                        } else {
+                            drawing.render_fibonacci_arc(&painter);
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                let mut red = 0;
+                let mut green = 0;
+                let mut labels = 0;
+                let start = drawing.points[0];
+                let end = drawing.points[1];
+                let radius = start.distance(end) * 0.5;
+                let side = if end.y >= start.y { 1.0 } else { -1.0 };
+                let opposite = start - egui::vec2(0.0, side * radius);
+                let mut filled_opposite = false;
+                for shape in &output.shapes {
+                    let stroke = match &shape.shape {
+                        egui::Shape::Path(path) => {
+                            if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::GREEN) {
+                                green += 1;
+                                assert_eq!(path.stroke.width, 6.0);
+                            }
+                            None
+                        }
+                        egui::Shape::LineSegment { points, stroke } => {
+                            if stroke.color == Color32::RED {
+                                red += 1;
+                                assert_eq!(stroke.width, 4.0);
+                                assert!(
+                                    points[0].distance(points[1]) <= 8.01,
+                                    "independent dashes"
+                                );
+                            }
+                            Some(stroke)
+                        }
+                        egui::Shape::Mesh(mesh) => {
+                            filled_opposite |= mesh
+                                .vertices
+                                .iter()
+                                .any(|v| v.pos.distance(opposite) < 0.01);
+                            None
+                        }
+                        egui::Shape::Text(text) => {
+                            labels += 1;
+                            assert!(
+                                text.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|s| s.format.font_id.size == 20.0)
+                            );
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(stroke) = stroke {
+                        assert_ne!(stroke.color, drawing.color32(), "hidden construction line");
+                        assert_ne!(stroke.color, Color32::BLUE, "hidden level");
+                    }
+                }
+                assert!(red > 1 && green == 1, "{tool:?}: assigned strokes");
+                assert_eq!(
+                    labels,
+                    if tool == Tool::FibonacciSpeedResistanceArcs && closed {
+                        4
+                    } else {
+                        2
+                    }
+                );
+                if tool == Tool::FibonacciSpeedResistanceArcs {
+                    assert_eq!(filled_opposite, closed, "full-circle background");
+                    assert_eq!(
+                        crate::drawings::services::DrawingInteraction::hit_test_painted(
+                            opposite,
+                            &output.shapes
+                        ),
+                        closed,
+                        "select the added half"
+                    );
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    /// A 100-point radius grows to 161.8034 after a quarter turn in either direction.
+    /// Curve width follows the drawing instead of the previous fixed one-point stroke.
+    #[test]
+    fn spiral_direction_and_width_reach_the_curve() {
+        let rect = Rect::from_min_max(Pos2::new(-1000.0, -1000.0), Pos2::new(1000.0, 1000.0));
+        for counterclockwise in [false, true] {
+            let mut drawing = Drawing::new(0, Tool::FibonacciSpiral);
+            drawing.points = vec![Pos2::ZERO, Pos2::new(100.0, 0.0)];
+            drawing.stroke_width = 5.0;
+            let mut saved = serde_json::to_value(FibonacciConfig::default()).unwrap();
+            saved["spiral_counterclockwise"] = counterclockwise.into();
+            drawing.fib_config = Some(serde_json::from_value(saved).unwrap());
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    drawing.render_fibonacci_spiral(&ui.painter().with_clip_rect(rect), rect);
+                },
+            );
+            output.textures_delta.clear();
+            let curve = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path) => Some(path),
+                    _ => None,
+                })
+                .unwrap();
+            let expected = Pos2::new(
+                0.0,
+                if counterclockwise {
+                    -161.8034
+                } else {
+                    161.8034
+                },
+            );
+            assert!(
+                curve.points.iter().any(|p| p.distance(expected) < 0.01),
+                "quarter-turn geometry"
+            );
+            assert_eq!(curve.stroke.width, 5.0);
+            output.drop_without_applying_deltas();
         }
     }
 
@@ -2701,7 +2902,7 @@ mod tests {
             ((100.0, 0.0), -FRAC_PI_2, (0.0, -61.8034)),
             ((0.0, 100.0), 0.0, (0.0, 100.0)),
         ] {
-            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), f64::from(theta));
+            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), f64::from(theta), false);
             if !near(got, Pos2::from(want)) {
                 wrong.push(format!(
                     "spiral edge {edge:?} theta {theta}: got {got:?}, want {want:?}"

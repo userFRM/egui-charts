@@ -552,6 +552,7 @@ impl Drawing {
                     | DrawingToolType::TrendBasedFibTime
                     | DrawingToolType::FibonacciCircles
                     | DrawingToolType::FibonacciSpeedResistanceArcs
+                    | DrawingToolType::FibonacciSpiral
             )
             .then(|| FibonacciConfig::for_tool(tool_type)),
             volume_profile: matches!(
