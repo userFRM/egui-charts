@@ -710,6 +710,7 @@ mod tests {
     }
 
     /// A trend angle's Text tab styles its own labels: it has no text to write, align or box.
+    /// Text also offers to follow the zoom and to wrap.
     #[test]
     fn text_tab_rows_follow_the_tool() {
         let ctx = Context::default();
@@ -737,6 +738,11 @@ mod tests {
             );
             assert_eq!(has("Text style") && has("Text color"), styles, "{tool:?}");
             assert_eq!(has("Background"), boxed, "{tool:?}");
+            assert_eq!(
+                has("Text size") && has("Text wrap"),
+                tool == Tool::TextLabel,
+                "{tool:?}"
+            );
             dialog.close();
             frame(&mut dialog, &mut chart, &ctx, vec![]);
         }
