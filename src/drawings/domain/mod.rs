@@ -29,7 +29,7 @@ pub use image::ImageConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
     LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign, LineTextOrientation,
-    LineTextVerticalAlign, PositionSize, PositionSizing, RegressionTrendConfig,
+    LineTextVerticalAlign, PositionReadout, PositionSize, PositionSizing, RegressionTrendConfig,
     TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};

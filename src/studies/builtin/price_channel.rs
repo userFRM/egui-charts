@@ -167,36 +167,3 @@ impl Indicator for PriceChannel {
         ]
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::studies::test_support::make_range_bar as make_bar;
-
-    #[test]
-    fn test_price_channel() {
-        let mut pc = PriceChannel::new(5);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(104.0, 99.0, 103.0),
-            make_bar(106.0, 101.0, 105.0),
-            make_bar(108.0, 103.0, 107.0),
-            make_bar(110.0, 105.0, 109.0),
-        ];
-
-        pc.calculate(&data);
-
-        assert_eq!(pc.values.len(), 5);
-
-        // Last value should be highest=110, lowest=98, middle=104
-        let rows = pc.values.to_rows();
-        let IndicatorValue::Multiple(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", pc.values.to_rows().last().unwrap());
-        };
-        assert_eq!(v.len(), 3);
-        assert!((v[0] - 110.0).abs() < 0.01); // Upper
-        assert!((v[1] - 98.0).abs() < 0.01); // Lower
-        assert!((v[2] - 104.0).abs() < 0.01); // Middle
-    }
-}

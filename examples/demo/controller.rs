@@ -708,10 +708,6 @@ impl DemoApp {
                     .storage
                     .and_then(|storage| eframe::get_value(storage, "drawing_toolbar_preferences"))
                     .unwrap_or_default();
-                toolbar.state.cursor_favorites = cc
-                    .storage
-                    .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
-                    .unwrap_or_default();
                 toolbar
             },
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -955,6 +951,13 @@ impl DemoApp {
         } else {
             true
         };
+        // Keep the old key as a fallback for settings saved before cursor favourites.
+        if app.drawing_toolbar.state.cursor_favorites.is_empty() {
+            app.drawing_toolbar.state.cursor_favorites = cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
+                .unwrap_or_default();
+        }
         if recover_workspace {
             app.restore_workspace();
         }
@@ -1265,9 +1268,9 @@ impl DemoApp {
             self.chart.end_user_action();
         }
 
-        if let Some(edit) = self
-            .indicator_settings
-            .show_for_chart(ctx, &self.theme, &self.chart)
+        if let Some(edit) =
+            self.indicator_settings
+                .show_preview_for_chart(ctx, &self.theme, &mut self.chart)
         {
             self.chart.begin_user_action();
             let result = self
@@ -1628,7 +1631,7 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "demo_formatting", &self.formatting);
         let current = self.user_settings();
-        self.settings.flush(&current);
+        let settings_saved = self.settings.flush(&current);
         eframe::set_value(storage, "detectors", &self.live.detectors().settings());
         storage.remove_string("api_samples");
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
@@ -1656,11 +1659,9 @@ impl eframe::App for DemoApp {
             "drawing_toolbar_preferences",
             &self.drawing_toolbar.state.preferences,
         );
-        eframe::set_value(
-            storage,
-            "cursor_favorites",
-            &self.drawing_toolbar.state.cursor_favorites,
-        );
+        if settings_saved {
+            storage.remove_string("cursor_favorites");
+        }
         eframe::set_value(
             storage,
             "chart_type_preferences",
@@ -5931,6 +5932,78 @@ mod tests {
     }
 
     #[test]
+    fn cursor_favourites_move_from_the_legacy_key_to_settings() {
+        use eframe::App;
+        use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+        let legacy = [CursorType::Dot, CursorType::Magic];
+        for (document, expected, readable) in [
+            (None, legacy.as_slice(), true),
+            (Some(r#"{"version":1}"#), legacy.as_slice(), true),
+            (
+                Some(r#"{"version":1,"cursor_favorites":[]}"#),
+                legacy.as_slice(),
+                true,
+            ),
+            (
+                Some(r#"{"version":1,"cursor_favorites":["Magic"]}"#),
+                &legacy[1..],
+                true,
+            ),
+            (Some(r#"{"version":2}"#), legacy.as_slice(), false),
+        ] {
+            let mut storage = AppStorage::default();
+            eframe::set_value(&mut storage, "cursor_favorites", &legacy.to_vec());
+            if let Some(document) = document {
+                eframe::set_value(
+                    &mut storage,
+                    "templates",
+                    &std::collections::HashMap::from([("Settings/settings", document)]),
+                );
+            }
+            let ctx = egui::Context::default();
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            assert_eq!(
+                app.drawing_toolbar.state.cursor_favorites, expected,
+                "{document:?}"
+            );
+            app.save(&mut storage);
+            assert_eq!(
+                eframe::Storage::get_string(&storage, "cursor_favorites").is_none(),
+                readable
+            );
+            let documents: std::collections::HashMap<String, String> =
+                eframe::get_value(&storage, "templates").unwrap();
+            if !readable {
+                assert_eq!(Some(documents["Settings/settings"].as_str()), document);
+                continue;
+            }
+            let settings: serde_json::Value =
+                serde_json::from_str(&documents["Settings/settings"]).unwrap();
+            assert_eq!(
+                settings["cursor_favorites"],
+                serde_json::to_value(expected).unwrap()
+            );
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new(&cc);
+            assert_eq!(restored.drawing_toolbar.state.cursor_favorites, expected);
+            restored.drawing_toolbar.state.cursor_favorites.clear();
+            restored.save(&mut storage);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx);
+            cc.storage = Some(&storage);
+            assert!(
+                DemoApp::new(&cc)
+                    .drawing_toolbar
+                    .state
+                    .cursor_favorites
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         // Repeated construction used to overflow this stack before checking the saved theme.
         std::thread::Builder::new()
@@ -5978,21 +6051,10 @@ mod tests {
                     ]),
                 );
             }
-            for (restart, explicit) in [false, true, true].into_iter().take(restarts).enumerate() {
+            for explicit in [false, true, true].into_iter().take(restarts) {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
-                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
-                assert_eq!(
-                    app.drawing_toolbar.state.cursor_favorites,
-                    if restart == 0 {
-                        &[][..]
-                    } else {
-                        CursorType::all()
-                    },
-                    "cursor favourites survive a restart; older settings start empty"
-                );
-                app.drawing_toolbar.state.cursor_favorites = CursorType::all().to_vec();
                 if legacy_document.is_some() {
                     assert_eq!(app.state.symbol, "AAPL");
                     assert_eq!(app.state.timeframe, Timeframe::Min5);
@@ -6990,11 +7052,32 @@ mod tests {
         let shading = egui::Color32::from_rgb(201, 37, 180);
         // 07:00 in New York on a Tuesday: outside regular hours.
         let now = "2026-11-03T12:00:00Z".parse().unwrap();
-        for (saved, legacy, opened) in [
-            (SessionType::Full24x7, false, SessionType::Full24x7),
-            (SessionType::RTH, false, SessionType::RTH),
-            (SessionType::ETH, false, SessionType::ETH),
-            (SessionType::Full24x7, true, SessionType::Full24x7),
+        for (saved, switched, legacy, opened) in [
+            (
+                SessionType::Full24x7,
+                SessionType::RTH,
+                false,
+                SessionType::Full24x7,
+            ),
+            (
+                SessionType::Full24x7,
+                SessionType::ETH,
+                false,
+                SessionType::Full24x7,
+            ),
+            (SessionType::RTH, SessionType::ETH, false, SessionType::RTH),
+            (
+                SessionType::ETH,
+                SessionType::Full24x7,
+                false,
+                SessionType::ETH,
+            ),
+            (
+                SessionType::Full24x7,
+                SessionType::RTH,
+                true,
+                SessionType::Full24x7,
+            ),
         ] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new_at(
@@ -7031,7 +7114,11 @@ mod tests {
             app.timeframe_toolbar.set_session(saved);
             app.apply_session();
             app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
-            assert_eq!(shaded(&mut app), saved == SessionType::ETH, "{saved:?}");
+            assert_eq!(
+                shaded(&mut app),
+                saved == SessionType::ETH,
+                "saved {saved:?}, switched to {switched:?}"
+            );
 
             app.handle_layout_action(LayoutAction::Save);
             app.poll_storage(&ctx);
@@ -7043,17 +7130,30 @@ mod tests {
                 let groups = serde_json::from_value(groups).unwrap();
                 app.storage.save_layout_groups(&name, &groups).unwrap();
             }
+            app.timeframe_toolbar.set_session(switched);
+            app.apply_session();
             app.handle_layout_action(LayoutAction::Open(name));
             app.poll_storage(&ctx);
             assert_eq!(
                 shaded(&mut app),
                 opened == SessionType::ETH,
-                "{saved:?} legacy {legacy}"
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
             );
-            assert_eq!(app.timeframe_toolbar.state.session_type, opened);
-            assert_eq!(app.live.view(app.chart.extended_hours()).0, opened);
+            assert_eq!(
+                app.timeframe_toolbar.state.session_type, opened,
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
+            );
+            assert_eq!(
+                app.live.view(app.chart.extended_hours()).0,
+                opened,
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
+            );
             let extra = &app.extra_charts[0];
-            assert_eq!(extra.live.view(extra.chart.extended_hours()).0, opened);
+            assert_eq!(
+                extra.live.view(extra.chart.extended_hours()).0,
+                opened,
+                "saved {saved:?}, switched to {switched:?}, legacy {legacy}"
+            );
         }
     }
 

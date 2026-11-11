@@ -287,7 +287,12 @@ impl Chart {
         item: &PriceSeries,
         map: PriceMap,
         index: usize,
+        background: impl FnOnce(Pos2) -> egui::Color32,
     ) {
+        let radius = item.options.crosshair_marker_radius;
+        if !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
         let Some(time) = self.state.shown().get(index).map(|bar| bar.time) else {
             return;
         };
@@ -295,11 +300,11 @@ impl Chart {
             return;
         };
         let bar = &item.bars[at];
-        let params = item.options.type_params();
+        let styles = item.options.type_styles();
         if let Some(color) = rendering::candles::line_color_at(
             item.options.chart_type,
-            &params.styles,
-            params.baseline,
+            &styles,
+            crate::model::BaselineLevel::PercentOfPane(50.0),
             &map,
             rect,
             bar.close,
@@ -310,12 +315,13 @@ impl Chart {
                 rect.left(),
                 rect.width(),
             );
+            let point = Pos2::new(x, map.price_to_y(bar.close));
             rendering::candles::render_crosshair_marker(
                 &plot.with_clip_rect(plot.clip_rect().intersect(rect)),
-                Pos2::new(x, map.price_to_y(bar.close)),
-                &params.styles,
+                point,
+                &styles,
                 color,
-                self.config.background_color,
+                background(point),
             );
         }
     }
@@ -466,18 +472,25 @@ impl Chart {
                     continue;
                 }
                 let outline = label.union(control).intersect(rect);
+                let control_id = id.with(("remove_series", item.id));
+                let revealed = (ui
+                    .input(|input| input.pointer.hover_pos().is_some() && !input.any_touches())
+                    && ui.rect_contains_pointer(outline))
+                    || ui.memory(|memory| memory.has_focus(control_id));
                 let name = l10n::text(ui.ctx(), "Remove series");
                 let response = ui
                     .interact(
                         control,
-                        id.with(("remove_series", item.id)),
-                        egui::Sense::click(),
+                        control_id,
+                        if revealed {
+                            egui::Sense::click()
+                        } else {
+                            egui::Sense::focusable_noninteractive()
+                        },
                     )
                     .on_hover_text(&name);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-                let revealed = (ui.input(|input| input.pointer.hover_pos().is_some())
-                    && ui.rect_contains_pointer(outline))
-                    || response.has_focus();
+                let revealed = revealed || response.has_focus();
                 if revealed {
                     let theme = ui.active_theme();
                     plot.rect_filled(
@@ -675,11 +688,15 @@ impl Chart {
                 slot,
                 formatter.as_deref(),
             );
-            measured = measured.max(crate::chart::rendering::axes::price_axis_width(
+            measured = measured.max(crate::chart::rendering::axes::price_axis_width_with_edges(
                 &clipped,
                 &map,
                 &[],
                 formatter.as_deref(),
+                self.config
+                    .price_axis
+                    .edge_ticks_visible
+                    .then_some(label_rect),
             ));
             ui.interact(
                 axis,
@@ -732,15 +749,86 @@ pub(in crate::widget) fn paint_last_price_pulse(
 mod tests {
     use super::*;
     use crate::widget::test_frames::{chart, frame, shapes};
-    use crate::widget::{ChartElementId, SeriesId};
-    use egui::{Event, PointerButton, Shape};
+    use crate::widget::{ChartElementId, ChartEvent, SeriesId};
+    use egui::{Event, Key, PointerButton, Shape};
+
+    #[test]
+    fn tap_on_hidden_remove_control_reaches_the_chart() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (touch_events, width) in
+                [(false, 800.0), (true, 800.0), (false, 320.0), (true, 320.0)]
+            {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.set_size(Some(egui::vec2(width, 580.0)));
+                let peer = chart.add_comparison("Peer", egui::Color32::GOLD);
+                chart.set_data(peer, chart.bars(SeriesId::MAIN).to_vec());
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let label = shapes(&ctx, &mut chart, 0.1, vec![])
+                    .into_iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text().starts_with("Peer  ") => {
+                            Some(Rect::from_min_size(text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                for (index, pos) in [
+                    chart.get_chart_mapping().rect.center(),
+                    Pos2::new(label.right() + 18.0, label.center().y),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    chart.drain_events().for_each(drop);
+                    for (step, pressed) in [(0.0, true), (0.01, false)] {
+                        let mut events = vec![Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }];
+                        if touch_events {
+                            events.push(Event::Touch {
+                                device_id: egui::TouchDeviceId(1),
+                                id: egui::TouchId(1),
+                                phase: if pressed {
+                                    egui::TouchPhase::Start
+                                } else {
+                                    egui::TouchPhase::End
+                                },
+                                pos,
+                                force: None,
+                            });
+                        }
+                        events.push(if pressed {
+                            Event::PointerMoved(pos)
+                        } else {
+                            Event::PointerGone
+                        });
+                        frame(&ctx, &mut chart, 0.2 + index as f64 + step, events);
+                    }
+                    assert!(
+                        chart.drain_events().any(|event| matches!(event,
+                            ChartEvent::Click { position, button: PointerButton::Primary }
+                                if position.pos == pos
+                        )),
+                        "tap at {pos:?} did not reach the chart (touch events: {touch_events})"
+                    );
+                    assert!(chart.series().any(|(id, _)| id == peer));
+                }
+            }
+        }
+    }
 
     /// A row removes its own handle, including after restore remaps ids; undo restores its
     /// data and legend position without disturbing the main series, studies or neighbours.
     #[test]
     fn overlay_legend_removal_keeps_other_series_and_undo_order() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for restored in [false, true] {
+            for (restored, keyboard) in [(false, false), (true, false), (false, true), (true, true)]
+            {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0], &[110.0]);
@@ -775,45 +863,61 @@ mod tests {
                 let rows = labels(painted);
                 assert_eq!(rows.len(), 3);
                 let pos = Pos2::new(rows[1].right() + 18.0, rows[1].center().y);
-                // A touch tap leaves no hover, so it must not remove an unrevealed row.
-                let tap = Pos2::new(rows[2].right() + 18.0, rows[2].center().y);
-                let button = |pressed, extra| {
-                    let mut events = vec![Event::PointerButton {
-                        pos: tap,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    }];
-                    events.extend(extra);
-                    events
-                };
-                frame(
-                    &ctx,
-                    &mut chart,
-                    0.15,
-                    button(true, [Event::PointerMoved(tap)]),
-                );
-                frame(&ctx, &mut chart, 0.16, button(false, [Event::PointerGone]));
-                assert!(
-                    chart.series().any(|(id, _)| id == ids[2]),
-                    "touch tap removed"
-                );
                 chart
                     .selection
                     .select(ChartElementId::Series(ids[1]), Some(0));
-                frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+                if keyboard {
+                    let mut focused = false;
+                    for stop in 0..30 {
+                        let painted = shapes(
+                            &ctx,
+                            &mut chart,
+                            0.2 + stop as f64 * 0.001,
+                            vec![Event::Key {
+                                key: Key::Tab,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Default::default(),
+                            }],
+                        );
+                        focused = ctx
+                            .memory(|memory| memory.focused())
+                            .and_then(|id| ctx.read_response(id))
+                            .is_some_and(|response| response.rect.center() == pos);
+                        if focused {
+                            assert!(
+                                painted.iter().any(|shape| matches!(shape,
+                                    Shape::Rect(outline) if outline.rect.contains(pos)
+                                        && outline.stroke.color == theme.ui.accent
+                                )),
+                                "Tab must reveal the focused control immediately"
+                            );
+                            break;
+                        }
+                    }
+                    assert!(focused, "Tab must reach a hidden remove control");
+                } else {
+                    frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+                }
                 for (time, pressed) in [(0.3, true), (0.4, false)] {
-                    frame(
-                        &ctx,
-                        &mut chart,
-                        time,
-                        vec![Event::PointerButton {
+                    let event = if keyboard {
+                        Event::Key {
+                            key: Key::Enter,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: Default::default(),
+                        }
+                    } else {
+                        Event::PointerButton {
                             pos,
                             button: PointerButton::Primary,
                             pressed,
                             modifiers: Default::default(),
-                        }],
-                    );
+                        }
+                    };
+                    frame(&ctx, &mut chart, time, vec![event]);
                 }
                 assert!(
                     !chart.series().any(|(id, _)| id == ids[1]),
