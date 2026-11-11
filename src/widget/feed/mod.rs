@@ -59,8 +59,8 @@ pub(crate) struct FeedLink {
     /// Open of the last bar a resume dropped; the bars before it are kept. The new subscription
     /// drops older executions, and a latest page that starts after it replaces the kept bars.
     resumed_from: Option<chrono::DateTime<chrono::Utc>>,
-    /// Open of the first bar this subscription pushed that is newer than every bar the chart held,
-    /// which stands for the first live execution while none is held.
+    /// On a trade-based interval, the open of the first bar this subscription pushed that is newer
+    /// than every bar the chart held, which stands for the first live execution while none is held.
     pushed_from: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main

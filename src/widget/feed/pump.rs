@@ -276,6 +276,8 @@ impl Chart {
                     });
                 }
                 link.pushed_from = link.pushed_from.or_else(|| {
+                    // Only a trade-based interval's cut reads it, and a slot lookup can allocate.
+                    link.clock.timeframe().filter(|tf| tf.is_trade_based())?;
                     // A bar the chart holds may come again, on subscribing or as a correction:
                     // the stream starts with the first newer one.
                     let newest =
