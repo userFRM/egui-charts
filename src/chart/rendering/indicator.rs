@@ -225,8 +225,7 @@ fn paint_fills(
         }
         let value = |boundary, bar| match boundary {
             FillBoundary::Level(value) => value.is_finite().then_some(value),
-            FillBoundary::Plot(line) => (line < study.line_count()
-                && study.plot_style(line).visible)
+            FillBoundary::Plot(line) => (line < study.line_count())
                 .then(|| study.plot_value(line, bar))
                 .flatten(),
         };
@@ -1163,7 +1162,14 @@ mod tests {
         };
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
         let red = Color32::from_rgba_unmultiplied(255, 0, 0, 51);
-        for (inverted, visible) in [(false, true), (true, true), (false, false), (true, false)] {
+        for (inverted, visible, boundary_visible) in [
+            (false, true, true),
+            (true, true, true),
+            (false, false, true),
+            (true, false, true),
+            (false, true, false),
+            (true, true, false),
+        ] {
             let mut study = CustomIndicator::new("Band", |_| {
                 vec![
                     IndicatorValue::Multiple(vec![2.0, 0.0]),
@@ -1185,6 +1191,7 @@ mod tests {
             let mut settings = serde_json::to_value(study.settings()).unwrap();
             // The band keeps its own colours even when its boundary plot colours change.
             settings["plots"][0]["color"] = serde_json::json!([10, 20, 30, 255]);
+            settings["plots"][0]["visible"] = boundary_visible.into();
             settings["fills"] = serde_json::json!([{
                 "color": blue.to_array(), "inverted_color": red.to_array(), "visible": visible
             }]);
