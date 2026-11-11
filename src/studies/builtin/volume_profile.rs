@@ -21,11 +21,11 @@
 //! to the opacity of the default value area rows. The point of control is a 2 px line in the theme's
 //! foreground colour until a line colour is chosen.
 
+use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
-use super::{AutoAnchor, first_trade_in};
 use crate::data::{
     FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, ProfileLevel,
-    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig,
+    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
 };
 use crate::model::{Bar, BarClock, Instrument, ProfileResolution, Timeframe};
 use crate::studies::{
@@ -132,13 +132,28 @@ struct LevelCache {
 struct Level {
     kind: ProfileLevelKind,
     price: f64,
-    /// The prices at which a trade ends the level: its profile row, and for the value area high
-    /// also the row's top edge, where its line lies.
-    row: Range<f64>,
-    /// The first bar after the profile that trades in `row`, once found.
+    /// The profile's grid, as the bottom of its first row and the row height.
+    grid: (f64, f64),
+    /// The level's row of the grid.
+    row: f64,
+    /// The first bar after the profile that touches the level, once found.
     touch: Option<usize>,
-    /// Bars from the profile's end up to this one trade outside `row`.
+    /// Bars from the profile's end up to this one do not touch the level.
     searched: usize,
+}
+
+impl Level {
+    /// Whether `bar` trades in the level's row, or for the value area high on the row's top
+    /// edge, where its line lies. Prices fall in rows as the profile binned its volume. A bar
+    /// without volume, such as the one a heartbeat opens, traded nowhere, and a bar with a NaN
+    /// high or low trades in no row.
+    fn touched_by(&self, bar: &Bar) -> bool {
+        let (low, on_edge) = grid_row(self.grid.0, self.grid.1, bar.low);
+        let high = grid_row(self.grid.0, self.grid.1, bar.high).0;
+        bar.volume > 0.0
+            && (low <= self.row && self.row <= high
+                || self.kind == ProfileLevelKind::ValueAreaHigh && on_edge && low == self.row + 1.0)
+    }
 }
 
 const PERIODS: [AnchorPeriod; 7] = [
@@ -920,7 +935,8 @@ impl ProfileStudy {
     }
 
     /// The levels of finished profiles that reach into `visible`, each from the bar after its
-    /// profile to the first later bar that trades at its price or in its row, or to the last bar.
+    /// profile to the first later bar that touches it (see [`Level::touched_by`]), or to the last
+    /// bar.
     fn levels(&self, visible: Range<usize>) -> Vec<ProfileLevel> {
         let len = self.data.len();
         if !self.extend.contains(&true) {
@@ -980,7 +996,10 @@ impl ProfileStudy {
             for level in levels {
                 if level.touch.is_none() && level.searched < len {
                     let from = level.searched.max(end);
-                    level.touch = first_trade_in(&self.data[from..], &level.row).map(|i| from + i);
+                    level.touch = self.data[from..]
+                        .iter()
+                        .position(|bar| level.touched_by(bar))
+                        .map(|i| from + i);
                     level.searched = len;
                 }
                 let last = level.touch.unwrap_or(len - 1);
@@ -1010,27 +1029,23 @@ impl ProfileStudy {
             return Vec::new();
         };
         let (low, height) = (profile.low(), profile.row_height());
-        let row = |row: usize| low + row as f64 * height..low + (row + 1) as f64 * height;
         LEVELS
             .into_iter()
             .zip(self.extend)
             .filter(|(_, on)| *on)
             .map(|(kind, _)| {
                 let (price, row) = match kind {
-                    ProfileLevelKind::PointOfControl => {
-                        (low + (poc as f64 + 0.5) * height, row(poc))
-                    }
-                    // The line lies on its row's top edge, so a trade at its price ends it too.
+                    ProfileLevelKind::PointOfControl => (low + (poc as f64 + 0.5) * height, poc),
                     ProfileLevelKind::ValueAreaHigh => {
-                        let row = row(va_high);
-                        (row.end, row.start..row.end.next_up())
+                        (low + (va_high + 1) as f64 * height, va_high)
                     }
-                    ProfileLevelKind::ValueAreaLow => (low + va_low as f64 * height, row(va_low)),
+                    ProfileLevelKind::ValueAreaLow => (low + va_low as f64 * height, va_low),
                 };
                 Level {
                     kind,
                     price,
-                    row,
+                    grid: (low, height),
+                    row: row as f64,
                     touch: None,
                     searched: plot.bars.end,
                 }
@@ -1516,6 +1531,34 @@ mod tests {
             } else {
                 assert_eq!(got, vec![(P, 102.5, 5..7)]);
             }
+        }
+        // With cent rows, a row edge computed from the profile's low can round a few steps off
+        // the traded price it stands for. Day one trades only at its first price and day two
+        // only at its second, which ends day one's levels in that row or on that line.
+        for (first, second, wanted) in [
+            (32.01, 32.02, vec![(P, 1..3), (H, 1..2), (V, 1..3)]),
+            (32.16, 32.16, vec![(P, 1..2), (H, 1..2), (V, 1..2)]),
+        ] {
+            let bars: Vec<_> = [first, second, 40.0]
+                .into_iter()
+                .zip([0, 3, 5])
+                .map(|(price, i)| Bar::new(bars[i].time, price, price, price, price, 1.0))
+                .collect();
+            let mut study = VolProfileSession::new(24);
+            study
+                .set_input("row_size", InputValue::Number(0.01))
+                .unwrap();
+            for id in ["extend_poc", "extend_vah", "extend_val"] {
+                study.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            study.calculate(&bars);
+            let got: Vec<_> = study
+                .profile_levels(0..3)
+                .into_iter()
+                .filter(|level| level.bars.start == 1)
+                .map(|level| (level.kind, level.bars))
+                .collect();
+            assert_eq!(got, wanted, "{first} then {second}");
         }
     }
 

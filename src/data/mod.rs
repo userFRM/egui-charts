@@ -83,7 +83,7 @@ pub use option_chain::{
 pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
 #[cfg(feature = "studies")]
-pub(crate) use volume_profile::{ExposureProfile, StrikeExposure};
+pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")

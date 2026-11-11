@@ -8,6 +8,10 @@ use std::ops::Range;
 /// The first of `bars` that trades in the price `row`: its low below the row's end and its high
 /// at or above its start. A bar without volume, such as the one a heartbeat opens, traded
 /// nowhere, and a bar with a NaN high or low trades in no row.
+#[cfg_attr(
+    not(feature = "widget"),
+    expect(dead_code, reason = "only the chart type extends its levels with it")
+)]
 pub(crate) fn first_trade_in(bars: &[Bar], row: &Range<f64>) -> Option<usize> {
     bars.iter()
         .position(|bar| bar.volume > 0.0 && bar.low < row.end && row.start <= bar.high)
