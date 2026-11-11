@@ -18,11 +18,11 @@ pub struct IndicatorPaneConfig {
     pub y_range: Option<(f64, f64)>,
     /// Show horizontal zone lines (e.g., RSI 70/30)
     pub show_zones: bool,
-    /// Zone levels, colours and captions. A zone in `Color32::TRANSPARENT` draws no line and
-    /// still bounds the fill.
+    /// Zone levels, colours and captions, in study level order. A transparent boundary draws
+    /// no line and still bounds the fill. Non-finite levels are ignored.
     pub zones: Vec<(f64, Color32, &'static str)>,
-    /// Fill between the lowest and highest zone in the study's
-    /// [`Indicator::level_fill_color`].
+    /// Fill between the zones chosen by [`Indicator::level_fill_indices`], or the lowest and
+    /// highest zones, using [`Indicator::level_fill_color`].
     pub fill_between_zones: bool,
     /// Show legend
     pub show_legend: bool,
@@ -66,7 +66,13 @@ impl IndicatorPaneConfig {
             zones: pane
                 .levels
                 .into_iter()
-                .filter(|(level, _, _)| level.is_finite())
+                .map(|zone| {
+                    if zone.0.is_finite() {
+                        zone
+                    } else {
+                        (f64::NAN, Color32::TRANSPARENT, zone.2)
+                    }
+                })
                 .collect(),
             fill_between_zones: pane.fill_between_levels,
             ..Self::default()

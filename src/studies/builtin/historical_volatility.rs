@@ -226,7 +226,7 @@ mod tests {
         let IndicatorValue::Single(v) = rows.last().unwrap() else {
             panic!("no value: {:?}", hv.values.to_rows().last().unwrap());
         };
-        assert!(v.abs() < 0.01, "HV should be ~0 for constant prices");
+        assert_eq!(*v, 0.0, "zero log returns have exactly zero variance");
     }
 
     #[test]
@@ -250,11 +250,12 @@ mod tests {
                 "warm-up bar {bar}"
             );
         }
-        // High volatility should produce large HV values
-        let rows = hv.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", hv.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
+        // Hand sample deviation of three log returns, times sqrt(252)*100:
+        // ln(6/5),ln(2/3),ln(13/8), then ln(2/3),ln(13/8),ln(7/13).
+        // Variance is sum((return-mean)^2)/2, evaluated independently at 60 digits.
+        for (bar, want) in [(3, 719.1134022641008), (4, 930.0417872049941)] {
+            let got = hv.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-10, "bar {bar}: {got}");
+        }
     }
 }

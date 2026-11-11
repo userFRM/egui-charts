@@ -5,7 +5,7 @@ use crate::Chart;
 use crate::drawings::{ChartPoint, Drawing};
 use chrono::{DateTime, Utc};
 
-/// Why [`Chart::create_drawing`] or [`Chart::set_drawing_points`] changed nothing.
+/// Why a host drawing creation or edit changed nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DrawingError {
@@ -141,6 +141,131 @@ impl Chart {
             });
         });
         Ok(())
+    }
+
+    /// Replace a retracement's, extension's, channel's or wedge's levels, typography, text placement
+    /// and construction visibility as one undoable edit. Unknown ids, locked drawings and invalid
+    /// settings change nothing.
+    pub fn set_fibonacci_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::FibonacciConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if !matches!(
+            drawing.tool_type,
+            crate::drawings::DrawingToolType::FibonacciRetracement
+                | crate::drawings::DrawingToolType::FibonacciExtension
+                | crate::drawings::DrawingToolType::FibonacciChannel
+                | crate::drawings::DrawingToolType::FibonacciWedge
+        ) {
+            return Err(DrawingError::Invalid(
+                "Drawing is not a Fibonacci retracement, extension, channel or wedge",
+            ));
+        }
+        if !config.is_valid() {
+            return Err(DrawingError::Invalid("Invalid Fibonacci settings"));
+        }
+        if drawing.fib_config.as_ref() != Some(&config) {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config));
+            });
+        }
+        Ok(())
+    }
+
+    /// Replace a position drawing's statistics, account currency and quantity precision in
+    /// one undoable edit. A different currency needs a host-supplied conversion rate before
+    /// monetary statistics can be calculated. Invalid settings and locked drawings change nothing.
+    pub fn set_position_readout(
+        &mut self,
+        id: usize,
+        readout: crate::drawings::PositionReadout,
+    ) -> Result<(), DrawingError> {
+        let drawing = self.position_drawing(id)?;
+        if !readout.is_valid() {
+            return Err(DrawingError::Invalid("Invalid position readout settings"));
+        }
+        if drawing.position_readout != readout {
+            self.user_action(|chart| {
+                chart.drawings_mut().edit_drawing(id, |drawing| {
+                    drawing.position_readout = readout;
+                });
+            });
+        }
+        Ok(())
+    }
+
+    /// Exchange a position drawing's target and stop prices and switch its direction as one
+    /// undoable edit. Entry, horizontal extent, anchor times and style stay in place. A legacy
+    /// two-anchor position gains its mirrored stop before the exchange. Invalid geometry,
+    /// unknown ids, other drawing tools and locked drawings leave history untouched.
+    pub fn reverse_position_drawing(&mut self, id: usize) -> Result<(), DrawingError> {
+        use crate::drawings::DrawingToolType as T;
+        let mut drawing = self.position_drawing(id)?.clone();
+        let [entry, target, rest @ ..] = drawing.chart_points.as_slice() else {
+            return Err(DrawingError::Invalid(
+                "Position needs entry and target anchors",
+            ));
+        };
+        let stop_price = rest
+            .first()
+            .map_or(2.0 * entry.price - target.price, |p| p.price);
+        if !stop_price.is_finite() || !entry.price.is_finite() || !target.price.is_finite() {
+            return Err(DrawingError::Invalid("Position prices must be finite"));
+        }
+        if drawing.chart_points.len() == 2 {
+            let mut stop = *target;
+            stop.price = stop_price;
+            drawing.chart_points.push(stop);
+        }
+        let target_price = drawing.chart_points[1].price;
+        drawing.chart_points[1].price = stop_price;
+        drawing.chart_points[2].price = target_price;
+        drawing.tool_type = if drawing.tool_type == T::LongPos {
+            T::ShortPos
+        } else {
+            T::LongPos
+        };
+        self.drawings()
+            .validate_drawing(&drawing)
+            .map_err(DrawingError::Invalid)?;
+        drawing.points.clear();
+        self.user_action(|chart| {
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |target| *target = drawing);
+        });
+        Ok(())
+    }
+
+    fn position_drawing(&self, id: usize) -> Result<&Drawing, DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if !matches!(
+            drawing.tool_type,
+            crate::drawings::DrawingToolType::LongPos | crate::drawings::DrawingToolType::ShortPos
+        ) {
+            return Err(DrawingError::Invalid("Drawing is not a position"));
+        }
+        Ok(drawing)
     }
 
     /// Sets an image drawing's picture as one undoable edit. `uri` is the address the host's
@@ -379,6 +504,87 @@ mod tests {
     use crate::model::{Bar, BarData};
     use crate::studies::{CustomIndicator, IndicatorValue};
 
+    /// Extension settings retain every level through templates, persistence and one undo step;
+    /// invalid fonts, locked drawings and wrong tools leave the drawing and history intact.
+    #[test]
+    fn fibonacci_extension_edits_preserve_levels_and_validate_atomically() {
+        use crate::drawings::{DrawingTemplate, DrawingToolType as T, FibonacciConfig};
+        let bars = (0..20)
+            .map(|i| {
+                Bar::new(
+                    DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                    100.0,
+                    220.0,
+                    90.0,
+                    150.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut drawing = Drawing::new(7, T::FibonacciExtension);
+        drawing.completed = true;
+        drawing.chart_points = [(0.0, 100.0), (5.0, 200.0), (10.0, 150.0)]
+            .map(|(x, y)| ChartPoint::new(x, y))
+            .to_vec();
+        let original = drawing.fib_config.clone();
+        let mut config = original.clone().unwrap();
+        assert_eq!(config.levels.len(), 24);
+        for (index, level) in config.levels.iter_mut().enumerate() {
+            level.text = format!("Target {index}");
+            level.width = Some(1.5 + index as f32);
+        }
+        config.label_size = 18.0;
+        config.trend_visible = false;
+        config.reverse = true;
+        config.logarithmic = true;
+        config.label_position = Some(crate::drawings::LineTextHorizontalAlign::Center);
+        chart.drawings_mut().drawings.push(drawing.clone());
+        chart.set_fibonacci_config(7, config.clone()).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].chart_points,
+            drawing.chart_points
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].fib_config, original);
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        let mut peer = Drawing::new(8, T::FibonacciExtension);
+        DrawingTemplate::from_drawing(&chart.drawings().drawings[0])
+            .apply_to(&mut peer)
+            .unwrap();
+        assert_eq!(peer.fib_config, Some(config.clone()));
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        chart.load_drawings(&saved).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].fib_config,
+            Some(config.clone())
+        );
+        // Repeated settings do not consume a history step.
+        chart
+            .set_fibonacci_config(chart.drawings().drawings[0].id, config.clone())
+            .unwrap();
+        let id = chart.drawings().drawings[0].id;
+        for size in [0.0, 257.0, f32::NAN, f32::INFINITY] {
+            let mut invalid = config.clone();
+            invalid.label_size = size;
+            assert!(chart.set_fibonacci_config(id, invalid).is_err());
+            assert_eq!(
+                chart.drawings().drawings[0].fib_config,
+                Some(config.clone())
+            );
+        }
+        chart.drawings_mut().drawings[0].locked = true;
+        assert_eq!(
+            chart.set_fibonacci_config(id, FibonacciConfig::extension_default()),
+            Err(DrawingError::Locked(id))
+        );
+        chart.drawings_mut().drawings[0].locked = false;
+        chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
+        assert!(chart.set_fibonacci_config(id, config).is_err());
+        assert!(!chart.can_undo());
+    }
+
     /// Host edits retain measurements in saved records and templates and undo in one step;
     /// old records keep every readout hidden. Rejected edits do not add history.
     #[test]
@@ -506,6 +712,206 @@ mod tests {
                 Default::default(),
                 "{tool:?}"
             );
+        }
+    }
+
+    /// Hosts can update either family in one history entry, including spare wedge arcs; invalid,
+    /// locked, missing and unrelated drawings leave their settings and history untouched.
+    #[test]
+    fn fibonacci_family_settings_are_validated_and_undoable() {
+        use crate::drawings::{DrawingTemplate, FibonacciConfig};
+        for tool in [
+            DrawingToolType::FibonacciChannel,
+            DrawingToolType::FibonacciWedge,
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(2.0, 100.0),
+                ChartPoint::new(8.0, 200.0),
+                ChartPoint::new(2.0, 150.0),
+            ];
+            let original = drawing.fib_config.clone();
+            chart.drawings_mut().drawings.push(drawing);
+            let mut json = serde_json::to_value(FibonacciConfig::for_tool(tool)).unwrap();
+            json["label_size"] = 20.0.into();
+            json["label_position"] = "Center".into();
+            json["trend_visible"] = false.into();
+            for (i, level) in json["levels"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
+                level["width"] = ((i + 1) as f64).into();
+                level["line_style"] = if i % 2 == 0 { "Dotted" } else { "Dashed" }.into();
+            }
+            let edited: FibonacciConfig = serde_json::from_value(json.clone()).unwrap();
+            chart.set_fibonacci_config(7, edited.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
+                    .unwrap(),
+                json
+            );
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].fib_config, original);
+            assert!(!chart.can_undo());
+            assert!(chart.redo());
+            // An unchanged assignment does not create a second history entry.
+            chart.set_fibonacci_config(7, edited.clone()).unwrap();
+            let template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
+            let mut peer = Drawing::new(8, tool);
+            template.apply_to(&mut peer).unwrap();
+            assert_eq!(peer.fib_config, Some(edited.clone()));
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            let mut restored = Chart::new(BarData::default());
+            restored.load_drawings(&saved).unwrap();
+            assert_eq!(
+                restored.drawings().drawings[0].fib_config,
+                Some(edited.clone())
+            );
+            for bad in [f32::NAN, 0.0, 101.0] {
+                let mut invalid = edited.clone();
+                invalid.levels[0].width = Some(bad);
+                assert!(chart.set_fibonacci_config(7, invalid).is_err());
+            }
+            chart.drawings_mut().drawings[0].locked = true;
+            assert_eq!(
+                chart.set_fibonacci_config(7, edited.clone()),
+                Err(DrawingError::Locked(7))
+            );
+            assert_eq!(
+                chart.set_fibonacci_config(77, edited.clone()),
+                Err(DrawingError::UnknownDrawing(77))
+            );
+            chart.drawings_mut().drawings[0].locked = false;
+            assert!(chart.undo());
+            assert!(!chart.can_undo());
+            assert_eq!(chart.drawings().drawings[0].fib_config, original);
+            chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
+            assert!(chart.set_fibonacci_config(7, edited).is_err());
+        }
+    }
+
+    /// Readout edits and reversal each undo in one step, preserve times and identity, and
+    /// round-trip through saved records and templates. Legacy records retain visible statistics.
+    #[test]
+    fn position_readouts_and_reversal_survive_history_and_storage() {
+        use crate::drawings::{DrawingTemplate, PositionReadout};
+        for anchors in [2, 3] {
+            let bars = (0..20)
+                .map(|i| {
+                    Bar::new(
+                        DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                        100.0,
+                        106.0,
+                        95.0,
+                        100.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            let mut drawing = Drawing::new(7, DrawingToolType::LongPos);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(2.0, 100.0),
+                ChartPoint::new(8.0, 105.0),
+                ChartPoint::new(6.0, 97.5),
+            ];
+            drawing.chart_points.truncate(anchors);
+            chart.drawings_mut().drawings.push(drawing.clone());
+            let readout = PositionReadout {
+                persistent: true,
+                condensed: true,
+                account_currency: Some("EUR".into()),
+                conversion_rate: Some(0.8),
+                quantity_decimals: Some(2),
+            };
+            chart.set_position_readout(7, readout.clone()).unwrap();
+            assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].position_readout,
+                PositionReadout::default()
+            );
+            assert!(!chart.undo());
+            assert!(chart.redo());
+            chart.reverse_position_drawing(7).unwrap();
+            let reversed = &chart.drawings().drawings[0];
+            assert_eq!(reversed.tool_type, DrawingToolType::ShortPos);
+            assert_eq!(
+                reversed
+                    .chart_points
+                    .iter()
+                    .map(|p| p.price)
+                    .collect::<Vec<_>>(),
+                [100.0, if anchors == 2 { 95.0 } else { 97.5 }, 105.0]
+            );
+            assert_eq!(reversed.chart_points[1].bar_idx, 8.0);
+            assert_eq!(
+                reversed.chart_points[2].bar_idx,
+                if anchors == 2 { 8.0 } else { 6.0 }
+            );
+            assert_eq!(reversed.position_readout, readout);
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            let mut loaded = Chart::new(BarData::default());
+            loaded.load_drawings(&saved).unwrap();
+            assert_eq!(
+                loaded.drawings().drawings[0].tool_type,
+                DrawingToolType::ShortPos
+            );
+            assert_eq!(loaded.drawings().drawings[0].position_readout, readout);
+            let template = DrawingTemplate::from_drawing(reversed);
+            let mut other = Drawing::new(8, DrawingToolType::ShortPos);
+            template.apply_to(&mut other).unwrap();
+            assert_eq!(other.position_readout, readout);
+            let mut old = serde_json::to_value(&drawing).unwrap();
+            old.as_object_mut().unwrap().remove("position_readout");
+            let old: Drawing = serde_json::from_value(old).unwrap();
+            assert!(old.position_readout.persistent);
+            assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points,
+                drawing.chart_points
+            );
+            assert!(chart.redo());
+            chart.reverse_position_drawing(7).unwrap();
+            let restored = &chart.drawings().drawings[0];
+            assert_eq!(restored.tool_type, DrawingToolType::LongPos);
+            assert_eq!(&restored.chart_points[..anchors], drawing.chart_points);
+            let before = format!("{:?}", chart.drawings().drawings);
+            assert!(
+                chart
+                    .set_position_readout(
+                        7,
+                        PositionReadout {
+                            conversion_rate: Some(f64::NAN),
+                            ..readout.clone()
+                        }
+                    )
+                    .is_err()
+            );
+            chart.drawings_mut().drawings[0].locked = true;
+            assert_eq!(
+                chart.reverse_position_drawing(7),
+                Err(DrawingError::Locked(7))
+            );
+            assert_eq!(
+                chart.set_position_readout(7, readout.clone()),
+                Err(DrawingError::Locked(7))
+            );
+            chart.drawings_mut().drawings[0].locked = false;
+            assert_eq!(format!("{:?}", chart.drawings().drawings), before);
+            assert_eq!(
+                chart.reverse_position_drawing(99),
+                Err(DrawingError::UnknownDrawing(99))
+            );
+            chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
+            assert!(matches!(
+                chart.reverse_position_drawing(7),
+                Err(DrawingError::Invalid(_))
+            ));
         }
     }
 

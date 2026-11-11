@@ -294,7 +294,8 @@ pub struct ChartConfig {
     /// Default: None
     pub axis_font_size: Option<f32>,
     /// Font family of this chart's price and time axis labels and tags, including study panes.
-    /// Named families must already be installed in the host's [`egui::FontDefinitions`].
+    /// Absent named families use proportional fonts until the host installs them in
+    /// [`egui::FontDefinitions`], without changing the saved choice.
     /// Defaults to proportional, including for saved configurations without this field.
     #[serde(default)]
     pub axis_font_family: egui::FontFamily,

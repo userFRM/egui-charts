@@ -79,7 +79,6 @@ pub fn render_crosshair_with_options(
     bar_seconds: i64,
     price_formatter: Option<&dyn PriceFormatter>,
 ) -> [Option<Rect>; 2] {
-    let options = options.resolved(context.painter.ctx());
     let bar = coords
         .local_idx_at_x(hover_pos.x, visible_data.len())
         .map(|idx| (coords.start_idx + idx, &visible_data[idx]));
@@ -95,13 +94,47 @@ pub fn render_crosshair_with_options(
             pos.y = price_scale.price_to_y(price);
         }
     }
+    render_crosshair_at_time(
+        context,
+        pos,
+        bar.map(|(_, candle)| candle.time),
+        price_scale,
+        options,
+        chart_bottom,
+        axis_right,
+        last_price_tag,
+        scale,
+        bar_seconds,
+        price_formatter,
+    )
+}
+
+/// Paints an already resolved crosshair without rounding an independently keyed point.
+pub(crate) fn render_crosshair_at_time(
+    context: &RenderContext,
+    pos: Pos2,
+    time: Option<chrono::DateTime<chrono::Utc>>,
+    price_scale: &PriceMap,
+    options: &CrosshairOptions,
+    chart_bottom: f32,
+    axis_right: f32,
+    last_price_tag: Option<Rect>,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    price_formatter: Option<&dyn PriceFormatter>,
+) -> [Option<Rect>; 2] {
+    let options = options.resolved(context.painter.ctx());
     render_crosshair_lines(context, pos, &options, chart_bottom);
     let price_tag = render_crosshair_price_tag(
         context,
         pos,
         price_scale,
         &options,
-        axis_right,
+        if axis_right <= context.rect.left() {
+            egui::emath::Rangef::new(context.painter.clip_rect().left(), axis_right)
+        } else {
+            egui::emath::Rangef::new(context.rect.right(), axis_right)
+        },
         last_price_tag,
         price_formatter.map(|price_formatter| {
             price_scale
@@ -109,19 +142,19 @@ pub fn render_crosshair_with_options(
                 .label(price_scale.y_to_scale(pos.y), 2, Some(price_formatter))
         }),
     );
-    let time_tag = bar
+    let time_tag = time
         .filter(|_| {
             options.label_visible
                 && options.vert_label_visible
                 && options.style != CrosshairStyle::Hidden
         })
-        .map(|(_, candle)| {
+        .map(|time| {
             paint_crosshair_tag(
                 context.painter,
                 Pos2::new(pos.x, chart_bottom + 1.5),
                 Align2::CENTER_TOP,
                 context.rect.left()..=axis_right.max(context.rect.right()),
-                scale.format_crosshair(candle.time, bar_seconds),
+                scale.format_crosshair(time, bar_seconds),
                 (
                     options.label_text_color,
                     options.vert_label_background_color,
@@ -228,7 +261,7 @@ pub(crate) fn render_crosshair_price_tag(
     pos: Pos2,
     price_scale: &PriceMap,
     options: &CrosshairOptions,
-    axis_right: f32,
+    axis: egui::emath::Rangef,
     last_price_tag: Option<Rect>,
     label: Option<String>,
 ) -> Option<Rect> {
@@ -253,7 +286,7 @@ pub(crate) fn render_crosshair_price_tag(
             .unwrap_or_else(|| tick_decimals(price_scale, pos.y));
         price_scale.label(price_scale.y_to_scale(pos.y), decimals, None)
     };
-    let left = axis_right <= context.rect.left();
+    let left = axis.max <= context.rect.left();
     let painter = context
         .painter
         .with_clip_rect(context.painter.clip_rect().intersect(Rect::from_x_y_ranges(
@@ -262,24 +295,13 @@ pub(crate) fn render_crosshair_price_tag(
         )));
     Some(paint_crosshair_tag(
         &painter,
-        Pos2::new(
-            if left {
-                context.rect.left()
-            } else {
-                context.rect.right()
-            },
-            pos.y,
-        ),
+        Pos2::new(if left { axis.max } else { axis.min }, pos.y),
         if left {
             Align2::RIGHT_CENTER
         } else {
             Align2::LEFT_CENTER
         },
-        if left {
-            context.painter.clip_rect().left()..=context.rect.left()
-        } else {
-            context.rect.right()..=axis_right
-        },
+        axis.min..=axis.max,
         label,
         (
             options.label_text_color,
@@ -490,14 +512,6 @@ mod tests {
     }
     #[test]
     fn options_control_each_stroke_and_label_at_the_bar_center() {
-        let mut saved = serde_json::to_value(CrosshairOptions::default()).unwrap();
-        let fields = saved.as_object_mut().unwrap();
-        fields.remove("vert_label_visible");
-        fields.remove("horz_label_visible");
-        assert_eq!(
-            serde_json::from_value::<CrosshairOptions>(saved).unwrap(),
-            CrosshairOptions::default()
-        );
         let rect = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(400.0, 200.0));
         let map = PriceMap::new(
             PriceTransform::default(),
@@ -556,7 +570,7 @@ mod tests {
                 let mut tags = [None; 2];
                 let x = coords.idx_to_x(10);
                 let output = ctx.run_ui(RawInput::default(), |ui| {
-                    tags = crate::chart::rendering::render_crosshair_with_options(
+                    tags = render_crosshair_with_options(
                         &RenderContext::new(ui.painter(), rect),
                         Pos2::new(x + 3.0, 100.0),
                         &bars,

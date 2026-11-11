@@ -4,22 +4,28 @@ use crate::config::{BackgroundStyle, WatermarkPos};
 use egui::{Rect, Ui};
 
 impl Chart {
-    /// The colour [`Self::draw_background`] paints the plot with, the midpoint of a gradient, or
-    /// `None` when something else paints it.
-    pub(super) fn plot_background(&self) -> Option<egui::Color32> {
+    /// The background colour at `pos` within the frame painted by [`Self::draw_background`],
+    /// or `None` when something else paints it.
+    pub(super) fn plot_background(&self, rect: Rect, pos: egui::Pos2) -> Option<egui::Color32> {
         if self.config.skip_background {
             return None;
         }
         Some(match self.config.background_style {
             BackgroundStyle::Solid => self.config.background_color,
             BackgroundStyle::VerticalGradient {
-                top_color: first,
-                bottom_color: second,
-            }
-            | BackgroundStyle::HorizontalGradient {
-                left_color: first,
-                right_color: second,
-            } => first.lerp_to_gamma(second, 0.5),
+                top_color,
+                bottom_color,
+            } => top_color.lerp_to_gamma(
+                bottom_color,
+                egui::remap_clamp(pos.y, rect.y_range(), 0.0..=1.0),
+            ),
+            BackgroundStyle::HorizontalGradient {
+                left_color,
+                right_color,
+            } => left_color.lerp_to_gamma(
+                right_color,
+                egui::remap_clamp(pos.x, rect.x_range(), 0.0..=1.0),
+            ),
         })
     }
 

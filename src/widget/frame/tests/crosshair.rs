@@ -877,20 +877,24 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
     use egui::{Color32, Stroke};
 
     let ring = crate::tokens::DESIGN_TOKENS.stroke.thick;
-    // Each row: main style, added style, and the expected fill and stroke of both circles,
-    // with `None` for a hidden marker. `None` colours resolve to the line colour and to the
-    // chart background, set to light gray.
-    let rows: [(MarkerStyle, MarkerStyle, _, _); 5] = [
+    // Each row: main and added styles, then the expected main, added and separate-pane
+    // circles. Hidden markers are `None`; default rings match the plot or pane fill.
+    let rows: [(MarkerStyle, MarkerStyle, _, _, _); 5] = [
         (
             (5.0, None, None, ring),
             (7.0, None, None, ring),
             Some((Color32::BLUE, Stroke::new(ring, Color32::LIGHT_GRAY))),
             Some((Color32::GREEN, Stroke::new(ring, Color32::LIGHT_GRAY))),
+            Some((
+                Color32::GREEN,
+                Stroke::new(ring, crate::theme::Theme::default().chart.bg),
+            )),
         ),
         (
             (5.0, Some(Color32::GOLD), Some(Color32::MAGENTA), 3.0),
             (7.0, None, Some(Color32::CYAN), 0.0),
             Some((Color32::GOLD, Stroke::new(3.0, Color32::MAGENTA))),
+            Some((Color32::GREEN, Stroke::NONE)),
             Some((Color32::GREEN, Stroke::NONE)),
         ),
         (
@@ -898,16 +902,22 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
             (7.0, Some(Color32::YELLOW), None, 4.0),
             Some((Color32::TRANSPARENT, Stroke::new(1.0, Color32::RED))),
             Some((Color32::YELLOW, Stroke::new(4.0, Color32::LIGHT_GRAY))),
+            Some((
+                Color32::YELLOW,
+                Stroke::new(4.0, crate::theme::Theme::default().chart.bg),
+            )),
         ),
         (
             (5.0, None, None, -1.0),
             (7.0, None, None, f32::NAN),
             Some((Color32::BLUE, Stroke::NONE)),
             Some((Color32::GREEN, Stroke::NONE)),
+            Some((Color32::GREEN, Stroke::NONE)),
         ),
         (
             (0.0, None, None, ring),
             (f32::NAN, None, None, ring),
+            None,
             None,
             None,
         ),
@@ -920,12 +930,17 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
         ChartType::Baseline,
     ] {
         for pane in [false, true] {
-            for (main, added, expect_main, expect_added) in rows {
+            for (main, added, expect_main, expect_added, expect_pane) in rows {
                 let (circles, x, main_rect, added_rect) =
                     hover_markers(kind, pane, (main, added), |_, _| {});
                 for (radius, rect, fraction, expected) in [
                     (5.0, main_rect, 0.25, expect_main),
-                    (7.0, added_rect, 0.75, expect_added),
+                    (
+                        7.0,
+                        added_rect,
+                        0.75,
+                        if pane { expect_pane } else { expect_added },
+                    ),
                 ] {
                     let found = circles.iter().find(|circle| circle.radius == radius);
                     let case = format!("{kind:?}, pane {pane}, {main:?} {added:?}");
@@ -1629,6 +1644,778 @@ fn drawing_drag_hides_the_value_readout() {
         assert!(
             shows_readout(&after),
             "on_long_press {on_long_press}: readout returns after the drag"
+        );
+    }
+}
+
+/// A host-positioned value tag sits in its target's column, against the plot, when axes share
+/// an edge.
+#[test]
+fn series_crosshair_label_sits_on_the_target_outer_axis() {
+    use crate::model::{AxisSide, Bar, SeriesScale};
+    use crate::scales::CustomPriceFormatter;
+    use crate::widget::{PaneId, PaneScale, SeriesId, SeriesOptions};
+
+    for width in [800.0, 360.0] {
+        for side in [None, Some(AxisSide::Left), Some(AxisSide::Right)] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.set_size(Some(egui::vec2(width - 16.0, 584.0)));
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.enabled = false;
+            let ids = [SeriesScale::Left, SeriesScale::Separate(1)].map(|scale| {
+                let id = chart.add_series(SeriesOptions {
+                    scale,
+                    ..Default::default()
+                });
+                chart.set_data(
+                    id,
+                    chart
+                        .bars(SeriesId::MAIN)
+                        .iter()
+                        .map(|bar| Bar::from_value(bar.time, 1000.0))
+                        .collect(),
+                );
+                chart.set_series_formatter(
+                    id,
+                    Some(std::sync::Arc::new(CustomPriceFormatter::new(|value| {
+                        format!("x{value:.0}")
+                    }))),
+                );
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(1000.0, 2000.0);
+                id
+            });
+            chart.set_series_formatter(
+                SeriesId::MAIN,
+                Some(std::sync::Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("x{value:.0}")
+                }))),
+            );
+            if let Some(side) = side {
+                assert!(chart.place_pane_scales(PaneId::MAIN, side));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let time = chart.bars(SeriesId::MAIN)[90].time;
+            for (step, (id, price)) in [(SeriesId::MAIN, 151.0), (ids[0], 1375.0), (ids[1], 1375.0)]
+                .into_iter()
+                .enumerate()
+            {
+                chart.set_series_crosshair_position(id, Some((time, price)));
+                let painted = shapes(
+                    &ctx,
+                    &mut chart,
+                    0.1 + step as f64 * 0.1,
+                    vec![Event::PointerGone],
+                );
+                let plot = chart.get_rendered_price_rect();
+                let axis = chart
+                    .pane_scale_axes(
+                        PaneId::MAIN,
+                        egui::Rect::from_min_max(
+                            Pos2::new(8.0, 8.0),
+                            Pos2::new(width - 8.0, 592.0),
+                        ),
+                        plot,
+                    )
+                    .find(|(key, _)| Some(*key) == chart.series_scale(id).map(PaneScale::Named))
+                    .unwrap()
+                    .1;
+                let label = format!("x{price:.0}");
+                let tag = painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == label => {
+                            Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .expect("target price label");
+                // Gaps from the text to the column's edge beside the plot and to its other edge.
+                let (inner, outer) = if axis.center().x < plot.center().x {
+                    (axis.right() - tag.right(), tag.left() - axis.left())
+                } else {
+                    (tag.left() - axis.left(), axis.right() - tag.right())
+                };
+                assert!(
+                    inner >= 0.0 && outer >= 0.0 && inner < outer,
+                    "width {width}, {side:?} {id:?}: tag {tag:?}, axis {axis:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Relative-scale tags report axis units for the pointer and host positions, including studies.
+#[cfg(feature = "studies")]
+#[test]
+fn pane_crosshair_label_uses_the_series_scale_mode() {
+    use crate::model::{Bar, SeriesScale};
+    use crate::scales::{CustomPriceFormatter, PriceScaleMode};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use PriceScaleMode::{IndexedTo100, Percentage};
+
+    // Each row: mode, percentage formatter, shared study, the range's shift in axis units and
+    // the label 37.5% up the pane.
+    for (mode, custom, study, shift, expected) in [
+        (Percentage, false, false, 0.0, "+37.50%"),
+        (IndexedTo100, false, false, 0.0, "137.50"),
+        (Percentage, true, false, 0.0, "relative 37.50"),
+        (IndexedTo100, true, false, 0.0, "relative 137.50"),
+        (Percentage, false, true, 0.0, "+37.50%"),
+        (IndexedTo100, false, true, 0.0, "137.50"),
+        (Percentage, true, true, 0.0, "relative 37.50"),
+        (IndexedTo100, true, true, 0.0, "relative 137.50"),
+        (Percentage, false, false, 1300.0, "+1,337.50%"),
+        (IndexedTo100, false, false, 1300.0, "1,437.50"),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[1000.0], &[1000.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        chart.chart_options.crosshair.label_text_color = egui::Color32::MAGENTA;
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(
+            id,
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .map(|bar| Bar::from_value(bar.time, 1000.0))
+                .collect(),
+        );
+        let pane = chart.add_pane();
+        assert!(chart.move_series_to_pane(id, pane));
+        // A raw-price formatter must not override a relative scale's units.
+        chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(CustomPriceFormatter::new(|v| {
+                format!("raw {v:.2}")
+            }))),
+        );
+        if custom {
+            chart.set_percentage_formatter(Some(std::sync::Arc::new(CustomPriceFormatter::new(
+                |v| format!("relative {v:.2}"),
+            ))));
+        }
+        if study {
+            let indicator = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            assert!(chart.set_indicator_scale(
+                indicator,
+                crate::studies::StudyScale::Shared(SeriesScale::Right)
+            ));
+            assert!(chart.move_series_to_pane(indicator, pane));
+            assert!(chart.set_series_visible(id, false));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let base = if mode == PriceScaleMode::Percentage {
+            0.0
+        } else {
+            100.0
+        };
+        chart
+            .series_price_scale_mut(id)
+            .unwrap()
+            .set_range(base + shift, base + shift + 100.0);
+        frame(&ctx, &mut chart, 0.15, vec![]);
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|p| p.id == pane)
+            .unwrap()
+            .rect;
+        let x = chart.get_chart_mapping().idx_to_x(50);
+        // (1375 - 1000) / 1000 = 37.5%; 1375 / 1000 * 100 = 137.5. Each further 10 adds one
+        // unit to both, so 14375 reads 1337.5% and 1437.5, grouped as the ticks are.
+        let pointer = Pos2::new(x, rect.bottom() - rect.height() * 0.375);
+        let time = chart.bars(SeriesId::MAIN)[50].time;
+        for host in [false, true] {
+            if host && study {
+                continue;
+            }
+            let events = if host {
+                chart.set_series_crosshair_position(id, Some((time, 1375.0 + 10.0 * shift)));
+                vec![Event::PointerGone]
+            } else {
+                vec![Event::PointerMoved(pointer)]
+            };
+            let painted = shapes(&ctx, &mut chart, if host { 0.3 } else { 0.2 }, events);
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) if text.fallback_color == egui::Color32::MAGENTA => {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                labels.contains(&expected),
+                "{mode:?}, custom {custom}, study {study}, host {host}: {expected}, got {labels:?}"
+            );
+        }
+    }
+}
+
+/// Hiding the host target removes its price readout but retains the shared time guide.
+#[test]
+fn hidden_pane_target_keeps_the_time_line_in_its_pane() {
+    use crate::model::{Bar, LineStyle};
+    use crate::widget::{SeriesId, SeriesOptions};
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[200.0]);
+    chart.config.show_volume = false;
+    chart.chart_options.tooltip.enabled = false;
+    chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.horz_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+    chart.chart_options.crosshair.horz_line_style = LineStyle::Solid;
+    chart.chart_options.crosshair.label_text_color = egui::Color32::MAGENTA;
+    let pane = chart.add_pane();
+    let ids = [0; 2].map(|_| {
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(
+            id,
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .map(|bar| Bar::from_value(bar.time, 1000.0))
+                .collect(),
+        );
+        chart.move_series_to_pane(id, pane);
+        id
+    });
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    chart
+        .series_price_scale_mut(ids[1])
+        .unwrap()
+        .set_range(1000.0, 2000.0);
+    let time = chart.bars(SeriesId::MAIN)[50].time;
+    chart.set_series_crosshair_position(ids[1], Some((time, 1375.0)));
+    for (step, visible) in [false, true].into_iter().enumerate() {
+        chart.set_series_visible(ids[1], visible);
+        let painted = shapes(
+            &ctx,
+            &mut chart,
+            0.1 + step as f64 * 0.1,
+            vec![Event::PointerGone],
+        );
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|p| p.id == pane)
+            .unwrap()
+            .rect;
+        let x = chart.get_chart_mapping().idx_to_x(50);
+        // The main guide can sit behind this pane, so require the pane's own endpoints.
+        let time_line = painted.iter().any(|shape| match shape {
+            Shape::LineSegment { points, stroke } => {
+                stroke.color == egui::Color32::MAGENTA
+                    && (points[0].x - x).abs() < 0.01
+                    && points[0].x == points[1].x
+                    && (points[0].y - rect.top()).abs() < 0.01
+                    && (points[1].y - rect.bottom()).abs() < 0.01
+            }
+            _ => false,
+        });
+        assert!(time_line, "visible {visible}: missing pane time guide");
+        let horizontal: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::MAGENTA && points[0].y == points[1].y =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(horizontal.len(), usize::from(visible));
+        if visible {
+            assert!((horizontal[0][0].y - (rect.bottom() - 0.375 * rect.height())).abs() < 0.01);
+        }
+        assert_eq!(
+            painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.fallback_color == egui::Color32::MAGENTA && text.galley.text() == "1,375.00")),
+            visible
+        );
+    }
+}
+
+/// Default marker rings use the painted background; explicit border colours still win.
+#[test]
+fn default_marker_ring_matches_the_background_behind_it() {
+    use crate::config::BackgroundStyle;
+    use crate::model::ChartType;
+    use egui::Color32;
+    let blue = Color32::from_rgb(0, 0, 139);
+    for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+        for (pane, background) in [
+            (
+                false,
+                BackgroundStyle::VerticalGradient {
+                    top_color: blue,
+                    bottom_color: blue,
+                },
+            ),
+            (
+                false,
+                BackgroundStyle::VerticalGradient {
+                    top_color: Color32::BLACK,
+                    bottom_color: Color32::WHITE,
+                },
+            ),
+            (
+                false,
+                BackgroundStyle::HorizontalGradient {
+                    left_color: Color32::BLACK,
+                    right_color: Color32::WHITE,
+                },
+            ),
+            (true, BackgroundStyle::Solid),
+        ] {
+            for border in [None, Some(Color32::MAGENTA)] {
+                let style = (5.0, None, border, 2.0);
+                let extra = (7.0, None, border, 2.0);
+                let (circles, ..) =
+                    hover_markers(ChartType::Line, pane, (style, extra), |chart, _| {
+                        chart.set_theme_override(Some(theme.clone()));
+                        chart.config.background_color = Color32::LIGHT_GRAY;
+                        chart.config.background_style = background;
+                    });
+                assert_eq!(circles.len(), 2);
+                for circle in circles {
+                    // The background spans the chart frame, including its axes, not just the plot.
+                    let fill = match background {
+                        BackgroundStyle::VerticalGradient {
+                            top_color,
+                            bottom_color,
+                        } => top_color.lerp_to_gamma(bottom_color, (circle.center.y - 8.0) / 584.0),
+                        BackgroundStyle::HorizontalGradient {
+                            left_color,
+                            right_color,
+                        } => left_color.lerp_to_gamma(right_color, (circle.center.x - 8.0) / 784.0),
+                        BackgroundStyle::Solid if circle.radius == 7.0 => theme.chart.bg,
+                        BackgroundStyle::Solid => Color32::LIGHT_GRAY,
+                    };
+                    assert_eq!(
+                        circle.stroke.color,
+                        border.unwrap_or(fill),
+                        "pane {pane}, radius {}, border {border:?}, background {background:?}",
+                        circle.radius
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Hidden markers add no hover allocations, and shown circles need no parameter allocations.
+#[cfg(feature = "studies")]
+#[test]
+fn hidden_series_markers_allocate_nothing_on_hover() {
+    use crate::config::CrosshairStyle;
+    use crate::widget::studies_data::tests::allocations;
+    use crate::widget::{SeriesId, SeriesOptions};
+
+    let mut counts = Vec::new();
+    for (added, radius) in [(0, 0.0), (24, 0.0), (24, 7.0)] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        let data = chart.bars(SeriesId::MAIN).to_vec();
+        for _ in 0..added {
+            let id = chart.add_series(SeriesOptions {
+                crosshair_marker_radius: radius,
+                ..Default::default()
+            });
+            chart.set_data(id, data.clone());
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(50), plot.center().y);
+        let mut count = [0; 2];
+        let mut time = 0.1;
+        for (at, style) in [CrosshairStyle::Hidden, CrosshairStyle::Full]
+            .into_iter()
+            .enumerate()
+        {
+            chart.chart_options.crosshair.style = style;
+            for _ in 0..5 {
+                frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                time += 0.1;
+            }
+            count[at] = allocations(|| frame(&ctx, &mut chart, time, vec![])).0;
+            time += 0.1;
+        }
+        counts.push(count);
+    }
+    let extra = |at: usize| counts[at][1] as isize - counts[at][0] as isize;
+    assert!(
+        extra(1) <= extra(0),
+        "hidden markers allocate on hover: {counts:?}"
+    );
+    assert!(
+        extra(2) <= extra(0),
+        "shown markers allocate beyond their circles: {counts:?}"
+    );
+}
+
+fn touch_events(phase: egui::TouchPhase, pos: Pos2) -> Vec<Event> {
+    use egui::TouchPhase::{Cancel, End, Move, Start};
+    let mut events = vec![
+        Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(1),
+            phase,
+            pos,
+            force: None,
+        },
+        Event::PointerMoved(pos),
+    ];
+    if phase != Move {
+        events.push(Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: phase == Start,
+            modifiers: Default::default(),
+        });
+    }
+    if matches!(phase, End | Cancel) {
+        events.push(Event::PointerGone);
+    }
+    events
+}
+
+#[test]
+fn touch_hold_released_before_the_click_limit_is_not_a_click() {
+    use crate::config::TouchTrackingExitMode;
+    use crate::widget::{ChartElementId, ChartEvent, SeriesId};
+    use egui::TouchPhase::{End, Start};
+    for pane in [false, true] {
+        for mode in [
+            TouchTrackingExitMode::OnTouchEnd,
+            TouchTrackingExitMode::OnNextTap,
+        ] {
+            for duration in [0.1, 0.7] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[100.0], &[110.0, 120.0]);
+                chart.config.show_volume = false;
+                chart.chart_options.tooltip.on_long_press = true;
+                chart.chart_options.tooltip.touch_exit_mode = mode;
+                let selected = if pane {
+                    let id = chart.add_series(Default::default());
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                    ChartElementId::Indicator(id)
+                } else {
+                    ChartElementId::Series(SeriesId::MAIN)
+                };
+                chart.selection.select(selected, Some(50));
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.apply_synced_time_scale(6.0, -10.0);
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                let map = chart.get_chart_mapping();
+                let y = if pane {
+                    chart.pane_layout.panes.last().unwrap().rect.center().y
+                } else {
+                    map.rect.center().y
+                };
+                let pos = Pos2::new(map.idx_to_x(50), y);
+                chart.drain_events().for_each(drop);
+                frame(&ctx, &mut chart, 2.0, touch_events(Start, pos));
+                if duration > 0.5 {
+                    frame(&ctx, &mut chart, 2.6, vec![]);
+                    assert!(chart.hover_time().is_some());
+                }
+                frame(&ctx, &mut chart, 2.0 + duration, touch_events(End, pos));
+                let clicks = chart
+                    .drain_events()
+                    .filter(|event| matches!(event, ChartEvent::Click { .. }))
+                    .count();
+                assert_eq!(
+                    clicks,
+                    usize::from(duration < 0.5),
+                    "pane={pane}, {mode:?}, duration={duration}"
+                );
+                if duration > 0.5 {
+                    assert_eq!(chart.selected_element(), Some(selected));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn moving_a_touch_readout_keeps_live_edge_following() {
+    use egui::TouchPhase::{End, Move, Start};
+    for pane in [false, true] {
+        for move_time in [0.1, 0.7, 1.0]
+            .into_iter()
+            .filter(|time| !pane || *time > 0.5)
+        {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.on_long_press = true;
+            if pane {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.enable_tracking_mode();
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let y = if pane {
+                chart.pane_layout.panes.last().unwrap().rect.center().y
+            } else {
+                map.rect.center().y
+            };
+            let pos = Pos2::new(map.idx_to_x(50), y);
+            let end = pos + egui::vec2(24.0, 0.0);
+            frame(&ctx, &mut chart, 2.0, touch_events(Start, pos));
+            if move_time > 0.5 {
+                frame(&ctx, &mut chart, 2.6, vec![]);
+            }
+            frame(&ctx, &mut chart, 2.0 + move_time, touch_events(Move, end));
+            assert_eq!(
+                chart.is_tracking_mode_active(),
+                move_time > 0.5,
+                "pane={pane}, move={move_time}"
+            );
+            frame(&ctx, &mut chart, 3.2, touch_events(End, end));
+            assert_eq!(chart.is_tracking_mode_active(), move_time > 0.5);
+        }
+    }
+}
+
+fn touch_frame(
+    ctx: &egui::Context,
+    chart: &mut crate::widget::Chart,
+    time: f64,
+    events: Vec<Event>,
+    size: egui::Vec2,
+    focused: bool,
+) {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, size)),
+            time: Some(time),
+            events,
+            focused,
+            ..Default::default()
+        },
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+        },
+    )
+    .drop_without_applying_deltas();
+}
+
+#[test]
+fn touch_readout_activates_without_keyboard_focus() {
+    use egui::TouchPhase::{End, Start};
+    for cancel in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = true;
+        let size = egui::vec2(800.0, 600.0);
+        touch_frame(&ctx, &mut chart, 0.0, vec![], size, false);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        touch_frame(&ctx, &mut chart, 0.1, vec![], size, false);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        let time = chart.state.shown()[50].time;
+        touch_frame(&ctx, &mut chart, 1.0, touch_events(Start, pos), size, false);
+        touch_frame(
+            &ctx,
+            &mut chart,
+            1.2,
+            if cancel {
+                vec![Event::WindowFocused(false)]
+            } else {
+                vec![]
+            },
+            size,
+            false,
+        );
+        touch_frame(&ctx, &mut chart, 1.6, vec![], size, false);
+        assert_eq!(chart.hover_time(), (!cancel).then_some(time));
+        touch_frame(&ctx, &mut chart, 1.7, touch_events(End, pos), size, false);
+    }
+}
+
+#[test]
+fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
+    use egui::TouchPhase::{End, Move, Start};
+    for (width, held) in [(300.0, false), (780.0, false), (300.0, true), (780.0, true)] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = true;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        frame(&ctx, &mut chart, 1.6, vec![]);
+        if !held {
+            frame(&ctx, &mut chart, 1.7, touch_events(End, pos));
+        }
+        let size = egui::vec2(width, 600.0);
+        touch_frame(&ctx, &mut chart, 2.0, vec![], size, true);
+        let inside = chart.last_rendered_price_rect.contains(pos);
+        assert_eq!(inside, width > 300.0);
+        let start = chart.last_rendered_price_rect.center();
+        let end = start + egui::vec2(60.0, 0.0);
+        let viewport = chart.get_time_scale_state();
+        if !held {
+            touch_frame(
+                &ctx,
+                &mut chart,
+                2.1,
+                touch_events(Start, start),
+                size,
+                true,
+            );
+        }
+        touch_frame(&ctx, &mut chart, 2.2, touch_events(Move, end), size, true);
+        touch_frame(&ctx, &mut chart, 2.3, touch_events(End, end), size, true);
+        assert_eq!(
+            chart.get_time_scale_state() == viewport,
+            inside || held,
+            "width={width}, held={held}"
+        );
+        assert_eq!(chart.hover_time().is_some(), inside || held);
+    }
+}
+
+#[cfg(feature = "icons")]
+#[test]
+fn tapping_the_price_button_of_a_latched_touch_readout_opens_its_action() {
+    use egui::TouchPhase::{End, Start};
+    for button in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = true;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        frame(&ctx, &mut chart, 1.6, vec![]);
+        frame(&ctx, &mut chart, 1.7, touch_events(End, pos));
+        let (readout, tag) = chart.axis_hover.expect("latched price tag");
+        let price = chart.last_price_map.y_to_price(readout.y);
+        let tap = if button {
+            crate::chart::rendering::axes::crosshair_price_button_rect(tag).center()
+        } else {
+            pos
+        };
+        frame(&ctx, &mut chart, 2.0, touch_events(Start, tap));
+        frame(&ctx, &mut chart, 2.1, touch_events(End, tap));
+        if button {
+            let Some(crate::widget::RightClickTarget::Background { price: actual, .. }) =
+                chart.take_right_click()
+            else {
+                panic!("price action was lost")
+            };
+            assert!((actual - price).abs() < 1e-8);
+        } else {
+            assert!(chart.take_right_click().is_none());
+            assert!(chart.hover_time().is_none());
+        }
+    }
+}
+
+#[test]
+fn latched_touch_readout_is_the_reported_crosshair() {
+    use crate::widget::ChartEvent;
+    use egui::TouchPhase::{End, Move, Start};
+    for enabled in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = enabled;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        let time = chart.state.shown()[50].time;
+        let moved = pos + egui::vec2(1.0, 1.0);
+        let mut movement = touch_events(Move, moved);
+        if let Event::Touch { force, .. } = &mut movement[0] {
+            *force = Some(0.6);
+        }
+        movement.insert(0, Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        movement.push(Event::ModifiersChanged(egui::Modifiers::NONE));
+        let mut reported = None;
+        for (t, events, expected) in [
+            (1.0, touch_events(Start, pos), (!enabled).then_some(time)),
+            (1.6, vec![], Some(time)),
+            (1.8, movement, Some(time)),
+            (2.0, touch_events(End, moved), enabled.then_some(time)),
+            (2.1, vec![], enabled.then_some(time)),
+            (2.2, touch_events(Start, pos), Some(time)),
+            (2.3, touch_events(End, pos), None),
+        ] {
+            let origin = events
+                .iter()
+                .find(|event| matches!(event, Event::Touch { .. }))
+                .cloned();
+            frame(&ctx, &mut chart, t, events);
+            for event in chart.drain_events() {
+                if let ChartEvent::CrosshairMoved(pointer) = event {
+                    if t == 1.8 {
+                        let pointer = pointer.as_ref().expect("moved readout");
+                        assert_eq!(pointer.origin, origin);
+                        assert_eq!(pointer.modifiers, egui::Modifiers::SHIFT);
+                        if enabled {
+                            assert!((pointer.pos.x - pos.x).abs() < 0.01);
+                        }
+                    }
+                    reported = pointer.and_then(|pointer| pointer.time);
+                }
+            }
+            assert_eq!(reported, expected, "enabled={enabled}, time={t}");
+            if enabled {
+                assert_eq!(reported, chart.hover_time());
+            }
+        }
+    }
+    for on_long_press in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(Default::default());
+        chart.chart_options.tooltip.on_long_press = on_long_press;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let pos = chart.last_rendered_price_rect.center();
+        chart.drain_events().for_each(drop);
+        frame(&ctx, &mut chart, 1.0, touch_events(Start, pos));
+        assert_eq!(
+            chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(_)))),
+            !on_long_press,
+            "an empty plot has no held readout"
         );
     }
 }

@@ -439,6 +439,53 @@ fn bar_updates_obey_live_edge_policies() {
     }
 }
 
+/// Removing a whitespace tail through either data API or replay keeps the offset and pending
+/// start, even when both shift options are enabled near the live edge.
+#[test]
+fn removed_whitespace_tail_keeps_the_view() {
+    let mut got = Vec::new();
+    for operation in ["pop_bars", "set_data", "replay"] {
+        let options = crate::config::ChartOptions {
+            time_scale: crate::config::TimeScaleOptions {
+                right_offset: 20.0,
+                shift_visible_range_on_new_bar: true,
+                allow_shift_visible_range_on_whitespace_replacement: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bars = window(0, 100);
+        bars[99] = Bar::whitespace(bars[99].time);
+        let mut chart = Chart::new(BarData::from_bars(bars.clone())).with_chart_options(options);
+        chart.scroll_to_position(19.0, false);
+        chart.set_start_idx(40);
+        match operation {
+            "pop_bars" => {
+                chart.pop_bars(SeriesId::MAIN, 1);
+            }
+            "set_data" => {
+                bars.pop();
+                chart.set_data(SeriesId::MAIN, bars);
+            }
+            "replay" => chart.set_replay_time(Some(bars[99].time)),
+            _ => unreachable!(),
+        }
+        got.push((
+            operation,
+            chart.state.time_scale().right_offset(),
+            chart.pending_start_idx,
+        ));
+    }
+    assert_eq!(
+        got,
+        [
+            ("pop_bars", 19.0, Some(40)),
+            ("set_data", 19.0, Some(40)),
+            ("replay", 19.0, Some(40)),
+        ]
+    );
+}
+
 /// A scrolled-back view keeps its time range while it shows held bars, and otherwise stops with
 /// the oldest held bar in view instead of moving into the whitespace before it. At 6 px a bar
 /// the plot of an 800x600 frame holds more than 100 bars, so a view stopped there shows them all.

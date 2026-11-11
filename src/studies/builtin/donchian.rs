@@ -209,7 +209,7 @@ mod tests {
     use crate::studies::{InputValue, PriceChannel};
 
     /// Period 2 over highs 1, 3, 2, 5 and lows 0, 1, 1, 2: from bar 1 the upper line is 3, 3, 5
-    /// and the middle line 1.5, 2, 3.
+    /// and the middle line 1.5, 2, 3; the lower line is 0, 1, 1.
     #[test]
     fn channels_draw_their_lines_offset_bars_later() {
         let bars = [
@@ -219,15 +219,15 @@ mod tests {
             make_bar(5.0, 2.0, 3.0),
         ];
         type Build = fn(i32) -> Box<dyn Indicator>;
-        let rows: [(usize, usize, Build); 2] = [
-            (1, 0, |offset| {
+        let rows: [(usize, usize, usize, Build); 2] = [
+            (1, 0, 2, |offset| {
                 Box::new(DonchianChannels::new(2).with_offset(offset))
             }),
-            (0, 2, |offset| {
+            (0, 2, 1, |offset| {
                 Box::new(PriceChannel::new(2).with_offset(offset))
             }),
         ];
-        for (upper, middle, build) in rows {
+        for (upper, middle, lower, build) in rows {
             // Bar 1 at the upper line's first 3, bar 3 at the middle line's 3.
             for (offset, first, last) in [(5, 6, 8), (-1, 0, 2)] {
                 let mut typed = build(0);
@@ -241,6 +241,8 @@ mod tests {
                     }
                     assert_eq!(study.plot_value(upper, first), Some(3.0));
                     assert_eq!(study.plot_value(middle, last), Some(3.0));
+                    assert_eq!(study.plot_value(lower, first), Some(0.0));
+                    assert_eq!(study.plot_value(lower, last), Some(1.0));
                     // Bar 0 has no value at offset 5, and no bar 6 exists at offset -1.
                     assert_eq!(study.plot_value(upper, 5), None);
                 }

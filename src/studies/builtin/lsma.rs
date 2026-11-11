@@ -226,32 +226,12 @@ mod tests {
             let data: Vec<Bar> = closes.into_iter().map(make_bar).collect();
             let mut lsma = LSMA::new(data.len()).with_offset(offset);
             lsma.calculate(&data);
+            assert_eq!(lsma.values().len(), data.len());
+            for bar in 0..data.len() - 1 {
+                assert_eq!(lsma.values().value(0, bar), None, "warm-up bar {bar}");
+            }
             let got = lsma.values().value(0, data.len() - 1).unwrap();
             assert!((got - expected).abs() < 1e-9, "{closes:?}, offset {offset}");
         }
-    }
-
-    #[test]
-    fn test_lsma_calculation() {
-        let mut lsma = LSMA::new(3);
-
-        let data = vec![
-            make_bar(100.0),
-            make_bar(101.0),
-            make_bar(102.0),
-            make_bar(103.0),
-        ];
-
-        lsma.calculate(&data);
-
-        assert_eq!(lsma.values.len(), 4);
-        assert!(matches!(lsma.values.to_rows()[0], IndicatorValue::None));
-        assert!(matches!(lsma.values.to_rows()[1], IndicatorValue::None));
-
-        // Third value should be close to 102.0 (uptrend)
-        let IndicatorValue::Single(v) = lsma.values.to_rows()[2] else {
-            panic!("no value: {:?}", lsma.values.to_rows()[2]);
-        };
-        assert!((v - 102.0).abs() < 0.01);
     }
 }

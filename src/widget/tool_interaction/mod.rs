@@ -47,7 +47,9 @@ impl Chart {
         drawing.line_measurement_card_rect(
             &ui.painter().with_clip_rect(clip),
             &ChartView {
-                price_formatter: price_member.and_then(|id| self.series_price_formatter(id)),
+                price_formatter: price_member
+                    .and_then(|id| self.series_price_formatter(id))
+                    .as_deref(),
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: price_member.and(self.instrument()),
@@ -355,6 +357,9 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
+        if owns_gesture {
+            text::begin_fibonacci_edit(ui, drawing_manager, response, price_rect);
+        }
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
@@ -449,7 +454,7 @@ impl Chart {
         // no dates.
         // Render existing drawings against the chart's bars
         let view = ChartView {
-            price_formatter,
+            price_formatter: price_formatter.as_deref(),
             time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
             bar_seconds: time_format.1,
             instrument: price_member.and(self.instrument()),
@@ -546,6 +551,7 @@ mod tests {
                 .map(|(bar, price)| ChartPoint::new(bar, price))
                 .collect();
             drawing.completed = true;
+            drawing.position_readout.persistent = tool == LongPos;
             if tool == FibonacciRetracement {
                 drawing.fib_config = Some(FibonacciConfig {
                     show_prices: Some(true),
@@ -577,8 +583,8 @@ mod tests {
             "+5.0 pts (+5.00%)",
             "4.0 pts (4.0%)",
             "Target: 105.0 pts",
-            "Target: 106.0 pts (6.00%)",
-            "Stop: 94.0 pts (-6.00%)",
+            "Target: 6.0 pts (6.000%)",
+            "Stop: 6.0 pts (6.000%)",
             "(100.0 pts)",
             "16.0 pts (17.39%)",
             "102.0 pts",
@@ -1598,16 +1604,35 @@ mod tests {
     /// selected, unless it is locked or Escape has turned the eraser off.
     #[test]
     fn an_eraser_click_deletes_the_drawing_unless_it_is_locked() {
-        for (selected, locked, escaped, kept) in [
-            (false, false, false, 0),
-            (true, false, false, 0),
-            (true, true, false, 1),
-            (false, false, true, 1),
+        for (tool, selected, locked, escaped, kept) in [
+            (DrawingToolType::HorizontalLine, false, false, false, 0),
+            (DrawingToolType::HorizontalLine, true, false, false, 0),
+            (DrawingToolType::HorizontalLine, true, true, false, 1),
+            (DrawingToolType::HorizontalLine, false, false, true, 1),
+            (DrawingToolType::FibonacciExtension, false, false, false, 0),
+            (DrawingToolType::FibonacciExtension, true, false, false, 0),
+            (DrawingToolType::FibonacciExtension, true, true, false, 1),
+            (DrawingToolType::FibonacciExtension, false, false, true, 1),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            let mut line = Drawing::new(1, DrawingToolType::HorizontalLine);
-            line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
+            let mut line = Drawing::new(1, tool);
+            line.chart_points = if tool == DrawingToolType::FibonacciExtension {
+                let config = line.fib_config.as_mut().unwrap();
+                for (index, level) in config.levels.iter_mut().enumerate() {
+                    level.visible = index == 0;
+                }
+                if !selected {
+                    config.levels[0].text = "Target".into();
+                }
+                vec![
+                    ChartPoint::new(20.0, 12.0),
+                    ChartPoint::new(50.0, 18.0),
+                    ChartPoint::new(80.0, 15.0),
+                ]
+            } else {
+                vec![ChartPoint::new(50.0, 15.0)]
+            };
             line.locked = locked;
             chart.drawings_mut().drawings.push(line);
             if selected {
@@ -1615,7 +1640,12 @@ mod tests {
             }
             chart.drawings_mut().set_eraser_mode(true);
             frame(&ctx, &mut chart, 0.0, vec![]);
-            let pos = chart.drawings().drawings[0].points[0];
+            let points = &chart.drawings().drawings[0].points;
+            let pos = if tool == DrawingToolType::FibonacciExtension {
+                egui::pos2((points[1].x + points[2].x) * 0.5, points[2].y)
+            } else {
+                points[0]
+            };
             let button = |pressed| Event::PointerButton {
                 pos,
                 button: PointerButton::Primary,
@@ -1641,7 +1671,7 @@ mod tests {
             let left = chart.drawings().drawings.len();
             assert_eq!(
                 left, kept,
-                "selected {selected}, locked {locked}, escaped {escaped}"
+                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}"
             );
         }
     }
