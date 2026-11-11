@@ -346,6 +346,7 @@ impl DrawingProps {
                             | crate::drawings::DrawingToolType::FibonacciExtension
                             | crate::drawings::DrawingToolType::FibonacciChannel
                             | crate::drawings::DrawingToolType::FibonacciWedge
+                            | crate::drawings::DrawingToolType::FibonacciSpeedFan
                             | crate::drawings::DrawingToolType::FibonacciTimeZones
                             | crate::drawings::DrawingToolType::TrendBasedFibTime
                     ) {
