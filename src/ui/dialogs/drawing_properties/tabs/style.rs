@@ -84,6 +84,8 @@ impl StyleTab {
                         | DrawingToolType::FibonacciExtension
                         | DrawingToolType::FibonacciChannel
                         | DrawingToolType::FibonacciWedge
+                        | DrawingToolType::FibonacciTimeZones
+                        | DrawingToolType::TrendBasedFibTime
                 ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
@@ -109,7 +111,14 @@ impl StyleTab {
                     }
                     ui.end_row();
                     if settings.tool_type != DrawingToolType::FibonacciChannel {
-                        ui.label(l10n::text(ui.ctx(), "Trend line"));
+                        ui.label(l10n::text(
+                            ui.ctx(),
+                            if settings.tool_type == DrawingToolType::FibonacciTimeZones {
+                                "Initial line"
+                            } else {
+                                "Trend line"
+                            },
+                        ));
                         ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
                             .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
                         ui.end_row();

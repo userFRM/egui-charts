@@ -4226,6 +4226,170 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
     assert!(!manual.is_fed(id));
 }
 
+/// Undo of a removed feed-backed series shows the bars it held over the frames before its history
+/// reply, merges a live bar into them and then leaves the series to the reply. A candle replay
+/// entered before the reply windows the held bars with the live bar merged. Bars held under
+/// another interval, hours, conversion or adjustment than the chart's are not shown, also when the
+/// interval changed just before the removal, while the series still had its old bars, and neither
+/// are the live feed's bars under a market replay, whether the series left before or during it.
+#[test]
+fn undo_of_a_removed_fed_series_keeps_its_bars() {
+    // MSFT closes at 40 plus the index of the one-minute bar.
+    let msft = |range: std::ops::Range<usize>| -> Vec<Bar> {
+        bars(7)[range]
+            .iter()
+            .map(|bar| {
+                let close = bar.close - 60.0;
+                Bar::new(bar.time, close, close, close, close, 1.0)
+            })
+            .collect()
+    };
+    let held = [40.0, 41.0, 42.0, 43.0, 44.0, 45.0];
+    let merged = [40.0, 41.0, 42.0, 43.0, 44.0, 50.0];
+    // A market replay in the fifth minute of a recording that lacks MSFT, run for a frame.
+    let market = |chart: &mut Chart| {
+        use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        let time = bars(5)[4].time + TimeDelta::seconds(30);
+        let fill = Tick::new(time, 70.0, 1.0, None).with_id(0);
+        let events = vec![ReplayEvent::new("A", time, 0, MarketEvent::Trade(fill))];
+        let driver = ReplayDriver::new(events, vec![Instrument::new("A")]).unwrap();
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time);
+        chart.set_market_replay(Some(Arc::new(driver)));
+        chart.pump(&egui::Context::default());
+    };
+    // How a row ends once a live bar has merged: the history reply arrives, a candle replay
+    // starts before it, or a market replay drives the series and no reply comes.
+    #[derive(PartialEq)]
+    enum End {
+        Reply,
+        CandleReplay,
+        MarketReplay,
+    }
+    // The change, whether it comes before the removal, the closes from undo to the reply,
+    // without and with a live bar of 50 in the last slot, and how the row ends.
+    type Row<'a> = (&'a str, bool, fn(&mut Chart), &'a [f64], &'a [f64], End);
+    let rows: [Row; 8] = [
+        ("none", false, |_| {}, &held, &merged, End::Reply),
+        (
+            "candle replay",
+            false,
+            |_| {},
+            &held,
+            &merged,
+            End::CandleReplay,
+        ),
+        (
+            "interval",
+            true,
+            |chart| chart.set_timeframe(Timeframe::Sec30),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        (
+            "hours",
+            false,
+            |chart| chart.set_extended_hours(true),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        (
+            "conversion",
+            false,
+            |chart| chart.set_conversion(Some("EUR".into())),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        (
+            "adjustment",
+            false,
+            |chart| chart.set_dividend_adjusted(true),
+            &[],
+            &[50.0],
+            End::Reply,
+        ),
+        ("market replay", false, market, &[], &[], End::MarketReplay),
+        (
+            "removed in a market replay",
+            true,
+            market,
+            &[],
+            &[],
+            End::MarketReplay,
+        ),
+    ];
+    for (change, before_removal, apply, shown, live, end) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, None);
+        let id = chart.add_feed_series(crate::widget::SeriesOptions {
+            name: "MSFT".into(),
+            ..Default::default()
+        });
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve().send(Ok(Instrument::new("MSFT")));
+        frames.run(&mut chart);
+        feed.page().send(page(msft(0..6), true));
+        frames.run(&mut chart);
+        assert_eq!(closes(&chart, id), held);
+
+        if before_removal {
+            apply(&mut chart);
+        }
+        assert!(chart.user_action(|chart| chart.remove_series(id)));
+        if !before_removal {
+            apply(&mut chart);
+        }
+        frames.run(&mut chart);
+        assert!(chart.undo());
+        assert_eq!(closes(&chart, id), shown, "{change}: right after undo");
+        frames.run(&mut chart);
+        if end != End::MarketReplay {
+            feed.resolve().send(Ok(Instrument::new("MSFT")));
+        }
+        for frame in 0..3 {
+            frames.run(&mut chart);
+            assert_eq!(
+                closes(&chart, id),
+                shown,
+                "{change}: frame {frame} before the reply"
+            );
+        }
+        let last = msft(5..6)[0].time;
+        feed.sink()
+            .push_bar(Bar::new(last, 50.0, 50.0, 50.0, 50.0, 1.0));
+        frames.run(&mut chart);
+        assert_eq!(
+            closes(&chart, id),
+            live,
+            "{change}: a live bar before the reply"
+        );
+        match end {
+            End::Reply => {}
+            End::CandleReplay => {
+                chart.set_replay_time(Some(msft(3..4)[0].time));
+                frames.run(&mut chart);
+                assert_eq!(closes(&chart, id), [40.0, 41.0, 42.0], "{change}: entered");
+                chart.set_replay_time(Some(msft(6..7)[0].time));
+                frames.run(&mut chart);
+                assert_eq!(closes(&chart, id), merged, "{change}: sought past the bars");
+                continue;
+            }
+            End::MarketReplay => continue,
+        }
+        feed.page().send(page(msft(1..7), true));
+        frames.run(&mut chart);
+        assert_eq!(
+            closes(&chart, id),
+            [41.0, 42.0, 43.0, 44.0, 50.0, 46.0],
+            "{change}: the reply replaces the held bars"
+        );
+    }
+}
+
 /// Dividend adjustment is asked of the feed for the main series and the comparisons, and
 /// changing it loads them again.
 #[test]
