@@ -832,6 +832,24 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             );
         });
     });
+    let round = matches!(
+        drawing.tool_type,
+        Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs
+    );
+    if round {
+        ui.horizontal(|ui| {
+            let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+            ui.add(
+                egui::DragValue::new(&mut config.label_size)
+                    .range(1.0..=256.0)
+                    .suffix(" px"),
+            )
+            .labelled_by(label.id);
+        });
+    }
+    if drawing.tool_type == Tool::FibonacciSpeedResistanceArcs {
+        ui.checkbox(&mut config.close_arcs, l10n::text(ui.ctx(), "Full circles"));
+    }
     let inherited_width = config.level_width;
     let inherited_style = config.level_style;
     let time = matches!(
@@ -855,12 +873,13 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             .then_some(&mut level.text),
             color: &mut level.color,
             line_style: None,
-            style_override: (drawing.tool_type == Tool::FibonacciWedge || time)
+            style_override: (drawing.tool_type == Tool::FibonacciWedge || round || time)
                 .then_some((&mut level.line_style, inherited_style)),
             width: (matches!(
                 drawing.tool_type,
                 Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciWedge
-            ) || time)
+            ) || round
+                || time)
                 .then_some((&mut level.width, inherited_width)),
             range: if matches!(
                 drawing.tool_type,
@@ -901,7 +920,8 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             &mut config.levels_as_percent,
             l10n::text(ui.ctx(), "Percent"),
         );
-        if !time
+        if !round
+            && !time
             && !matches!(
                 drawing.tool_type,
                 Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciChannel
@@ -1532,6 +1552,166 @@ mod tests {
                         h.state().0.drawings().drawings[0].fib_config,
                         drawing.fib_config
                     );
+                }
+            }
+        }
+    }
+
+    /// Fibonacci typography and construction controls preview without history; Cancel restores
+    /// them and confirmation stores one edit, including independent text and hidden levels.
+    #[test]
+    fn round_fibonacci_controls_preview_cancel_and_restore() {
+        for tool in [
+            Tool::FibonacciRetracement,
+            Tool::FibonacciCircles,
+            Tool::FibonacciSpeedResistanceArcs,
+            Tool::FibonacciSpiral,
+        ] {
+            let ctx = Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+            let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+            if tool != Tool::FibonacciSpiral {
+                saved["levels"][3]["text"] = "Halfway".into();
+                saved["levels"][3]["width"] = 4.0.into();
+                saved["levels"][3]["line_style"] = "Dotted".into();
+                saved["levels"][3]["visible"] = false.into();
+            }
+            drawing.fib_config = Some(serde_json::from_value(saved.clone()).unwrap());
+            let mut peer = drawing.clone();
+            peer.id = 8;
+            let mut peer_config = saved.clone();
+            if tool != Tool::FibonacciSpiral {
+                peer_config["levels"][3]["text"] = "Peer".into();
+                peer_config["levels"][3]["width"] = 6.0.into();
+            }
+            peer.fib_config = Some(serde_json::from_value(peer_config).unwrap());
+            chart
+                .drawings_mut()
+                .drawings
+                .extend([drawing.clone(), peer.clone()]);
+            chart.drawings_mut().select_drawings([7, 8]);
+            let mut dialog = DrawingPropertiesDialog::new();
+            for confirm in [false, true] {
+                dialog.open_for_chart(&chart, DrawingId(7));
+                if tool == Tool::FibonacciSpiral {
+                    dialog.active_tab = PropertiesTab::Style;
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    let pos = texts
+                        .iter()
+                        .find(|(text, _)| text == "Counterclockwise")
+                        .unwrap()
+                        .1
+                        .center();
+                    click(&mut dialog, &mut chart, &ctx, pos);
+                } else {
+                    dialog.active_tab = if tool == Tool::FibonacciRetracement {
+                        PropertiesTab::Text
+                    } else {
+                        PropertiesTab::Inputs
+                    };
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    enter(&mut dialog, &mut chart, &ctx, "Font size", "20");
+                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    if tool == Tool::FibonacciRetracement {
+                        for label in [
+                            "Label position",
+                            "Label height",
+                            "Text position",
+                            "Text height",
+                            "Show level text",
+                        ] {
+                            assert!(texts.iter().any(|(text, _)| text == label), "{label}");
+                        }
+                    }
+                    if tool == Tool::FibonacciSpeedResistanceArcs {
+                        let pos = texts
+                            .iter()
+                            .find(|(text, _)| text == "Full circles")
+                            .unwrap()
+                            .1
+                            .center();
+                        click(&mut dialog, &mut chart, &ctx, pos);
+                    }
+                    dialog.active_tab = PropertiesTab::Style;
+                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    let pos = texts
+                        .iter()
+                        .find(|(text, _)| text == "Visible")
+                        .unwrap()
+                        .1
+                        .center();
+                    click(&mut dialog, &mut chart, &ctx, pos);
+                }
+                assert!(!chart.can_undo());
+                let current =
+                    serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
+                        .unwrap();
+                assert_eq!(
+                    current["label_size"],
+                    if tool == Tool::FibonacciSpiral {
+                        12.0
+                    } else {
+                        20.0
+                    }
+                );
+                assert_eq!(
+                    current["spiral_counterclockwise"],
+                    tool == Tool::FibonacciSpiral
+                );
+                assert_eq!(
+                    chart.drawings().drawings[0].stroke_width,
+                    drawing.stroke_width
+                );
+                assert_eq!(current["trend_visible"], tool == Tool::FibonacciSpiral);
+                assert_eq!(
+                    current["close_arcs"],
+                    tool == Tool::FibonacciSpeedResistanceArcs
+                );
+                assert_eq!(current["levels"], saved["levels"]);
+                assert_eq!(
+                    chart.drawings().drawings[1]
+                        .fib_config
+                        .as_ref()
+                        .unwrap()
+                        .levels,
+                    peer.fib_config.as_ref().unwrap().levels
+                );
+                if confirm {
+                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    let pos = texts
+                        .iter()
+                        .find(|(text, _)| text == "Ok")
+                        .unwrap()
+                        .1
+                        .center();
+                    click(&mut dialog, &mut chart, &ctx, pos);
+                    assert!(chart.undo());
+                    assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
+                    assert!(!chart.can_undo());
+                    assert!(chart.redo());
+                    let json = chart.save_drawings().unwrap().to_json().unwrap();
+                    chart.load_drawings(&json).unwrap();
+                    assert_eq!(
+                        serde_json::to_value(
+                            chart.drawings().drawings[0].fib_config.as_ref().unwrap()
+                        )
+                        .unwrap(),
+                        current
+                    );
+                    let template = crate::drawings::DrawingTemplate::from_drawing(
+                        &chart.drawings().drawings[0],
+                    );
+                    let mut peer = Drawing::new(8, tool);
+                    template.apply_to(&mut peer).unwrap();
+                    assert_eq!(peer.fib_config, chart.drawings().drawings[0].fib_config);
+                } else {
+                    dialog.close();
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
                 }
             }
         }

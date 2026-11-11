@@ -339,6 +339,9 @@ impl DrawingProps {
                     if matches!(
                         drawing.tool_type,
                         crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciCircles
+                            | crate::drawings::DrawingToolType::FibonacciSpeedResistanceArcs
+                            | crate::drawings::DrawingToolType::FibonacciSpiral
                             | crate::drawings::DrawingToolType::FibonacciExtension
                             | crate::drawings::DrawingToolType::FibonacciChannel
                             | crate::drawings::DrawingToolType::FibonacciWedge

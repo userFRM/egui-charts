@@ -79,6 +79,8 @@ impl StyleTab {
                 if matches!(
                     settings.tool_type,
                     DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
                         | DrawingToolType::FibonacciExtension
                         | DrawingToolType::FibonacciChannel
                         | DrawingToolType::FibonacciWedge
@@ -127,6 +129,20 @@ impl StyleTab {
                     if config != original {
                         settings.fib_config = Some(config);
                     }
+                }
+                if settings.tool_type == DrawingToolType::FibonacciSpiral {
+                    let mut config = settings.fibonacci_config().into_owned();
+                    ui.label("");
+                    if ui
+                        .checkbox(
+                            &mut config.spiral_counterclockwise,
+                            l10n::text(ui.ctx(), "Counterclockwise"),
+                        )
+                        .changed()
+                    {
+                        settings.fib_config = Some(config);
+                    }
+                    ui.end_row();
                 }
                 if position {
                     let style = &mut settings.position_style;
