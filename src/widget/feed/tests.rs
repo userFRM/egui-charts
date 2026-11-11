@@ -1547,7 +1547,8 @@ enum Stream {
     Nothing,
     /// One execution, which opens a bar of its own.
     Execution(Tick),
-    /// The bars of the tape from this one on, as complete bars.
+    /// The bars of the tape from this one on, as complete bars, after the newest history bar
+    /// again, as a feed may push it on subscribing.
     Bars(usize),
 }
 
@@ -1581,7 +1582,7 @@ fn paged_cells(
     match stream {
         Stream::Nothing => {}
         Stream::Execution(trade) => feed.sink().push_tick(trade.clone()),
-        Stream::Bars(from) => candles[*from..]
+        Stream::Bars(from) => candles[*from - 1..]
             .iter()
             .for_each(|bar| feed.sink().push_bar(bar.clone())),
     }
@@ -1635,8 +1636,9 @@ fn paged_cells(
 /// end: the page's end proves nothing there, and the own cells are those of the fourth tape. The
 /// last tape's bars hold the buy of 6 at 100 and the sell of 4 at 101; the buy of 5 at 101 and
 /// the sell of 5 at 102; the buy of 3 at 102 and the sell of 7 at 103; the buy of 4 at 104 and
-/// the sell of 6 at 105, which the host pushes as a bar. Its page starts at a price the bar
-/// before closes at and ends with the bar before the pushed one, which proves its start.
+/// the sell of 6 at 105, which the host pushes as a bar after pushing the newest history bar
+/// again. Its page starts at a price the bar before closes at and ends with the bar before the
+/// new one, which proves its start.
 #[test]
 fn split_fill_boundaries_draw_only_a_bars_own_executions() {
     use crate::model::OrderSide::{Buy, Sell};
@@ -1820,7 +1822,7 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
             )),
         ),
         (
-            "page ending with the bar before the pushed bars",
+            "page ending with the bar before the first new pushed bar",
             "10v",
             tape(&[
                 (100.0, 6.0, Buy),

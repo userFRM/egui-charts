@@ -276,9 +276,14 @@ impl Chart {
                     });
                 }
                 link.pushed_from = link.pushed_from.or_else(|| {
+                    // A bar the chart holds may come again, on subscribing or as a correction:
+                    // the stream starts with the first newer one.
+                    let newest =
+                        (self.bars(SeriesId::MAIN).last()).map(|bar| link.clock.bar_open(bar.time));
                     (incoming.iter())
                         .filter(|(_, origin)| *origin == Origin::Live)
                         .map(|(bar, _)| link.clock.bar_open(bar.time))
+                        .filter(|open| newest.is_none_or(|newest| *open > newest))
                         .min()
                 });
                 let merged = self.apply_by(&link.clock, incoming);

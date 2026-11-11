@@ -25,11 +25,11 @@ from another bar.
 
 A trade page proves the cells of the newest history bar only when it reaches that bar and holds
 every one of its executions. When the host pushes complete bars instead of executions, the first
-pushed bar takes the place of the first live execution. Page executions without ids at the time
-of the first live execution cannot be told from the live ones, so the chart leaves them out; the
-bar before then counts as one the page does not reach, and bars only its end would prove draw
-candles. History bars newer than everything the trade page reaches draw candles too, so a host
-should answer both pages up to the same time.
+pushed bar newer than every bar the chart holds takes the place of the first live execution.
+Page executions without ids at the time of the first live execution cannot be told from the live
+ones, so the chart leaves them out; the bar before then counts as one the page does not reach,
+and bars only its end would prove draw candles. History bars newer than everything the trade page
+reaches draw candles too, so a host should answer both pages up to the same time.
 
 <!-- example -->
 
