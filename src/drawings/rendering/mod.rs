@@ -261,7 +261,7 @@ impl Drawing {
 
             // Annotations (7 tools)
             DrawingToolType::TextLabel | DrawingToolType::AnchoredText => {
-                self.render_text_label(painter)
+                self.render_text_label(painter, view)
             }
             DrawingToolType::Note => self.render_note(painter),
             DrawingToolType::AnchoredNote => self.render_anchored_note(painter, selected),
@@ -1740,18 +1740,55 @@ mod tests {
         assert_eq!(inside.rects.len(), 1);
         assert_eq!(inside.rects[0].stroke.width, 2.0);
 
-        // Wrapped callout text breaks into lines no wider than the wrap width.
-        let mut wrapped = Drawing::new(7, DrawingToolType::Callout);
-        wrapped.points = vec![pos(100.0, 300.0), pos(200.0, 100.0)];
-        wrapped.text = Some("Wrapped callout text".into());
-        wrapped.text_wrap = true;
-        wrapped.text_wrap_width = 60.0;
-        let mut painted = Painted::default();
-        collect(&paint(&wrapped), &mut painted);
-        let [text] = &painted.texts[..] else {
-            panic!("one text");
+        // Wrapped text breaks into lines no wider than the wrap width.
+        for tool in [
+            DrawingToolType::Callout,
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+        ] {
+            let mut wrapped = Drawing::new(7, tool);
+            wrapped.points = vec![pos(100.0, 300.0), pos(200.0, 100.0)];
+            wrapped.text = Some("Wrapped annotation text".into());
+            wrapped.text_wrap = true;
+            wrapped.text_wrap_width = 60.0;
+            let mut painted = Painted::default();
+            collect(&paint(&wrapped), &mut painted);
+            let [text] = &painted.texts[..] else {
+                panic!("one text");
+            };
+            assert!(
+                text.galley.rows.len() > 1 && text.galley.size().x <= 60.0,
+                "{tool:?}"
+            );
+        }
+
+        // Text sized at 5 points a bar is twice as large at the 10 points a bar `paint` maps
+        // with: its 14 point font, 60 point wrap width and box padding all double.
+        let mut zoomed = Drawing::new(7, DrawingToolType::TextLabel);
+        zoomed.chart_points = vec![crate::drawings::ChartPoint::new(10.0, 200.0)];
+        zoomed.points = vec![pos(100.0, 300.0)];
+        zoomed.text = Some("Wrapped annotation text".into());
+        zoomed.background = true;
+        zoomed.text_wrap = true;
+        zoomed.text_wrap_width = 60.0;
+        let boxes = |drawing: &Drawing| {
+            let mut painted = Painted::default();
+            collect(&paint(drawing), &mut painted);
+            let ([card], [text]) = (&painted.rects[..], &painted.texts[..]) else {
+                panic!("one box around one text");
+            };
+            (
+                text.galley.job.sections[0].format.font_id.size,
+                text.galley.job.wrap.max_width,
+                text.pos - card.rect.min,
+            )
         };
-        assert!(text.galley.rows.len() > 1 && text.galley.size().x <= 60.0);
+        let (font, wrap, padding) = boxes(&zoomed);
+        assert_eq!((font, wrap), (14.0, 60.0));
+        zoomed.text_zoom_spacing = Some(5.0);
+        assert_eq!(boxes(&zoomed), (font, wrap, padding));
+        zoomed.text_follows_zoom = true;
+        assert_eq!(boxes(&zoomed), (28.0, 120.0, padding * 2.0));
 
         let label = draw(
             DrawingToolType::PriceLabel,

@@ -261,6 +261,7 @@ impl DrawingPropertiesDialog {
                 drawing.italic = old.italic;
                 drawing.text_wrap = old.text_wrap;
                 drawing.text_wrap_width = old.text_wrap_width;
+                drawing.text_follows_zoom = old.text_follows_zoom;
                 drawing.text_color = old.text_color;
                 drawing.background = old.background;
                 drawing.border = old.border;
@@ -811,6 +812,7 @@ mod tests {
                 settings.italic = true;
                 settings.text_wrap = true;
                 settings.text_wrap_width = 120.0;
+                settings.text_follows_zoom = true;
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
                 dialog.coordinates.points[1].price = "125".into();
@@ -828,6 +830,7 @@ mod tests {
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
                 assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
+                assert!(preview.text_follows_zoom);
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
@@ -877,6 +880,7 @@ mod tests {
                 "{finish}"
             );
             assert!(!restored.italic, "{finish}");
+            assert!(!restored.text_follows_zoom, "{finish}");
             assert_eq!(
                 (restored.text_wrap, restored.text_wrap_width),
                 (false, 200.0),
