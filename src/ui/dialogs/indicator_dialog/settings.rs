@@ -1201,7 +1201,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn smi_value_lines_apply_cancel_save_and_restore_independently() {
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
