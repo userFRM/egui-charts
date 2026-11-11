@@ -100,6 +100,26 @@ pub struct SeriesLastValue {
 pub struct PriceLineId(u64);
 
 impl Chart {
+    /// Closest visible numeric key gap in spacing units, capped at one nominal slot.
+    pub(super) fn series_slot_gap(&self, bars: &[Bar]) -> f64 {
+        let scale = self.state.time_scale();
+        scale.numeric_positions().map_or(1.0, |positions| {
+            let (left, right) = scale.visible_positions();
+            let start = bars
+                .partition_point(|bar| positions.position_at(bar.time) < left)
+                .saturating_sub(1);
+            let end = (bars.partition_point(|bar| positions.position_at(bar.time) <= right) + 1)
+                .min(bars.len());
+            bars[start.min(end)..end]
+                .windows(2)
+                .map(|pair| {
+                    positions.position_at(pair[1].time) - positions.position_at(pair[0].time)
+                })
+                .filter(|gap| *gap > 0.0)
+                .fold(1.0_f64, f64::min)
+        })
+    }
+
     /// Take the settings request from a legend button or a double-click in a pane: a study, a
     /// bar series shown in a pane other than the main one, or [`SeriesId::MAIN`] from the main
     /// series' legend button.
@@ -900,7 +920,12 @@ impl Chart {
     /// [`follow_live_edge`](Self::follow_live_edge) for the slots an added series gave a chart
     /// without main bars after `tail`, the last slot before the refresh, when the view's
     /// [right edge](Self::right_edge) was at `right_edge`.
-    pub(super) fn added_slots_arrived(&mut self, tail: DateTime<Utc>, right_edge: f64) {
+    pub(super) fn added_slots_arrived(
+        &mut self,
+        tail: DateTime<Utc>,
+        right_edge: ViewEdge,
+        near_live: bool,
+    ) {
         if !self.state.shows_fallback() {
             return;
         }
@@ -908,9 +933,7 @@ impl Chart {
             self.stop_at_oldest_bar(right_edge);
             return;
         }
-        if self.chart_options.time_scale.shift_visible_range_on_new_bar
-            && self.state.time_scale().is_near_live_edge()
-        {
+        if self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();
         } else {
             self.keep_bars_in_view(&self.clock(), tail, right_edge);
@@ -928,47 +951,67 @@ impl Chart {
     /// forward per appended bar. A bar stamped later in the slot of the last bar replaces it
     /// and appends nothing. `right_edge` is the view's [right edge](Self::right_edge) before the
     /// bars changed.
-    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>, right_edge: f64) {
-        let tail = clock.bar_open(tail);
-        let shown = self.state.shown();
-        let appended = shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= tail);
-        let time_scale = self.state.time_scale_mut();
-        time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
+    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>, right_edge: ViewEdge) {
+        // Numeric refresh already preserves the view by key, including gaps and insertions.
+        if self.state.time_scale().numeric_positions().is_none() {
+            let tail = clock.bar_open(tail);
+            let shown = self.state.shown();
+            let appended =
+                shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= tail);
+            let time_scale = self.state.time_scale_mut();
+            time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
+        }
         self.stop_at_oldest_bar(right_edge);
     }
 
-    /// The right edge of the view in slots from the oldest shown slot, negative before it.
-    pub(super) fn right_edge(&self) -> f64 {
+    /// Retain the view's right edge and oldest key across data updates.
+    pub(super) fn right_edge(&self) -> ViewEdge {
         let scale = self.state.time_scale();
-        scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0)
+        ViewEdge {
+            right: scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0),
+            first: self.state.shown().first().map(|bar| bar.time),
+        }
     }
 
     /// Stops a time-based view with the oldest bar in view when older bars left it, given its
     /// right edge `before` they did: a plot that was full of bars stays full, and any other view
     /// keeps its range until it would show no bars. A view that showed no bars before stays in
     /// the whitespace where the user left it.
-    fn stop_at_oldest_bar(&mut self, before: f64) {
+    fn stop_at_oldest_bar(&mut self, before: ViewEdge) {
         if self.state.shows_elements() || self.state.shown().is_empty() {
             return;
         }
-        let right = self.right_edge();
+        // A numeric refresh cannot evict keys that are still loaded.
+        if self.state.time_scale().numeric_positions().is_some()
+            && before
+                .first
+                .is_some_and(|first| self.state.shown()[0].time <= first)
+        {
+            return;
+        }
+        let right = self.right_edge().right;
         let scale = self.state.time_scale_mut();
-        // The right edge with the oldest slot at the left border, as with fix_left_edge.
         let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
         let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
         let stop = full.clamp(0.0, last);
         // The right edge a stop leaves at `full` can read back a rounding error short of it.
-        let before = before + 1e-6;
-        if right < stop && (before >= full || right < 0.0 && before >= 0.0) {
+        let was_full = before.right + 1e-6 >= full;
+        if right < stop && (was_full || right < 0.0 && before.right + 1e-6 >= 0.0) {
             scale.set_right_offset(scale.right_offset_precise() + stop - right);
         }
     }
 }
 
+/// The viewport and oldest loaded key before bars change.
+pub(super) struct ViewEdge {
+    right: f64,
+    first: Option<DateTime<Utc>>,
+}
+
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {
     near_live: bool,
-    right_edge: f64,
+    right_edge: ViewEdge,
     tail: Option<Bar>,
 }
 
