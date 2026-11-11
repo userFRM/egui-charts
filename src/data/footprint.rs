@@ -284,7 +284,8 @@ pub struct Footprint {
     tick_size: f64,
     ticks_per_row: u32,
     bars: BTreeMap<DateTime<Utc>, FootprintBar>,
-    trade_bars: super::inbox::TradeBars,
+    /// The grouping that [`push`](Self::push) continues on a trade-based interval.
+    pub(crate) trade_bars: super::inbox::TradeBars,
     /// First contributing exchange timestamp, before equal-time opens are disambiguated.
     trade_starts: BTreeMap<DateTime<Utc>, DateTime<Utc>>,
     /// Price rows held across all bars.
@@ -1059,11 +1060,11 @@ fn history_run<'a>(
     }
 }
 
-/// Groups the held live executions `trades`, in time order, along `history`, the chart's bars,
-/// from the oldest bar whose parts are all held: the executions are the newest part of the sink's
-/// stream and the chart's bars hold exactly its parts, so the volume held counts them from the
-/// newest. Returns the parts and the grouping after them, or `None` unless they rebuild every bar
-/// through the newest.
+/// Groups `trades`, the held executions the sink allocated, in time order, along `history`, the
+/// chart's bars, from the oldest bar whose parts are all held: the executions are the newest part
+/// of the sink's stream and the chart's bars hold exactly its parts, so the volume held counts
+/// them from the newest. Returns the parts and the grouping after them, or `None` unless they
+/// rebuild every bar through the newest.
 #[cfg(feature = "widget")]
 pub(crate) fn live_run<'a>(
     timeframe: crate::model::Timeframe,
