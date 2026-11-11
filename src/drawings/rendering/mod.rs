@@ -300,6 +300,9 @@ impl Drawing {
             | DrawingToolType::ArrowCursor
             | DrawingToolType::Eraser => {}
         }
+        if selected {
+            self.render_text_hint(painter);
+        }
         self.finish_style(painter, start, rect);
         if self.tool_type.supports_line_measurements() {
             self.render_line_measurements(painter, view, selected);

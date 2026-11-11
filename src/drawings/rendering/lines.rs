@@ -1400,11 +1400,22 @@ mod tests {
     }
 
     /// A new trend line's, ray's, extended line's or horizontal ray's text starts in its own blue,
-    /// which a change of line colour leaves alone, and draws the slant it is given.
+    /// and a new rectangle's, circle's or ellipse's in the purple or red of its border. A change
+    /// of line colour leaves the text's alone, and the text draws the slant it is given.
     #[test]
-    fn line_text_keeps_its_own_colour_and_slant() {
+    fn line_and_shape_text_keeps_its_own_colour_and_slant() {
         use crate::drawings::DrawingToolType as T;
-        for tool in [T::TrendLine, T::Ray, T::ExtendedLine, T::HorizontalRay] {
+        let blue = Color32::from_rgb(41, 98, 255);
+        let red = Color32::from_rgb(242, 54, 69);
+        for (tool, color) in [
+            (T::TrendLine, blue),
+            (T::Ray, blue),
+            (T::ExtendedLine, blue),
+            (T::HorizontalRay, blue),
+            (T::Rect, Color32::from_rgb(156, 39, 176)),
+            (T::Circle, red),
+            (T::Ellipse, red),
+        ] {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = vec![Pos2::new(100., 200.), Pos2::new(300., 100.)];
             drawing.color = [200, 0, 0, 255];
@@ -1418,7 +1429,7 @@ mod tests {
                     _ => None,
                 })
                 .expect("text");
-            assert_eq!(format.color, Color32::from_rgb(41, 98, 255), "{tool:?}");
+            assert_eq!(format.color, color, "{tool:?}");
             assert!(format.italics, "{tool:?}");
         }
     }
@@ -1723,8 +1734,8 @@ mod tests {
         }
     }
 
-    /// Size labels and centre guides belong to a selected rectangle; a deselected one has
-    /// only its border and fill.
+    /// Size labels, centre guides and the hint for its text belong to a selected rectangle; a
+    /// deselected one has only its border and fill.
     #[test]
     fn rectangle_guides_show_only_while_selected() {
         use crate::drawings::{DrawingManager, DrawingToolType};
@@ -1762,7 +1773,7 @@ mod tests {
         };
         assert_eq!(texts(&manager), 0);
         manager.select(1);
-        assert_eq!(texts(&manager), 2);
+        assert_eq!(texts(&manager), 3);
     }
 
     /// All five line tools keep a solid 1 pt card border and single price labels under bold and

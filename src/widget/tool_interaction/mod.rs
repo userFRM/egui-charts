@@ -365,6 +365,7 @@ impl Chart {
                 .is_none_or(|area| area.pane == pane.map(|id| id.0));
         if owns_gesture {
             text::begin_fibonacci_edit(ui, drawing_manager, response, price_rect);
+            text::begin_shape_edit(ui, drawing_manager, response);
         }
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
