@@ -1062,8 +1062,8 @@ fn history_run<'a>(
 /// Groups `trades`, the held executions the sink allocated, in time order, along `history`, the
 /// chart's bars, from the oldest bar whose parts are all held: the executions are the newest part
 /// of the sink's stream and the chart's bars hold exactly its parts, so the volume held counts
-/// them from the newest. Returns the parts and the grouping after them, or `None` unless they rebuild every bar
-/// through the newest.
+/// them from the newest. Returns the parts and the grouping after them, or `None` unless they
+/// rebuild every bar through the newest.
 #[cfg(feature = "widget")]
 pub(crate) fn live_run<'a>(
     timeframe: crate::model::Timeframe,
