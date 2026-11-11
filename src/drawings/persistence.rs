@@ -1033,6 +1033,7 @@ mod v1 {
             DrawingToolType::RegressionTrend
             | DrawingToolType::DisjointChannel
             | DrawingToolType::XABCDPattern
+            | DrawingToolType::CypherPattern
             | DrawingToolType::TrianglePattern => Some(25),
             DrawingToolType::DateAndPriceRange => Some(30),
             DrawingToolType::FlatTopBottom => Some(35),
@@ -2137,10 +2138,9 @@ mod tests {
         );
     }
 
-    /// Version 1 held no fill or tool configuration. Fills follow the v0.2.0 renderers
-    /// (45a0c294): channels, patterns, cycles and date ranges tinted in the drawing colour at a
-    /// fixed alpha, and the measure a negative price change red, zero or a rise blue, at alpha
-    /// 30 and 150.
+    /// Version 1 held no fill or tool configuration. Fills follow the v0.2.0 renderers: the
+    /// area tools in this table tinted in the drawing colour at a fixed alpha, and the measure a
+    /// negative price change red, zero or a rise blue, at alpha 30 and 150.
     #[test]
     fn version_1_profile_drawings_restore_without_a_config() {
         use DrawingToolType as T;
@@ -2164,6 +2164,7 @@ mod tests {
             (T::DisjointChannel, [100.0, 110.0], None, Some(25)),
             (T::RegressionTrend, [100.0, 110.0], None, Some(25)),
             (T::XABCDPattern, [100.0, 110.0], None, Some(25)),
+            (T::CypherPattern, [100.0, 110.0], None, Some(25)),
             (T::HeadAndShoulders, [100.0, 110.0], None, Some(20)),
             (T::TrianglePattern, [100.0, 110.0], None, Some(25)),
             (T::TimeCycles, [100.0, 110.0], None, Some(15)),
