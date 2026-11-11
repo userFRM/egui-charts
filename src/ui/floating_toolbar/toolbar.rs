@@ -300,6 +300,9 @@ impl FloatingSelectionToolbar {
                     .clone()
                     .map(|alert| DrawingContextMenuAction::AddAlert(Box::new(alert)));
             }
+            FloatingToolbarAction::DrawingMenu(DrawingContextMenuAction::ReversePosition) => {
+                let _ = chart.reverse_position_drawing(id);
+            }
             FloatingToolbarAction::DrawingMenu(action)
                 if !action.apply_interval_visibility(chart, id) =>
             {
@@ -354,8 +357,9 @@ impl FloatingSelectionToolbar {
             .default_size(size)
             .movable(false)
             .constrain_to(bounds)
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .show(ui.ctx(), |ui| {
+                ui.set_max_width(bounds.width());
                 egui::Frame::popup(ui.style())
                     .corner_radius(ui.active_theme().radius.md)
                     .inner_margin(egui::Margin::symmetric(
@@ -363,7 +367,7 @@ impl FloatingSelectionToolbar {
                         ui.active_theme().spacing.sm as i8,
                     ))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.sm;
                             let drag = Self::render_drag_handle(ui);
                             if drag.dragged() {
@@ -429,6 +433,18 @@ impl FloatingSelectionToolbar {
                                 .clicked()
                             {
                                 action = Some(FloatingToolbarAction::OpenSettings);
+                            }
+                            if self.menu.position_direction_available()
+                                && IconButton::new(&icons::ROTATE_CCW)
+                                    .size(ButtonSize::SM)
+                                    .tooltip("Reverse position")
+                                    .enabled(!self.is_locked)
+                                    .show(ui)
+                                    .clicked()
+                            {
+                                action = Some(FloatingToolbarAction::DrawingMenu(
+                                    DrawingContextMenuAction::ReversePosition,
+                                ));
                             }
                             if self.alert_available
                                 && IconButton::new(&icons::ALERTS)
@@ -807,8 +823,7 @@ mod tests {
         }
     }
 
-    /// A viewport smaller than the toolbar (204 x 32 px without colour slots) must not panic and
-    /// pins the toolbar to the viewport's min edge on each axis that does not fit.
+    /// Tiny viewports must not panic. Position actions wrap to stay reachable in a narrow window.
     #[test]
     fn show_survives_viewport_smaller_than_toolbar() {
         for (w, h, expected) in [
@@ -831,6 +846,78 @@ mod tests {
             .textures_delta
             .clear();
             assert_eq!(toolbar.position, expected, "viewport {w}x{h}");
+        }
+        for (width, dark) in [(320.0, false), (320.0, true), (800.0, false), (800.0, true)] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(
+                &ctx,
+                &if dark {
+                    crate::theme::Theme::dark()
+                } else {
+                    crate::theme::Theme::light()
+                },
+            );
+            let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0));
+            let mut toolbar = FloatingSelectionToolbar::new();
+            toolbar.show_at(Pos2::new(100.0, 100.0));
+            toolbar.menu.set_context(
+                crate::drawings::DrawingToolType::LongPos.as_str(),
+                false,
+                true,
+            );
+            toolbar.stroke = Some((2.0, LineStyle::Solid));
+            toolbar.set_colors(vec![ColorSlot {
+                label: "Line color",
+                color: Color32::BLUE,
+            }]);
+            for _ in 0..3 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        toolbar.show(ui);
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(
+                bounds.contains_rect(toolbar.last_rect),
+                "{width}, dark {dark}: {:?}",
+                toolbar.last_rect
+            );
+            let mut chart = Chart::new(crate::model::BarData::new());
+            chart
+                .drawings_mut()
+                .drawings
+                .push(crate::drawings::Drawing::new(
+                    7,
+                    crate::drawings::DrawingToolType::LongPos,
+                ));
+            let mut dialog = crate::ui::dialogs::DrawingPropertiesDialog::new();
+            dialog.open_for_chart(&chart, crate::ui::dialogs::DrawingId(7));
+            toolbar.position = bounds.center() - toolbar.last_rect.size() * 0.5;
+            for _ in 0..3 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        toolbar.show(ui);
+                        dialog.show(ui.ctx());
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let overlap = bounds.center();
+            assert!(toolbar.last_rect.contains(overlap));
+            assert_ne!(
+                ctx.layer_id_at(overlap).unwrap().id,
+                egui::Id::unique("floating_selection_toolbar"),
+                "the settings dialog must receive clicks where it covers the toolbar"
+            );
         }
     }
 

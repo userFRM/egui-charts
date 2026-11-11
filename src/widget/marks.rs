@@ -9,14 +9,6 @@ use crate::services::{Marks, MarksPage, MarksRequest};
 use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// Where a bar mark with a host ID was painted.
-pub(super) struct MarkHit {
-    id: String,
-    series: SeriesId,
-    time: DateTime<Utc>,
-    rect: egui::Rect,
-}
-
 pub(super) struct MarkSource {
     source: Arc<dyn Marks>,
     inbox: Arc<Inbox>,
@@ -240,16 +232,11 @@ impl Chart {
                 time: mark.time,
             });
         }
-        self.mark_hits
-            .borrow_mut()
-            .extend(hits.into_iter().filter_map(|(mark, rect)| {
-                Some(MarkHit {
-                    id: mark.id.clone()?,
-                    series,
-                    time: mark.time,
-                    rect,
-                })
-            }));
+        self.mark_hits.borrow_mut().extend(
+            hits.into_iter()
+                .filter(|(mark, _)| mark.id.is_some())
+                .map(|(_, rect)| rect),
+        );
     }
 
     /// A later painted hit covers any annotation found underneath it.
@@ -317,9 +304,9 @@ impl Chart {
         self.clickable_marks = std::mem::take(self.mark_hits.get_mut());
     }
 
-    /// The mark painted on top at `pos`: the last of those painted there. Drawing tools and
-    /// the eraser take the click first.
-    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&MarkHit> {
+    /// The last host mark painted at `pos` in the previous frame, for selection gating.
+    /// Drawing tools and the eraser take the click first.
+    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&egui::Rect> {
         #[cfg(feature = "drawings")]
         if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
             return None;
@@ -327,20 +314,27 @@ impl Chart {
         self.clickable_marks
             .iter()
             .rev()
-            .find(|hit| hit.rect.contains(pos))
+            .find(|rect| rect.contains(pos))
     }
 
-    /// Reports a click on a mark with a host ID.
-    pub(super) fn click_mark(&mut self, pos: egui::Pos2) {
-        let Some(hit) = self.mark_at(pos) else {
+    /// Reports a click only for the host marker selected by this frame's paint order.
+    pub(super) fn click_mark(&mut self, position: &super::ChartPointer) {
+        #[cfg(feature = "drawings")]
+        if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
             return;
-        };
-        let event = ChartEvent::MarkClick {
-            id: hit.id.clone(),
-            series: hit.series,
-            time: hit.time,
-        };
-        self.host_events.push(event);
+        }
+        if let Some(super::PointerTarget::Marker { series, id, time }) = &position.target {
+            self.selection.deselect();
+            #[cfg(feature = "drawings")]
+            self.drawings.deselect();
+            if let Some(id) = id {
+                self.host_events.push(ChartEvent::MarkClick {
+                    id: id.clone(),
+                    series: *series,
+                    time: *time,
+                });
+            }
+        }
     }
 
     /// Connects a source of bar marks and time-axis events. Replacing or removing the source
@@ -1058,7 +1052,7 @@ mod tests {
             );
             test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
             test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
-            let pos = chart.clickable_marks.last().unwrap().rect.center();
+            let pos = chart.clickable_marks.last().unwrap().center();
             let button = |pressed| {
                 vec![egui::Event::PointerButton {
                     pos,
@@ -1331,14 +1325,13 @@ mod tests {
                 .collect(),
         );
         let shapes = test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
-        for series in [SeriesId::MAIN, series] {
-            let hits = chart.mark_hits.borrow();
-            let ids: Vec<_> = hits
-                .iter()
-                .filter(|hit| hit.series == series)
-                .map(|hit| hit.id.as_str())
-                .collect();
-            assert_eq!(ids, ["future-in", "edge-in", "middle"]);
+        let hits = chart.mark_hits.borrow();
+        assert_eq!(hits.len(), 6);
+        let mapping = chart.get_chart_mapping();
+        for series_hits in hits.as_chunks::<3>().0 {
+            for (rect, index) in series_hits.iter().zip([102.0, left + 0.25, 90.0]) {
+                assert!(rect.x_range().contains(mapping.index_to_x(index)));
+            }
         }
         assert_eq!(
             shapes
@@ -1455,48 +1448,212 @@ mod tests {
         }
     }
 
-    /// A primary click on marks reports the host ID of the one painted on top, with its series
-    /// and time, and selects nothing; marks without an ID are not reported.
+    /// Covered marks cannot report a second click on the annotation underneath.
     #[test]
-    fn clicking_overlapping_marks_reports_the_top_one_and_selects_nothing() {
-        let ctx = Context::default();
-        let mut chart = test_frames::chart(&[95.0], &[105.0]);
-        chart.config_mut().show_volume = false;
-        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
-        let time = chart.state.shown()[70].time;
-        let mark = |id: &str| Marker::new(time).with_pos(MarkerPos::InBar).with_id(id);
-        chart.set_markers(
-            SeriesId::MAIN,
-            vec![mark("first"), mark("top"), Marker::new(time)],
-        );
-        test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
-        test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
-        let pos = chart.clickable_marks.last().unwrap().rect.center();
-        for pressed in [true, false] {
-            test_frames::frame(
-                &ctx,
-                &mut chart,
-                0.3,
-                vec![egui::Event::PointerButton {
+    fn click_on_primitive_over_marker_reports_no_mark() {
+        use crate::widget::{
+            PointerTarget, Primitive, PrimitiveHit, PrimitivePass, PrimitiveView, SeriesOptions,
+        };
+        struct Cover;
+        impl Primitive for Cover {
+            fn hit_test_result(
+                &self,
+                pos: egui::Pos2,
+                view: &PrimitiveView<'_>,
+            ) -> Option<PrimitiveHit> {
+                (view.mapping.rect.contains(pos)
+                    && (pos.y - view.mapping.price_to_y(100.0)).abs() < 3.0)
+                    .then(|| {
+                        let mut hit = PrimitiveHit::new(egui::CursorIcon::PointingHand);
+                        hit.pass = PrimitivePass::Above;
+                        hit
+                    })
+            }
+        }
+        for secondary in [false, true] {
+            for cover in [
+                "primitive",
+                "drawing",
+                "uncovered",
+                "fresh",
+                "top",
+                "eraser",
+            ] {
+                if !cfg!(feature = "drawings") && matches!(cover, "drawing" | "top" | "eraser") {
+                    continue;
+                }
+                let ctx = Context::default();
+                let mut chart = test_frames::chart(&[95.0], &[105.0]);
+                chart.config.show_volume = false;
+                let id = if secondary {
+                    let id = chart.add_series(SeriesOptions {
+                        chart_type: crate::model::ChartType::Candles,
+                        ..Default::default()
+                    });
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    let pane = chart.add_pane();
+                    chart.move_series_to_pane(id, pane);
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                #[cfg(feature = "drawings")]
+                if cover == "eraser" {
+                    chart.drawings_mut().eraser_mode = true;
+                }
+                let time = chart.bars(id)[70].time;
+                chart.set_marker_options(
+                    id,
+                    crate::model::MarkerOptions {
+                        auto_scale: false,
+                        z_order: if cover == "top" {
+                            MarkerZOrder::Top
+                        } else {
+                            MarkerZOrder::Normal
+                        },
+                    },
+                );
+                chart.set_markers(
+                    id,
+                    vec![
+                        Marker::new(if cover == "fresh" {
+                            chart.bars(id)[60].time
+                        } else {
+                            time
+                        })
+                        .at_price(100.0, MarkerPos::AtPriceMiddle)
+                        .with_id("under"),
+                    ],
+                );
+                let primitive =
+                    (cover == "primitive").then(|| chart.attach_primitive(id, Cover).unwrap());
+                #[cfg(feature = "drawings")]
+                if matches!(cover, "drawing" | "top") {
+                    let mut drawing = crate::drawings::Drawing::with_color(
+                        77,
+                        crate::drawings::DrawingToolType::HorizontalLine,
+                        [0, 0, 255, 255],
+                    );
+                    drawing.chart_points = vec![crate::drawings::ChartPoint::new(70.0, 100.0)];
+                    drawing.pane = secondary.then_some(id.0);
+                    chart.drawings_mut().drawings.push(drawing);
+                }
+                test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+                let pos = egui::pos2(
+                    chart.get_chart_mapping().idx_to_x(70),
+                    chart.series_price_map(id).unwrap().price_to_y(100.0),
+                );
+                test_frames::frame(&ctx, &mut chart, 0.1, vec![egui::Event::PointerMoved(pos)]);
+                if cover == "fresh" {
+                    chart.set_markers(
+                        id,
+                        vec![
+                            Marker::new(time)
+                                .at_price(100.0, MarkerPos::AtPriceMiddle)
+                                .with_id("under"),
+                        ],
+                    );
+                }
+                chart.drain_events().for_each(drop);
+                let click = |pressed| egui::Event::PointerButton {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed,
                     modifiers: Default::default(),
-                }],
-            );
+                };
+                test_frames::frame(&ctx, &mut chart, 0.2, vec![click(true), click(false)]);
+                let events: Vec<_> = chart.drain_events().collect();
+                let target = events
+                    .iter()
+                    .find_map(|event| match event {
+                        ChartEvent::Click { position, .. } => position.target.clone(),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("secondary={secondary}, cover={cover}: {events:?}"));
+                let covered = matches!(cover, "primitive" | "drawing" | "eraser");
+                if let Some(primitive) = primitive {
+                    assert_eq!(target, PointerTarget::Primitive(primitive));
+                }
+                if cover == "drawing" {
+                    assert_eq!(target, PointerTarget::Drawing(77));
+                }
+                if !covered {
+                    assert!(matches!(target, PointerTarget::Marker { .. }));
+                }
+                let marks: Vec<_> = events
+                    .iter()
+                    .filter(|event| matches!(event, ChartEvent::MarkClick { .. }))
+                    .collect();
+                assert_eq!(
+                    marks.len(),
+                    usize::from(!covered),
+                    "secondary={secondary}, cover={cover}: {events:?}"
+                );
+                if cover != "eraser" {
+                    assert_eq!(
+                        chart.selected_element(),
+                        None,
+                        "secondary={secondary}, cover={cover}"
+                    );
+                }
+                #[cfg(feature = "drawings")]
+                if cover == "top" {
+                    assert_eq!(chart.drawings.selected_ids().count(), 0);
+                }
+            }
         }
-        let clicks: Vec<_> = chart
-            .drain_events()
-            .filter(|event| matches!(event, ChartEvent::MarkClick { .. }))
-            .collect();
-        assert_eq!(
-            clicks,
-            [ChartEvent::MarkClick {
-                id: "top".into(),
-                series: SeriesId::MAIN,
-                time
-            }]
-        );
-        assert_eq!(chart.selected_element(), None);
+    }
+
+    /// A primary click reports only the top mark's host ID, if it has one, and selects nothing.
+    #[test]
+    fn clicking_overlapping_marks_reports_the_top_one_and_selects_nothing() {
+        for unnamed_on_top in [false, true] {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let time = chart.state.shown()[70].time;
+            let mark = |id: &str| Marker::new(time).with_pos(MarkerPos::InBar).with_id(id);
+            let unnamed = || Marker::new(time).with_pos(MarkerPos::InBar);
+            chart.set_markers(
+                SeriesId::MAIN,
+                if unnamed_on_top {
+                    vec![mark("first"), mark("top"), unnamed()]
+                } else {
+                    vec![unnamed(), mark("first"), mark("top")]
+                },
+            );
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+            test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
+            let pos = chart.clickable_marks.last().unwrap().center();
+            for pressed in [true, false] {
+                test_frames::frame(
+                    &ctx,
+                    &mut chart,
+                    0.3,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+            let clicks: Vec<_> = chart
+                .drain_events()
+                .filter(|event| matches!(event, ChartEvent::MarkClick { .. }))
+                .collect();
+            let expected = if unnamed_on_top {
+                Vec::new()
+            } else {
+                vec![ChartEvent::MarkClick {
+                    id: "top".into(),
+                    series: SeriesId::MAIN,
+                    time,
+                }]
+            };
+            assert_eq!(clicks, expected);
+            assert_eq!(chart.selected_element(), None);
+        }
     }
 }

@@ -282,9 +282,9 @@ impl DrawingProps {
                 let settings = &template.settings;
                 // A tool setting that differs from the target's was edited.
                 macro_rules! edited {
-                    ($($($field:ident).+),+ $(,)?) => {
-                        $(if settings.$($field).+ != target.$($field).+ {
-                            drawing.$($field).+.clone_from(&settings.$($field).+);
+                    ($($field:ident $(.$member:ident)?),+ $(,)?) => {
+                        $(if settings.$field$(.$member)? != target.$field$(.$member)? {
+                            drawing.$field$(.$member)?.clone_from(&settings.$field$(.$member)?);
                         })+
                     };
                 }
@@ -298,13 +298,15 @@ impl DrawingProps {
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
-                    fib_config,
                     pitchfork,
                     gann,
                     ghost_feed,
                     bars_pattern,
                     position_size,
                     position_sizing,
+                    position_readout.persistent,
+                    position_readout.condensed,
+                    position_readout.quantity_decimals,
                     position_target_color,
                     position_stop_color,
                     volume_profile,
@@ -328,6 +330,41 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                 );
+                if settings.fib_config != target.fib_config {
+                    if matches!(
+                        drawing.tool_type,
+                        crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciExtension
+                            | crate::drawings::DrawingToolType::FibonacciChannel
+                            | crate::drawings::DrawingToolType::FibonacciWedge
+                    ) {
+                        let original = target.fibonacci_config();
+                        let edited = settings.fibonacci_config();
+                        let mut config = drawing.fibonacci_config().into_owned();
+                        config.apply_edits(&original, &edited);
+                        drawing.fib_config = Some(config);
+                    } else {
+                        drawing.fib_config.clone_from(&settings.fib_config);
+                    }
+                }
+                if settings.position_readout.account_currency
+                    != target.position_readout.account_currency
+                {
+                    drawing
+                        .position_readout
+                        .account_currency
+                        .clone_from(&settings.position_readout.account_currency);
+                    // A peer's old rate cannot follow it into a different currency.
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                } else if settings.position_readout.conversion_rate
+                    != target.position_readout.conversion_rate
+                    && drawing.position_readout.account_currency
+                        == settings.position_readout.account_currency
+                {
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                }
                 // Only the image's opacity: each picture keeps its own frame size.
                 let opacity = settings.image.map_or(255, |c| c.opacity);
                 if opacity != target.image.map_or(255, |c| c.opacity) {
@@ -367,12 +404,8 @@ impl DrawingProps {
             {
                 return Err("Fibonacci ratios must be finite");
             }
-            if settings
-                .fib_config
-                .as_ref()
-                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
-            {
-                return Err("Fibonacci widths must be above 0 and at most 100");
+            if settings.fib_config.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err("Fibonacci widths must be above 0 and at most 100, font size 1 to 256");
             }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
@@ -417,6 +450,9 @@ impl DrawingProps {
                 return Err(
                     "Ghost feed average range must be positive and noise nonnegative, both finite",
                 );
+            }
+            if !settings.position_readout.is_valid() {
+                return Err("Invalid position readout settings");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(
@@ -576,11 +612,19 @@ mod tests {
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             use DrawingToolType as T;
             let (price, time) = (
-                matches!(tool, T::HorizontalLine | T::HorizontalRay | T::CrossLine),
+                matches!(
+                    tool,
+                    T::HorizontalLine | T::HorizontalRay | T::CrossLine | T::LongPos | T::ShortPos
+                ),
                 matches!(tool, T::VerticalLine | T::CrossLine),
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
             assert_eq!(labels.contains(&"Time"), time, "{tool:?}");
+            assert_eq!(
+                labels.contains(&"Through all panes"),
+                tool == T::VerticalLine,
+                "{tool:?}"
+            );
             for label in [
                 "Middle point",
                 "Keep statistics visible",
@@ -649,6 +693,8 @@ mod tests {
                 price_labels: true,
                 text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Right,
                 text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
+                text_orientation: crate::drawings::LineTextOrientation::Horizontal,
+                across_panes: true,
             };
             settings.line_measurements = measurements;
             settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {
@@ -879,6 +925,78 @@ mod tests {
             let mut expected = drawings.clone();
             expected.iter_mut().for_each(change);
             assert_eq!(format!("{edits:?}"), format!("{expected:?}"), "{case}");
+        }
+        // Editing typography or one caption leaves every other saved level of a peer intact.
+        chart.drawings_mut().drawings = (0..2)
+            .map(|id| {
+                let mut drawing = Drawing::new(id, DrawingToolType::FibonacciExtension);
+                let config = drawing.fib_config.as_mut().unwrap();
+                config.levels[1].text = format!("Peer {id}");
+                config.levels[1].value = 0.25 + id as f32;
+                config.level_width = 2.0 + id as f32;
+                drawing
+            })
+            .collect();
+        chart.drawings_mut().select_drawings([0, 1]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let config = props
+            .tool_settings
+            .as_mut()
+            .unwrap()
+            .settings
+            .fib_config
+            .as_mut()
+            .unwrap();
+        config.label_size = 18.0;
+        config.levels[0].text = "Target".into();
+        let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+        for (index, drawing) in edits.iter().enumerate() {
+            let config = drawing.fib_config.as_ref().unwrap();
+            assert_eq!(config.label_size, 18.0);
+            assert_eq!(config.levels[0].text, "Target");
+            assert_eq!(config.levels[1].text, format!("Peer {index}"));
+            assert_eq!(config.levels[1].value, 0.25 + index as f32);
+            assert_eq!(config.level_width, 2.0 + index as f32);
+        }
+        // A rate belongs to an account currency; changing the currency also replaces its rate.
+        for currency_changed in [false, true] {
+            chart.drawings_mut().drawings = [("EUR", 0.8), ("GBP", 0.6), ("EUR", 0.7)]
+                .into_iter()
+                .enumerate()
+                .map(|(id, (currency, rate))| {
+                    let mut drawing = Drawing::new(id, DrawingToolType::LongPos);
+                    drawing.position_readout.account_currency = Some(currency.into());
+                    drawing.position_readout.conversion_rate = Some(rate);
+                    drawing
+                })
+                .collect();
+            chart.drawings_mut().select_drawings([0, 1, 2]);
+            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            let readout = &mut props
+                .tool_settings
+                .as_mut()
+                .unwrap()
+                .settings
+                .position_readout;
+            readout.conversion_rate = Some(0.9);
+            if currency_changed {
+                readout.account_currency = Some("CAD".into());
+            }
+            let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+            for (id, drawing) in edits.iter().enumerate() {
+                let expected = if currency_changed {
+                    ("CAD", 0.9)
+                } else if id == 1 {
+                    ("GBP", 0.6)
+                } else {
+                    ("EUR", 0.9)
+                };
+                assert_eq!(
+                    drawing.position_readout.account_currency.as_deref(),
+                    Some(expected.0)
+                );
+                assert_eq!(drawing.position_readout.conversion_rate, Some(expected.1));
+            }
         }
         // An image's opacity is independent of its frame and of the other selected pictures.
         for opacity in [None, Some(128)] {

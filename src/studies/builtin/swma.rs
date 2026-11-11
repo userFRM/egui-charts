@@ -175,36 +175,25 @@ mod tests {
     use crate::studies::test_support::make_bar;
 
     #[test]
-    fn test_swma_weighted() {
-        // Middle values should have more weight
-        // (1*100 + 2*120 + 2*120 + 1*100) / 6 = (100 + 240 + 240 + 100) / 6 = 680 / 6 = 113.33
-        let swma = SWMA::swma_val(100.0, 120.0, 120.0, 100.0);
-        assert!((swma - 113.33).abs() < 0.01);
-    }
-
-    #[test]
     fn test_swma_calculation() {
-        let mut swma = SWMA::new();
-
-        let data = vec![
-            make_bar(100.0),
-            make_bar(102.0),
-            make_bar(101.0),
-            make_bar(103.0),
-            make_bar(104.0),
-        ];
-
-        swma.calculate(&data);
-
-        assert_eq!(swma.values.len(), 5);
-        assert!(matches!(swma.values.to_rows()[0], IndicatorValue::None));
-        assert!(matches!(swma.values.to_rows()[1], IndicatorValue::None));
-        assert!(matches!(swma.values.to_rows()[2], IndicatorValue::None));
-
-        // Fourth bar: (100 + 2*102 + 2*101 + 103) / 6 = 609 / 6 = 101.5
-        let IndicatorValue::Single(v) = swma.values.to_rows()[3] else {
-            panic!("no value: {:?}", swma.values.to_rows()[3]);
-        };
-        assert!((v - 101.5).abs() < 0.01);
+        // Hand weights [1,2,2,1]/6: (100+204+202+103)/6=101.5,
+        // then 614/6=307/3. The middle-heavy fixture gives 680/6=340/3,
+        // then 660/6=110, so a simple average cannot satisfy both rows.
+        for (closes, expected) in [
+            ([100.0, 102.0, 101.0, 103.0, 104.0], [101.5, 307.0 / 3.0]),
+            ([100.0, 120.0, 120.0, 100.0, 100.0], [340.0 / 3.0, 110.0]),
+        ] {
+            let data: Vec<Bar> = closes.into_iter().map(make_bar).collect();
+            let mut swma = SWMA::new();
+            swma.calculate(&data);
+            assert_eq!(swma.values().len(), data.len());
+            for bar in 0..3 {
+                assert_eq!(swma.values().value(0, bar), None);
+            }
+            for (bar, want) in (3..5).zip(expected) {
+                let got = swma.values().value(0, bar).unwrap();
+                assert!((got - want).abs() < 1e-12, "{closes:?} bar {bar}: {got}");
+            }
+        }
     }
 }

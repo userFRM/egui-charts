@@ -28,6 +28,7 @@ fn shared_prices(
     study: &dyn Indicator,
     range: std::ops::Range<usize>,
 ) -> impl Iterator<Item = f64> + '_ {
+    let gradients = crate::studies::plots::gradient_prices(study, range.clone());
     (0..study.line_count())
         .filter(move |line| {
             let plot = study.plot_style(*line);
@@ -50,6 +51,7 @@ fn shared_prices(
                     )
                 }))
         })
+        .chain(gradients)
 }
 
 impl Chart {
@@ -622,7 +624,8 @@ impl Chart {
     /// includes bars cut by a plot edge, as rendering does. On price-based main charts,
     /// loaded selection uses stored bars and visible selection uses displayed elements.
     /// Returns `None` for absent series, studies, a selection without values, or before the
-    /// pane is drawn. A scale without a valid coordinate also returns `None`.
+    /// pane is drawn. A close the scale cannot place, such as zero or a negative price on a
+    /// logarithmic scale, also returns `None`.
     pub fn series_last_value(
         &self,
         id: SeriesId,
@@ -650,7 +653,7 @@ impl Chart {
             (bar, item.value_color(bar), self.time_to_index(bar.time)?)
         };
         let coordinate = map.price_to_y(bar.close);
-        if !coordinate.is_finite() {
+        if !coordinate.is_finite() || !map.transform().to_scale(bar.close).is_finite() {
             return None;
         }
         Some(SeriesLastValue {
@@ -1097,11 +1100,12 @@ impl Chart {
                     for value in shared_prices(study.as_ref(), visible.clone()) {
                         include(&mut bounds, value, transform);
                     }
-                } else if !self.is_custom_data(id) {
-                    let range = crate::widget::IndicatorPane::with_config(
+                } else if !self.is_custom_data(id)
+                    && let Some(range) = crate::widget::IndicatorPane::with_config(
                         crate::widget::IndicatorPaneConfig::from_study(study.as_ref()),
                     )
-                    .calculate_y_range(study.as_ref(), &visible);
+                    .value_range(study.as_ref(), &visible)
+                {
                     for value in [range.0, range.1] {
                         include(&mut bounds, value, transform);
                     }

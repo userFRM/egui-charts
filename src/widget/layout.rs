@@ -610,6 +610,7 @@ impl Divider {
 }
 
 struct DividerDrag {
+    history_guard: Arc<()>,
     mode: ChartLayoutMode,
     count: usize,
     start: egui::Pos2,
@@ -873,23 +874,16 @@ impl LinkChange {
 
 /// Undo and redo steps of cross-chart edits, which every chart of the layout takes at the next
 /// [`ChartLayout::show`].
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LayoutEdits {
     steps: Arc<Mutex<Vec<(u64, bool)>>>,
-}
-
-impl Clone for LayoutEdits {
-    /// A copy serves other charts, whose steps do not concern this layout.
-    fn clone(&self) -> Self {
-        Self::default()
-    }
 }
 
 impl LayoutEdits {
     #[cfg(any(feature = "studies", feature = "drawings"))]
     fn start(&mut self) -> LayoutEditLink {
-        // Process-wide, so that a clone of a layout, which starts a new queue, never reuses an
-        // id that a chart's history may already hold from the original.
+        // Process-wide, so that copies made through different layout values never reuse an id
+        // that a chart's history may already hold.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         LayoutEditLink {
             steps: Arc::clone(&self.steps),
@@ -963,6 +957,9 @@ impl Default for ChartSyncOptions {
 /// grid preset. The container does not acquire data or persist it. Charts that keep their
 /// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
 /// after another of them wrote them, in any group.
+/// A clone follows pending cross-chart undo and redo steps when it shows the same charts.
+/// Clones showing other charts leave those steps for their owners; split sizes and link
+/// memberships remain independent.
 ///
 /// ```
 /// # fn example(ui: &mut egui::Ui) {
@@ -1160,12 +1157,30 @@ impl ChartLayout {
         }
     }
 
-    fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) {
+    fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
+        let mut stepped = false;
         loop {
-            let step = self.edits.steps.lock().unwrap().pop();
-            let Some((id, redo)) = step else {
-                return;
+            let step = {
+                let mut steps = self.edits.steps.lock().unwrap();
+                let at = steps.iter().rposition(|(id, _)| {
+                    let mut belongs = false;
+                    for chart in charts
+                        .iter()
+                        .filter(|chart| chart.history.holds_layout_edit(*id))
+                    {
+                        if chart.history.blocked() {
+                            return false;
+                        }
+                        belongs = true;
+                    }
+                    belongs
+                });
+                at.map(|at| steps.remove(at))
             };
+            let Some((id, redo)) = step else {
+                return stepped;
+            };
+            stepped = true;
             for chart in charts.iter_mut() {
                 chart.step_layout_edit(id, redo);
             }
@@ -1490,6 +1505,19 @@ impl ChartLayout {
     /// touch must tap a border before moving it. Double-clicking a border restores the proportions.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
+        self.show_with(ui, charts, |ui, _, chart| chart.show(ui))
+    }
+
+    /// Draws the layout with a host-selected renderer for each visible chart, including
+    /// detached viewports. The callback runs every frame and must not block; supply cached
+    /// data to calls such as [`Chart::show_footprint`]. Return the chart's response so focus,
+    /// pointer activation and link controls behave as they do with [`Self::show`].
+    pub fn show_with(
+        &mut self,
+        ui: &mut Ui,
+        charts: &mut [&mut Chart],
+        mut render: impl FnMut(&mut Ui, usize, &mut Chart) -> Response,
+    ) -> Response {
         let total = charts.len().min(16);
         let charts = &mut charts[..total];
         let count = total.min(self.mode.chart_count());
@@ -1543,9 +1571,29 @@ impl ChartLayout {
         }
         self.record_sizes(charts[self.active]);
         self.record_links(charts[self.active]);
-        self.step_layout_edits(charts);
         let (mut rects, mut dividers) = self.geometry(rect, count);
         if self.move_divider(ui) {
+            (rects, dividers) = self.geometry(rect, count);
+        }
+        // Divider hit regions stay above the charts, but their input is known before painting.
+        let starting_resize = self.sizing.drag.is_none()
+            && dividers.iter().any(|divider| {
+                let key = (divider.group, divider.at);
+                ui.ctx()
+                    .is_being_dragged(ui.scope_id().with(("chart_divider", self.mode, key)))
+                    && (self.sizing.selected == Some(key) || !ui.input(|input| input.any_touches()))
+            });
+        let resize_start = starting_resize.then(|| Arc::new(()));
+        let resizing = self
+            .sizing
+            .drag
+            .as_ref()
+            .map(|drag| &drag.history_guard)
+            .or(resize_start.as_ref());
+        for chart in charts.iter_mut() {
+            chart.history.resizing = resizing.map(Arc::downgrade).unwrap_or_default();
+        }
+        if self.step_layout_edits(charts) {
             (rects, dividers) = self.geometry(rect, count);
         }
         let over_divider = self.sizing.drag.is_some()
@@ -1626,7 +1674,7 @@ impl ChartLayout {
                             .horizontal(|ui| self.link_controls(ui, index, false))
                             .inner;
                         egui::CentralPanel::default().show(ui, |ui| {
-                            let response = chart.show(ui);
+                            let response = render(ui, index, chart);
                             if focus {
                                 response.request_focus();
                             }
@@ -1675,7 +1723,7 @@ impl ChartLayout {
                     let link_controls =
                         total > 1 && rect.right() - plot_left >= LINK_CONTROLS_MIN_WIDTH;
                     charts[index].layout_link_controls = link_controls;
-                    let response = charts[index].show(ui);
+                    let response = render(ui, index, charts[index]);
                     charts[index].layout_link_controls = false;
                     charts[index].layout_inactive = false;
                     if focus {
@@ -1757,6 +1805,14 @@ impl ChartLayout {
             && let Some(id) = charts[self.active].keyboard.chart_id
         {
             ui.memory_mut(|memory| memory.request_focus(id));
+        }
+        for chart in charts.iter_mut() {
+            chart.history.resizing = self
+                .sizing
+                .drag
+                .as_ref()
+                .map(|drag| Arc::downgrade(&drag.history_guard))
+                .unwrap_or_default();
         }
         self.record_sizes(charts[self.active]);
         self.record_links(charts[self.active]);
@@ -1908,7 +1964,7 @@ impl ChartLayout {
         let range = charts[self.active].visible_time_range();
         let source = charts[self.active].sync_source();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            chart.set_synced_crosshair(None, None);
+            chart.restore_host_crosshair();
             if self.sync.sync_crosshair
                 && let Some(source) = hovered
                 && index != source
@@ -2081,6 +2137,7 @@ impl ChartLayout {
             {
                 let shift = ui.input(|input| input.modifiers.shift);
                 self.sizing.drag = Some(DividerDrag {
+                    history_guard: Arc::new(()),
                     mode: self.mode,
                     count,
                     start,
@@ -2159,6 +2216,56 @@ mod tests {
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Min1);
         chart
+    }
+
+    /// The renderer receives the original slot of every visible chart in each layout path.
+    #[test]
+    fn host_renderer_receives_visible_slots_in_each_layout() {
+        for (mode, maximized, detached, expected) in [
+            (ChartLayoutMode::TwoHorizontal, None, false, vec![0, 1]),
+            (ChartLayoutMode::Tabs, None, false, vec![1]),
+            (ChartLayoutMode::TwoHorizontal, Some(1), false, vec![1]),
+            (ChartLayoutMode::Tabs, None, true, vec![0, 1]),
+        ] {
+            let ctx = egui::Context::default();
+            let mut charts = [chart(60), chart(60)];
+            charts[0].set_symbol("FIRST");
+            charts[1].set_symbol("SECOND");
+            let mut layout = ChartLayout {
+                mode,
+                active: 1,
+                maximized,
+                ..Default::default()
+            };
+            layout.set_detached(0, detached);
+            for _ in 0..3 {
+                let mut visited = Vec::new();
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        visited.clear();
+                        layout.show_with(
+                            ui,
+                            &mut charts.iter_mut().collect::<Vec<_>>(),
+                            |ui, index, chart| {
+                                assert_eq!(chart.symbol(), ["FIRST", "SECOND"][index]);
+                                assert_eq!(chart.layout_inactive, index != 1 && !detached);
+                                visited.push(index);
+                                chart.show(ui)
+                            },
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(
+                    visited, expected,
+                    "{mode:?}, maximized={maximized:?}, detached={detached}"
+                );
+            }
+        }
     }
 
     /// A border drag affects its neighbouring charts; Shift also moves aligned borders in other
@@ -2462,6 +2569,150 @@ mod tests {
             edits,
             "the undo opt-out records no edit"
         );
+        // A second drag must not consume the first size step, or a waiting redo.
+        let bounds = Rect::from_min_size(pos2(10.0, 10.0), vec2(1440.0, 720.0));
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::ThreeHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+            time += 0.1;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(bounds.expand(10.0)),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let assert_widths = |layout: &ChartLayout, expected: [f32; 3]| {
+            for (rect, width) in layout.rects(bounds, 3).iter().zip(expected) {
+                assert!(
+                    (rect.width() - width).abs() < 0.01,
+                    "{rect:?}, width {width}"
+                );
+            }
+        };
+        for _ in 0..2 {
+            frame(&mut layout, &mut charts, vec![]);
+        }
+        assert_widths(&layout, [480.0, 480.0, 480.0]);
+        let start = pos2(bounds.left() + 480.0, bounds.center().y);
+        let first = start + vec2(120.0, 0.0);
+        let second = first + vec2(60.0, 0.0);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(start), button(start, true)],
+        );
+        for pos in [start + vec2(4.0, 0.0), first] {
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(pos)]);
+        }
+        frame(&mut layout, &mut charts, vec![button(first, false)]);
+        assert_widths(&layout, [600.0, 360.0, 480.0]);
+        charts[0].user_action(|chart| chart.config_mut().show_grid = false);
+        assert!(charts[0].undo());
+        let edits = charts[0].edit_count();
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let undo = || Event::Key {
+            key: egui::Key::Z,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: command,
+        };
+        frame(&mut layout, &mut charts, vec![button(first, true)]);
+        for pos in [first + vec2(12.0, 0.0), second] {
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![
+                    Event::PointerMoved(pos),
+                    Event::ModifiersChanged(command),
+                    undo(),
+                ],
+            );
+            assert_eq!(
+                charts[0].edit_count(),
+                edits,
+                "drag start preserves history"
+            );
+        }
+        for key in [egui::Key::Z, egui::Key::Y] {
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![
+                    Event::ModifiersChanged(command),
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: command,
+                    },
+                ],
+            );
+            assert_eq!(
+                charts[0].edit_count(),
+                edits,
+                "{key:?} during a divider drag"
+            );
+            assert_widths(&layout, [660.0, 300.0, 480.0]);
+            assert!(charts[0].can_undo() && charts[0].can_redo());
+            for chart in &mut charts {
+                assert!(
+                    !chart.undo() && !chart.redo(),
+                    "history is blocked on every chart"
+                );
+            }
+        }
+        frame(&mut layout, &mut charts, vec![button(second, false)]);
+        assert_eq!(charts[0].edit_count(), edits + 1, "one step on release");
+        for expected in [[600.0, 360.0, 480.0], [480.0, 480.0, 480.0]] {
+            assert!(charts[0].undo());
+            assert_widths(&layout, expected);
+        }
+        assert!(!charts[0].undo());
+        for expected in [[600.0, 360.0, 480.0], [660.0, 300.0, 480.0]] {
+            assert!(charts[0].redo());
+            assert_widths(&layout, expected);
+        }
+        assert!(!charts[0].redo());
+        frame(&mut layout, &mut charts, vec![button(second, true)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(second + vec2(8.0, 0.0))],
+        );
+        frame(&mut layout, &mut charts, vec![]);
+        assert!(!charts[0].undo());
+        drop(layout);
+        assert!(
+            charts[0].undo(),
+            "dropping a dragged layout releases history"
+        );
+
         for &mode in ChartLayoutMode::all() {
             let mut layout = ChartLayout {
                 mode,
@@ -3174,6 +3425,92 @@ mod tests {
         layout.set_detached(1, false);
         frame(&mut layout, &mut charts, vec![]);
         assert!(!layout.is_detached(1));
+    }
+
+    #[test]
+    fn layout_keeps_a_crosshair_position_set_from_code() {
+        use super::super::{SeriesId, SeriesOptions};
+
+        for sync_crosshair in [false, true] {
+            for setter in [0, 1, 2] {
+                let ctx = egui::Context::default();
+                let mut layout = ChartLayout {
+                    mode: ChartLayoutMode::TwoHorizontal,
+                    ..Default::default()
+                };
+                layout.sync.sync_crosshair = sync_crosshair;
+                let mut charts = [chart(60), chart(60)];
+                let series = charts[1].add_series(SeriesOptions::default());
+                let bars = charts[1].bars(SeriesId::MAIN).to_vec();
+                charts[1].set_data(series, bars);
+                let mut time = 0.0;
+                let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+                    time += 0.1;
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                };
+                frame(&mut layout, &mut charts, vec![]);
+                let selected = charts[1].bars(SeriesId::MAIN)[50].time;
+                match setter {
+                    0 => charts[1].set_crosshair_position(Some((selected, 10.5))),
+                    1 => charts[1].set_synced_crosshair_time(Some(selected)),
+                    _ => charts[1].set_series_crosshair_position(series, Some((selected, 10.5))),
+                }
+                let price = (setter != 1).then_some(10.5);
+                let target = (setter == 2).then_some(series);
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+                    assert_eq!(charts[1].synced_crosshair_bar_idx, Some(50.0));
+                    assert_eq!(charts[1].last_crosshair, Some((selected, price)));
+                    assert_eq!(charts[1].synced_crosshair_series, target);
+                }
+
+                let pointer = pos2(
+                    charts[0].index_to_x(80.0).unwrap(),
+                    charts[0].last_rendered_price_rect.center().y,
+                );
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerMoved(pointer)]);
+                }
+                let hovered = charts[0].last_crosshair.unwrap();
+                assert_ne!(hovered.0, selected);
+                assert_eq!(
+                    charts[1].last_crosshair,
+                    Some(if sync_crosshair {
+                        hovered
+                    } else {
+                        (selected, price)
+                    })
+                );
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+                }
+                assert_eq!(charts[1].last_crosshair, Some((selected, price)));
+                assert_eq!(charts[1].synced_crosshair_series, target);
+
+                // An explicit local index replaces the saved time-based request.
+                charts[1].set_synced_crosshair_bar_idx(Some(20.0));
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![]);
+                }
+                assert_eq!(charts[1].synced_crosshair_bar_idx, None);
+                charts[1].set_crosshair_position(Some((selected, 10.5)));
+                charts[1].set_crosshair_position(None);
+                frame(&mut layout, &mut charts, vec![]);
+                assert_eq!(charts[1].last_crosshair, None);
+            }
+        }
     }
 
     #[test]

@@ -18,18 +18,17 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
     ) {
         if self.config.fill_between_zones {
-            let lower = self
+            let indices = indicator.level_fill_indices();
+            let levels = self
                 .config
                 .zones
                 .iter()
-                .map(|z| z.0)
-                .fold(f64::INFINITY, f64::min);
-            let upper = self
-                .config
-                .zones
-                .iter()
-                .map(|z| z.0)
-                .fold(f64::NEG_INFINITY, f64::max);
+                .enumerate()
+                .filter(|(index, _)| indices.is_none_or(|indices| indices.contains(index)))
+                .map(|(_, zone)| zone.0)
+                .filter(|level| level.is_finite());
+            let lower = levels.clone().fold(f64::INFINITY, f64::min);
+            let upper = levels.fold(f64::NEG_INFINITY, f64::max);
             if lower < upper {
                 painter.rect_filled(
                     Rect::from_two_pos(
@@ -51,6 +50,9 @@ impl IndicatorPane {
         let colors = painter.ctx().active_theme().chart;
         let (bullish, bearish) = (colors.candle_up, colors.candle_down);
         for (level, color, label) in &self.config.zones {
+            if !level.is_finite() {
+                continue;
+            }
             let live_color = if *color == DESIGN_TOKENS.semantic.extended.bullish {
                 bullish
             } else if *color == DESIGN_TOKENS.semantic.extended.bearish {
@@ -99,7 +101,7 @@ impl IndicatorPane {
             // Design-token colours stand for the grid colour only for studies without their own
             // presentation; a configured study shows the colours of its Style tab.
             let tokens = !indicator.has_settings();
-            for (level, color, _label) in &self.config.zones {
+            for (index, (level, color, _label)) in self.config.zones.iter().enumerate() {
                 // A hidden level bounds the band but draws no line.
                 if *color == Color32::TRANSPARENT {
                     continue;
@@ -121,8 +123,8 @@ impl IndicatorPane {
                 if y >= rect.min.y && y <= rect.max.y {
                     let start = Pos2::new(rect.min.x, y);
                     let end = Pos2::new(rect.max.x, y);
-                    let stroke = Stroke::new(indicator.level_width(*level), live_color);
-                    let pattern = indicator.level_style(*level);
+                    let (pattern, width) = indicator.level_stroke(index, *level);
+                    let stroke = Stroke::new(width, live_color);
                     if pattern == crate::model::LineStyle::Solid {
                         painter.line_segment([start, end], stroke);
                         continue;
@@ -396,10 +398,11 @@ impl IndicatorPane {
                 self.price_formatter.as_deref(),
             )
         };
-        for tag in tags.iter().flatten() {
+        for tag in tags.iter().chain(&self.fixed_axis_tags).flatten() {
             width = width.max(tag.width() + 5.0 + 6.0);
         }
         self.axis_tags = tags.clone();
+        tags.extend(self.fixed_axis_tags.iter().copied());
         if !self.draw_axis {
             return width;
         }
@@ -502,15 +505,13 @@ impl IndicatorPane {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
-                    // The value comes from a source bar, and a transparent colour there hides
-                    // only the segment into it.
-                    let color = indicator
-                        .plot_offset(line)
-                        .checked_neg()
-                        .and_then(|back| bar.checked_add_signed(back))
-                        .and_then(|source| indicator.plot_color(line, source))
-                        .filter(|color| color.a() != 0)
-                        .unwrap_or_else(|| indicator.plot_style(line).color);
+                    let color = crate::chart::indicators::plots::plot_value_color(
+                        indicator,
+                        line,
+                        Some(bar),
+                    )
+                    .filter(|color| color.a() != 0)
+                    .unwrap_or_else(|| indicator.plot_style(line).color);
                     // A fully transparent colour holds no RGB, so it has no opaque form.
                     let color = if color.a() == 0 {
                         text_color
@@ -738,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn rsi_paints_the_band_and_guides_of_its_preset_and_its_level_settings() {
+    fn rsi_and_crsi_paint_bands_and_guide_settings() {
         let config = IndicatorPaneConfig::rsi();
         assert_eq!(config.height, 138.0);
         assert_eq!(
@@ -758,6 +759,26 @@ mod tests {
         settings.levels[2].visible = false;
         settings.level_fill_color = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
         edited.apply_settings(&[], settings).unwrap();
+        let mut crsi =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::ConnorsRSI::default()));
+        let mut settings = crsi.settings();
+        let levels = edited.settings().levels;
+        settings.levels = vec![levels[0], levels[2], levels[1]];
+        settings.levels[1].value = Some(95.0);
+        settings.level_fill_color = edited.level_fill_color();
+        crsi.apply_settings(&[], settings).unwrap();
+        let mut crsi_below = crsi.clone();
+        let mut settings = crsi_below.settings();
+        settings.levels[1].value = Some(5.0);
+        crsi_below.apply_settings(&[], settings).unwrap();
+        let mut coincident = crsi.clone();
+        let mut settings = coincident.settings();
+        settings.levels[1].value = Some(80.0);
+        settings.levels[1].visible = true;
+        settings.levels[1].color = Color32::RED;
+        settings.levels[1].pattern = crate::model::LineStyle::Solid;
+        settings.levels[1].width = 2.0;
+        coincident.apply_settings(&[], settings).unwrap();
         let bare = crate::studies::RSI::default();
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
@@ -771,6 +792,7 @@ mod tests {
                 crate::studies::palette::GRAY,
                 4.0,
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+                false,
             ),
             (
                 IndicatorPaneConfig::from_study(&edited),
@@ -780,9 +802,41 @@ mod tests {
                 Color32::WHITE,
                 8.0,
                 Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                false,
+            ),
+            // The middle guide never changes the band, even hidden above or below its edges.
+            (
+                IndicatorPaneConfig::from_study(&crsi),
+                &crsi,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                false,
+            ),
+            (
+                IndicatorPaneConfig::from_study(&crsi_below),
+                &crsi_below,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                false,
+            ),
+            (
+                IndicatorPaneConfig::from_study(&coincident),
+                &coincident,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                true,
             ),
         ];
-        for (config, study, band, guide_ys, color, dash, fill) in rows {
+        for (config, study, band, guide_ys, color, dash, fill, coincident) in rows {
             for inverted in [false, true] {
                 let mut pane = IndicatorPane::with_config(config.clone());
                 pane.price_map = Some(PriceMap::new(
@@ -825,6 +879,13 @@ mod tests {
                     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::Shape::LineSegment { points, stroke } if stroke.color == color && stroke.width == 3.0 && (points[0].y - guide_ys[inverted as usize][0]).abs() < 0.001
                     )));
+                    let (top, bottom) = band[inverted as usize];
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(r) if r.fill == fill && (r.rect.top() - top).abs() < 0.001 && (r.rect.bottom() - bottom).abs() < 0.001
+                    )));
+                    assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::LineSegment { points, stroke } if stroke.color == Color32::RED && stroke.width == 2.0 && (points[1].x - points[0].x - rect.width()).abs() < 0.001
+                    )), coincident);
                     output.drop_without_applying_deltas();
                 }
                 let bands: Vec<_> = shapes
@@ -851,7 +912,18 @@ mod tests {
                     })
                     .collect();
                 assert!(!guides.is_empty());
+                assert_eq!(
+                    guides.iter().any(|(points, color, width)| {
+                        *color == Color32::RED
+                            && *width == 2.0
+                            && (points[1].x - points[0].x - rect.width()).abs() < 0.001
+                    }),
+                    coincident
+                );
                 for (guide, guide_color, width) in guides {
+                    if guide_color == Color32::RED {
+                        continue;
+                    }
                     assert_eq!(width, if color == Color32::WHITE { 3.0 } else { 1.0 });
                     assert_eq!(guide_color, color);
                     assert!(
