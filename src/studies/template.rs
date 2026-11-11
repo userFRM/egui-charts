@@ -175,9 +175,10 @@ impl StudyTemplate {
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change. `own` holds the inputs of the study registered under the saved name; a saved input
-    /// that study takes as saved is neither renamed nor converted.
-    fn upgraded(&self, own: &[StudyInput]) -> Option<Self> {
+    /// change. `own` holds the inputs of the study registered under the saved name, or the
+    /// chart's study a stored pane is matched against; a saved input that study takes as saved
+    /// is neither renamed nor converted.
+    pub(crate) fn upgraded(&self, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
         // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
@@ -342,6 +343,61 @@ mod tests {
     };
     use chrono::{NaiveTime, TimeZone, Utc, Weekday};
     use egui::Color32;
+
+    /// Missing permissions inherit the study's declaration; explicit permissions survive saves.
+    #[test]
+    fn legacy_settings_keep_a_read_only_host_study() {
+        #[derive(Clone, Default)]
+        struct Locked(crate::studies::IndicatorValues);
+        impl Indicator for Locked {
+            fn name(&self) -> &str {
+                "Locked"
+            }
+            fn user_edit_enabled(&self) -> bool {
+                false
+            }
+            fn calculate(&mut self, _: &[Bar]) {}
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                &self.0
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::RED]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+        }
+        let mut factory = IndicatorFactory::new();
+        factory.register("Locked", || Box::<Locked>::default());
+        for (name, declared) in [("Locked", false), ("SMA", true)] {
+            for saved in [None, Some(true), Some(false)] {
+                let study = factory.create(name).unwrap();
+                let mut json =
+                    serde_json::to_value(StudyTemplate::from_study(study.as_ref())).unwrap();
+                if let Some(enabled) = saved {
+                    json["settings"]["user_edit_enabled"] = enabled.into();
+                } else {
+                    json["settings"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("user_edit_enabled");
+                }
+                let template: StudyTemplate = serde_json::from_value(json).unwrap();
+                let restored = template.create_with(&factory).unwrap();
+                let expected = saved.unwrap_or(declared);
+                assert_eq!(restored.user_edit_enabled(), expected, "{name} {saved:?}");
+                let captured = StudyTemplate::from_study(restored.as_ref());
+                let json = serde_json::to_value(&captured).unwrap();
+                assert_eq!(json["settings"]["user_edit_enabled"], expected);
+                assert_eq!(
+                    captured.create_with(&factory).unwrap().user_edit_enabled(),
+                    expected
+                );
+            }
+        }
+    }
 
     /// What a chart shows of a calculated study: its name, values, line names, crossing
     /// markers, line styles, value scale and drawings, as text.

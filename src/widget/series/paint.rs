@@ -44,8 +44,8 @@ impl Chart {
             item.bars.partition_point(|bar| bar.time < time)
         };
         let tolerance = item.options.style.hit_tolerance;
-        let column_half_width =
-            self.state.time_scale().bar_spacing() * self.config.candle_width / 2.0;
+        let slot = self.state.time_scale().bar_spacing() * self.series_slot_gap(&item.bars) as f32;
+        let column_half_width = slot * self.config.candle_width / 2.0;
         let near = at.saturating_sub(1)..(at + 2).min(item.bars.len());
         let mut range = near.clone();
         if columns {
@@ -69,7 +69,7 @@ impl Chart {
             let px = x(bar)?;
             let close = Pos2::new(px, map.price_to_y(bar.close));
             let hit = if item.options.chart_type.uses_ohlc() {
-                let half_width = self.state.time_scale().bar_spacing() * 0.35;
+                let half_width = slot * 0.35;
                 let body = Rect::from_two_pos(
                     Pos2::new(px - half_width, map.price_to_y(bar.open)),
                     Pos2::new(px + half_width, close.y),
@@ -190,7 +190,9 @@ impl Chart {
             },
             &rendering::ChartTypeParams::new(
                 rendering::BarDimensions::new(
-                    self.state.time_scale().bar_spacing() * self.config.candle_width,
+                    self.state.time_scale().bar_spacing()
+                        * self.series_slot_gap(&item.bars) as f32
+                        * self.config.candle_width,
                     self.config.wick_width,
                 ),
                 rendering::VolumeSettings::new(
@@ -287,7 +289,12 @@ impl Chart {
         item: &PriceSeries,
         map: PriceMap,
         index: usize,
+        background: impl FnOnce(Pos2) -> egui::Color32,
     ) {
+        let radius = item.options.crosshair_marker_radius;
+        if !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
         let Some(time) = self.state.shown().get(index).map(|bar| bar.time) else {
             return;
         };
@@ -295,11 +302,11 @@ impl Chart {
             return;
         };
         let bar = &item.bars[at];
-        let params = item.options.type_params();
+        let styles = item.options.type_styles();
         if let Some(color) = rendering::candles::line_color_at(
             item.options.chart_type,
-            &params.styles,
-            params.baseline,
+            &styles,
+            crate::model::BaselineLevel::PercentOfPane(50.0),
             &map,
             rect,
             bar.close,
@@ -310,12 +317,13 @@ impl Chart {
                 rect.left(),
                 rect.width(),
             );
+            let point = Pos2::new(x, map.price_to_y(bar.close));
             rendering::candles::render_crosshair_marker(
                 &plot.with_clip_rect(plot.clip_rect().intersect(rect)),
-                Pos2::new(x, map.price_to_y(bar.close)),
-                &params.styles,
+                point,
+                &styles,
                 color,
-                self.config.background_color,
+                background(point),
             );
         }
     }

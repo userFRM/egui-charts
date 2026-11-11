@@ -744,7 +744,7 @@ impl SettingsDialog {
                         colors.body_down,
                     );
                     *colors = crate::widget::settings::CandleColorConfig {
-                        color_by_previous_close: style.color_by_previous_close,
+                        color_by_previous_close: colors.color_by_previous_close,
                         show_body: style.body_visible,
                         show_border: style.border_visible,
                         show_wick: style.wick_visible,
@@ -1710,7 +1710,7 @@ mod tests {
             assert_eq!(
                 dialog.settings().candle_colors,
                 CandleColorConfig {
-                    color_by_previous_close: false,
+                    color_by_previous_close: true,
                     show_body: true,
                     show_border: false,
                     show_wick: true,

@@ -225,8 +225,7 @@ fn paint_fills(
         }
         let value = |boundary, bar| match boundary {
             FillBoundary::Level(value) => value.is_finite().then_some(value),
-            FillBoundary::Plot(line) => (line < study.line_count()
-                && study.plot_style(line).visible)
+            FillBoundary::Plot(line) => (line < study.line_count())
                 .then(|| study.plot_value(line, bar))
                 .flatten(),
         };
@@ -370,6 +369,7 @@ impl IndicatorRenderer {
 
         // Handle multi-line indicators
         let line_count = indicator.line_count();
+        let bar_spacing = coords.bar_spacing_for_width();
 
         for line_idx in 0..line_count {
             let mut plot = indicator.plot_style(line_idx);
@@ -378,7 +378,7 @@ impl IndicatorRenderer {
                 PlotType::Columns | PlotType::BackgroundColor
             ) || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
             {
-                plot.width = coords.bar_spacing
+                plot.width = bar_spacing
                     * if plot.plot_type != PlotType::BackgroundColor {
                         0.8
                     } else {
@@ -469,7 +469,7 @@ impl IndicatorRenderer {
                             .checked_sub(bars_start)
                             .and_then(|i| bars.get(i))
                     {
-                        let width = coords.bar_spacing * 0.8;
+                        let width = bar_spacing * 0.8;
                         let open = price_scale.price_to_y(bar.open);
                         let close = price_scale.price_to_y(bar.close);
                         let top = open.min(close);
@@ -1163,7 +1163,14 @@ mod tests {
         };
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
         let red = Color32::from_rgba_unmultiplied(255, 0, 0, 51);
-        for (inverted, visible) in [(false, true), (true, true), (false, false), (true, false)] {
+        for (inverted, visible, boundary_visible) in [
+            (false, true, true),
+            (true, true, true),
+            (false, false, true),
+            (true, false, true),
+            (false, true, false),
+            (true, true, false),
+        ] {
             let mut study = CustomIndicator::new("Band", |_| {
                 vec![
                     IndicatorValue::Multiple(vec![2.0, 0.0]),
@@ -1185,6 +1192,7 @@ mod tests {
             let mut settings = serde_json::to_value(study.settings()).unwrap();
             // The band keeps its own colours even when its boundary plot colours change.
             settings["plots"][0]["color"] = serde_json::json!([10, 20, 30, 255]);
+            settings["plots"][0]["visible"] = boundary_visible.into();
             settings["fills"] = serde_json::json!([{
                 "color": blue.to_array(), "inverted_color": red.to_array(), "visible": visible
             }]);

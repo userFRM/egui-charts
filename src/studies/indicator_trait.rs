@@ -346,7 +346,7 @@ pub trait Indicator: Send {
             super::settings::declared_levels(self);
         super::StudySettings {
             show_legend_values: true,
-            user_edit_enabled: self.user_edit_enabled(),
+            user_edit_enabled: Some(self.user_edit_enabled()),
             help_url: self.help_url().map(str::to_owned),
             plots: (0..self.line_count())
                 .map(|line| self.plot_style(line))
@@ -510,7 +510,8 @@ pub trait Indicator: Send {
     /// studies reading it or the feed reports its end, and loads more when that time moves
     /// earlier. The time may lie before the chart's first bar, however few bars the chart holds.
     /// `None`, the default, counts as the chart's first bar. Price-based chart types such as
-    /// Renko do not use the times and always load the series back to that bar.
+    /// Renko load at least back to that bar, honoring a stated time only when it lies earlier,
+    /// since the source study is not given the view of the rendered elements.
     fn data_start(
         &self,
         request: &super::StudyDataRequest,

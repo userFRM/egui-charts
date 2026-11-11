@@ -28,7 +28,7 @@ fn shared_prices(
     study: &dyn Indicator,
     range: std::ops::Range<usize>,
 ) -> impl Iterator<Item = f64> + '_ {
-    let gradients = crate::studies::plots::gradient_prices(study, range.clone());
+    let fills = crate::studies::plots::fill_prices(study, range.clone());
     (0..study.line_count())
         .filter(move |line| {
             let plot = study.plot_style(*line);
@@ -51,7 +51,7 @@ fn shared_prices(
                     )
                 }))
         })
-        .chain(gradients)
+        .chain(fills)
 }
 
 impl Chart {
@@ -534,7 +534,7 @@ impl Chart {
 
     /// The times of the first and the last bar slot in view, whitespace included.
     fn visible_times(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let logical = self.state.time_scale().visible_logical_range();
+        let logical = self.state.time_scale().visible_data_range();
         let bars = self.state.shown();
         crate::model::time_at(bars, logical.left.floor() as f64)
             .zip(crate::model::time_at(bars, logical.right.ceil() as f64))
@@ -542,6 +542,17 @@ impl Chart {
     }
 
     pub(in crate::widget) fn series_range(&self, item: &PriceSeries) -> std::ops::Range<usize> {
+        let scale = self.state.time_scale();
+        if let Some(positions) = scale.numeric_positions() {
+            let (left, right) = scale.visible_positions();
+            let half = self.series_slot_gap(&item.bars) / 2.0;
+            return item
+                .bars
+                .partition_point(|bar| positions.position_at(bar.time) <= left - half)
+                ..item
+                    .bars
+                    .partition_point(|bar| positions.position_at(bar.time) < right + half);
+        }
         match self.visible_times() {
             Some((first, last)) => {
                 item.bars.partition_point(|bar| bar.time < first)

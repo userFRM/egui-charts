@@ -844,14 +844,18 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             visible: &mut level.visible,
             value: &mut level.value,
             legacy_label: Some(&mut level.label),
-            text: (drawing.tool_type == Tool::FibonacciRetracement).then_some(&mut level.text),
+            text: (matches!(
+                drawing.tool_type,
+                Tool::FibonacciRetracement | Tool::FibonacciExtension
+            ))
+            .then_some(&mut level.text),
             color: &mut level.color,
             line_style: None,
             style_override: (drawing.tool_type == Tool::FibonacciWedge)
                 .then_some((&mut level.line_style, inherited_style)),
             width: matches!(
                 drawing.tool_type,
-                Tool::FibonacciRetracement | Tool::FibonacciWedge
+                Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciWedge
             )
             .then_some((&mut level.width, inherited_width)),
             range: if matches!(
@@ -895,7 +899,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
         );
         if !matches!(
             drawing.tool_type,
-            Tool::FibonacciRetracement | Tool::FibonacciChannel
+            Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciChannel
         ) {
             ui.checkbox(
                 &mut config.labels_on_left,
@@ -1349,6 +1353,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         for tool in [
             Tool::FibonacciRetracement,
+            Tool::FibonacciExtension,
             Tool::FibonacciChannel,
             Tool::FibonacciWedge,
         ] {
@@ -1379,6 +1384,8 @@ mod tests {
             chart.drawings_mut().select_drawings([7, 8]);
             let mut dialog = DrawingPropertiesDialog::new();
             dialog.config.height = 650.0;
+            let mut older = chart.drawings().drawings[0].clone();
+            older.fib_config = None;
             let mut h = Harness::builder()
                 .with_size(egui::vec2(1440.0, 900.0))
                 .with_accessibility_check(false)
@@ -1389,6 +1396,26 @@ mod tests {
                     },
                     (chart, dialog),
                 );
+            // Merely inspecting an older drawing must not materialise its effective config.
+            if matches!(tool, Tool::FibonacciRetracement | Tool::FibonacciExtension) {
+                let current =
+                    std::mem::replace(&mut h.state_mut().0.drawings_mut().drawings[0], older);
+                for tab in [PropertiesTab::Style, PropertiesTab::Text] {
+                    let (chart, dialog) = h.state_mut();
+                    dialog.open_for_chart(chart, DrawingId(7));
+                    dialog.active_tab = tab;
+                    h.run();
+                    assert!(h.state().0.drawings().drawings[0].fib_config.is_none());
+                    h.get_by_role_and_label(Role::Button, "Ok").click();
+                    h.run();
+                    let chart = &mut h.state_mut().0;
+                    assert!(chart.drawings().drawings[0].fib_config.is_none());
+                    assert!(chart.undo());
+                    assert!(chart.drawings().drawings[0].fib_config.is_none());
+                    assert!(!chart.can_undo());
+                }
+                h.state_mut().0.drawings_mut().drawings[0] = current;
+            }
             for confirm in [false, true] {
                 let (chart, dialog) = h.state_mut();
                 dialog.open_for_chart(chart, DrawingId(7));
@@ -1403,7 +1430,7 @@ mod tests {
                     for label in ["Label position", "Label height"] {
                         h.get_by_role_and_label(Role::ComboBox, label);
                     }
-                    if tool == Tool::FibonacciRetracement {
+                    if matches!(tool, Tool::FibonacciRetracement | Tool::FibonacciExtension) {
                         h.get_by_role_and_label(Role::CheckBox, "Show level text");
                         for label in ["Text position", "Text height"] {
                             h.get_by_role_and_label(Role::ComboBox, label);

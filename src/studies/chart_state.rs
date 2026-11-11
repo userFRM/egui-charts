@@ -282,7 +282,7 @@ impl ChartState {
     /// the range is empty: it starts at 0 before the first bar and at the number of bars
     /// after the last.
     pub fn visible_range(&self) -> (usize, usize) {
-        let (start, end) = self.time_scale.visible_logical_range().to_strict_range();
+        let (start, end) = self.time_scale.visible_data_range().to_strict_range();
         let end = end.min(self.shown().len());
         (start.min(end), end)
     }
@@ -344,7 +344,7 @@ impl ChartState {
             .map_or(f64::NAN, |bar| bar.close);
         let transform = PriceTransform::new(mode, base);
         // Unclamped, so that displaced values and projections past the last bar are fitted.
-        let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
+        let (study_start, study_end) = self.time_scale.visible_data_range().to_strict_range();
         let study_values = indicators
             .into_iter()
             .filter(|study| {

@@ -338,18 +338,20 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 8 extends a trend line past the anchor its Left or
-    /// Right names; those saved before that change load with the reach they were drawn with.
-    /// Version 7 does the same for an info line or trend angle. Version 6 draws arrow marks in
-    /// their own colour; earlier versions load in the colour they were drawn in. Version 5 gives
-    /// Elliott double and triple
-    /// combinations an unlabelled start point; earlier versions load with a start point on their
+    /// Current storage format version. Version 9 draws a callout's border at its stored width;
+    /// those saved before that change load with the 1 px border they were drawn with. Version 8
+    /// extends a trend line past the anchor its Left or Right names; those saved before that
+    /// change load with the reach they were drawn with.
+    /// Version 7 does the same for rays, extended lines, info lines and trend angles.
+    /// Version 6 draws arrow marks in their own colour; earlier versions load in the colour they
+    /// were drawn in. Version 5 gives Elliott double and triple combinations an unlabelled start
+    /// point; earlier versions load with a start point on their
     /// first anchor.
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 8;
+    pub const CURRENT_VERSION: u32 = 9;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -609,6 +611,11 @@ impl DrawingStorage {
                                 }
                             }
                         }
+                        if version < 9 && tool == T::Callout {
+                            // Earlier renderers drew a callout's border 1 px wide whatever its
+                            // width.
+                            drawing.drawing.stroke_width = 1.0;
+                        }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
                             && !has_price_labels)
@@ -633,6 +640,23 @@ impl DrawingStorage {
                                     settings.extend_right = false;
                                 }
                                 std::cmp::Ordering::Less => {}
+                            }
+                        }
+                        if (3..7).contains(&version)
+                            && matches!(tool, T::Ray | T::ExtendedLine)
+                            && let [a, b, ..] = drawing.points.as_slice()
+                        {
+                            // Versions 3 to 6 used pane sides for sloping lines and the upper
+                            // anchor for vertical extended lines. Later version 6 records have
+                            // no marker for the changed rule; versions 1 and 2 migrate above.
+                            let (first, second) = ((a.ts_ms, a.subms_ns), (b.ts_ms, b.subms_ns));
+                            let bottom_up = tool == T::ExtendedLine && a.price < b.price;
+                            if first > second || (first == second && bottom_up) {
+                                let settings = &mut drawing.drawing;
+                                std::mem::swap(
+                                    &mut settings.extend_left,
+                                    &mut settings.extend_right,
+                                );
                             }
                         }
                         match (tool, drawing.points.as_slice()) {
@@ -981,7 +1005,8 @@ impl std::error::Error for StorageError {
 /// the colour, width, lock, visibility and text, and nothing else.
 mod v1 {
     use super::StoredCoord;
-    use crate::drawings::{Drawing, DrawingToolType};
+    use crate::drawings::{Drawing, DrawingToolType, FontWeight, LineMeasurements};
+    use crate::model::LineStyle;
     use serde::Deserialize;
     use std::collections::HashMap;
 
@@ -1022,9 +1047,80 @@ mod v1 {
             .map_err(super::SkipReason::UnknownTool)?;
         let Color { r, g, b, a } = stored.color;
         let mut drawing = Drawing::with_color(0, tool_type, [r, g, b, a]);
+        // Version 1 stored none of these settings; creation styles must not colour old saves.
+        // The released renderers tinted these tools' areas in the saved colour; the regression
+        // trend shaded its inner band at 25 and its outer band at 15.
+        drawing.fill_color = match tool_type {
+            DrawingToolType::TimeCycles => Some(15),
+            DrawingToolType::DateRange | DrawingToolType::HeadAndShoulders => Some(20),
+            DrawingToolType::RegressionTrend
+            | DrawingToolType::DisjointChannel
+            | DrawingToolType::XABCDPattern
+            | DrawingToolType::CypherPattern
+            | DrawingToolType::TrianglePattern => Some(25),
+            DrawingToolType::DateAndPriceRange => Some(30),
+            DrawingToolType::FlatTopBottom => Some(35),
+            _ => None,
+        }
+        .map(|alpha| [r, g, b, alpha]);
         drawing.fib_config = None;
+        drawing.pitchfork = None;
+        drawing.volume_profile = None;
+        drawing.line_style = LineStyle::Solid;
+        // The released renderers used fixed sizes, not the constructor's unused 12 pt field.
+        // Other tools had no stored text presentation; their added captions keep their defaults.
+        drawing.font_size = match tool_type {
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText => 14.0,
+            DrawingToolType::TrendAngle | DrawingToolType::Callout => 13.0,
+            DrawingToolType::Measure
+            | DrawingToolType::PriceRange
+            | DrawingToolType::DateRange
+            | DrawingToolType::PriceLabel
+            | DrawingToolType::PriceNote
+            | DrawingToolType::Signpost
+            | DrawingToolType::Comment
+            | DrawingToolType::AnchoredNote => 11.0,
+            DrawingToolType::InfoLine
+            | DrawingToolType::DateAndPriceRange
+            | DrawingToolType::Note
+            | DrawingToolType::FlagNote => 10.0,
+            DrawingToolType::FontIcon => (stored.line_width * 8.0).clamp(24.0, 72.0),
+            _ => drawing.font_size,
+        };
+        drawing.font_weight = FontWeight::Normal;
+        drawing.text_color = None;
+        drawing.background = true;
+        drawing.border = true;
+        drawing.border_color = None;
+        drawing.channel_midline = false;
+        // Info lines already displayed readouts; other lines keep their old text placement.
+        drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
+            LineMeasurements::for_tool(tool_type)
+        } else {
+            LineMeasurements::default()
+        };
         drawing.position_readout.persistent = true;
+        // Rays and extended lines get their former reach from the version 3 step. Arrow and
+        // path heads keep their geometry; the other creation fields are unset or tool-neutral.
         drawing.stroke_width = stored.line_width;
+        if tool_type == DrawingToolType::Measure
+            && let [a, b, ..] = stored.points.as_slice()
+        {
+            // The released renderer tinted a fall red and a rise or flat move blue.
+            let [r, g, b] = if b.price < a.price {
+                [242, 54, 69]
+            } else {
+                [41, 98, 255]
+            };
+            drawing.fill_color = Some([r, g, b, 30]);
+            drawing.color = [r, g, b, 150];
+            // Leave invalid saved widths for the common validation in `from_json`.
+            if drawing.stroke_width > 0.0
+                && drawing.stroke_width <= crate::drawings::validation::MAX_STROKE_WIDTH
+            {
+                drawing.stroke_width = 1.5;
+            }
+        }
         drawing.locked = stored.locked;
         drawing.visible = stored.visible;
         drawing.text = stored
@@ -1480,8 +1576,16 @@ mod tests {
         assert_eq!(v1.drawings().len(), tools.len());
         for (stored, (tool, text)) in v1.drawings().iter().zip(tools) {
             let mut want = Drawing::with_color(1, tool, [33, 150, 243, 255]);
-            // Old files without Fibonacci settings retain their absent config.
+            // Version 1 had no fill, independent text styling or Fibonacci configuration.
             want.fib_config = None;
+            want.fill_color = None;
+            want.line_style = LineStyle::Solid;
+            // Only the text label rendered text here, in a fixed 14 pt font.
+            want.font_size = 14.0;
+            want.text_color = None;
+            want.background = true;
+            want.border = true;
+            want.border_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
@@ -1748,13 +1852,16 @@ mod tests {
         }
 
         // Strokes saved before version 4 were drawn at twice (brush) and eight times
-        // (highlighter) their width, the highlighter at alpha 100. They load as drawn, once.
+        // (highlighter) their width, the highlighter at alpha 100, and callout borders before
+        // version 9 at 1 px whatever their width. They load as drawn, once.
         for (version, tool, width, alpha, want_width, want_alpha) in [
             (2, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
             (3, DrawingToolType::Brush, 3.0, 200, 6.0, 200),
             (3, DrawingToolType::Highlighter, 2.0, 255, 16.0, 100),
             (3, DrawingToolType::Highlighter, 20.0, 40, 100.0, 100),
             (4, DrawingToolType::Highlighter, 2.0, 40, 2.0, 40),
+            (8, DrawingToolType::Callout, 2.0, 255, 1.0, 255),
+            (9, DrawingToolType::Callout, 2.0, 255, 2.0, 255),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -2055,12 +2162,364 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let error = DrawingStorage::from_json(&current.replace("\"version\": 8", "\"version\": 9"))
-            .unwrap_err();
+        let error =
+            DrawingStorage::from_json(&current.replace("\"version\": 9", "\"version\": 10"))
+                .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 9, supported } if *supported == (1..=8)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 10, supported } if *supported == (1..=9)),
             "{error}"
         );
+    }
+
+    /// Version 1 held no fill or tool configuration. Fills follow the v0.2.0 renderers: the
+    /// area tools in this table tinted in the drawing colour at a fixed alpha, and the measure a
+    /// negative price change red, zero or a rise blue, at alpha 30 and 150.
+    #[test]
+    fn version_1_profile_drawings_restore_without_a_config() {
+        use DrawingToolType as T;
+        for (tool, prices, font, alpha) in [
+            (T::Rect, [100.0, 110.0], None, None),
+            (T::Circle, [100.0, 110.0], None, None),
+            (T::Ellipse, [100.0, 110.0], None, None),
+            (T::Arc, [100.0, 110.0], None, None),
+            (T::Polyline, [100.0, 110.0], None, None),
+            (T::PriceRange, [100.0, 110.0], Some(11.0), None),
+            (T::Pitchfork, [100.0, 110.0], None, None),
+            (T::SchiffPitchfork, [100.0, 110.0], None, None),
+            (T::ModifiedSchiffPitchfork, [100.0, 110.0], None, None),
+            (T::InsidePitchfork, [100.0, 110.0], None, None),
+            (T::Pitchfan, [100.0, 110.0], None, None),
+            (T::FixedRangeVolumeProfile, [100.0, 110.0], None, None),
+            (T::AnchoredVolumeProfile, [100.0, 110.0], None, None),
+            (T::FibonacciRetracement, [100.0, 110.0], None, None),
+            (T::ParallelChannel, [100.0, 110.0], None, None),
+            (T::FlatTopBottom, [100.0, 110.0], None, Some(35)),
+            (T::DisjointChannel, [100.0, 110.0], None, Some(25)),
+            (T::RegressionTrend, [100.0, 110.0], None, Some(25)),
+            (T::XABCDPattern, [100.0, 110.0], None, Some(25)),
+            (T::CypherPattern, [100.0, 110.0], None, Some(25)),
+            (T::HeadAndShoulders, [100.0, 110.0], None, Some(20)),
+            (T::TrianglePattern, [100.0, 110.0], None, Some(25)),
+            (T::TimeCycles, [100.0, 110.0], None, Some(15)),
+            (T::TextLabel, [100.0, 110.0], Some(14.0), None),
+            (T::AnchoredText, [100.0, 110.0], Some(14.0), None),
+            (T::Callout, [100.0, 110.0], Some(13.0), None),
+            (T::TrendAngle, [100.0, 110.0], Some(13.0), None),
+            (T::InfoLine, [100.0, 110.0], Some(10.0), None),
+            (T::Comment, [100.0, 110.0], Some(11.0), None),
+            (T::DateRange, [100.0, 110.0], Some(11.0), Some(20)),
+            (T::DateAndPriceRange, [100.0, 110.0], Some(10.0), Some(30)),
+            (T::PriceLabel, [100.0, 110.0], Some(11.0), None),
+            (T::PriceNote, [100.0, 110.0], Some(11.0), None),
+            (T::Signpost, [100.0, 110.0], Some(11.0), None),
+            (T::Note, [100.0, 110.0], Some(10.0), None),
+            (T::AnchoredNote, [100.0, 110.0], Some(11.0), None),
+            (T::FlagNote, [100.0, 110.0], Some(10.0), None),
+            (T::FontIcon, [100.0, 110.0], Some(24.0), None),
+            (T::ArrowMarker, [100.0, 110.0], None, None),
+            (T::Measure, [110.0, 100.0], Some(11.0), Some(30)),
+            (T::Measure, [100.0, 110.0], Some(11.0), Some(30)),
+            (T::Measure, [100.0, 100.0], Some(11.0), Some(30)),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v1.json")).unwrap();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["tool_type"] = tool.to_string().into();
+            records[0]["points"] = serde_json::json!([
+                {"ts_ms": T0, "price": prices[0]},
+                {"ts_ms": T0 + 60_000, "price": prices[1]},
+                {"ts_ms": T0 + 120_000, "price": prices[0]}
+            ]);
+            if tool == T::Measure {
+                let mut invalid = saved.clone();
+                invalid["drawings"][0]["line_width"] = (-1.0).into();
+                let (loaded, skipped) = DrawingStorage::from_json(&invalid.to_string()).unwrap();
+                assert!(
+                    loaded.drawings.is_empty(),
+                    "invalid stored width must still be rejected"
+                );
+                assert_eq!(skipped.len(), 1);
+            }
+            let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            for storage in [&once, &twice] {
+                let drawing = &storage.drawings[0].drawing;
+                let tint = if prices[1] < prices[0] {
+                    [242, 54, 69]
+                } else {
+                    [41, 98, 255]
+                };
+                // Areas take the saved colour, the measure the tint of its move.
+                let rgb = if tool == T::Measure {
+                    tint
+                } else {
+                    [33, 150, 243]
+                };
+                let fill = alpha.map(|alpha| [rgb[0], rgb[1], rgb[2], alpha]);
+                assert_eq!(drawing.fill_color, fill, "{tool:?} {prices:?}");
+                assert!(drawing.fib_config.is_none(), "{tool:?}");
+                assert!(drawing.pitchfork.is_none(), "{tool:?}");
+                assert!(drawing.volume_profile.is_none(), "{tool:?}");
+                assert_eq!(drawing.line_style, LineStyle::Solid, "{tool:?}");
+                if let Some(font) = font {
+                    assert_eq!(drawing.font_size, font, "{tool:?}");
+                }
+                assert_eq!(drawing.font_weight, FontWeight::Normal, "{tool:?}");
+                assert_eq!(drawing.text_color, None, "{tool:?}");
+                assert!(drawing.background && drawing.border, "{tool:?}");
+                assert_eq!(drawing.border_color, None, "{tool:?}");
+                assert!(!drawing.channel_midline, "{tool:?}");
+                if tool == T::Measure {
+                    assert_eq!(drawing.color, [tint[0], tint[1], tint[2], 150]);
+                    assert_eq!(drawing.stroke_width, 1.5);
+                }
+                if matches!(
+                    tool,
+                    T::Measure | T::PriceRange | T::DateRange | T::DateAndPriceRange
+                ) {
+                    let restored = restore(&storage.drawings[0], 1);
+                    let view = crate::drawings::rendering::ChartView {
+                        instrument: None,
+                        price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        bars: &[],
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                        revision: 0,
+                        bar_to_x: &bar_to_x,
+                        price_to_y: &price_to_y,
+                        y_to_price: &|y| (500.0 - f64::from(y)) / 2.0,
+                        time_axis: false,
+                    };
+                    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                        let ctx = egui::Context::default();
+                        crate::theme::apply_to_egui(&ctx, &theme);
+                        let pane =
+                            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 500.0));
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(pane),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                if tool == T::Measure {
+                                    restored.render_measure(ui.painter(), &view);
+                                } else {
+                                    restored.render_range(
+                                        ui.painter(),
+                                        pane,
+                                        restored.stroke(),
+                                        &view,
+                                    );
+                                }
+                            },
+                        );
+                        let shapes = std::mem::take(&mut output.shapes);
+                        output.drop_without_applying_deltas();
+                        if fill.is_some() && prices[0] != prices[1] {
+                            assert!(shapes.iter().any(|s| matches!(&s.shape,
+                                egui::Shape::Rect(r) if r.fill == restored.fill_color32().unwrap())));
+                        }
+                        assert!(shapes.iter().any(|s| matches!(&s.shape,
+                            egui::Shape::LineSegment { stroke, .. } if *stroke == restored.stroke())));
+                        let text = shapes
+                            .iter()
+                            .find_map(|s| match &s.shape {
+                                egui::Shape::Text(text) => Some(text),
+                                _ => None,
+                            })
+                            .expect("range readout");
+                        assert_eq!(
+                            text.galley.job.sections[0].format.font_id.size,
+                            font.unwrap(),
+                            "{tool:?}"
+                        );
+                        assert!(pane.contains_rect(text.visual_bounding_rect()), "{tool:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Saves `tool` with `anchors` as (bar, price) and Extend (Left, Right) set to `flags` in
+    /// each shape of record a build wrote, loads it, saves and loads it again, and returns each
+    /// load whose painted segment differs from the one that build painted: `old` in versions 3
+    /// to 6, `new` from version 7. The pane is 0..1000 square; bar b sits at x = 100 + 8b and
+    /// price p at y = 500 - 2p.
+    fn reach_changes(
+        tool: DrawingToolType,
+        anchors: [(f32, f64); 2],
+        flags: (bool, bool),
+        old: [(f32, f32); 2],
+        new: [(f32, f32); 2],
+    ) -> Vec<String> {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 1000.0));
+        let near =
+            |p: egui::Pos2, (x, y): (f32, f32)| (p.x - x).abs() < 1e-2 && (p.y - y).abs() < 1e-2;
+        let mut drawing = Drawing::new(1, tool);
+        drawing.chart_points = anchors
+            .iter()
+            .map(|&(bar, price)| ChartPoint::new(bar, price))
+            .collect();
+        (drawing.extend_left, drawing.extend_right) = flags;
+        drawing.completed = true;
+        let mut storage = DrawingStorage::new("AAPL");
+        storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
+        let current: serde_json::Value = serde_json::from_str(&storage.to_json().unwrap()).unwrap();
+        let mut failures = Vec::new();
+        // Versions 3 to 5 wrote no `line_measurements` (None). Version 6 wrote none, then one
+        // without the price label and text alignment keys (Some(false)), then every key
+        // (Some(true)), as version 7 does.
+        for (version, keys) in [
+            (3, None),
+            (4, None),
+            (5, None),
+            (6, None),
+            (6, Some(false)),
+            (6, Some(true)),
+            (7, Some(true)),
+            (8, Some(true)),
+        ] {
+            let mut saved = current.clone();
+            saved["version"] = version.into();
+            let settings = saved["drawings"][0]["drawing"].as_object_mut().unwrap();
+            match keys {
+                None => {
+                    settings.remove("line_measurements");
+                }
+                Some(false) => {
+                    let measurements = settings["line_measurements"].as_object_mut().unwrap();
+                    for key in [
+                        "price_labels",
+                        "text_horizontal_align",
+                        "text_vertical_align",
+                    ] {
+                        measurements.remove(key);
+                    }
+                }
+                Some(true) => {}
+            }
+            let want = if version < 7 { old } else { new };
+            let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            let want_flags = if version < 7 && old != new {
+                (flags.1, flags.0)
+            } else {
+                flags
+            };
+            for (load, loaded) in [(1, &once), (2, &twice)] {
+                let restored = restore(&loaded.drawings[0], 1);
+                assert_eq!(
+                    (restored.extend_left, restored.extend_right),
+                    want_flags,
+                    "{tool:?} {anchors:?} v{version} load {load}"
+                );
+                let (a, b) = restored.trend_line_ends(rect).unwrap();
+                let painted = (near(a, want[0]) && near(b, want[1]))
+                    || (near(a, want[1]) && near(b, want[0]));
+                if !painted {
+                    failures.push(format!(
+                        "v{version} {keys:?} load {load}: painted {a:?}..{b:?}, want {want:?}"
+                    ));
+                }
+            }
+        }
+        failures
+    }
+
+    /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
+    /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
+    /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
+    /// (180, 300) and (124, 280); the line through them has slope 20 / 56 and meets x = 0 at
+    /// y = 235.714 and x = 1000 at y = 592.857. A ray drawn left to right and a vertical ray,
+    /// which already extended past the anchor each side names, are controls.
+    #[test]
+    fn ray_saved_right_to_left_keeps_its_reach() {
+        const LEFT: (bool, bool) = (true, false);
+        const RIGHT: (bool, bool) = (false, true);
+        let (to_left, to_right) = (
+            [(0.0, 235.714), (180.0, 300.0)],
+            [(124.0, 280.0), (1000.0, 592.857)],
+        );
+        let (up, down) = (
+            [(140.0, 0.0), (140.0, 300.0)],
+            [(140.0, 280.0), (140.0, 1000.0)],
+        );
+        let (reversed, forward) = ([(10.0, 100.0), (3.0, 110.0)], [(3.0, 110.0), (10.0, 100.0)]);
+        let vertical = [(5.0, 100.0), (5.0, 110.0)];
+        let mut failures = Vec::new();
+        for (anchors, flags, old, new) in [
+            (reversed, RIGHT, to_right, to_left),
+            (reversed, LEFT, to_left, to_right),
+            (forward, RIGHT, to_right, to_right),
+            (forward, LEFT, to_left, to_left),
+            (vertical, RIGHT, up, up),
+            (vertical, LEFT, down, down),
+        ] {
+            for failure in reach_changes(DrawingToolType::Ray, anchors, flags, old, new) {
+                failures.push(format!("{anchors:?} {flags:?}, {failure}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Builds that wrote versions 3 to 6 drew a sloping extended line with one side extended by
+    /// the rays' rule above, and a vertical one from its upper anchor: Left ran up past it to
+    /// the top, Right down past the lower anchor to the bottom. Drawn bottom up, from bar 5,
+    /// price 100 at y = 300 to bar 5, price 110 at y = 280, Right painted (140, 280) to
+    /// (140, 1000) and Left (140, 0) to (140, 300), the other way round from the current rule.
+    /// Drawn top down or left to right, or with both sides extended, both rules paint the same.
+    #[test]
+    fn extended_line_saved_right_to_left_or_bottom_up_keeps_its_reach() {
+        const LEFT: (bool, bool) = (true, false);
+        const RIGHT: (bool, bool) = (false, true);
+        let (to_left, to_right, across) = (
+            [(0.0, 235.714), (180.0, 300.0)],
+            [(124.0, 280.0), (1000.0, 592.857)],
+            [(0.0, 235.714), (1000.0, 592.857)],
+        );
+        let (up, down) = (
+            [(140.0, 0.0), (140.0, 300.0)],
+            [(140.0, 280.0), (140.0, 1000.0)],
+        );
+        let (reversed, forward) = ([(10.0, 100.0), (3.0, 110.0)], [(3.0, 110.0), (10.0, 100.0)]);
+        let (bottom_up, top_down) = ([(5.0, 100.0), (5.0, 110.0)], [(5.0, 110.0), (5.0, 100.0)]);
+        let mut failures = Vec::new();
+        for (anchors, flags, old, new) in [
+            (reversed, RIGHT, to_right, to_left),
+            (reversed, LEFT, to_left, to_right),
+            (reversed, (true, true), across, across),
+            (
+                reversed,
+                (false, false),
+                [(180.0, 300.0), (124.0, 280.0)],
+                [(180.0, 300.0), (124.0, 280.0)],
+            ),
+            (
+                bottom_up,
+                (false, false),
+                [(140.0, 300.0), (140.0, 280.0)],
+                [(140.0, 300.0), (140.0, 280.0)],
+            ),
+            (forward, RIGHT, to_right, to_right),
+            (forward, LEFT, to_left, to_left),
+            (bottom_up, RIGHT, down, up),
+            (bottom_up, LEFT, up, down),
+            (top_down, RIGHT, down, down),
+            (top_down, LEFT, up, up),
+        ] {
+            for failure in reach_changes(DrawingToolType::ExtendedLine, anchors, flags, old, new) {
+                failures.push(format!("{anchors:?} {flags:?}, {failure}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]

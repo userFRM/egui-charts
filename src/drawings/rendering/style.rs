@@ -5,6 +5,9 @@ use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::ColorMode, layers::ShapeIdx};
 
+/// Baseline offset of the second text paint used for synthetic bold.
+pub(super) const BOLD_OFFSET: f32 = 0.6;
+
 /// Colours of the box around an annotation's text, from [`Drawing::text_box_colors`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TextBoxColors {
@@ -216,7 +219,7 @@ impl Drawing {
                 // Synthetic weight keeps host font families and fallback glyphs intact. The copy
                 // moves along the baseline, which text turned along a line turns with it.
                 let mut weighted = t.clone();
-                weighted.pos += egui::Vec2::angled(t.angle) * 0.6;
+                weighted.pos += egui::Vec2::angled(t.angle) * BOLD_OFFSET;
                 *shape = Shape::Vec(vec![Shape::Text(t.clone()), Shape::Text(weighted)]);
             }
             return;
@@ -808,7 +811,8 @@ mod tests {
             ] {
                 let solid = matches!(tool, Comment | PriceNote | Signpost);
                 let plain = matches!(tool, TextLabel | AnchoredText);
-                let border = |color| vec![Stroke::new(1.0, color)];
+                let border =
+                    |color| vec![Stroke::new(if tool == Callout { 2.0 } else { 1.0 }, color)];
                 let pin = tool == AnchoredNote;
                 let text = if pin { theme.ui.text } else { red };
                 let outline = if pin { theme.ui.border } else { red };
@@ -1086,6 +1090,7 @@ mod tests {
             GannFixed,
             Brush,
             Highlighter,
+            Callout,
         ] {
             for width in [1.0, 2.0, 3.0] {
                 let mut drawing = pattern(tool);
@@ -1111,7 +1116,7 @@ mod tests {
                                 p.points
                                     .windows(2)
                                     .any(|p| drawing.points.windows(2).any(|leg| leg == p))
-                                    || matches!(tool, Brush | Highlighter | SineLine)
+                                    || matches!(tool, Brush | Highlighter | SineLine | Callout)
                                     || matches!(tool, GannSquare | GannFixed)
                                     || (tool == TimeCycles
                                         && p.points.len() > 4
@@ -1119,7 +1124,7 @@ mod tests {
                                 Stroke::new(p.stroke.width, color),
                             )
                         }
-                        Shape::Rect(r) => (false, r.stroke),
+                        Shape::Rect(r) => (tool == Callout, r.stroke),
                         _ => continue,
                     };
                     if stroke.is_empty() {

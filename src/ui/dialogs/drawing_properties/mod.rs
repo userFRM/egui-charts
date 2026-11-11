@@ -189,7 +189,10 @@ mod tests {
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 640.0));
                 let tabs = if matches!(
                     tool,
-                    Tool::FibonacciRetracement | Tool::FibonacciChannel | Tool::FibonacciWedge
+                    Tool::FibonacciRetracement
+                        | Tool::FibonacciExtension
+                        | Tool::FibonacciChannel
+                        | Tool::FibonacciWedge
                 ) {
                     PropertiesTab::all().to_vec()
                 } else {
