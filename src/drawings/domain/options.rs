@@ -446,6 +446,12 @@ pub struct FibonacciConfig {
     /// Show the construction line between anchors, using the drawing's line style.
     #[serde(default = "percent_levels")]
     pub trend_visible: bool,
+    /// Complete resistance arcs into circles, including their shaded bands.
+    #[serde(default)]
+    pub close_arcs: bool,
+    /// Grow a spiral counterclockwise in screen space instead of clockwise.
+    #[serde(default)]
+    pub spiral_counterclockwise: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
@@ -517,6 +523,8 @@ impl FibonacciConfig {
             text_position: LineTextHorizontalAlign::Center,
             text_vertical: fib_vertical_align(),
             trend_visible: true,
+            close_arcs: false,
+            spiral_counterclockwise: false,
         }
     }
 
@@ -546,6 +554,7 @@ impl FibonacciConfig {
             BLUE, CYAN, DEEP_PURPLE, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL,
         };
         let levels: Vec<(f32, [u8; 4], bool)> = match tool {
+            T::FibonacciSpiral => Vec::new(),
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
                 .map(|value| (value, if value == 0.0 { GREY } else { BLUE }, true))
                 .to_vec(),
@@ -633,7 +642,7 @@ impl FibonacciConfig {
                     ..FibonacciLevel::new(value, "", color)
                 })
                 .collect(),
-            show_background: tool != T::FibonacciTimeZones,
+            show_background: !matches!(tool, T::FibonacciTimeZones | T::FibonacciSpiral),
             background_opacity: 51,
             show_levels: (tool == T::FibonacciWedge).then_some(true),
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
@@ -686,7 +695,9 @@ impl FibonacciConfig {
             show_text,
             text_position,
             text_vertical,
-            trend_visible
+            trend_visible,
+            close_arcs,
+            spiral_counterclockwise
         );
         if original.levels.len() == edited.levels.len() {
             for ((target, original), edited) in self
