@@ -20,9 +20,8 @@
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
-//! use egui_charts::studies::{Indicator, Median};
-//!
 //! use egui_charts::model::PriceSource;
+//! use egui_charts::studies::{Indicator, Median};
 //!
 //! let mut median = Median::new(3, 14, 2.0).with_source(PriceSource::Close);
 //! median.calculate(&bars);
@@ -352,6 +351,25 @@ mod tests {
                 &format!("{source:?} restored"),
             );
         }
+        // A template saved before the source existed lists three inputs and draws the midpoint.
+        let saved = StudyTemplate {
+            name: "Median".to_owned(),
+            inputs: vec![
+                ("length".to_owned(), InputValue::Length(3)),
+                ("atr_length".to_owned(), InputValue::Length(2)),
+                ("multiplier".to_owned(), InputValue::Number(2.0)),
+            ],
+            settings: ConfiguredStudy::new(Box::new(Median::default())).settings(),
+            visible: true,
+            scale: None,
+        };
+        let mut older = saved.create().unwrap();
+        older.calculate(&bars);
+        assert_rows(
+            &rows(older.as_ref()),
+            &want(midpoint.1, midpoint.2),
+            "saved before the source",
+        );
         let editor = ConfiguredStudy::new(Box::new(Median::default())).inputs();
         let input = editor.iter().find(|input| input.id == "source").unwrap();
         assert_eq!(input.label, "Median source");
