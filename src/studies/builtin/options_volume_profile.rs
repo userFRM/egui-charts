@@ -37,12 +37,22 @@ struct CachedProfile {
     interest_available: bool,
     pain_available: bool,
     awaiting_chain: bool,
+    // Set by each rebuild and taken when held inputs are retried.
+    rebuilt: bool,
 }
 
 /// How an input the chain decides on is listed while it waits for the chain, or `None` for any
 /// other id. Its saved choice of measure is kept as saved, whatever the chain then offers.
 fn waiting_input(id: &str, value: InputValue) -> Option<StudyInput> {
     let (label, kind, default) = match id {
+        "measure_label" if matches!(&value, InputValue::Text(label) if ["Volume", "Open interest", "Gamma exposure"].contains(&label.as_str())) =>
+        {
+            return Some(
+                StudyInput::new(id, "Measure label", value, InputKind::Text)
+                    .with_default(InputValue::Text("Volume".into()))
+                    .shown_when("measure", Vec::new()),
+            );
+        }
         "measure" => (
             "Measure",
             InputKind::Choice(vec![
@@ -93,7 +103,7 @@ pub struct OptionsVolumeProfile {
     exposure: Option<OptionExposureHandle>,
     exposure_levels: [Cell<bool>; 3],
     max_pain: Cell<bool>,
-    // Inputs saved before the chain offered them, in their saved order.
+    // Inputs the chain does not yet offer, in their saved order.
     waiting_inputs: RefCell<Vec<(String, InputValue)>>,
     expected_move: bool,
     move_iv: bool,
@@ -189,7 +199,8 @@ impl OptionsVolumeProfile {
     /// and uncrossed. Implied volatility instead uses price × IV × sqrt(calendar days / 365),
     /// with the mean of available ATM call/put IVs. The centre is the newest supplied
     /// underlying price for that expiry, or the latest valid underlying bar close when absent.
-    /// Historical fallback closes must be at or before the query's `as_of`. Option last trades
+    /// A historical fallback bar has closed when its successor opens by the query's `as_of`;
+    /// the last bar is eligible from its own opening time. Option last trades
     /// never replace missing bid/ask mids.
     /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight.
     /// Nearest-expiry selection and band ageing follow UTC time for live chains and the
@@ -197,8 +208,12 @@ impl OptionsVolumeProfile {
     /// Missing inputs or an expired date remove both bounds and their expiry/method label.
     /// The fill spans the visible pane even when only one underlying bar has arrived.
     /// Inputs saved with data that has not arrived, such as a layout restored before its quotes,
-    /// are listed and saved as they were and apply once the chain and any attached exposure
-    /// answer. One that answer does not offer is then dropped, and setting it fails as usual.
+    /// are listed and saved as they were and apply as their required data becomes available.
+    /// Saved expiry and measure labels take precedence over their choice positions;
+    /// an expiry no longer listed selects Nearest. Older saves keep position semantics.
+    /// New saves contain hidden `expiry_label` and `measure_label` inputs that older releases
+    /// do not accept. Editors applying all inputs must update the matching label on an explicit
+    /// choice edit or reset, and preserve it on unrelated edits while a measure is unavailable.
     /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
@@ -269,21 +284,46 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         self.refresh_cache();
-        if self.waiting_inputs.borrow().is_empty() || self.cache.borrow().awaiting_chain {
-            return;
-        }
-        // In saved order, since the measure decides which levels are offered.
-        for (id, value) in self.waiting_inputs.take() {
-            let input = self
-                .inputs()
-                .into_iter()
-                .find(|input| input.id == id && input.accepts(&value));
-            if let Some(input) = input {
-                self.set_chain_input(&id, &value, &input);
-                *self.cache.borrow_mut() = CachedProfile::default();
+        // Held inputs can only apply once new data or a setting has rebuilt the cache. The flag is
+        // taken only while inputs are held, and a rebuild during this retry, from an applied input
+        // or a snapshot arriving meanwhile, leaves it set for the next lookup.
+        if !self.waiting_inputs.borrow().is_empty()
+            && std::mem::take(&mut self.cache.borrow_mut().rebuilt)
+        {
+            let (awaiting_chain, supplied) = {
+                let cache = self.cache.borrow();
+                (cache.awaiting_chain, cache.supplied.is_some())
+            };
+            if awaiting_chain && !supplied {
+                return;
             }
+            // In saved order, since the measure decides which levels are offered.
+            let pending = self.waiting_inputs.take();
+            let labelled = pending.iter().any(|(id, _)| id == "measure_label");
+            let mut waiting = Vec::new();
+            for (id, value) in pending {
+                // A label names the measure. Without chain rows only Gamma exposure is listed,
+                // which a saved position does not index.
+                if id == "measure" && (labelled || awaiting_chain) {
+                    waiting.push((id, value));
+                    continue;
+                }
+                let input = self
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == id && input.accepts(&value));
+                if input.is_some_and(|input| self.set_chain_input(&id, &value, &input)) {
+                    if id == "measure_label" {
+                        waiting.retain(|(id, _)| id != "measure");
+                    }
+                    *self.cache.borrow_mut() = CachedProfile::default();
+                } else {
+                    waiting.push((id, value));
+                }
+            }
+            self.waiting_inputs.replace(waiting);
+            self.refresh_cache();
         }
-        self.refresh_cache();
     }
 
     /// Set an input the chain decides on, as `input` lists it. False for any other id.
@@ -292,6 +332,27 @@ impl OptionsVolumeProfile {
             ("measure", InputValue::Choice(choice), InputKind::Choice(choices)) => {
                 self.open_interest.set(choices[*choice] == "Open interest");
                 self.gamma.set(choices[*choice] == "Gamma exposure");
+            }
+            ("measure_label", InputValue::Text(label), _) => {
+                let cache = self.cache.borrow();
+                let available = match label.as_str() {
+                    "Volume" => cache.volume_available,
+                    "Open interest" => cache.interest_available,
+                    "Gamma exposure" => {
+                        cache
+                            .exposure
+                            .as_ref()
+                            .is_some_and(|profile| !profile.rows.is_empty())
+                            || cache.supplied.is_some()
+                            || self.gamma.get()
+                    }
+                    _ => false,
+                };
+                if !available {
+                    return false;
+                }
+                self.open_interest.set(label == "Open interest");
+                self.gamma.set(label == "Gamma exposure");
             }
             ("max_pain", InputValue::Toggle(enabled), _) => self.max_pain.set(*enabled),
             ("call_wall", InputValue::Toggle(enabled), _) => self.exposure_levels[0].set(*enabled),
@@ -310,6 +371,7 @@ impl OptionsVolumeProfile {
                 if Arc::ptr_eq(&values, &cache.values) {
                     return;
                 }
+                cache.rebuilt = true;
                 let row_size = self.config.row_size().expect("fixed options row height");
                 (values, row_size)
             }
@@ -347,6 +409,7 @@ impl OptionsVolumeProfile {
                 if same_rows && cache.day == Some(day) && same_exposure {
                     return;
                 }
+                cache.rebuilt = true;
                 let nearest = nearest();
                 let selected_expiry = |expiry| {
                     expiries.binary_search(&expiry).is_ok()
@@ -419,12 +482,12 @@ impl OptionsVolumeProfile {
                                 let value = if puts { row.puts?.abs() } else { row.calls? };
                                 Some((value, row.strike))
                             })
+                            .filter(|(value, _)| *value != 0.0)
                             .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
                             .map(|(_, strike)| strike)
                     })
                 });
-                cache.awaiting_chain =
-                    selected.is_empty() || (self.exposure.is_some() && supplied.is_none());
+                cache.awaiting_chain = selected.is_empty();
                 cache.supplied = supplied;
                 cache.volume_available =
                     !selected.is_empty() && selected.iter().all(|row| row.volume.is_some());
@@ -515,7 +578,7 @@ impl OptionsVolumeProfile {
     }
 
     fn move_band(&self) -> Option<(NaiveDate, [f64; 2])> {
-        if !self.visible || !self.matching_instrument || !self.expected_move {
+        if !self.matching_instrument || !self.expected_move {
             return None;
         }
         self.refresh();
@@ -681,11 +744,13 @@ impl Indicator for OptionsVolumeProfile {
     }
     fn calculate(&mut self, data: &[Bar]) {
         let close = if self.matching_instrument {
-            data.iter().rev().find_map(|bar| {
+            data.iter().enumerate().rev().find_map(|(index, bar)| {
                 (!bar.is_whitespace()
                     && bar.close.is_finite()
                     && bar.close >= 0.0
-                    && self.as_of.is_none_or(|time| bar.time <= time))
+                    && self
+                        .as_of
+                        .is_none_or(|time| data.get(index + 1).unwrap_or(bar).time <= time))
                 .then_some(bar.close)
             })
         } else {
@@ -807,7 +872,7 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
-        if !self.visible || !self.matching_instrument || bar >= self.values.len() {
+        if !self.matching_instrument || bar >= self.values.len() {
             return None;
         }
         if (6..=7).contains(&line) {
@@ -833,6 +898,9 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        if !self.visible {
+            return Vec::new();
+        }
         let Some((_, [low, high])) = self.move_band() else {
             return Vec::new();
         };
@@ -844,6 +912,9 @@ impl Indicator for OptionsVolumeProfile {
         }]
     }
     fn plot_label(&self) -> Option<(usize, String)> {
+        if !self.visible {
+            return None;
+        }
         let (expiry, _) = self.move_band()?;
         let method = if self.move_iv {
             "Implied volatility"
@@ -877,6 +948,7 @@ impl Indicator for OptionsVolumeProfile {
             Expiries::One(date) => 1 + dates.binary_search(&date).expect("listed expiry"),
             Expiries::Through => 1 + dates.len(),
         };
+        let expiry_label = choices[expiry].clone();
         let mut inputs = vec![
             StudyInput::new(
                 "expiry",
@@ -885,6 +957,14 @@ impl Indicator for OptionsVolumeProfile {
                 InputKind::Choice(choices),
             )
             .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "expiry_label",
+                "Expiry label",
+                InputValue::Text(expiry_label),
+                InputKind::Text,
+            )
+            .with_default(InputValue::Text("Nearest".into()))
+            .shown_when("expiry", Vec::new()),
             StudyInput::new(
                 "sides",
                 "Sides",
@@ -910,7 +990,7 @@ impl Indicator for OptionsVolumeProfile {
             InputValue::Text(self.through_date.to_string()),
             InputKind::Text,
         ));
-        let mut measures = Vec::new();
+        let mut measures: Vec<String> = Vec::new();
         if cache.volume_available {
             measures.push("Volume".into());
         }
@@ -934,6 +1014,7 @@ impl Indicator for OptionsVolumeProfile {
                     self.open_interest.get() && cache.volume_available && cache.interest_available,
                 )
             };
+            let label = measures[selected].clone();
             inputs.push(
                 StudyInput::new(
                     "measure",
@@ -942,6 +1023,15 @@ impl Indicator for OptionsVolumeProfile {
                     InputKind::Choice(measures),
                 )
                 .with_default(InputValue::Choice(0)),
+            );
+            inputs.push(
+                StudyInput::new(
+                    "measure_label",
+                    "Measure label",
+                    InputValue::Text(label),
+                    InputKind::Text,
+                )
+                .shown_when("measure", Vec::new()),
             );
         }
         if gamma {
@@ -975,12 +1065,32 @@ impl Indicator for OptionsVolumeProfile {
             );
         }
         let waiting = self.waiting_inputs.borrow();
-        inputs.retain(|input| !waiting.iter().any(|(id, _)| *id == input.id));
+        // A held position keeps its saved meaning, which a label of the shown measure would undo.
+        inputs.retain(|input| {
+            !waiting
+                .iter()
+                .any(|(id, _)| *id == input.id || (id == "measure" && input.id == "measure_label"))
+        });
         inputs.extend(
             waiting
                 .iter()
                 .filter_map(|(id, value)| waiting_input(id, value.clone())),
         );
+        if let Some(label) = inputs.iter().position(|input| input.id == "measure_label") {
+            let mut label = inputs.remove(label);
+            let position = inputs
+                .iter()
+                .position(|input| input.id == "measure")
+                .map_or(inputs.len(), |position| {
+                    if let InputKind::Choice(choices) = &inputs[position].kind
+                        && let Some(default) = choices.first()
+                    {
+                        label.default = InputValue::Text(default.clone());
+                    }
+                    position + 1
+                });
+            inputs.insert(position, label);
+        }
         inputs.extend([
             StudyInput::new(
                 "expected_move",
@@ -1000,13 +1110,44 @@ impl Indicator for OptionsVolumeProfile {
         inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
+        let value = match (id, value, &self.source) {
+            ("expiry", InputValue::Choice(choice), ProfileSource::Chain(_, dates)) => {
+                InputValue::Choice(choice.min(dates.len() + 1))
+            }
+            (_, value, _) => value,
+        };
         let input = self.inputs().into_iter().find(|input| input.id == id);
+        let chain_input = matches!(self.source, ProfileSource::Chain(..))
+            && waiting_input(id, value.clone()).is_some_and(|input| input.accepts(&value));
+        let unavailable_label = chain_input
+            && id == "measure_label"
+            && !input
+                .as_ref()
+                .is_some_and(|input| self.set_chain_input(id, &value, input));
         let waiting = self.waiting_inputs.get_mut();
+        if chain_input {
+            let superseded = if id == "measure_label" && !unavailable_label {
+                "measure"
+            } else if id == "measure" {
+                "measure_label"
+            } else {
+                ""
+            };
+            waiting.retain(|(saved, _)| saved != superseded);
+        }
         let held = waiting.iter().position(|(saved, _)| saved == id);
-        if self.cache.get_mut().awaiting_chain
-            && (held.is_some() || !input.as_ref().is_some_and(|input| input.accepts(&value)))
-            && waiting_input(id, value.clone()).is_some_and(|input| input.accepts(&value))
+        if chain_input
+            && (held.is_some()
+                || unavailable_label
+                || !input.as_ref().is_some_and(|input| input.accepts(&value)))
         {
+            // A held measure shows the default until it applies, as before quotes arrive.
+            if matches!(id, "measure" | "measure_label") {
+                self.open_interest.set(false);
+                self.gamma.set(false);
+            }
+            // The rebuild on the next refresh retries the held value.
+            *self.cache.get_mut() = CachedProfile::default();
             match held {
                 Some(held) => waiting[held].1 = value,
                 None => waiting.push((id.to_owned(), value)),
@@ -1029,6 +1170,20 @@ impl Indicator for OptionsVolumeProfile {
                     Expiries::One(dates[choice - 1])
                 } else {
                     Expiries::Through
+                };
+            }
+            ("expiry_label", InputValue::Text(label)) => {
+                let ProfileSource::Chain(_, dates) = &self.source else {
+                    unreachable!()
+                };
+                self.expiries = if label == "Through date" {
+                    Expiries::Through
+                } else if let Ok(date) = NaiveDate::parse_from_str(&label, "%Y-%m-%d")
+                    && dates.binary_search(&date).is_ok()
+                {
+                    Expiries::One(date)
+                } else {
+                    Expiries::Nearest
                 };
             }
             ("through_date", InputValue::Text(date)) => {
@@ -1350,7 +1505,9 @@ mod tests {
         sink.push(rows(expiry, Utc::now())).unwrap();
         assert_eq!(study.plot_value(6, 0), Some(93.0));
         study.set_visible(false);
-        assert_eq!(study.plot_value(6, 0), None);
+        assert_eq!(study.plot_value(6, 0), Some(93.0));
+        assert!(study.volume_profiles(0..bars.len()).is_empty());
+        assert!(study.fills().is_empty());
         assert!(study.plot_label().is_none());
         study.set_visible(true);
         study.set_instrument(Some(&Instrument::new("OTHER")));
@@ -1586,6 +1743,7 @@ mod tests {
                         .net,
                     Some(13.0)
                 );
+                assert_eq!(study.plot_value(3, 0), Some(100.0), "signed provider calls");
                 assert_eq!(study.plot_value(5, 0), Some(0.0));
                 let mut unknown_call = OptionExposureRow::new(next, 100.0);
                 unknown_call.puts = Some(-2.0);
@@ -1642,6 +1800,61 @@ mod tests {
             assert_eq!(study.plot_value(3, 0), None);
             assert_eq!(study.plot_value(4, 0), None);
             assert_eq!(study.plot_value(5, 0), None);
+        }
+    }
+
+    #[test]
+    fn walls_need_exposure_on_their_side() {
+        let feed = ChainFeed::default();
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        let chain = OptionChain::new(
+            &feed,
+            OptionChainQuery::new("SAMPLE", expiry..=expiry),
+            || {},
+        )
+        .unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let bars = [Bar::new(time, 105.0, 112.0, 98.0, 105.0, 1.0)];
+        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        study.calculate(&bars);
+        for (calls, puts, walls) in [
+            ([0.0, 0.0], [0.0, 0.0], [None, None]),
+            ([1.0, 3.0], [0.0, 0.0], [Some(110.0), None]),
+            ([0.0, 0.0], [3.0, 1.0], [None, Some(100.0)]),
+            ([1.0, 1.0], [1.0, 1.0], [Some(100.0), Some(100.0)]),
+        ] {
+            let rows = [100.0, 110.0]
+                .into_iter()
+                .enumerate()
+                .flat_map(|(index, strike)| {
+                    [OptionKind::Call, OptionKind::Put].map(move |kind| {
+                        let mut row = OptionQuote::new(
+                            format!("{strike}-{kind:?}"),
+                            expiry,
+                            strike,
+                            kind,
+                            time,
+                        );
+                        row.gamma = Some(0.05);
+                        row.multiplier = Some(100.0);
+                        row.underlying_price = Some(105.0);
+                        // One contract gives 0.05 * 100 * 105² * 0.01 = 551.25.
+                        row.open_interest = Some(if kind == OptionKind::Call {
+                            calls[index]
+                        } else {
+                            puts[index]
+                        });
+                        row
+                    })
+                })
+                .collect();
+            sink.push(rows).unwrap();
+            study.set_input("measure", InputValue::Choice(1)).unwrap();
+            for id in ["call_wall", "put_wall"] {
+                study.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            assert_eq!([study.plot_value(3, 0), study.plot_value(4, 0)], walls);
         }
     }
 
@@ -1915,8 +2128,7 @@ mod tests {
         );
         assert!(loaded.fills().is_empty());
 
-        // Quotes with volume select it, so the chain offers no walls. The saved walls are dropped,
-        // and setting one fails as it does for any such chain.
+        // Quotes with volume offer no walls. Keep the saved wall until gamma is selected.
         let (later, later_sink, mut later_rows, _, _) = expected_move_chain();
         let mut loaded = template
             .create_with(&profile_factory(later, expiry))
@@ -1925,11 +2137,10 @@ mod tests {
             row.volume = Some(1.0);
         }
         later_sink.push(later_rows).unwrap();
-        assert!(!loaded.inputs().iter().any(|input| input.id == "call_wall"));
-        assert!(matches!(
-            loaded.set_input("call_wall", InputValue::Toggle(true)),
-            Err(StudyError::UnknownInput(_))
-        ));
+        assert!(loaded.inputs().iter().any(|input| input.id == "call_wall"));
+        loaded
+            .set_input("call_wall", InputValue::Toggle(true))
+            .unwrap();
         // An id it can never offer fails even before quotes arrive.
         let (later, _later_sink, _, _, _) = expected_move_chain();
         let mut waiting = OptionsVolumeProfile::from_chain(later, "SAMPLE", vec![expiry]).unwrap();
@@ -1937,5 +2148,531 @@ mod tests {
             waiting.set_input("unheard_of", InputValue::Toggle(true)),
             Err(StudyError::UnknownInput(_))
         ));
+    }
+    /// A hidden profile keeps the values that cursor payloads with hidden studies, and alerts on
+    /// its outputs, read.
+    #[cfg(all(feature = "widget", feature = "drawings"))]
+    #[test]
+    fn hidden_profile_keeps_its_values_for_cursor_payloads_and_alerts() {
+        use crate::model::{AlertSource, LogicalRange};
+        use crate::widget::test_frames::{chart, frame};
+        use crate::widget::{Chart, ChartEvent, CursorDataPolicy};
+
+        let (chain, sink, rows, expiry, _) = expected_move_chain();
+        sink.push(rows).unwrap();
+        let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        profile
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[99.0], &[101.0]);
+        chart.config.show_volume = false;
+        let id = chart.add_indicator(Box::new(profile));
+        chart.set_cursor_data_policy(CursorDataPolicy::IncludeHidden);
+        for time in [0.0, 0.1, 0.2] {
+            frame(&ctx, &mut chart, time, vec![]);
+        }
+        chart.set_visible_logical_range(LogicalRange::new(40.0, 80.0));
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        chart.drain_events().for_each(drop);
+        // The expected low and high in the payload of a pointer moved onto bar `index`.
+        let band = |chart: &mut Chart, index: usize, time: f64| {
+            let pos = egui::Pos2::new(
+                chart.get_chart_mapping().idx_to_x(index),
+                chart.last_rendered_price_rect.center().y,
+            );
+            frame(&ctx, chart, time, vec![egui::Event::PointerMoved(pos)]);
+            let pointer = chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .last()
+                .expect("a cursor payload");
+            pointer
+                .studies
+                .iter()
+                .filter(|(study, row)| *study == id && row.plot.starts_with("Expected"))
+                .map(|(_, row)| (row.plot.clone(), row.value))
+                .collect::<Vec<_>>()
+        };
+        // Strikes 95 and 105 are both 5 from the underlying at 100, so the lower one is at the
+        // money: its call mid is (2 + 4) / 2 = 3 and its put mid (3 + 5) / 2 = 4, a move of 7.
+        let expected = vec![
+            ("Expected low".to_owned(), Some(93.0)),
+            ("Expected high".to_owned(), Some(107.0)),
+        ];
+        assert_eq!(band(&mut chart, 60, 1.0), expected, "visible profile");
+        assert!(chart.set_indicator_visible(id, false));
+        frame(&ctx, &mut chart, 1.5, vec![]);
+        chart.drain_events().for_each(drop);
+        let hidden = band(&mut chart, 61, 2.0);
+        let output = AlertSource::Study {
+            id: id.0.to_string(),
+            output: 6,
+        };
+        let alert = chart.alert_value(&output, 61);
+        assert_eq!((hidden, alert), (expected, Some(93.0)), "hidden profile");
+    }
+    #[test]
+    fn saved_expiry_choice_survives_a_rolled_listing() {
+        let dates = |days: &[u32]| {
+            days.iter()
+                .map(|&day| NaiveDate::from_ymd_opt(2099, 11, day).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let make = |dates: Vec<NaiveDate>| {
+            let feed = ChainFeed::default();
+            let chain = OptionChain::new(
+                &feed,
+                OptionChainQuery::new("SAMPLE", dates[0]..=*dates.last().unwrap()),
+                || {},
+            )
+            .unwrap();
+            let rows = dates
+                .iter()
+                .map(|&expiry| {
+                    let mut row = OptionQuote::new(
+                        expiry.to_string(),
+                        expiry,
+                        100.0,
+                        OptionKind::Call,
+                        Utc::now(),
+                    );
+                    row.volume = Some(expiry.format("%d").to_string().parse().unwrap());
+                    row
+                })
+                .collect();
+            feed.0.lock().unwrap().as_ref().unwrap().push(rows).unwrap();
+            let mut factory = crate::studies::IndicatorFactory::new();
+            factory.register("Options Volume Profile", move || {
+                Box::new(
+                    OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone())
+                        .unwrap(),
+                )
+            });
+            factory
+        };
+        let original = make(dates(&[6, 13, 20]));
+        for (choice, listed, labelled, expected, selected) in [
+            (3, vec![13, 20, 27], true, 20.0, 2),
+            (4, vec![13, 20, 27], true, 33.0, 4),
+            (4, vec![13, 20], true, 33.0, 3),
+            (3, vec![13, 27], true, 13.0, 0),
+            (3, vec![13, 20, 27], false, 27.0, 3),
+            (4, vec![13, 20], false, 33.0, 3),
+        ] {
+            let mut study = original.create("Options Volume Profile").unwrap();
+            study
+                .set_input("expiry", InputValue::Choice(choice))
+                .unwrap();
+            let mut saved = crate::studies::StudyTemplate::from_study(study.as_ref());
+            if !labelled {
+                saved.inputs.retain(|(id, _)| !id.ends_with("_label"));
+            }
+            let restored = saved.create_with(&make(dates(&listed))).unwrap();
+            let plot = restored.volume_profiles(0..1).remove(0);
+            assert_eq!(
+                plot.profile.up(),
+                [expected],
+                "choice {choice}, {listed:?}, labelled {labelled}"
+            );
+            let inputs = restored.inputs();
+            assert_eq!(
+                inputs.iter().find(|i| i.id == "expiry").unwrap().value,
+                InputValue::Choice(selected)
+            );
+            assert!(
+                inputs
+                    .iter()
+                    .filter(|i| i.id.ends_with("_label"))
+                    .all(|i| !i.is_shown(&inputs))
+            );
+        }
+    }
+
+    #[test]
+    fn saved_measure_restores_by_name() {
+        let feed = ChainFeed::default();
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        let bars = vec![Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0); 2];
+        let chain = OptionChain::new(
+            &feed,
+            OptionChainQuery::new("SAMPLE", expiry..=expiry),
+            || {},
+        )
+        .unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let rows: Vec<_> = [OptionKind::Call, OptionKind::Put]
+            .into_iter()
+            .map(|kind| {
+                let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+                let call = row.kind == OptionKind::Call;
+                row.volume = Some(if call { 10.0 } else { 5.0 });
+                row.open_interest = Some(if call { 4.0 } else { 2.0 });
+                row.gamma = Some(0.05);
+                row.multiplier = Some(100.0);
+                row.underlying_price = Some(100.0);
+                row
+            })
+            .collect();
+        sink.push(rows.clone()).unwrap();
+        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        study.set_input("measure", InputValue::Choice(1)).unwrap();
+        study
+            .set_input("max_pain", InputValue::Toggle(true))
+            .unwrap();
+        let saved = crate::studies::StudyTemplate::from_study(&study);
+        for ready in [true, false] {
+            for (missing, pending_exposure) in [(0, false), (1, false), (2, false), (0, true)] {
+                let feed = ChainFeed::default();
+                let later = OptionChain::new(
+                    &feed,
+                    OptionChainQuery::new("SAMPLE", expiry..=expiry),
+                    || {},
+                )
+                .unwrap();
+                let later_sink = feed.0.lock().unwrap().clone().unwrap();
+                let mut changed = rows.clone();
+                changed[1].volume = None;
+                if missing == 1 {
+                    changed.iter_mut().for_each(|row| row.multiplier = None);
+                } else if missing == 2 {
+                    changed[1].volume = Some(5.0);
+                    changed[1].open_interest = None;
+                }
+                if ready {
+                    later_sink.push(changed.clone()).unwrap();
+                }
+                let exposure = pending_exposure.then(|| {
+                    OptionExposureHandle::new(
+                        &feed,
+                        OptionExposureQuery::new(
+                            "SAMPLE",
+                            expiry..=expiry,
+                            OptionExposureKind::Gamma,
+                        ),
+                        || {},
+                    )
+                    .unwrap()
+                });
+                let mut factory = crate::studies::IndicatorFactory::new();
+                factory.register("Options Volume Profile", move || {
+                    let mut profile =
+                        OptionsVolumeProfile::from_chain(later.clone(), "SAMPLE", vec![expiry])
+                            .unwrap();
+                    if let Some(exposure) = &exposure {
+                        profile = profile.with_exposure(exposure.clone()).unwrap();
+                    }
+                    Box::new(profile)
+                });
+                let mut restored = saved.create_with(&factory).unwrap();
+                if !ready {
+                    // Saving before the first response must retain the selected measure and level.
+                    let again = crate::studies::StudyTemplate::from_study(restored.as_ref());
+                    assert!(
+                        again
+                            .inputs
+                            .iter()
+                            .any(|(id, value)| id == "measure" && *value == InputValue::Choice(1))
+                    );
+                    assert!(again.inputs.iter().any(|(id, value)| id == "measure_label"
+                        && *value == InputValue::Text("Open interest".into())));
+                    restored = again.create_with(&factory).unwrap();
+                    later_sink.push(changed).unwrap();
+                }
+                restored.calculate(&bars);
+                let plot = restored.volume_profiles(0..bars.len()).remove(0);
+                assert_eq!(plot.profile.up(), [if missing == 2 { 10.0 } else { 4.0 }]);
+                assert_eq!(plot.profile.down(), [if missing == 2 { 5.0 } else { 2.0 }]);
+                assert_eq!(restored.plot_value(1, 0), (missing == 0).then_some(100.0));
+                #[cfg(all(feature = "widget", feature = "drawings"))]
+                if missing != 0 {
+                    let mut chart =
+                        crate::widget::Chart::new(crate::model::BarData::from_bars(bars.clone()));
+                    chart.set_symbol("SAMPLE");
+                    chart.add_indicator(restored.clone_box());
+                    let snapshot = chart.snapshot_with(&factory).unwrap();
+                    chart.restore_with(&snapshot, &factory).unwrap();
+                    assert_eq!(chart.indicators().next().unwrap().1.plot_value(1, 0), None);
+                }
+                let again = crate::studies::StudyTemplate::from_study(restored.as_ref());
+                restored = again.create_with(&factory).unwrap();
+                restored.calculate(&bars);
+                later_sink.push(rows.clone()).unwrap();
+                assert_eq!(restored.plot_value(1, 0), Some(100.0));
+                assert_eq!(restored.volume_profiles(0..1)[0].profile.up(), [4.0]);
+            }
+        }
+    }
+    /// A profile saved by an earlier release has no labels. Its measure position counts among
+    /// the measures the chain's rows list, whichever feed answers first, and a position that
+    /// the restored chain does not list is saved again as it was.
+    #[test]
+    fn earlier_saved_measure_keeps_its_position() {
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        // A call and a put at 100 with volume 10 and 5 and, when reported, open interest 4 and 2.
+        let rows = |interest: bool| -> Vec<OptionQuote> {
+            [OptionKind::Call, OptionKind::Put]
+                .into_iter()
+                .map(|kind| {
+                    let call = kind == OptionKind::Call;
+                    let mut row =
+                        OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+                    row.volume = Some(if call { 10.0 } else { 5.0 });
+                    row.open_interest = interest.then_some(if call { 4.0 } else { 2.0 });
+                    row.gamma = Some(0.05);
+                    row.multiplier = Some(100.0);
+                    row.underlying_price = Some(100.0);
+                    row
+                })
+                .collect()
+        };
+        let answer = |feed: &ChainFeed, interest: Option<bool>, exposure: bool| {
+            if exposure {
+                let mut row = OptionExposureRow::new(expiry, 100.0);
+                (row.calls, row.puts, row.net) = (Some(12.0), Some(-7.0), Some(5.0));
+                let snapshot =
+                    OptionExposure::new(OptionExposureKind::Gamma, time, "host units", vec![row]);
+                let sink = feed.1.lock().unwrap();
+                sink.as_ref().unwrap().push(snapshot).unwrap();
+            }
+            if let Some(interest) = interest {
+                let sink = feed.0.lock().unwrap();
+                sink.as_ref().unwrap().push(rows(interest)).unwrap();
+            }
+        };
+        let factory = |exposure: bool| {
+            let feed = ChainFeed::default();
+            let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+            let chain = OptionChain::new(&feed, query, || {}).unwrap();
+            let handle = exposure.then(|| {
+                let query =
+                    OptionExposureQuery::new("SAMPLE", expiry..=expiry, OptionExposureKind::Gamma);
+                OptionExposureHandle::new(&feed, query, || {}).unwrap()
+            });
+            let mut factory = crate::studies::IndicatorFactory::new();
+            factory.register("Options Volume Profile", move || {
+                let profile =
+                    OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", vec![expiry])
+                        .unwrap();
+                Box::new(match &handle {
+                    Some(handle) => profile.with_exposure(handle.clone()).unwrap(),
+                    None => profile,
+                })
+            });
+            (factory, feed)
+        };
+        // Saved over Volume, Open interest and Gamma exposure: Volume with the provider answering
+        // first, and Open interest restored over a chain that lists Volume alone.
+        for (exposure, position, interest, up) in [(true, 0, true, 10.0), (false, 1, false, 4.0)] {
+            let (original, feed) = factory(exposure);
+            answer(&feed, Some(true), exposure);
+            let mut study = original.create("Options Volume Profile").unwrap();
+            study
+                .set_input("measure", InputValue::Choice(position))
+                .unwrap();
+            let mut saved = crate::studies::StudyTemplate::from_study(study.as_ref());
+            saved.inputs.retain(|(id, _)| !id.ends_with("_label"));
+            // Restored, read after any provider answer and before the chain's, and saved again.
+            let (restoring, feed) = factory(exposure);
+            let restored = saved.create_with(&restoring).unwrap();
+            answer(&feed, None, exposure);
+            restored.inputs();
+            answer(&feed, Some(interest), false);
+            let saved = crate::studies::StudyTemplate::from_study(restored.as_ref());
+            let (later, feed) = factory(exposure);
+            answer(&feed, Some(true), exposure);
+            let restored = saved.create_with(&later).unwrap();
+            assert_eq!(
+                restored.volume_profiles(0..1)[0].profile.up(),
+                [up],
+                "position {position}"
+            );
+        }
+    }
+    /// A saved measure position the chain does not list waits and shows the default measure,
+    /// also when an undo brings it back after another measure was shown.
+    #[test]
+    fn held_measure_shows_the_default_after_an_undo() {
+        let feed = ChainFeed::default();
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        // Without the put's volume the chain lists Open interest (calls 4, puts 2) and Gamma
+        // exposure, so position 2 is held.
+        let rows = [OptionKind::Call, OptionKind::Put].map(|kind| {
+            let call = kind == OptionKind::Call;
+            let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+            row.volume = call.then_some(10.0);
+            row.open_interest = Some(if call { 4.0 } else { 2.0 });
+            row.gamma = Some(0.05);
+            row.multiplier = Some(100.0);
+            row.underlying_price = Some(100.0);
+            row
+        });
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        sink.push(rows.to_vec()).unwrap();
+        let profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile));
+        let calls = |study: &dyn Indicator| study.volume_profiles(0..1)[0].profile.up().to_vec();
+        study.set_input("measure", InputValue::Choice(2)).unwrap();
+        assert_eq!(calls(&study), [4.0]);
+        let before = study.snapshot_settings();
+        study
+            .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
+            .unwrap();
+        assert_ne!(calls(&study), [4.0]);
+        study.restore_settings(&before).unwrap();
+        assert_eq!(calls(&study), [4.0]);
+    }
+    #[test]
+    fn historical_fallback_close_known_at_as_of() {
+        let (chain, sink, mut rows, expiry, _) = expected_move_chain();
+        rows.iter_mut().for_each(|row| row.underlying_price = None);
+        sink.push(rows).unwrap();
+        let start = NaiveDate::from_ymd_opt(2023, 12, 31)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let bars: Vec<_> = [100.0, 110.0, 120.0]
+            .into_iter()
+            .enumerate()
+            .map(|(day, price)| {
+                Bar::new(
+                    start + chrono::TimeDelta::days(day as i64),
+                    price,
+                    price + 1.0,
+                    price - 1.0,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        study
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        for (count, bounds) in [(3, [93.0, 107.0]), (2, [8.5, 211.5]), (1, [93.0, 107.0])] {
+            // With a successor after the query instant, the middle bar's final close is unknown.
+            // The last bar has no successor, so its close is eligible from its own opening time.
+            study.calculate(&bars[..count]);
+            assert_eq!(
+                [study.plot_value(6, 0), study.plot_value(7, 0)],
+                bounds.map(Some),
+                "{count} bars"
+            );
+        }
+    }
+    #[test]
+    fn options_volume_profile_has_help_article() {
+        let feed = Feed::default();
+        let expiry = NaiveDate::from_ymd_opt(2026, 12, 18).unwrap();
+        let study = OptionsVolumeProfile::new(
+            &feed,
+            OptionsVolumeQuery {
+                symbol: "SAMPLE".into(),
+                expiries: expiry..=expiry,
+            },
+            4.0,
+            || {},
+        )
+        .unwrap();
+        assert_eq!(
+            study.help_url(),
+            Some(
+                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OptionsVolumeProfile.html"
+            )
+        );
+    }
+    #[cfg(feature = "ui")]
+    #[test]
+    fn profile_editor_updates_choice_labels_on_edit_and_reset() {
+        use crate::ui::dialogs::indicator_dialog::IndicatorSettingsDialog;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (chain, sink, mut rows, expiry, _) = expected_move_chain();
+        for row in &mut rows {
+            row.volume = Some(10.0);
+            row.open_interest = Some(4.0);
+        }
+        sink.push(rows).unwrap();
+        let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        profile.set_input("expiry", InputValue::Choice(1)).unwrap();
+        profile.set_input("measure", InputValue::Choice(1)).unwrap();
+        for (theme, width, reset) in [
+            (crate::theme::Theme::dark(), 1440.0, false),
+            (crate::theme::Theme::light(), 1440.0, true),
+            (crate::theme::Theme::dark(), 360.0, true),
+            (crate::theme::Theme::light(), 360.0, false),
+        ] {
+            let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile.clone()));
+            let mut dialog = IndicatorSettingsDialog::default();
+            dialog.open(crate::widget::SeriesId(2), &study, None);
+            let mut edit = None;
+            let mut harness = Harness::builder()
+                .with_context_setup({
+                    let theme = theme.clone();
+                    move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &theme);
+                    }
+                })
+                .with_size(egui::vec2(width, 900.0))
+                .build_ui(|ui| {
+                    if let Some(next) = dialog.show(ui.ctx(), &theme) {
+                        edit = Some(next);
+                    }
+                });
+            harness.run();
+            if reset {
+                harness.get_by_label("Reset inputs").click();
+                harness.run();
+            } else {
+                for (input, label) in [("Expiry", "Nearest"), ("Measure", "Volume")] {
+                    harness
+                        .get_by_role_and_label(egui::Role::ComboBox, input)
+                        .click();
+                    harness.run();
+                    harness.get_by_label(label).click();
+                    harness.run();
+                }
+            }
+            harness.get_by_label("Apply").click();
+            harness.run();
+            drop(harness);
+            let edit = edit.expect("an applied profile edit");
+            let original = study.inputs();
+            for (id, label) in [("expiry_label", "Nearest"), ("measure_label", "Volume")] {
+                assert_eq!(
+                    original
+                        .iter()
+                        .find(|input| input.id == id)
+                        .unwrap()
+                        .default,
+                    InputValue::Text(label.into()),
+                    "default {id}"
+                );
+                assert_eq!(
+                    edit.inputs.iter().find(|(saved, _)| saved == id).unwrap().1,
+                    InputValue::Text(label.into()),
+                    "reset {reset}: {id}"
+                );
+            }
+            study.apply_settings(&edit.inputs, edit.settings).unwrap();
+            let inputs = study.inputs();
+            for id in ["expiry", "measure"] {
+                assert_eq!(
+                    inputs.iter().find(|input| input.id == id).unwrap().value,
+                    InputValue::Choice(0),
+                    "reset {reset}: {id}"
+                );
+            }
+        }
     }
 }

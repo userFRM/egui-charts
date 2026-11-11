@@ -19,7 +19,8 @@ use std::collections::HashSet;
 #[derive(Debug, Clone)]
 pub(crate) struct SelectionArea {
     pub origin: Pos2,
-    pub pane: Rect,
+    pub pane: Option<usize>,
+    pub release_frame: Option<u64>,
     pub cancelled: bool,
     initial: HashSet<usize>,
 }
@@ -103,10 +104,11 @@ impl SelectionService {
     }
 
     /// Starts an area gesture that adds to the current selection.
-    pub(crate) fn begin_area(&mut self, origin: Pos2, pane: Rect) {
+    pub(crate) fn begin_area(&mut self, origin: Pos2, pane: Option<usize>) {
         self.area = Some(SelectionArea {
             origin,
             pane,
+            release_frame: None,
             cancelled: false,
             initial: self.selected.clone(),
         });

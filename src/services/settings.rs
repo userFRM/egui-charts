@@ -2,9 +2,9 @@
 
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
-use crate::config::{DrawingSort, DrawingToolType};
+use crate::config::{CursorType, DrawingSort, DrawingToolType};
 use crate::model::{ReplaySession, Timeframe, Watchlist};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,16 +20,22 @@ pub struct UserSettings {
     /// Name of the theme preset, as listed by [`presets`](crate::theme::presets).
     pub theme: Option<String>,
     /// The order of each symbol's listed drawings; a symbol without one keeps the order of the
-    /// charts.
+    /// charts. An order this release does not know is left out when reading.
+    #[serde(deserialize_with = "known_values")]
     pub drawing_sort: BTreeMap<String, DrawingSort>,
     /// The symbol shown last.
     pub symbol: Option<String>,
-    /// The interval shown last.
+    /// The interval shown last. An interval this release does not know reads as `None`.
+    #[serde(deserialize_with = "known_or_unset")]
     pub interval: Option<Timeframe>,
     /// The drawing tools on the drawing toolbar's favourites bar, in order. A tool this release
     /// does not know is left out when reading.
-    #[serde(deserialize_with = "known_tools")]
+    #[serde(deserialize_with = "known_items")]
     pub drawing_favorites: Vec<DrawingToolType>,
+    /// The cursor modes on the drawing toolbar's favourites bar, in order. A mode this release
+    /// does not know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub cursor_favorites: Vec<CursorType>,
     /// Whether the user hid the favourites strip with its close or toggle button.
     pub drawing_favorites_hidden: bool,
     /// The top-left corner of the favourites strip, in logical points, where the user left it;
@@ -46,7 +52,9 @@ pub struct UserSettings {
     pub layout_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
-    /// The intervals starred in the interval menu, in order.
+    /// The intervals starred in the interval menu, in order. An interval this release does not
+    /// know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
     pub interval_favorites: Vec<Timeframe>,
     /// The properties each drawing tool starts with, keyed by tool, as the JSON of
     /// its `DrawingTemplate`. A tool without an entry starts with
@@ -56,7 +64,10 @@ pub struct UserSettings {
     pub watchlists: Vec<Watchlist>,
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
-    /// The replay position to resume, with the interval its history was fetched at.
+    /// The replay position to resume, with the interval its history was fetched at. A position
+    /// this release cannot read, such as one at an interval a newer release added, reads as
+    /// `None`.
+    #[serde(deserialize_with = "known_or_unset")]
     pub replay_session: Option<(ReplaySession, Timeframe)>,
 }
 
@@ -75,13 +86,34 @@ pub struct MarketHeatmapSelection {
     pub colour: Option<String>,
 }
 
-fn known_tools<'de, D: Deserializer<'de>>(
+/// Reads a list, leaving out the items this release does not know, such as a tool, a cursor
+/// mode or an interval a newer release added.
+fn known_items<'de, D: Deserializer<'de>, T: DeserializeOwned>(
     deserializer: D,
-) -> Result<Vec<DrawingToolType>, D::Error> {
+) -> Result<Vec<T>, D::Error> {
     Ok(Vec::<serde_json::Value>::deserialize(deserializer)?
         .into_iter()
-        .filter_map(|tool| serde_json::from_value(tool).ok())
+        .filter_map(|item| serde_json::from_value(item).ok())
         .collect())
+}
+
+/// Reads a map, leaving out the entries whose value this release does not know.
+fn known_values<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    deserializer: D,
+) -> Result<BTreeMap<String, T>, D::Error> {
+    Ok(
+        BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?
+            .into_iter()
+            .filter_map(|(key, value)| Some((key, serde_json::from_value(value).ok()?)))
+            .collect(),
+    )
+}
+
+/// Reads a value that is unset when this release does not know it.
+fn known_or_unset<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,7 +138,9 @@ impl UserSettings {
 
     /// Reads a document [`to_json`](Self::to_json) wrote, migrating older versions. Fails on
     /// invalid JSON and on a version this release does not know. A missing field takes its
-    /// default.
+    /// default. A drawing order, tool, cursor mode or interval a newer release added is left out,
+    /// as each field says, and the rest is read. Values left out when reading are absent from the
+    /// next save.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
@@ -286,6 +320,82 @@ mod tests {
     use crate::data::Reply;
     use crate::services::document::tests::Revised;
     use std::sync::Mutex;
+
+    #[test]
+    fn user_settings_keep_cursor_favourites() {
+        for modes in [r#"["Dot","Magic"]"#, r#"["Dot","FutureCursor","Magic"]"#] {
+            let json = format!(r#"{{"version":1,"theme":"Dark","cursor_favorites":{modes}}}"#);
+            let settings = UserSettings::from_json(&json).unwrap();
+            assert_eq!(settings.theme.as_deref(), Some("Dark"));
+            let written: serde_json::Value = serde_json::from_str(&settings.to_json()).unwrap();
+            assert_eq!(
+                written["cursor_favorites"],
+                serde_json::json!(["Dot", "Magic"])
+            );
+            assert_eq!(
+                UserSettings::from_json(&settings.to_json()).unwrap(),
+                settings
+            );
+        }
+        let older = UserSettings::from_json(r#"{"version":1}"#).unwrap();
+        assert_eq!(older, UserSettings::default());
+        assert_eq!(
+            serde_json::to_value(older).unwrap()["cursor_favorites"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn unknown_drawing_order_keeps_the_other_settings() {
+        let json = r#"{"version":1,"theme":"Dark","drawing_sort":{"AAA":"Created","BBB":"Name"}}"#;
+        let settings = UserSettings::from_json(json).unwrap();
+        assert_eq!(settings.theme.as_deref(), Some("Dark"));
+        assert_eq!(
+            settings.drawing_sort,
+            BTreeMap::from([("BBB".to_owned(), DrawingSort::Name)])
+        );
+    }
+
+    /// An interval from a newer release is left out of the starred intervals and unsets the last
+    /// interval and the replay position; the same places keep an interval this release knows.
+    #[test]
+    fn unknown_intervals_keep_the_other_settings() {
+        use chrono::TimeZone;
+        let session = ReplaySession {
+            symbol: "AAA".into(),
+            time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
+            speed: 2.0,
+        };
+        let rows = [
+            (
+                "FutureInterval",
+                UserSettings {
+                    interval_favorites: vec![Timeframe::Min5],
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "Day1",
+                UserSettings {
+                    interval: Some(Timeframe::Day1),
+                    interval_favorites: vec![Timeframe::Min5, Timeframe::Day1],
+                    replay_session: Some((session, Timeframe::Day1)),
+                    ..UserSettings::default()
+                },
+            ),
+        ];
+        for (interval, mut expected) in rows {
+            expected.theme = Some("Dark".into());
+            let json = format!(
+                r#"{{"version":1,"theme":"Dark","interval":"{interval}","interval_favorites":["Min5","{interval}"],"replay_session":[{{"symbol":"AAA","time":"2026-01-02T00:00:00Z","speed":2.0}},"{interval}"]}}"#
+            );
+            assert_eq!(
+                UserSettings::from_json(&json).map_err(|error| error.to_string()),
+                Ok(expected),
+                "{interval}"
+            );
+        }
+    }
 
     /// The default settings with the layout `name` open.
     fn layout(name: &str) -> UserSettings {
