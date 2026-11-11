@@ -40,7 +40,7 @@ pub use domain::{
     FibonacciLevel, FolderSync, FontWeight, GannConfig, GannFanDirection, GannLevel, GhostCandle,
     GhostFeedConfig, HandlePos, ImageConfig, LineMeasurementPosition, LineMeasurements,
     LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign, ParseToolTypeError,
-    PitchforkConfig, PitchforkLevel, PositionReadout, PositionSize, PositionSizing,
+    PitchforkConfig, PitchforkLevel, PositionReadout, PositionSize, PositionSizing, PositionStyle,
     RegressionTrendConfig, TimeframeVisibility, VwapBand, VwapConfig,
 };
 

@@ -11,8 +11,8 @@
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
     FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility, VwapConfig,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -218,12 +218,17 @@ pub struct Drawing {
     /// Statistics, account currency and quantity precision of position tools.
     #[serde(default = "PositionReadout::legacy")]
     pub position_readout: PositionReadout,
-    /// Target zone and level colour of position tools; `None` keeps the default green.
+    /// Target zone and level colour of position tools, whose alpha is the zone's opacity while
+    /// labels and tags stay opaque; `None` keeps the default green at 20% opacity.
     #[serde(default)]
     pub position_target_color: Option<[u8; 4]>,
-    /// Stop zone and level colour of position tools; `None` keeps the default red.
+    /// Stop zone and level colour of position tools, whose alpha is the zone's opacity while
+    /// labels and tags stay opaque; `None` keeps the default red at 20% opacity.
     #[serde(default)]
     pub position_stop_color: Option<[u8; 4]>,
+    /// Lines, labels, zone fill and border of position tools.
+    #[serde(default)]
+    pub position_style: PositionStyle,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
@@ -535,6 +540,7 @@ impl Drawing {
             position_readout: PositionReadout::default(),
             position_target_color: None,
             position_stop_color: None,
+            position_style: PositionStyle::default(),
             fib_config: matches!(
                 tool_type,
                 DrawingToolType::FibonacciRetracement
