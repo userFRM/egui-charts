@@ -1740,6 +1740,19 @@ mod tests {
         assert_eq!(inside.rects.len(), 1);
         assert_eq!(inside.rects[0].stroke.width, 2.0);
 
+        // Wrapped callout text breaks into lines no wider than the wrap width.
+        let mut wrapped = Drawing::new(7, DrawingToolType::Callout);
+        wrapped.points = vec![pos(100.0, 300.0), pos(200.0, 100.0)];
+        wrapped.text = Some("Wrapped callout text".into());
+        wrapped.text_wrap = true;
+        wrapped.text_wrap_width = 60.0;
+        let mut painted = Painted::default();
+        collect(&paint(&wrapped), &mut painted);
+        let [text] = &painted.texts[..] else {
+            panic!("one text");
+        };
+        assert!(text.galley.rows.len() > 1 && text.galley.size().x <= 60.0);
+
         let label = draw(
             DrawingToolType::PriceLabel,
             &[(100., 300.)],
