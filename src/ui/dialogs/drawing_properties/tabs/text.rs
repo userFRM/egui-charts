@@ -10,6 +10,7 @@ use egui::Ui;
 use super::style::color_swatch;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPickerState, FormGrid};
 
@@ -56,7 +57,8 @@ fn alignment_row<T: Copy + PartialEq, const N: usize>(
 pub struct TextTab;
 
 impl TextTab {
-    /// Tools with text to write or their own labels to place and size.
+    /// Tools with text to write, and the trend angle, Fibonacci, Fibonacci time and position
+    /// tools, whose own labels have a font and a colour.
     pub(crate) fn available(tool: DrawingToolType) -> bool {
         tool.supports_text()
             || matches!(
@@ -67,6 +69,8 @@ impl TextTab {
                     | DrawingToolType::FibonacciChannel
                     | DrawingToolType::FibonacciTimeZones
                     | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::LongPos
+                    | DrawingToolType::ShortPos
             )
     }
 
@@ -177,6 +181,64 @@ impl TextTab {
             if config != original {
                 template.settings.fib_config = Some(config);
             }
+            return;
+        }
+        if let Some(template) = &mut props.tool_settings
+            && matches!(
+                template.settings.tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+        {
+            let target = template.settings.position_colors()[0];
+            let style = &mut template.settings.position_style;
+            let [text_picker, background_picker, _] = pickers;
+            let rgba = |[r, g, b, a]: [u8; 4]| egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+            FormGrid::new("position_text").show(ui, |ui| {
+                let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "position_font_size",
+                        &mut style.font_size,
+                        FONT_SIZES.iter().copied(),
+                        |v| format!("{}px", *v as i32),
+                    );
+                });
+                ui.end_row();
+
+                ui.label(l10n::text(ui.ctx(), "Text color"));
+                let text = style.text_color.map_or(egui::Color32::WHITE, rgba);
+                if let Some(picked) = color_swatch(ui, text_picker, text, "position_text_color") {
+                    style.text_color = Some(
+                        keep_opacity(picked, text, text_picker.custom_mode).to_srgba_unmultiplied(),
+                    );
+                }
+                ui.end_row();
+
+                // Until a plate colour is chosen, each label takes its level's colour.
+                let label = ui.label(l10n::text(ui.ctx(), "Background"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut style.label_background,
+                        l10n::text(ui.ctx(), "Show background"),
+                    )
+                    .labelled_by(label.id);
+                    let plate = rgba(
+                        style
+                            .label_color
+                            .unwrap_or([target[0], target[1], target[2], 255]),
+                    );
+                    if style.label_background
+                        && let Some(picked) =
+                            color_swatch(ui, background_picker, plate, "position_label_background")
+                    {
+                        style.label_color = Some(
+                            keep_opacity(picked, plate, background_picker.custom_mode)
+                                .to_srgba_unmultiplied(),
+                        );
+                    }
+                });
+                ui.end_row();
+            });
             return;
         }
 

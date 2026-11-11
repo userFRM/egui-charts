@@ -25,6 +25,38 @@ pub struct StudyProfile {
     pub width: f32,
 }
 
+/// A level of a finished study profile carried right past the profile's bars: from the bar
+/// after its last to the first later bar that trades in the level's row, or on the line for the
+/// value area high, or to the last bar. Prices fall in rows as the profile binned its volume.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileLevel {
+    /// Chart bars the line spans. It starts at the left edge of the first, which follows the
+    /// profile, and ends at the centre of the last: the bar that trades in the level's row, or
+    /// on the line for the value area high, or the last bar when none has.
+    pub bars: Range<usize>,
+    /// Price of the line: the middle of the point of control row, or the top or bottom edge of
+    /// the value area.
+    pub price: f64,
+    /// Which level of the profile this is.
+    pub kind: ProfileLevelKind,
+    /// Colour of the profile's point of control, `Color32::PLACEHOLDER` as bytes following the
+    /// theme's foreground. The value area high and low are drawn at the opacity of the profile's
+    /// value area lines.
+    pub color: [u8; 4],
+}
+
+/// A level of a volume profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProfileLevelKind {
+    /// The middle of the row with the most volume.
+    PointOfControl,
+    /// The top edge of the value area.
+    ValueAreaHigh,
+    /// The bottom edge of the value area.
+    ValueAreaLow,
+}
+
 /// Volume shown in each price row of a profile built from bars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ProfileDisplay {
@@ -547,7 +579,7 @@ impl VolumeProfile {
             &mut self.down
         };
         let top_row = self.volume.len() - 1;
-        let row_of = |price: f64| (grid_floor((price - low) / row_height) as usize).min(top_row);
+        let row_of = |price: f64| (grid_row(low, row_height, price).0 as usize).min(top_row);
         if bar.high > bar.low {
             let (first, last) = (row_of(bar.low), row_of(bar.high));
             for (row, row_volume) in self
@@ -595,12 +627,25 @@ impl VolumeProfile {
 
 // Decimal tick heights can put an exact boundary one rounding step below its integer row.
 fn grid_floor(value: f64) -> f64 {
+    grid_edge(value, value.abs()).unwrap_or_else(|| value.floor())
+}
+
+/// The integer nearest `value` when `value` lies within the rounding of figures of size up to
+/// `scale` it was computed from.
+fn grid_edge(value: f64, scale: f64) -> Option<f64> {
     let nearest = value.round();
-    if (value - nearest).abs() <= 4.0 * f64::EPSILON * value.abs() {
-        nearest
-    } else {
-        value.floor()
-    }
+    ((value - nearest).abs() <= 4.0 * f64::EPSILON * scale).then_some(nearest)
+}
+
+/// The row of a grid from `low` in rows of `height` that `price` lies in, counted from its first
+/// row and not clamped to the grid, and whether the price lies on the row's bottom edge. A price
+/// within rounding of an edge lies on it, in the row above, as where `fixed_grid` starts a grid.
+/// Profiles bin volume with this, so a level of a profile ends at the prices in its row.
+pub(crate) fn grid_row(low: f64, height: f64, price: f64) -> (f64, bool) {
+    let row = (price - low) / height;
+    // The difference rounds as its prices do, not as its own size.
+    grid_edge(row, (price.abs() + low.abs()) / height)
+        .map_or((row.floor(), false), |edge| (edge, true))
 }
 
 /// A zero-aligned grid, including the row of a zero-range bar on an edge.
@@ -870,6 +915,10 @@ mod tests {
         let decimal = VolumeProfile::of(&[boundary], 24, Some(0.1)).unwrap();
         assert_close(decimal.low(), 0.3);
         assert_eq!(decimal.volume(), [7.0]);
+        // A price on an inner edge of cent rows lies in the row the grid starts there.
+        let cents = [32.16, 32.18].map(|price| Bar::new(time, price, price, price, price, 1.0));
+        let cents = VolumeProfile::of(&cents, 24, Some(0.01)).unwrap();
+        assert_eq!(cents.volume(), [1.0, 0.0, 1.0]);
     }
 
     /// Four-unit rows centered at 100, 104 and 108 collect [98,102), [102,106)

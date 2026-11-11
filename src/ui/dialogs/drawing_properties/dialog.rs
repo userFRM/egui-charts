@@ -248,6 +248,7 @@ impl DrawingPropertiesDialog {
                 drawing.position_readout = old.position_readout;
                 drawing.position_target_color = old.position_target_color;
                 drawing.position_stop_color = old.position_stop_color;
+                drawing.position_style = old.position_style;
                 drawing.volume_profile = old.volume_profile;
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
@@ -802,6 +803,7 @@ mod tests {
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
+                settings.position_style.border = true;
                 settings.price_axis_label = false;
                 settings.time_axis_label = false;
                 settings.italic = true;
@@ -818,6 +820,7 @@ mod tests {
                 let preview = &chart.drawings().drawings[0];
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
+                assert!(preview.position_style.border);
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
@@ -863,6 +866,7 @@ mod tests {
             let restored = &chart.drawings().drawings[0];
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
+            assert!(!restored.position_style.border, "{finish}");
             assert!(
                 restored.price_axis_label && restored.time_axis_label,
                 "{finish}"

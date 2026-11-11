@@ -309,6 +309,7 @@ impl DrawingProps {
                     position_readout.quantity_decimals,
                     position_target_color,
                     position_stop_color,
+                    position_style,
                     volume_profile,
                     regression_trend,
                     vwap,
@@ -457,6 +458,9 @@ impl DrawingProps {
             }
             if !settings.position_readout.is_valid() {
                 return Err("Invalid position readout settings");
+            }
+            if !settings.position_style.is_valid() {
+                return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(
@@ -680,6 +684,7 @@ mod tests {
             let sizing = settings.position_sizing;
             settings.position_target_color = Some([40, 100, 220, 255]);
             settings.position_stop_color = Some([220, 140, 40, 255]);
+            settings.position_style.font_size = 16.0;
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -742,6 +747,7 @@ mod tests {
             assert_eq!(saved.position_sizing, sizing);
             assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
+            assert_eq!(saved.position_style.font_size, 16.0);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.line_measurements, measurements);

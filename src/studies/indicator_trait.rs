@@ -738,6 +738,15 @@ pub trait Indicator: Send {
         Vec::new()
     }
 
+    /// Levels of finished price-row profiles carried right past their own bars, each to the
+    /// first later bar that trades in its row of the profile, or on the line for the value area
+    /// high, or to the last bar: those whose bars intersect the half-open visible source-bar
+    /// range, including levels of profiles left of it. Empty by default.
+    fn profile_levels(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::ProfileLevel> {
+        let _ = visible;
+        Vec::new()
+    }
+
     /// Shapes attached to study values, empty by default.
     fn markers(&self) -> &[IndicatorMarker] {
         &[]

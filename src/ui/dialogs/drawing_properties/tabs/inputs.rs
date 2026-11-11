@@ -10,6 +10,7 @@ use crate::drawings::{
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
 use crate::localization as l10n;
 use crate::model::LineStyle;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid, buttons::Button};
 use egui::Ui;
@@ -174,16 +175,23 @@ impl InputsTab {
                         ),
                     ] {
                         let label = ui.label(l10n::text(ui.ctx(), label));
-                        let mut color = color.to_srgba_unmultiplied();
+                        let mut picked = color;
                         if ui
                             .push_id(label.id, |ui| {
                                 ui.label_inputs_by(label.id, |ui| {
-                                    level_color(ui, &mut color, picker)
+                                    level_color(ui, &mut picked, picker)
                                 })
                             })
                             .inner
                         {
-                            *saved = Some(color);
+                            // The alpha is the zone's opacity: an opaque palette swatch keeps it.
+                            let rgba = |[r, g, b, a]: [u8; 4]| {
+                                egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+                            };
+                            *saved = Some(
+                                keep_opacity(rgba(picked), rgba(color), picker.custom_mode)
+                                    .to_srgba_unmultiplied(),
+                            );
                         }
                         ui.end_row();
                     }

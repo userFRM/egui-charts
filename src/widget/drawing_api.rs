@@ -209,6 +209,37 @@ impl Chart {
         Ok(())
     }
 
+    /// Replace a position drawing's lines, labels, zone fill and border, and its target and stop
+    /// colours, whose alpha is the opacity of their zones (`None` keeps the defaults), in one
+    /// undoable edit. Invalid widths or font sizes and locked drawings change nothing.
+    pub fn set_position_style(
+        &mut self,
+        id: usize,
+        style: crate::drawings::PositionStyle,
+        target_color: Option<[u8; 4]>,
+        stop_color: Option<[u8; 4]>,
+    ) -> Result<(), DrawingError> {
+        let drawing = self.position_drawing(id)?;
+        if !style.is_valid() {
+            return Err(DrawingError::Invalid("Invalid position style"));
+        }
+        if (
+            drawing.position_style,
+            drawing.position_target_color,
+            drawing.position_stop_color,
+        ) != (style, target_color, stop_color)
+        {
+            self.user_action(|chart| {
+                chart.drawings_mut().edit_drawing(id, |drawing| {
+                    drawing.position_style = style;
+                    drawing.position_target_color = target_color;
+                    drawing.position_stop_color = stop_color;
+                });
+            });
+        }
+        Ok(())
+    }
+
     /// Exchange a position drawing's target and stop prices and switch its direction as one
     /// undoable edit. Entry, horizontal extent, anchor times and style stay in place. A legacy
     /// two-anchor position gains its mirrored stop before the exchange. Invalid geometry,
