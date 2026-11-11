@@ -96,9 +96,7 @@ impl InputsTab {
             | Tool::FibonacciSpeedFan
             | Tool::TrendBasedFibTime
             | Tool::FibonacciCircles
-            | Tool::FibonacciSpeedResistanceArcs => {
-                fibonacci(ui, drawing, grid_pickers(pickers, 0))
-            }
+            | Tool::FibonacciSpeedResistanceArcs => fibonacci(ui, drawing, pickers),
             Tool::Pitchfork
             | Tool::SchiffPitchfork
             | Tool::ModifiedSchiffPitchfork
@@ -808,9 +806,10 @@ fn level_grid<T>(
     });
 }
 
-fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
+fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<Vec<ColorPickerState>>) {
     let mut config = drawing.fibonacci_config().into_owned();
     let original = config.clone();
+    let fan = drawing.tool_type == Tool::FibonacciSpeedFan;
     ui.strong(l10n::text(ui.ctx(), "Fibonacci levels"));
     ui.horizontal_wrapped(|ui| {
         let label = ui.label(l10n::text(ui.ctx(), "Level width"));
@@ -852,45 +851,42 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     }
     let inherited_width = config.level_width;
     let inherited_style = config.level_style;
+    if fan {
+        ui.label(l10n::text(ui.ctx(), "Price levels"));
+    }
+    let tool = drawing.tool_type;
+    let new_level = FibonacciLevel::new(1.0, "", drawing.color);
     let time = matches!(
         drawing.tool_type,
         Tool::FibonacciTimeZones | Tool::TrendBasedFibTime
     );
     level_grid(
         ui,
-        "Level",
+        if fan { "Price level" } else { "Level" },
         &mut config.levels,
-        pickers,
-        FibonacciLevel::new(1.0, "", drawing.color),
-        |level| LevelRow {
-            visible: &mut level.visible,
-            value: &mut level.value,
-            legacy_label: Some(&mut level.label),
-            text: (matches!(
-                drawing.tool_type,
-                Tool::FibonacciRetracement | Tool::FibonacciExtension
-            ))
-            .then_some(&mut level.text),
-            color: &mut level.color,
-            line_style: None,
-            style_override: (drawing.tool_type == Tool::FibonacciWedge || round || time)
-                .then_some((&mut level.line_style, inherited_style)),
-            width: (matches!(
-                drawing.tool_type,
-                Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciWedge
-            ) || round
-                || time)
-                .then_some((&mut level.width, inherited_width)),
-            range: if matches!(
-                drawing.tool_type,
-                Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs | Tool::FibonacciWedge
-            ) {
-                0.0
-            } else {
-                -f32::MAX
-            }..=f32::MAX,
-        },
+        grid_pickers(pickers, 0),
+        new_level.clone(),
+        |level| fib_row(level, tool, inherited_width, inherited_style),
     );
+    if fan {
+        // A fan saved with shared levels gets its own time levels only once either list changes.
+        let mut time = original.fan_time_levels().to_vec();
+        ui.label(l10n::text(ui.ctx(), "Time levels"));
+        level_grid(
+            ui,
+            "Time level",
+            &mut time,
+            grid_pickers(pickers, 1),
+            new_level,
+            |level| fib_row(level, tool, inherited_width, inherited_style),
+        );
+        if config.time_levels.is_some()
+            || time != original.levels
+            || config.levels != original.levels
+        {
+            config.time_levels = Some(time);
+        }
+    }
     background(
         ui,
         &mut config.show_background,
@@ -920,7 +916,16 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             &mut config.levels_as_percent,
             l10n::text(ui.ctx(), "Percent"),
         );
-        if !round
+        if fan {
+            for (shown, label) in [
+                (&mut config.left_labels, "Left labels"),
+                (&mut config.right_labels, "Right labels"),
+                (&mut config.top_labels, "Top labels"),
+                (&mut config.bottom_labels, "Bottom labels"),
+            ] {
+                ui.checkbox(shown, l10n::text(ui.ctx(), label));
+            }
+        } else if !round
             && !time
             && !matches!(
                 drawing.tool_type,
@@ -933,6 +938,33 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             );
         }
     });
+    if fan {
+        ui.horizontal_wrapped(|ui| {
+            let grid = ui.checkbox(&mut config.grid_visible, l10n::text(ui.ctx(), "Grid"));
+            ui.add_enabled_ui(config.grid_visible, |ui| {
+                let picker = grid_pickers(pickers, 2);
+                picker.resize_with(1, ColorPickerState::default);
+                level_color(ui, &mut config.grid_color, &mut picker[0]);
+                ui.add(
+                    egui::DragValue::new(&mut config.grid_width)
+                        .range(0.1..=crate::drawings::validation::MAX_STROKE_WIDTH)
+                        .speed(0.1)
+                        .suffix(" px"),
+                )
+                .accessible_name(l10n::text(ui.ctx(), "Grid width"));
+                let ctx = ui.ctx().clone();
+                ui.label_inputs_by(grid.id, |ui| {
+                    ui.combo_select(
+                        "fib_grid_style",
+                        &mut config.grid_style,
+                        LineStyle::all().iter().copied(),
+                        |style| l10n::text(&ctx, style.name()),
+                    );
+                });
+            });
+        });
+        ui.checkbox(&mut config.reverse, l10n::text(ui.ctx(), "Reverse"));
+    }
     if matches!(
         drawing.tool_type,
         Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciChannel
@@ -962,6 +994,44 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     }
     if config != original {
         drawing.fib_config = Some(config);
+    }
+}
+
+fn fib_row(
+    level: &mut FibonacciLevel,
+    tool: Tool,
+    inherited_width: f32,
+    inherited_style: LineStyle,
+) -> LevelRow<'_> {
+    let round = matches!(
+        tool,
+        Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs
+    );
+    let time = matches!(tool, Tool::FibonacciTimeZones | Tool::TrendBasedFibTime);
+    LevelRow {
+        visible: &mut level.visible,
+        value: &mut level.value,
+        legacy_label: Some(&mut level.label),
+        text: matches!(tool, Tool::FibonacciRetracement | Tool::FibonacciExtension)
+            .then_some(&mut level.text),
+        color: &mut level.color,
+        line_style: None,
+        style_override: (tool == Tool::FibonacciWedge || round || time)
+            .then_some((&mut level.line_style, inherited_style)),
+        width: (matches!(
+            tool,
+            Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciWedge
+        ) || round
+            || time)
+            .then_some((&mut level.width, inherited_width)),
+        range: if matches!(
+            tool,
+            Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs | Tool::FibonacciWedge
+        ) {
+            0.0
+        } else {
+            -f32::MAX
+        }..=f32::MAX,
     }
 }
 
@@ -1554,6 +1624,85 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A fan saved with shared levels keeps them until edited; hiding one time level, the grid and
+    /// the left labels and reversing the fan previews on it and a selected peer without touching
+    /// either's price levels, Cancel restores both, and Ok records one undoable edit.
+    #[test]
+    fn speed_fan_controls_preview_cancel_and_commit() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        let mut drawing = Drawing::new(7, Tool::FibonacciSpeedFan);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+        let mut peer = drawing.clone();
+        peer.id = 8;
+        peer.fib_config.as_mut().unwrap().levels[1].color = [1, 2, 3, 255];
+        drawing.fib_config.as_mut().unwrap().time_levels = None;
+        chart
+            .drawings_mut()
+            .drawings
+            .extend([drawing.clone(), peer.clone()]);
+        chart.drawings_mut().select_drawings([7, 8]);
+        // Tall enough to show both level tables and the grid controls without scrolling.
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog.config.height = 1300.0;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 1400.0))
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                    dialog.show_and_apply(ui.ctx(), chart);
+                },
+                (chart, dialog),
+            );
+        let config = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>, i: usize| {
+            h.state().0.drawings().drawings[i]
+                .fib_config
+                .clone()
+                .unwrap()
+        };
+        for confirm in [false, true] {
+            let (chart, dialog) = h.state_mut();
+            dialog.open_for_chart(chart, DrawingId(7));
+            dialog.active_tab = PropertiesTab::Inputs;
+            h.run();
+            assert_eq!(
+                config(&h, 0).time_levels,
+                None,
+                "inspection keeps shared levels"
+            );
+            for label in ["Time level 2 visible", "Grid", "Left labels", "Reverse"] {
+                h.get_by_role_and_label(Role::CheckBox, label).click();
+                h.run();
+            }
+            assert!(!h.state().0.can_undo());
+            for (i, original) in [&drawing, &peer].into_iter().enumerate() {
+                let current = config(&h, i);
+                let original = original.fib_config.as_ref().unwrap();
+                assert_eq!(current.levels, original.levels);
+                let mut time = original.fan_time_levels().to_vec();
+                time[1].visible = false;
+                assert_eq!(current.time_levels, Some(time));
+                assert!(!current.grid_visible && !current.left_labels && current.reverse);
+                assert!(current.right_labels && current.top_labels && current.bottom_labels);
+            }
+            if confirm {
+                h.get_by_role_and_label(Role::Button, "Ok").click();
+                h.run();
+                let chart = &mut h.state_mut().0;
+                assert!(chart.undo());
+                assert!(!chart.can_undo());
+            } else {
+                h.state_mut().1.close();
+                h.run();
+            }
+            assert_eq!(config(&h, 0), drawing.fib_config.clone().unwrap());
+            assert_eq!(config(&h, 1), peer.fib_config.clone().unwrap());
         }
     }
 
