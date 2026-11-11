@@ -714,7 +714,7 @@ Studies,Indicators,MA with EMA Cross,unverified,library,src/studies/builtin/ma_c
 Studies,Indicators,Majority Rule,incomplete,library,src/studies/builtin/majority_rule.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Mass Index,unverified,library,src/studies/builtin/mass_index.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,McGinley Dynamic,unverified,library,src/studies/builtin/mcginley_dynamic.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Median,incomplete,library,src/studies/builtin/median.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
+Studies,Indicators,Median,unverified,library,src/studies/builtin/median.rs;src/studies/settings.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,2666
 Studies,Indicators,Median Price,unverified,library,src/studies/builtin/typical_price.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Momentum,unverified,library,src/studies/builtin/momentum.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Money Flow,incomplete,library,src/studies/builtin/mfi.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/builtin/rsi.rs;src/studies/factory/mod.rs,
