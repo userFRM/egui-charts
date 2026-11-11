@@ -312,6 +312,8 @@ impl Chart {
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
+        // The previous feed's histories, and the bars filled from them, are another request's.
+        self.study_data.clear_feed();
         let timeframe = self.timeframe.unwrap_or_default();
         self.readout_revision = crate::model::next_revision();
         self.feed_link = Some(FeedLink {

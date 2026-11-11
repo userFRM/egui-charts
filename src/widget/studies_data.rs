@@ -15,6 +15,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub(super) struct StudyDataCache {
     series: Vec<Series>,
+    /// Counts the times `clear_feed` dropped the feed's histories, so that bars filled from them
+    /// before can be told apart.
+    generation: u64,
 }
 
 struct Series {
@@ -43,6 +46,9 @@ struct Stream {
     retry_at: Option<f64>,
     failures: u32,
     end: bool,
+    /// Whether a page arrived since the history was requested, or a replay reset dropped the
+    /// bars: before, they are only the live ones.
+    paged: bool,
     wake: Arc<Mutex<Option<egui::ViewportId>>>,
 }
 
@@ -148,10 +154,25 @@ impl StudyDataCache {
                     from_ticks: series.from_ticks.clone(),
                 })
                 .collect(),
+            generation: self.generation,
         }
     }
     pub(super) fn clear_feed(&mut self) {
         self.series.retain(|series| series.stream.is_none());
+        self.generation += 1;
+    }
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Whether the feed is yet to answer the history of `symbol` at `timeframe` with a page, also
+    /// before the next frame requests it. A history the host supplies is answered.
+    pub(super) fn awaits_page(&self, symbol: &str, timeframe: Timeframe) -> bool {
+        !self.series.iter().any(|series| {
+            series.request.metric.is_none()
+                && series.request.symbol == symbol
+                && series.request.timeframe == Some(timeframe)
+                && series.stream.as_ref().is_none_or(|stream| stream.paged)
+        })
     }
     pub(super) fn pause(&mut self) {
         for series in &mut self.series {
@@ -400,6 +421,7 @@ impl Chart {
                         retry_at: None,
                         failures: 0,
                         end: false,
+                        paged: false,
                         wake,
                     }),
                 });
@@ -483,6 +505,7 @@ impl Chart {
                             });
                             series.error = None;
                             stream.failures = 0;
+                            stream.paged = true;
                             let empty = page.bars.is_empty();
                             let continuation = page.continue_before.filter(|_| empty);
                             stream.cursor = continuation;
@@ -532,6 +555,7 @@ impl Chart {
                     stream.retry_at = None;
                     stream.failures = 0;
                     stream.end = false;
+                    stream.paged = true;
                     changes.note(&series.request, true);
                 }
                 if !updates.bars.is_empty() {
