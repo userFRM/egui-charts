@@ -648,6 +648,305 @@ mod tests {
     use super::*;
     use crate::studies::{ConfiguredStudy, SMA};
 
+    /// A source edit must change the basis without flattening Keltner's range bars. All three
+    /// band studies preview, cancel and save independent styles as one undoable edit.
+    #[test]
+    fn channel_sources_bands_preview_cancel_and_stream_restore() {
+        use crate::model::{Bar, BarData, PriceSource};
+        use crate::studies::{IndicatorFactory, StudySource, StudyTemplate};
+        use crate::widget::Chart;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let bar = |i: i64, open, high, low, close| {
+            Bar::new(
+                chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
+                open,
+                high,
+                low,
+                close,
+                1.0,
+            )
+        };
+        for name in ["BB", "Envelopes", "Keltner"] {
+            let mut bars = vec![
+                bar(0, 10.0, 14.0, 8.0, 12.0),
+                bar(1, 20.0, 24.0, 18.0, 22.0),
+                bar(2, 16.0, 20.0, 14.0, 18.0),
+                bar(3, 24.0, 28.0, 22.0, 26.0),
+            ];
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min1);
+            let id = chart.add_indicator(IndicatorFactory::new().create(name).unwrap());
+            let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+            if name != "BB" {
+                let average = study
+                    .inputs()
+                    .into_iter()
+                    .find(|input| {
+                        input.id
+                            == if name == "Keltner" {
+                                "average"
+                            } else {
+                                "ma_type"
+                            }
+                    })
+                    .unwrap();
+                assert_eq!(average.value, InputValue::Toggle(name == "Keltner"));
+            }
+            let before = study.snapshot_settings();
+            let defaults = study.settings();
+            assert!(defaults.price_line_plots.is_empty());
+            assert_eq!(defaults.fills.len(), 1);
+            assert!(defaults.fills[0].visible);
+            let mut edited = defaults.clone();
+            edited.price_line_plots = vec![0, 2];
+            edited.untagged_plots = vec![0, 1, 2];
+            edited.plots[1].visible = false;
+            edited.plots[0].width = 3.0;
+            edited.plots[0].pattern = LineStyle::Dashed;
+            edited.fills[0].color = egui::Color32::from_rgba_unmultiplied(80, 120, 160, 64);
+            edited.fills[0].visible = false;
+            let mut dialog = IndicatorSettingsDialog::default();
+            for (action, theme, size) in [
+                ("Cancel", Theme::dark(), egui::vec2(1440.0, 900.0)),
+                ("Apply", Theme::light(), egui::vec2(420.0, 640.0)),
+            ] {
+                assert!(dialog.open_for_chart(&chart, id));
+                dialog.edit.as_mut().unwrap().settings = edited.clone();
+                for input in &mut dialog.inputs {
+                    input.value = match input.id.as_str() {
+                        "period" | "ema_period" | "atr_period" => InputValue::Length(2),
+                        "average" => InputValue::Toggle(false),
+                        "source" => InputValue::Source(StudySource::Price(PriceSource::Open)),
+                        "plot_offset" => InputValue::Integer(1),
+                        _ => input.value.clone(),
+                    };
+                }
+                let mut applied = None;
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .with_size(size)
+                    .build_ui(|ui| {
+                        chart.show(ui);
+                        if let Some(edit) =
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
+                        {
+                            applied = Some(edit);
+                        }
+                    });
+                harness.run();
+                if name != "BB" {
+                    for _ in 0..2 {
+                        harness.get_by_label("Exponential basis").click();
+                        harness.run();
+                    }
+                }
+                drop(harness);
+                let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+                assert_eq!(study.settings(), edited);
+                assert_eq!(study.source(), Some(StudySource::Price(PriceSource::Open)));
+                assert_eq!(study.plot_offset(0), 1, "{name}");
+                assert!(study.fills().is_empty());
+                assert!(study.plot_price_line(0));
+                assert!(!study.plot_price_line(1));
+                assert!(study.plot_price_line(2));
+                assert!(!chart.undo(), "preview does not enter history");
+                dialog.tab = Tab::Style;
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .with_size(size)
+                    .build_ui(|ui| {
+                        if let Some(edit) =
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
+                        {
+                            applied = Some(edit);
+                        }
+                    });
+                harness.run();
+                assert_eq!(harness.query_all_by_label("Latest value line").count(), 3);
+                harness.get_by_label("Band 1").click();
+                harness.run();
+                harness.get_by_label(action).click();
+                harness.run();
+                drop(harness);
+                assert!(
+                    chart
+                        .indicators()
+                        .find(|(i, _)| *i == id)
+                        .unwrap()
+                        .1
+                        .snapshot_settings()
+                        == before
+                );
+                if action == "Cancel" {
+                    assert!(applied.is_none());
+                } else {
+                    let edit = applied.unwrap();
+                    edited.fills[0].visible = true;
+                    chart.user_action(|chart| {
+                        chart
+                            .indicator_mut(id)
+                            .unwrap()
+                            .apply_settings(&edit.inputs, edit.settings)
+                            .unwrap();
+                    });
+                }
+            }
+            assert!(chart.undo());
+            assert!(
+                chart
+                    .indicators()
+                    .find(|(i, _)| *i == id)
+                    .unwrap()
+                    .1
+                    .snapshot_settings()
+                    == before
+            );
+            assert!(chart.redo());
+            let study = chart.indicator_mut(id).unwrap();
+            // Last two opens give means 20, 22, 29 and population deviations 4, 6, 1.
+            // True ranges start 6,12,8,10. Correcting the second high gives 6,18,8,10;
+            // a last-bar tick changes the final TR to 14, then the appended bar has TR 7.
+            for (step, middle, width) in match name {
+                "BB" => [
+                    (0, 20.0, 8.0),
+                    (1, 20.0, 8.0),
+                    (2, 22.0, 12.0),
+                    (3, 29.0, 2.0),
+                ],
+                "Envelopes" => [
+                    (0, 20.0, 2.0),
+                    (1, 20.0, 2.0),
+                    (2, 22.0, 2.2),
+                    (3, 29.0, 2.9),
+                ],
+                _ => [
+                    (0, 20.0, 18.5),
+                    (1, 20.0, 20.0),
+                    (2, 22.0, 24.0),
+                    (3, 29.0, 19.0),
+                ],
+            } {
+                match step {
+                    0 => study.calculate(&bars),
+                    1 => {
+                        bars[1].high = 30.0;
+                        study.update(&bars, 1);
+                    }
+                    2 => {
+                        bars[3] = bar(3, 28.0, 32.0, 22.0, 30.0);
+                        study.update(&bars, 3);
+                    }
+                    _ => {
+                        bars.push(bar(4, 30.0, 35.0, 28.0, 32.0));
+                        study.update(&bars, 4);
+                    }
+                }
+                let wanted = if name == "Keltner" {
+                    [middle, middle + width, middle - width]
+                } else {
+                    [middle + width, middle, middle - width]
+                };
+                for (line, want) in wanted.into_iter().enumerate() {
+                    let got = study.plot_value(line, bars.len()).unwrap();
+                    assert!(
+                        (got - want).abs() < 1e-9,
+                        "{name} step {step}, line {line}: {got} vs {want}"
+                    );
+                }
+            }
+            if name == "Keltner" {
+                let mut legacy = StudyTemplate::from_study(study);
+                for (id, value) in &mut legacy.inputs {
+                    if id == "source" {
+                        *value = InputValue::Choice(0);
+                    } else if id == "average" {
+                        *value = InputValue::Choice(1);
+                    }
+                }
+                let mut legacy = legacy.create().unwrap();
+                legacy.calculate(&bars);
+                assert_eq!(legacy.source(), Some(StudySource::Price(PriceSource::Open)));
+                for line in 0..3 {
+                    for i in 0..bars.len() {
+                        assert_eq!(
+                            legacy.values().value(line, i),
+                            study.values().value(line, i)
+                        );
+                    }
+                }
+                // RMA(2) of ranges 6,12,6,10,7 ends at 63/8; the last TR is 7.
+                for (band, width) in [(1, 14.0), (2, 63.0 / 4.0)] {
+                    study.set_input("band", InputValue::Choice(band)).unwrap();
+                    study.calculate(&bars);
+                    assert!((study.values().value(1, 4).unwrap() - (29.0 + width)).abs() < 1e-9);
+                }
+            }
+            let saved = serde_json::to_value(StudyTemplate::from_study(study)).unwrap();
+            let mut loaded = serde_json::from_value::<StudyTemplate>(saved.clone())
+                .unwrap()
+                .create()
+                .unwrap();
+            loaded.calculate(&bars);
+            assert_eq!(loaded.settings(), edited);
+            for line in 0..3 {
+                for i in 0..bars.len() {
+                    assert_eq!(
+                        loaded.values().value(line, i),
+                        study.values().value(line, i)
+                    );
+                }
+            }
+            // Older styles inherit a visible band and leave latest-value lines disabled.
+            let mut older = saved;
+            for key in ["fills", "price_line_plots"] {
+                older["settings"].as_object_mut().unwrap().remove(key);
+            }
+            let older = serde_json::from_value::<StudyTemplate>(older)
+                .unwrap()
+                .create()
+                .unwrap();
+            assert!(older.settings().fills[0].visible);
+            assert!(older.settings().price_line_plots.is_empty());
+            if name != "BB" {
+                for enabled in [false, true] {
+                    let mut legacy = StudyTemplate::from_study(study);
+                    let field = if name == "Keltner" {
+                        "average"
+                    } else {
+                        "ma_type"
+                    };
+                    for (id, value) in &mut legacy.inputs {
+                        if id == field {
+                            *value =
+                                InputValue::Choice(usize::from(enabled != (name == "Keltner")));
+                        }
+                    }
+                    let mut legacy = legacy.create().unwrap();
+                    legacy.calculate(&bars);
+                    let basis = if !enabled {
+                        29.0
+                    } else if name == "Keltner" {
+                        755.0 / 27.0
+                    } else {
+                        2270.0 / 81.0
+                    };
+                    let line = usize::from(name == "Envelopes");
+                    assert!((legacy.values().value(line, 4).unwrap() - basis).abs() < 1e-9);
+                }
+            }
+            if name == "Keltner" {
+                study.set_input("band", InputValue::Choice(0)).unwrap();
+                study.update_source(&bars, 0, &[10.0, f64::NAN, 16.0, 28.0, 30.0]);
+                assert!(study.values().value(0, 1).is_none());
+                // A missing source leaves a basis gap; ATR still reads every original bar.
+                assert!((study.values().value(1, 4).unwrap() - 48.0).abs() < 1e-9);
+            }
+        }
+    }
+
     #[test]
     fn smi_value_lines_apply_cancel_save_and_restore_independently() {
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
