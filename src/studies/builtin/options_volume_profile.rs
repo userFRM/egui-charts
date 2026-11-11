@@ -1136,9 +1136,12 @@ impl Indicator for OptionsVolumeProfile {
             waiting.retain(|(saved, _)| saved != superseded);
         }
         let held = waiting.iter().position(|(saved, _)| saved == id);
+        // As in `refresh`, a measure position waits for chain rows, without which only Gamma
+        // exposure is listed.
         if chain_input
             && (held.is_some()
                 || unavailable_label
+                || (id == "measure" && self.cache.get_mut().awaiting_chain)
                 || !input.as_ref().is_some_and(|input| input.accepts(&value)))
         {
             // A held measure shows the default until it applies, as before quotes arrive.
@@ -2467,8 +2470,13 @@ mod tests {
             (factory, feed)
         };
         // Saved over Volume, Open interest and Gamma exposure: Volume with the provider answering
-        // first, and Open interest restored over a chain that lists Volume alone.
-        for (exposure, position, interest, up) in [(true, 0, true, 10.0), (false, 1, false, 4.0)] {
+        // first, after or before the restore, and Open interest restored over a chain that lists
+        // Volume alone.
+        for (exposure, early, position, interest, up) in [
+            (true, false, 0, true, 10.0),
+            (true, true, 0, true, 10.0),
+            (false, false, 1, false, 4.0),
+        ] {
             let (original, feed) = factory(exposure);
             answer(&feed, Some(true), exposure);
             let mut study = original.create("Options Volume Profile").unwrap();
@@ -2479,8 +2487,9 @@ mod tests {
             saved.inputs.retain(|(id, _)| !id.ends_with("_label"));
             // Restored, read after any provider answer and before the chain's, and saved again.
             let (restoring, feed) = factory(exposure);
+            answer(&feed, None, early);
             let restored = saved.create_with(&restoring).unwrap();
-            answer(&feed, None, exposure);
+            answer(&feed, None, exposure && !early);
             restored.inputs();
             answer(&feed, Some(interest), false);
             let saved = crate::studies::StudyTemplate::from_study(restored.as_ref());
@@ -2490,7 +2499,7 @@ mod tests {
             assert_eq!(
                 restored.volume_profiles(0..1)[0].profile.up(),
                 [up],
-                "position {position}"
+                "position {position}, early {early}"
             );
         }
     }
