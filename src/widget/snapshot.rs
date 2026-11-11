@@ -150,7 +150,8 @@ pub struct ChartSnapshot {
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
     pub bar_spacing: f32,
-    /// Numeric key units per spacing unit. Absent in older layouts and on time charts.
+    /// Numeric key units per spacing unit. Absent in older layouts, on time charts and
+    /// before the numeric keys differ.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numeric_unit: Option<f64>,
     /// The space after the last bar, in bars.
