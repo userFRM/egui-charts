@@ -823,15 +823,20 @@ impl OrderFlowInput {
         // Groups the executions the sink allocated along the chart's bars: the live ones, after
         // a loss only those after it. Without a loss a page's copy stands in for a live execution
         // the store dropped as a repeat, so paged ones from the open of the chart bar holding the
-        // oldest live one join them. Older paged ones belong to history bars, which the chart did
-        // not fold from them.
+        // oldest live one join them. A bar the sink opened a nanosecond after the one before
+        // starts with an execution no later than that one's open, so a run of such bars counts
+        // from the open of its first. Older paged ones belong to history bars, which the chart
+        // did not fold from them.
         let chart_run = || {
             let timeframe = clock.timeframe().filter(|_| trade_based)?;
             let paged = trades.iter().count() - trades.live().count();
             let oldest = trades.live().map(|trade| trade.ts).min();
             let from = oldest.filter(|_| lost.is_none()).and_then(|oldest| {
-                let before = history.partition_point(|bar| bar.time <= oldest);
-                Some(history[..before].last()?.time)
+                let bars = &history[..history.partition_point(|bar| bar.time <= oldest)];
+                let chained = (bars.windows(2).rev())
+                    .take_while(|pair| pair[1].time - pair[0].time == TimeDelta::nanoseconds(1))
+                    .count();
+                Some(bars[..bars.len() - chained].last()?.time)
             });
             let live = trades
                 .live()

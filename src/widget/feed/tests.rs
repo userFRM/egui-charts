@@ -1457,10 +1457,11 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
 /// of the sell of 4 (-1); its last unit, the buy of 2 and 2 of the sell of 6 (-1); its other 4 and
 /// 1 of the buy of 5 (-3); its other 4 (4). One study is away for the last two executions and
 /// another joins at the undo. Holding the last executions before the newest, they lack the first
-/// two bars and match the study that stayed on the others. In the last row nothing is lost, but a
-/// trade page holding the buy of 1, answered in the drain that streams it without an id, stands
-/// in for it: 2t bars of 1 and 2 (3), 4 and 8 (12), 16 and 32 (48), which the rebuilt studies
-/// and an added footprint source, buying 3, 12 and 48, match on every bar.
+/// two bars and match the study that stayed on the others. In the last two rows nothing is lost,
+/// but a trade page answered in the drain that streams them without an id stands in for the first
+/// executions: the buy of 1, or the buys of 1, 2 and 4 at one instant, so that the bar of 4 and 8
+/// opens a nanosecond after the first. 2t bars of 1 and 2 (3), 4 and 8 (12), 16 and 32 (48), which
+/// the rebuilt studies and an added footprint source, buying 3, 12 and 48, match on every bar.
 #[cfg(feature = "studies")]
 #[test]
 fn restored_order_flow_study_keeps_the_chart_bars() {
@@ -1480,7 +1481,7 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
                 (64.0, Buy),
             ],
             vec![3.0, 12.0, 48.0, 64.0],
-            false,
+            0,
         ),
         (
             "5v",
@@ -1493,7 +1494,7 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
                 (5.0, Buy),
             ],
             vec![5.0, -1.0, -1.0, -3.0, 4.0],
-            false,
+            0,
         ),
         (
             "2t",
@@ -1506,7 +1507,20 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
                 (32.0, Buy),
             ],
             vec![3.0, 12.0, 48.0],
-            true,
+            1,
+        ),
+        (
+            "2t",
+            vec![
+                (1.0, Buy),
+                (2.0, Buy),
+                (4.0, Buy),
+                (8.0, Buy),
+                (16.0, Buy),
+                (32.0, Buy),
+            ],
+            vec![3.0, 12.0, 48.0],
+            3,
         ),
     ];
     let start = bars(1)[0].time;
@@ -1528,7 +1542,7 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
         feed.page().send(page(Vec::new(), true));
         frames.run(&mut chart);
-        if !paged {
+        if paged == 0 {
             chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
         }
         let sink = feed.sink();
@@ -1542,7 +1556,7 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             if i + 1 == fills.len() {
                 assert!(chart.undo());
                 added = Some(chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false))));
-                if paged {
+                if paged > 0 {
                     chart.add_indicator(Box::new(PocAndBid {
                         inputs: [footprint.clone(), OrderFlowInput::book(1)],
                         clock: BarClock::exact(),
@@ -1551,14 +1565,17 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
                 }
                 frames.run(&mut chart);
             }
-            let at = start + TimeDelta::seconds(i as i64);
-            let tick = Tick::new(at, 100.0, size, Some(side));
-            if paged && i == 0 {
-                (feed.trades.lock().unwrap().remove(0))
-                    .send(Ok(TradePage::new(vec![tick.clone()], false)));
+            // The paged executions share the first instant and drain with the page.
+            let at = start + TimeDelta::seconds(i.saturating_sub(paged.max(1) - 1) as i64);
+            let tick = |&(size, side)| Tick::new(at, 100.0, size, Some(side));
+            if i + 1 == paged {
+                let trades = fills[..paged].iter().map(tick).collect();
+                (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(trades, false)));
             }
-            sink.push_tick(tick);
-            frames.run(&mut chart);
+            sink.push_tick(tick(&(size, side)));
+            if i + 1 >= paged {
+                frames.run(&mut chart);
+            }
         }
         for _ in 0..8 {
             frames.run(&mut chart);
@@ -1566,11 +1583,11 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
         let all: Vec<_> = stayed_values.iter().copied().map(Some).collect();
         assert_eq!(values(&chart, stayed), all, "{interval}");
         let held: Vec<_> = (all.iter().enumerate())
-            .map(|(bar, value)| value.filter(|_| paged || bar >= 2))
+            .map(|(bar, value)| value.filter(|_| paged > 0 || bar >= 2))
             .collect();
         assert_eq!(values(&chart, restored), held, "{interval}, restored");
         assert_eq!(values(&chart, added.unwrap()), held, "{interval}, added");
-        if paged {
+        if paged > 0 {
             let bought: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
                 .iter()
                 .map(|(open, bar)| (*open, bar.ask))
