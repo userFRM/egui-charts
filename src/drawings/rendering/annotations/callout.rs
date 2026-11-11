@@ -27,7 +27,10 @@ impl Drawing {
         }
         let anchor = self.points[0];
         let box_pos = self.points[1];
-        let colors = self.text_box_colors(painter.ctx());
+        let mut colors = self.text_box_colors(painter.ctx());
+        if self.border {
+            colors.border.width = self.stroke_width;
+        }
 
         // Callout box
         let text = self.display_text(painter.ctx());

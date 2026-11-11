@@ -256,10 +256,15 @@ impl DrawingInteraction {
                         .expand(2.0 * hit_distance);
                     if drawing
                         .fib_channel_level_lines(reach)
-                        .is_some_and(|(_, lines)| {
+                        .is_some_and(|(config, lines)| {
                             lines
                                 .iter()
-                                .any(|&[a, b]| point_to_line_distance(point, a, b) <= hit_distance)
+                                .zip(config.visible_levels())
+                                .any(|(&[a, b], level)| {
+                                    point_to_line_distance(point, a, b)
+                                        <= hit_distance
+                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
+                                })
                         })
                     {
                         return Some(drawing.id);
@@ -751,6 +756,30 @@ mod tests {
                 extended(),
                 (400.0, 50.0),
                 Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])],
+                    level_width: 40.0,
+                    ..Default::default()
+                }),
+                // The level crosses (150, 300); this point is 14.1 px from its centre.
+                (150.0, 320.0),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel {
+                        width: Some(2.0),
+                        ..crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])
+                    }],
+                    level_width: 40.0,
+                    ..Default::default()
+                }),
+                (150.0, 320.0),
+                None,
             ),
         ];
         let mut wrong = Vec::new();

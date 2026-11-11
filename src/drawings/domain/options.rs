@@ -328,7 +328,7 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
-    /// Custom retracement text beside this level, independent of its numeric label.
+    /// Custom retracement or extension text beside this level, independent of its numeric label.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     /// Line width in points; absent inherits the drawing's level width.
@@ -422,24 +422,25 @@ pub struct FibonacciConfig {
     /// Font size of level labels and custom text, in points (1 through 256).
     #[serde(default = "fib_font_size")]
     pub label_size: f32,
-    /// Retracement labels sit outside the Left/Right endpoint or midway at Center.
+    /// Retracement, extension and channel labels sit outside the Left/Right endpoint or midway at Center.
     /// Time projections place labels left of, on, or right of each vertical level.
     /// Absent follows `labels_on_left` for earlier drawings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_position: Option<LineTextHorizontalAlign>,
-    /// Edge of a retracement label resting on its level; middle places it on the line.
+    /// Edge of a retracement, extension or channel label resting on its level; middle places it on the line.
     #[serde(default = "fib_vertical_align")]
     pub label_vertical: LineTextVerticalAlign,
     /// Time projection labels at the top, middle or bottom of the pane; defaults to bottom.
     #[serde(default = "fib_time_label_vertical")]
     pub time_label_vertical: LineTextVerticalAlign,
-    /// Whether custom retracement text is visible, independently of prices and ratios.
+    /// Whether custom retracement or extension text is visible, independently of prices and ratios.
     #[serde(default = "percent_levels")]
     pub show_text: bool,
-    /// Retracement text sits outside the Left/Right endpoint or midway at Center.
+    /// Custom text sits outside retracement endpoints and inside extension endpoints;
+    /// Center places it midway along the level.
     #[serde(default)]
     pub text_position: LineTextHorizontalAlign,
-    /// Edge of the custom retracement text resting on its level.
+    /// Edge of the custom retracement or extension text resting on its level.
     #[serde(default = "fib_vertical_align")]
     pub text_vertical: LineTextVerticalAlign,
     /// Show the construction line between anchors, using the drawing's line style.
