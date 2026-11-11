@@ -2087,9 +2087,9 @@ impl DemoApp {
                 });
                 self.top_toolbar = toolbar;
                 if let Some((id, enabled)) = study_permission {
-                    self.chart.user_action(|chart| {
-                        chart.set_indicator_user_edit_enabled(id, enabled);
-                    });
+                    // Undo keeps the host's permission, so autosave counts the change here.
+                    self.chart.set_indicator_user_edit_enabled(id, enabled);
+                    self.grid_edits = self.grid_edits.wrapping_add(1);
                 }
                 if let Some(panel) = panel_action {
                     self.open_panel = (self.open_panel != Some(panel)).then_some(panel);
