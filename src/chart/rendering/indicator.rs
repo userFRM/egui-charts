@@ -369,6 +369,7 @@ impl IndicatorRenderer {
 
         // Handle multi-line indicators
         let line_count = indicator.line_count();
+        let bar_spacing = coords.bar_spacing_for_width();
 
         for line_idx in 0..line_count {
             let mut plot = indicator.plot_style(line_idx);
@@ -377,7 +378,7 @@ impl IndicatorRenderer {
                 PlotType::Columns | PlotType::BackgroundColor
             ) || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
             {
-                plot.width = coords.bar_spacing
+                plot.width = bar_spacing
                     * if plot.plot_type != PlotType::BackgroundColor {
                         0.8
                     } else {
@@ -468,7 +469,7 @@ impl IndicatorRenderer {
                             .checked_sub(bars_start)
                             .and_then(|i| bars.get(i))
                     {
-                        let width = coords.bar_spacing * 0.8;
+                        let width = bar_spacing * 0.8;
                         let open = price_scale.price_to_y(bar.open);
                         let close = price_scale.price_to_y(bar.close);
                         let top = open.min(close);

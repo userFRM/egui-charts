@@ -247,7 +247,10 @@ impl Chart {
         let movable: Vec<_> = self
             .pane_series(self.main_series_pane())
             .into_iter()
-            .filter(|id| *id != SeriesId::MAIN)
+            .filter(|id| {
+                *id != SeriesId::MAIN
+                    && (!self.study_ids.contains(id) || self.indicator_user_edit_enabled(*id))
+            })
             .collect();
         if movable.is_empty() || !hovered {
             return;
@@ -390,6 +393,10 @@ impl Chart {
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
         child.menu_button("...", |ui| {
+            let members = self.pane_series(id);
+            let editable = members.iter().all(|member| {
+                !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member)
+            });
             for (label, enabled, command) in [
                 ("Move pane up", above.is_some(), 0),
                 ("Move pane down", below.is_some(), 1),
@@ -404,15 +411,15 @@ impl Chart {
                 ),
                 (
                     "Merge with pane above",
-                    above.is_some_and(|pane| pane != PaneId::MAIN),
+                    editable && above.is_some_and(|pane| pane != PaneId::MAIN),
                     3,
                 ),
                 (
                     "Merge with pane below",
-                    below.is_some_and(|pane| pane != PaneId::MAIN),
+                    editable && below.is_some_and(|pane| pane != PaneId::MAIN),
                     4,
                 ),
-                ("Remove pane", panes.len() > 1, 5),
+                ("Remove pane", editable && panes.len() > 1, 5),
             ] {
                 if ui
                     .add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
@@ -422,15 +429,16 @@ impl Chart {
                     ui.close();
                 }
             }
-            let members = self.pane_series(id);
             if !members.is_empty() {
                 ui.separator();
             }
             for member in &members {
+                let editable =
+                    !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member);
                 ui.menu_button(l10n::text(ui.ctx(), self.member_name(*member)), |ui| {
                     if ui
                         .add_enabled(
-                            main_pane.is_some(),
+                            editable && main_pane.is_some(),
                             egui::Button::new(l10n::text(ui.ctx(), "Move to main pane")),
                         )
                         .clicked()
@@ -441,7 +449,7 @@ impl Chart {
                     }
                     if ui
                         .add_enabled(
-                            members.len() > 1,
+                            editable && members.len() > 1,
                             egui::Button::new(l10n::text(ui.ctx(), "Move to new pane")),
                         )
                         .clicked()
@@ -554,6 +562,109 @@ impl Chart {
 mod tests {
     use super::*;
     use egui::{Context, Event, Modifiers, PointerButton, RawInput};
+
+    /// Pane controls respect study permissions while host pane operations remain available.
+    #[test]
+    fn pane_menu_keeps_read_only_study() {
+        use crate::studies::{RSI, SMA};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (theme, size) in [
+            (crate::theme::Theme::light(), egui::vec2(320.0, 450.0)),
+            (crate::theme::Theme::dark(), egui::vec2(320.0, 450.0)),
+            (crate::theme::Theme::light(), egui::vec2(800.0, 600.0)),
+            (crate::theme::Theme::dark(), egui::vec2(800.0, 600.0)),
+        ] {
+            for enabled in [false, true] {
+                for command in [
+                    "Remove pane",
+                    "Merge with pane above",
+                    "Merge with pane below",
+                    "Move to main pane",
+                    "Move to new pane",
+                    "price member",
+                ] {
+                    let mut chart = crate::widget::test_frames::chart(&[100.0; 20], &[110.0; 20]);
+                    chart.add_indicator(Box::new(RSI::new(7)));
+                    let study = chart.add_indicator(Box::new(RSI::new(14)));
+                    let pane = chart.series_pane(study).unwrap();
+                    let below = chart.add_indicator(Box::new(RSI::new(21)));
+                    let below_pane = chart.series_pane(below).unwrap();
+                    let peer = chart.add_indicator(Box::new(SMA::new(1)));
+                    chart.move_series_to_pane(peer, pane);
+                    chart.set_indicator_user_edit_enabled(study, enabled);
+                    if command == "price member" {
+                        chart.move_series_to_pane(study, PaneId::MAIN);
+                        chart.move_series_to_pane(peer, PaneId::MAIN);
+                    }
+                    let original = chart.series_pane(study);
+                    let setup_theme = theme.clone();
+                    let mut harness = Harness::builder()
+                        .with_context_setup(move |ctx| {
+                            crate::theme::apply_to_egui(ctx, &setup_theme);
+                        })
+                        .with_size(size)
+                        .build_ui_state(
+                            |ui, chart: &mut Chart| {
+                                let rect = ui.max_rect();
+                                if command == "price member" {
+                                    chart.main_pane_actions(ui, rect, rect);
+                                } else if let Some(at) =
+                                    chart.pane_layout.panes.iter().position(|p| p.id == pane)
+                                {
+                                    chart.pane_actions(ui, at, pane, rect, rect, false);
+                                }
+                            },
+                            chart,
+                        );
+                    harness.hover_at((size / 2.0).to_pos2());
+                    harness.run();
+                    harness.get_by_label("...").click();
+                    harness.run();
+                    if command == "price member" && !enabled {
+                        assert!(harness.query_by_label("RSI").is_none());
+                        assert!(harness.query_by_label("SMA").is_some());
+                    } else {
+                        let action = if command.starts_with("Move to") || command == "price member"
+                        {
+                            harness.get_by_label("RSI").click();
+                            harness.run();
+                            if command == "price member" {
+                                "Move to new pane"
+                            } else {
+                                command
+                            }
+                        } else {
+                            command
+                        };
+                        assert!(
+                            Rect::from_min_size(Pos2::ZERO, size)
+                                .contains_rect(harness.get_by_label(action).rect()),
+                            "{command} at {size:?}"
+                        );
+                        harness.get_by_label(action).click();
+                        harness.run();
+                    }
+                    let chart = harness.state();
+                    if enabled {
+                        assert_ne!(chart.series_pane(study), original, "{command}");
+                    } else {
+                        assert_eq!(chart.series_pane(study), original, "{command}");
+                        assert!(
+                            chart.indicators().any(|(id, _)| id == peer),
+                            "no partial removal"
+                        );
+                        let chart = harness.state_mut();
+                        assert!(chart.move_series_to_pane(study, below_pane));
+                        assert!(chart.move_to_new_pane(study));
+                        let pane = chart.series_pane(study).unwrap();
+                        assert!(chart.remove_pane(pane));
+                        assert!(chart.indicators().all(|(id, _)| id != study));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn pointer_command_double_click_collapses_and_restores_the_pointed_pane() {

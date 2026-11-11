@@ -229,10 +229,18 @@ fn fit_content_includes_added_series_across_panes() {
             assert_eq!(chart.time_at_index(0), Some(data[10].time));
             chart.remove_series(id);
             chart.fit_content();
+            // Numeric spacing keeps the initial 15-minute unit when main bars arrive.
+            let slots = if case == "added only numeric" {
+                10.0 / 15.0 + 1.0
+            } else {
+                11.0
+            };
             assert!(
-                (chart.get_time_scale_state().0 - chart.get_rendered_price_rect().width() / 14.0)
+                (chart.get_time_scale_state().0
+                    - chart.get_rendered_price_rect().width() / (slots + 3.0))
                     .abs()
-                    < 0.001
+                    < 0.001,
+                "{case}: fit after replacing the fallback domain"
             );
         }
     }

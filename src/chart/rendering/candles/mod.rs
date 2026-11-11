@@ -26,7 +26,6 @@ pub(crate) mod volume;
 
 pub use bar::render_ohlc_bar;
 pub use candle::render_candle;
-pub use volume::render_volume_bar;
 
 use crate::theme::ThemeExt;
 pub use heikin_ashi::HeikinAshiCache;

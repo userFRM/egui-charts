@@ -249,12 +249,18 @@ pub(crate) fn time_axis_marks(
     // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
     let left = right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing);
-    let (left, right) = coords
-        .numeric_positions
-        .as_ref()
-        .map_or((left.floor(), right), |positions| {
-            (positions.index(left).floor(), positions.index(right))
-        });
+    let (left, right) =
+        coords
+            .numeric_positions
+            .as_ref()
+            .map_or((left.floor(), right), |positions| {
+                let right = right + 0.5;
+                let left = right - f64::from(context.rect.width()) / f64::from(coords.bar_spacing);
+                (
+                    (positions.index(left) + 0.5).floor(),
+                    positions.index(right) - 0.5,
+                )
+            });
     let first = if visible_data.is_empty() {
         left.max(0.0) as usize
     } else {
@@ -339,7 +345,7 @@ pub(crate) fn time_axis_marks(
             .numeric_positions
             .as_ref()
             .map_or(coords.bar_spacing, |positions| {
-                (f64::from(coords.bar_spacing) / positions.unit) as f32
+                (f64::from(coords.bar_spacing) / positions.unit.unwrap_or(1.0)) as f32
             }),
         min_spacing: min_time_label_spacing(options),
         uniform_distribution: options.uniform_distribution,

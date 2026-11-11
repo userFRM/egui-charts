@@ -161,14 +161,15 @@ pub(crate) fn zone_rect(
 pub(crate) fn candle_geometry(
     candle: &StudyCandle,
     coords: &crate::chart::coords::ChartMapping,
+    bar_spacing: f32,
     price_to_y: impl Fn(f64) -> f32,
 ) -> Option<(egui::Rect, [egui::Pos2; 2])> {
     use egui::{Pos2, Rect};
     if candle.bars.is_empty() {
         return None;
     }
-    let half = coords.bar_spacing * 0.5;
-    let inset = (coords.bar_spacing * 0.1).min(2.0);
+    let half = bar_spacing * 0.5;
+    let inset = (bar_spacing * 0.1).min(2.0);
     let left = coords.idx_to_x(candle.bars.start) - half + inset;
     let right = coords.idx_to_x(candle.bars.end - 1) + half - inset;
     let x = (left + right) * 0.5;
@@ -198,18 +199,21 @@ pub(crate) fn paint_candles(
     coords: &crate::chart::coords::ChartMapping,
 ) {
     let painter = context.painter.with_clip_rect(context.rect);
+    let bar_spacing = coords.bar_spacing_for_width();
     let candles = study.candles();
     let start = candles
         .partition_point(|c| c.bars.end <= coords.x_to_idx(context.rect.left()).saturating_sub(1));
     for candle in &candles[start..] {
-        if coords.idx_to_x(candle.bars.start) - coords.bar_spacing * 0.5 > context.rect.right() {
+        if coords.idx_to_x(candle.bars.start) - bar_spacing * 0.5 > context.rect.right() {
             break;
         }
         let style = study.plot_style(candle.plot);
         if !style.visible {
             continue;
         }
-        if let Some((body, wick)) = candle_geometry(candle, coords, |p| price.price_to_y(p)) {
+        if let Some((body, wick)) =
+            candle_geometry(candle, coords, bar_spacing, |p| price.price_to_y(p))
+        {
             let stroke = egui::Stroke::new(style.width, style.color);
             painter.line_segment(wick, stroke);
             painter.rect(
