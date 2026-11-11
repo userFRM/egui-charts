@@ -1025,7 +1025,20 @@ mod v1 {
         let Color { r, g, b, a } = stored.color;
         let mut drawing = Drawing::with_color(0, tool_type, [r, g, b, a]);
         // Version 1 stored none of these settings; creation styles must not colour old saves.
-        drawing.fill_color = None;
+        // The released renderers tinted these tools' areas in the saved colour; the regression
+        // trend shaded its inner band at 25 and its outer band at 15.
+        drawing.fill_color = match tool_type {
+            DrawingToolType::TimeCycles => Some(15),
+            DrawingToolType::DateRange | DrawingToolType::HeadAndShoulders => Some(20),
+            DrawingToolType::RegressionTrend
+            | DrawingToolType::DisjointChannel
+            | DrawingToolType::XABCDPattern
+            | DrawingToolType::TrianglePattern => Some(25),
+            DrawingToolType::DateAndPriceRange => Some(30),
+            DrawingToolType::FlatTopBottom => Some(35),
+            _ => None,
+        }
+        .map(|alpha| [r, g, b, alpha]);
         drawing.fib_config = None;
         drawing.pitchfork = None;
         drawing.volume_profile = None;
@@ -2124,46 +2137,55 @@ mod tests {
         );
     }
 
-    /// Version 1 held no fill or tool configuration. The measure tint follows v0.2.0
-    /// (45a0c294): a negative price change is red, zero or a rise blue, at alpha 30 and 150.
+    /// Version 1 held no fill or tool configuration. Fills follow the v0.2.0 renderers
+    /// (45a0c294): channels, patterns, cycles and date ranges tinted in the drawing colour at a
+    /// fixed alpha, and the measure a negative price change red, zero or a rise blue, at alpha
+    /// 30 and 150.
     #[test]
     fn version_1_profile_drawings_restore_without_a_config() {
         use DrawingToolType as T;
-        for (tool, prices, font) in [
-            (T::Rect, [100.0, 110.0], None),
-            (T::Circle, [100.0, 110.0], None),
-            (T::Ellipse, [100.0, 110.0], None),
-            (T::Arc, [100.0, 110.0], None),
-            (T::Polyline, [100.0, 110.0], None),
-            (T::PriceRange, [100.0, 110.0], Some(11.0)),
-            (T::Pitchfork, [100.0, 110.0], None),
-            (T::SchiffPitchfork, [100.0, 110.0], None),
-            (T::ModifiedSchiffPitchfork, [100.0, 110.0], None),
-            (T::InsidePitchfork, [100.0, 110.0], None),
-            (T::Pitchfan, [100.0, 110.0], None),
-            (T::FixedRangeVolumeProfile, [100.0, 110.0], None),
-            (T::AnchoredVolumeProfile, [100.0, 110.0], None),
-            (T::FibonacciRetracement, [100.0, 110.0], None),
-            (T::ParallelChannel, [100.0, 110.0], None),
-            (T::TextLabel, [100.0, 110.0], Some(14.0)),
-            (T::AnchoredText, [100.0, 110.0], Some(14.0)),
-            (T::Callout, [100.0, 110.0], Some(13.0)),
-            (T::TrendAngle, [100.0, 110.0], Some(13.0)),
-            (T::InfoLine, [100.0, 110.0], Some(10.0)),
-            (T::Comment, [100.0, 110.0], Some(11.0)),
-            (T::DateRange, [100.0, 110.0], Some(11.0)),
-            (T::DateAndPriceRange, [100.0, 110.0], Some(10.0)),
-            (T::PriceLabel, [100.0, 110.0], Some(11.0)),
-            (T::PriceNote, [100.0, 110.0], Some(11.0)),
-            (T::Signpost, [100.0, 110.0], Some(11.0)),
-            (T::Note, [100.0, 110.0], Some(10.0)),
-            (T::AnchoredNote, [100.0, 110.0], Some(11.0)),
-            (T::FlagNote, [100.0, 110.0], Some(10.0)),
-            (T::FontIcon, [100.0, 110.0], Some(24.0)),
-            (T::ArrowMarker, [100.0, 110.0], None),
-            (T::Measure, [110.0, 100.0], Some(11.0)),
-            (T::Measure, [100.0, 110.0], Some(11.0)),
-            (T::Measure, [100.0, 100.0], Some(11.0)),
+        for (tool, prices, font, alpha) in [
+            (T::Rect, [100.0, 110.0], None, None),
+            (T::Circle, [100.0, 110.0], None, None),
+            (T::Ellipse, [100.0, 110.0], None, None),
+            (T::Arc, [100.0, 110.0], None, None),
+            (T::Polyline, [100.0, 110.0], None, None),
+            (T::PriceRange, [100.0, 110.0], Some(11.0), None),
+            (T::Pitchfork, [100.0, 110.0], None, None),
+            (T::SchiffPitchfork, [100.0, 110.0], None, None),
+            (T::ModifiedSchiffPitchfork, [100.0, 110.0], None, None),
+            (T::InsidePitchfork, [100.0, 110.0], None, None),
+            (T::Pitchfan, [100.0, 110.0], None, None),
+            (T::FixedRangeVolumeProfile, [100.0, 110.0], None, None),
+            (T::AnchoredVolumeProfile, [100.0, 110.0], None, None),
+            (T::FibonacciRetracement, [100.0, 110.0], None, None),
+            (T::ParallelChannel, [100.0, 110.0], None, None),
+            (T::FlatTopBottom, [100.0, 110.0], None, Some(35)),
+            (T::DisjointChannel, [100.0, 110.0], None, Some(25)),
+            (T::RegressionTrend, [100.0, 110.0], None, Some(25)),
+            (T::XABCDPattern, [100.0, 110.0], None, Some(25)),
+            (T::HeadAndShoulders, [100.0, 110.0], None, Some(20)),
+            (T::TrianglePattern, [100.0, 110.0], None, Some(25)),
+            (T::TimeCycles, [100.0, 110.0], None, Some(15)),
+            (T::TextLabel, [100.0, 110.0], Some(14.0), None),
+            (T::AnchoredText, [100.0, 110.0], Some(14.0), None),
+            (T::Callout, [100.0, 110.0], Some(13.0), None),
+            (T::TrendAngle, [100.0, 110.0], Some(13.0), None),
+            (T::InfoLine, [100.0, 110.0], Some(10.0), None),
+            (T::Comment, [100.0, 110.0], Some(11.0), None),
+            (T::DateRange, [100.0, 110.0], Some(11.0), Some(20)),
+            (T::DateAndPriceRange, [100.0, 110.0], Some(10.0), Some(30)),
+            (T::PriceLabel, [100.0, 110.0], Some(11.0), None),
+            (T::PriceNote, [100.0, 110.0], Some(11.0), None),
+            (T::Signpost, [100.0, 110.0], Some(11.0), None),
+            (T::Note, [100.0, 110.0], Some(10.0), None),
+            (T::AnchoredNote, [100.0, 110.0], Some(11.0), None),
+            (T::FlagNote, [100.0, 110.0], Some(10.0), None),
+            (T::FontIcon, [100.0, 110.0], Some(24.0), None),
+            (T::ArrowMarker, [100.0, 110.0], None, None),
+            (T::Measure, [110.0, 100.0], Some(11.0), Some(30)),
+            (T::Measure, [100.0, 110.0], Some(11.0), Some(30)),
+            (T::Measure, [100.0, 100.0], Some(11.0), Some(30)),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v1.json")).unwrap();
@@ -2196,7 +2218,13 @@ mod tests {
                 } else {
                     [41, 98, 255]
                 };
-                let fill = (tool == T::Measure).then_some([tint[0], tint[1], tint[2], 30]);
+                // Areas take the saved colour, the measure the tint of its move.
+                let rgb = if tool == T::Measure {
+                    tint
+                } else {
+                    [33, 150, 243]
+                };
+                let fill = alpha.map(|alpha| [rgb[0], rgb[1], rgb[2], alpha]);
                 assert_eq!(drawing.fill_color, fill, "{tool:?} {prices:?}");
                 assert!(drawing.fib_config.is_none(), "{tool:?}");
                 assert!(drawing.pitchfork.is_none(), "{tool:?}");
@@ -2259,7 +2287,7 @@ mod tests {
                         );
                         let shapes = std::mem::take(&mut output.shapes);
                         output.drop_without_applying_deltas();
-                        if tool == T::Measure && prices[0] != prices[1] {
+                        if fill.is_some() && prices[0] != prices[1] {
                             assert!(shapes.iter().any(|s| matches!(&s.shape,
                                 egui::Shape::Rect(r) if r.fill == restored.fill_color32().unwrap())));
                         }
