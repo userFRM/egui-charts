@@ -1731,58 +1731,73 @@ mod tests {
     }
 
     /// Sizes of 0.1 and 0.2 do not sum exactly to their threshold, so a fill that reaches the
-    /// threshold must close the bar whole. A fill that crosses it by more than the rounding is
-    /// still split.
+    /// threshold must close the bar whole, and its candle closes at that fill's price. A fill
+    /// that crosses it by more than the rounding is still split.
     #[test]
     fn fractional_fills_that_reach_the_threshold_close_the_bar() {
         use OrderSide::Buy;
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let at = |seconds: i64| start + TimeDelta::seconds(seconds);
-        let fill = |seconds, price, size| Tick::new(at(seconds), price, size, Some(Buy));
-        let summary = |flow: &Footprint| {
-            flow.bars()
-                .values()
-                .map(|bar| (bar.trades(), bar.levels.keys().copied().collect::<Vec<_>>()))
-                .collect::<Vec<_>>()
-        };
+        // Per bar: executions, rows, and the candle's open and close.
+        let cases = [
+            (
+                "ten buys of 0.1",
+                [(100.0, 0.1); 10]
+                    .into_iter()
+                    .chain([(101.0, 0.1)])
+                    .collect(),
+                vec![(10, vec![100], 100.0, 100.0), (1, vec![101], 101.0, 101.0)],
+            ),
+            (
+                "sizes of 0.1 to 0.5",
+                vec![
+                    (100.0, 0.1),
+                    (101.0, 0.2),
+                    (102.0, 0.3),
+                    (103.0, 0.4),
+                    (104.0, 0.5),
+                ],
+                vec![
+                    (4, vec![100, 101, 102, 103], 100.0, 103.0),
+                    (1, vec![104], 104.0, 104.0),
+                ],
+            ),
+            (
+                "a fill crossing by more than the rounding is split",
+                vec![(100.0, 0.6), (101.0, 0.6)],
+                vec![
+                    (2, vec![100, 101], 100.0, 101.0),
+                    (1, vec![101], 101.0, 101.0),
+                ],
+            ),
+        ];
         for interval in ["1v", "1delta"] {
-            let clock = || BarClock::new(interval.parse().unwrap());
-            let mut ten = Footprint::new(clock(), 1.0, 1).unwrap();
-            for second in 0..10 {
-                ten.push(&fill(second, 100.0, 0.1)).unwrap();
+            let clock = BarClock::new(interval.parse().unwrap());
+            for (name, fills, expected) in &cases {
+                let trades: Vec<_> = (0..)
+                    .zip(fills)
+                    .map(|(second, &(price, size))| {
+                        Tick::new(start + TimeDelta::seconds(second), price, size, Some(Buy))
+                    })
+                    .collect();
+                let mut flow = Footprint::new(clock.clone(), 1.0, 1).unwrap();
+                for trade in &trades {
+                    flow.push(trade).unwrap();
+                }
+                let candles = super::super::aggregate_trades_with_tick_size(
+                    &trades,
+                    clock.clone(),
+                    Some(1.0),
+                )
+                .unwrap();
+                assert_eq!(flow.bars().len(), candles.len(), "{interval}: {name}");
+                let got: Vec<_> = (flow.bars().values().zip(&candles))
+                    .map(|(bar, candle)| {
+                        let rows: Vec<_> = bar.levels.keys().copied().collect();
+                        (bar.trades(), rows, candle.open, candle.close)
+                    })
+                    .collect();
+                assert_eq!(&got, expected, "{interval}: {name}");
             }
-            ten.push(&fill(10, 101.0, 0.1)).unwrap();
-            assert_eq!(
-                summary(&ten),
-                [(10, vec![100]), (1, vec![101])],
-                "{interval}: ten buys of 0.1"
-            );
-            let mut stepped = Footprint::new(clock(), 1.0, 1).unwrap();
-            for (second, (price, size)) in [
-                (100.0, 0.1),
-                (101.0, 0.2),
-                (102.0, 0.3),
-                (103.0, 0.4),
-                (104.0, 0.5),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                stepped.push(&fill(second as i64, price, size)).unwrap();
-            }
-            assert_eq!(
-                summary(&stepped),
-                [(4, vec![100, 101, 102, 103]), (1, vec![104])],
-                "{interval}: sizes of 0.1 to 0.5"
-            );
-            let mut crossing = Footprint::new(clock(), 1.0, 1).unwrap();
-            crossing.push(&fill(0, 100.0, 0.6)).unwrap();
-            crossing.push(&fill(1, 101.0, 0.6)).unwrap();
-            assert_eq!(
-                summary(&crossing),
-                [(2, vec![100, 101]), (1, vec![101])],
-                "{interval}: a fill crossing by more than the rounding is split"
-            );
         }
     }
 

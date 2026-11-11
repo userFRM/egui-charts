@@ -585,7 +585,9 @@ impl PriceMap {
         ) {
             self.price_precision = Some(format.precision);
             let mut unit = 10f64.powi(-i32::from(format.precision));
-            if format.kind == crate::model::SeriesFormat::Volume {
+            if format.kind == crate::model::SeriesFormat::Volume
+                && self.transform.mode == PriceScaleMode::Normal
+            {
                 let magnitude = self
                     .transform
                     .to_price(self.range.min)

@@ -108,6 +108,12 @@ pub trait PriceFormatter: Send + Sync {
     /// Formatted string to display on the price axis
     fn format(&self, price: f64) -> String;
 
+    /// Format an absolute price change. The default preserves the formatter's text;
+    /// chart-owned display formats add the built-in sign for non-negative changes.
+    fn format_change(&self, change: f64) -> String {
+        self.format(change)
+    }
+
     /// Format a price axis tick. Defaults to [`format`](Self::format); override it
     /// to write ticks differently from crosshair and price tag labels.
     fn format_tick(&self, price: f64) -> String {
@@ -122,7 +128,8 @@ pub trait PriceFormatter: Send + Sync {
     /// falls back to that per-value method for the whole list.
     ///
     /// Layout and painting can each request labels; ticks covered by tags or clipped
-    /// at the pane boundary are still included. Crosshair and price tags use
+    /// at the pane boundary are still included, as are the edge values when edge ticks
+    /// are enabled. Layout and painting use the same list. Crosshair and price tags use
     /// [`format`](Self::format) instead.
     fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
         prices

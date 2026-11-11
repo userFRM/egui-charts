@@ -25,6 +25,35 @@ pub fn render_alert_levels<'a>(
     format: impl Fn(f64) -> String,
 ) -> Option<Alert> {
     let mut changed = None;
+    let (escape, primary_down, primary_released) = ui.input(|input| {
+        // Preserve event order even when another widget consumed the key.
+        let escape = input
+            .raw
+            .events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    ..
+                } => Some(true),
+                egui::Event::PointerButton {
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false);
+        (
+            escape,
+            input.pointer.primary_down(),
+            input.pointer.button_released(egui::PointerButton::Primary),
+        )
+    });
+    let dragged = ui.ctx().dragged_id();
+    let started = ui.ctx().drag_started_id();
+    let stopped = ui.ctx().drag_stopped_id();
     let painter = ui.painter().with_clip_rect(mapping.rect);
     let now = Utc::now();
     for alert in alerts
@@ -61,10 +90,17 @@ pub fn render_alert_levels<'a>(
                 .filter(|(_, v)| v.is_finite())
             {
                 let key = ui.scope_id().with(("alert_level", &id.0, index, edge));
-                let staged = ui
-                    .ctx()
-                    .data(|data| data.get_temp::<f64>(key))
-                    .unwrap_or(level);
+                let owns = |id| id == Some(key) || id == Some(key.with("line"));
+                let staged = ui.ctx().data_mut(|data| {
+                    // A hidden or replaced widget may never report its own drag stop.
+                    if escape
+                        || owns(started)
+                        || !(owns(dragged) && primary_down || owns(stopped) && primary_released)
+                    {
+                        data.remove::<f64>(key);
+                    }
+                    data.get_temp::<f64>(key).unwrap_or(level)
+                });
                 let y = mapping.price_to_y(staged);
                 if !y.is_finite() || !mapping.is_y_visible(y) {
                     continue;
@@ -160,9 +196,11 @@ pub fn render_alert_levels<'a>(
                         ui.ctx().data_mut(|data| data.insert_temp(key, value));
                     }
                 }
-                if response.drag_stopped_by(egui::PointerButton::Primary) {
+                if response.drag_stopped() {
                     ui.ctx().data_mut(|data| data.remove::<f64>(key));
-                    if value.is_finite() && value != level {
+                    if escape || !response.drag_stopped_by(egui::PointerButton::Primary) {
+                        value = level;
+                    } else if value.is_finite() && value != level {
                         let mut updated = alert.clone();
                         let condition = if index == 0 {
                             &mut updated.condition
@@ -484,6 +522,133 @@ mod tests {
     }
 
     #[test]
+    fn drag_ended_without_primary_release_draws_the_stored_level() {
+        let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
+        let mapping = ChartMapping::new(
+            rect,
+            6.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                rect.top(),
+                rect.bottom(),
+                false,
+            ),
+        );
+        for (touch, release_with_escape, consumed, line_removed) in [
+            (false, false, false, false),
+            (false, true, false, false),
+            (false, true, true, false),
+            (true, false, false, false),
+            (false, false, false, true),
+        ] {
+            for x in [408.0, 100.0] {
+                let ctx = egui::Context::default();
+                let mut alert = Alert::new("SYM", AlertCondition::Above(100.0));
+                alert.id = Some(AlertId("1".into()));
+                alert.extend_line = true;
+                let start = pos2(x, 120.0);
+                let end = start + vec2(0.0, if touch { 2.0 } else { 30.0 });
+                let button = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                let contact = |pos, phase| egui::Event::Touch {
+                    device_id: egui::TouchDeviceId(0),
+                    id: egui::TouchId(0),
+                    phase,
+                    pos,
+                    force: None,
+                };
+                let mut pressed = vec![button(start, true)];
+                let mut moved = vec![egui::Event::PointerMoved(end)];
+                let mut released = vec![button(end, false)];
+                if touch {
+                    pressed.push(contact(start, egui::TouchPhase::Start));
+                    moved.push(contact(end, egui::TouchPhase::Move));
+                    released.push(contact(end, egui::TouchPhase::End));
+                }
+                let mut cancel = if touch {
+                    vec![]
+                } else {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }]
+                };
+                if release_with_escape {
+                    cancel.push(button(end, false));
+                }
+                let steps = [
+                    (0.0, vec![egui::Event::PointerMoved(start)]),
+                    (0.05, pressed),
+                    (0.10, moved),
+                    (1.0, cancel),
+                    (1.05, released),
+                    (1.10, vec![]),
+                    (1.15, vec![]),
+                ];
+                for (step, (time, events)) in steps.into_iter().enumerate() {
+                    if step == 3 && line_removed {
+                        alert.extend_line = false;
+                    }
+                    if step == 6 {
+                        alert.condition = AlertCondition::Above(105.0);
+                    }
+                    let mut changed = None;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            if consumed {
+                                ui.input_mut(|input| {
+                                    input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                                });
+                            }
+                            changed = render_alert_levels(
+                                ui,
+                                &mapping,
+                                [&alert],
+                                Color32::GOLD,
+                                true,
+                                false,
+                                |p| p.to_string(),
+                            );
+                        },
+                    );
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    assert!(
+                        changed.is_none(),
+                        "cancelled drag must not save, touch={touch}, release={release_with_escape}, consumed={consumed}, line_removed={line_removed}, step={step}"
+                    );
+                    if step >= 3 {
+                        // y = 20 + (110 - price) * 200 / 20: 100 -> 120 and 105 -> 70.
+                        let expected = if step == 6 { 70.0 } else { 120.0 };
+                        assert_eq!(
+                            marker(&shapes).unwrap().center.y,
+                            expected,
+                            "touch={touch}, x={x}, step={step}"
+                        );
+                        assert_eq!(egui::Popup::is_any_open(&ctx), touch);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn short_quick_drag_moves_the_level() {
         use egui::PointerButton::{Primary, Secondary};
         let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
@@ -506,16 +671,17 @@ mod tests {
         alert.id = Some(AlertId("1".into()));
         alert.extend_line = true;
         // x = 408 is the marker and x = 100 the line.
-        for (button, x, from, to, level, menu) in [
-            (Primary, 408.0, 120.0, 124.0, Some(99.6), false),
-            (Primary, 100.0, 120.0, 124.0, Some(99.6), false),
+        for (button, x, from, to, level, menu, escape_after_release) in [
+            (Primary, 408.0, 120.0, 124.0, Some(99.6), false, false),
+            (Primary, 408.0, 120.0, 124.0, Some(99.6), false, true),
+            (Primary, 100.0, 120.0, 124.0, Some(99.6), false, false),
             // A press beside the level keeps its distance from the pointer, without a jump.
-            (Primary, 408.0, 123.0, 127.0, Some(99.6), false),
-            (Primary, 408.0, 123.0, 123.0, None, false),
-            (Secondary, 408.0, 120.0, 120.0, None, true),
-            (Secondary, 100.0, 120.0, 120.0, None, true),
+            (Primary, 408.0, 123.0, 127.0, Some(99.6), false, false),
+            (Primary, 408.0, 123.0, 123.0, None, false, false),
+            (Secondary, 408.0, 120.0, 120.0, None, true, false),
+            (Secondary, 100.0, 120.0, 120.0, None, true, false),
             // A hand moving during a secondary click opens the menu and leaves the level.
-            (Secondary, 408.0, 120.0, 123.0, None, true),
+            (Secondary, 408.0, 120.0, 123.0, None, true, false),
         ] {
             let ctx = egui::Context::default();
             let (start, end) = (pos2(x, from), pos2(x, to));
@@ -525,11 +691,21 @@ mod tests {
                 pressed,
                 modifiers: Default::default(),
             };
+            let mut released = vec![press(end, false)];
+            if escape_after_release {
+                released.push(egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                });
+            }
             let steps = [
                 vec![egui::Event::PointerMoved(start)],
                 vec![press(start, true)],
                 vec![egui::Event::PointerMoved(end)],
-                vec![press(end, false)],
+                released,
                 vec![],
             ];
             let mut changed = None;

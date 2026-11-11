@@ -58,11 +58,108 @@ pub struct TextTab;
 impl TextTab {
     /// Tools with text to write and the trend angle, whose own labels have a font and a colour.
     pub(crate) fn available(tool: DrawingToolType) -> bool {
-        tool.supports_text() || tool == DrawingToolType::TrendAngle
+        tool.supports_text()
+            || matches!(
+                tool,
+                DrawingToolType::TrendAngle
+                    | DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+            )
     }
 
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 3]) {
         ui.space_md();
+        if let Some(template) = &mut props.tool_settings
+            && matches!(
+                template.settings.tool_type,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+            )
+        {
+            let mut config = template.settings.fibonacci_config().into_owned();
+            let original = config.clone();
+            FormGrid::new("fibonacci_text").show(ui, |ui| {
+                let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.add(
+                    egui::DragValue::new(&mut config.label_size)
+                        .range(1.0..=256.0)
+                        .suffix(" px"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+                use LineTextHorizontalAlign as H;
+                use LineTextVerticalAlign as V;
+                let mut position = config.label_position.unwrap_or(if config.labels_on_left {
+                    H::Left
+                } else {
+                    H::Right
+                });
+                alignment_row(
+                    ui,
+                    "Label position",
+                    &mut position,
+                    [
+                        (H::Left, "Left"),
+                        (H::Center, "Center"),
+                        (H::Right, "Right"),
+                    ],
+                );
+                if position
+                    != config.label_position.unwrap_or(if config.labels_on_left {
+                        H::Left
+                    } else {
+                        H::Right
+                    })
+                {
+                    config.label_position = Some(position);
+                }
+                alignment_row(
+                    ui,
+                    "Label height",
+                    &mut config.label_vertical,
+                    [
+                        (V::Bottom, "Top"),
+                        (V::Middle, "Middle"),
+                        (V::Top, "Bottom"),
+                    ],
+                );
+                if template.settings.tool_type == DrawingToolType::FibonacciChannel {
+                    return;
+                }
+                ui.label("");
+                ui.checkbox(
+                    &mut config.show_text,
+                    l10n::text(ui.ctx(), "Show level text"),
+                );
+                ui.end_row();
+                alignment_row(
+                    ui,
+                    "Text position",
+                    &mut config.text_position,
+                    [
+                        (H::Left, "Left"),
+                        (H::Center, "Center"),
+                        (H::Right, "Right"),
+                    ],
+                );
+                alignment_row(
+                    ui,
+                    "Text height",
+                    &mut config.text_vertical,
+                    [
+                        (V::Bottom, "Top"),
+                        (V::Middle, "Middle"),
+                        (V::Top, "Bottom"),
+                    ],
+                );
+            });
+            if config != original {
+                template.settings.fib_config = Some(config);
+            }
+            return;
+        }
 
         FormGrid::new("text_grid").show(ui, |ui| {
             let writes = (props.tool_settings.as_ref())

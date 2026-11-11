@@ -28,6 +28,7 @@ fn shared_prices(
     study: &dyn Indicator,
     range: std::ops::Range<usize>,
 ) -> impl Iterator<Item = f64> + '_ {
+    let gradients = crate::studies::plots::gradient_prices(study, range.clone());
     (0..study.line_count())
         .filter(move |line| {
             let plot = study.plot_style(*line);
@@ -50,6 +51,7 @@ fn shared_prices(
                     )
                 }))
         })
+        .chain(gradients)
 }
 
 impl Chart {
@@ -1098,11 +1100,12 @@ impl Chart {
                     for value in shared_prices(study.as_ref(), visible.clone()) {
                         include(&mut bounds, value, transform);
                     }
-                } else if !self.is_custom_data(id) {
-                    let range = crate::widget::IndicatorPane::with_config(
+                } else if !self.is_custom_data(id)
+                    && let Some(range) = crate::widget::IndicatorPane::with_config(
                         crate::widget::IndicatorPaneConfig::from_study(study.as_ref()),
                     )
-                    .calculate_y_range(study.as_ref(), &visible);
+                    .value_range(study.as_ref(), &visible)
+                {
                     for value in [range.0, range.1] {
                         include(&mut bounds, value, transform);
                     }

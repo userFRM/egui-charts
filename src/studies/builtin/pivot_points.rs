@@ -1028,20 +1028,26 @@ mod tests {
                 timeframe: Timeframe::Day1,
             }],
         );
-        let mut on_daily = PivotPoints::new().with_timeframe(PivotTimeframe::Weekly);
-        on_daily.set_timeframe(Timeframe::Day1);
-        on_daily.calculate(&daily);
+        // Traditional levels by hand from H=13,L=7,C=11,P=31/3 and range=6:
+        // R2=P+6, S2=P-6; R3=2P+13-14, S3=2P-26+7;
+        // R4=3P+13-21, S4=3P-39+7; R5=4P+13-28, S5=4P-52+7.
+        let expected = [
+            31.0 / 3.0,
+            41.0 / 3.0,
+            23.0 / 3.0,
+            49.0 / 3.0,
+            13.0 / 3.0,
+            59.0 / 3.0,
+            5.0 / 3.0,
+            23.0,
+            -1.0,
+            79.0 / 3.0,
+            -11.0 / 3.0,
+        ];
         for bar in 0..3 {
-            for (line, want) in [(0, 31.0 / 3.0), (1, 41.0 / 3.0), (2, 23.0 / 3.0)] {
+            for (line, want) in expected.into_iter().enumerate() {
                 let got = pivots.values().value(line, bar).unwrap();
-                assert!((got - want).abs() < 1e-9, "line {line} bar {bar}: {got}");
-            }
-            for line in 0..11 {
-                assert_eq!(
-                    pivots.values().value(line, bar),
-                    on_daily.values().value(line, 5),
-                    "line {line} bar {bar}"
-                );
+                assert!((got - want).abs() < 1e-12, "line {line} bar {bar}: {got}");
             }
         }
         // A tick on the newest daily bar keeps the levels; a corrected earlier week moves them.

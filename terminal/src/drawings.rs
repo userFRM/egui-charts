@@ -384,7 +384,7 @@ impl Terminal {
                 let manager = chart.drawings_mut();
                 if let Some(tool) = manager.active_tool() {
                     let mut drawing = manager.new_drawing(0, tool);
-                    drawing.color = rgba;
+                    drawing.set_line_color(rgba);
                     manager
                         .tool_defaults
                         .insert(tool, DrawingTemplate::from_drawing(&drawing));
@@ -759,6 +759,57 @@ mod tests {
 
     fn run(terminal: &mut Terminal, action: DrawingToolbarAction) {
         assert!(terminal.run(Action::DrawingToolbar(action)).is_none());
+    }
+
+    /// A new tool's fill follows toolbar colours at its own opacity, except independent fills.
+    #[test]
+    fn toolbar_colour_tints_the_default_fill() {
+        let mut terminal = ready();
+        let host = [70, 80, 90, 255];
+        let picked = [10, 200, 30, 220];
+        for (tool, fill) in [
+            (DrawingToolType::Rect, [10, 200, 30, 51]),
+            (DrawingToolType::Arc, [10, 200, 30, 51]),
+            (DrawingToolType::Polyline, [10, 200, 30, 51]),
+            (DrawingToolType::PriceRange, [10, 200, 30, 38]),
+            (DrawingToolType::Sector, [41, 98, 255, 51]),
+        ] {
+            for saved in [false, true] {
+                let manager = terminal.chart_mut().drawings_mut();
+                manager.tool_defaults.clear();
+                manager.options.default_color = Some(host);
+                manager.set_active_tool(Some(tool));
+                if saved {
+                    let mut defaults = manager.new_drawing(0, tool);
+                    defaults.stroke_width = 5.0;
+                    defaults.line_style = egui_charts::model::LineStyle::Dashed;
+                    manager
+                        .tool_defaults
+                        .insert(tool, DrawingTemplate::from_drawing(&defaults));
+                }
+                run(&mut terminal, DrawingToolbarAction::ColorChanged(picked));
+                let drawing = terminal.chart().drawings().new_drawing(1, tool);
+                assert_eq!(drawing.color, picked, "{tool:?}");
+                assert_eq!(drawing.fill_color, Some(fill), "{tool:?}");
+                assert_eq!(
+                    drawing.stroke_width,
+                    if saved {
+                        5.0
+                    } else {
+                        Drawing::new(0, tool).stroke_width
+                    }
+                );
+                assert_eq!(
+                    drawing.line_style,
+                    if saved {
+                        egui_charts::model::LineStyle::Dashed
+                    } else {
+                        egui_charts::model::LineStyle::Solid
+                    }
+                );
+                assert_eq!(terminal.chart().drawings().tool_defaults.len(), 1);
+            }
+        }
     }
 
     /// Selecting a drawing exposes current style values, and each quick edit is undoable.

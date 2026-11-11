@@ -1,6 +1,37 @@
 use super::Chart;
 use crate::chart::rendering;
-use crate::scales::TimeFormatterBuilder;
+use crate::model::{SeriesDisplayFormat, SeriesFormat};
+use crate::scales::{PriceFormatter, TimeFormatterBuilder};
+
+#[derive(Clone)]
+struct DisplayFormatLabels {
+    format: SeriesDisplayFormat,
+    thousands_sep: Option<char>,
+}
+
+impl PriceFormatter for DisplayFormatLabels {
+    fn format(&self, value: f64) -> String {
+        let text = self.format.format(value);
+        if self.format.kind == SeriesFormat::Volume {
+            text
+        } else {
+            crate::scales::group_thousands(text, self.thousands_sep)
+        }
+    }
+
+    fn format_change(&self, change: f64) -> String {
+        let text = self.format(change);
+        if text.starts_with(['-', '+']) || change < 0.0 {
+            text
+        } else {
+            format!("+{text}")
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn PriceFormatter> {
+        Box::new(self.clone())
+    }
+}
 
 impl Chart {
     /// Formats a timestamp with the chart's zone, clock visibility and interval, or the median
@@ -275,30 +306,29 @@ impl Chart {
         match mode {
             crate::scales::PriceScaleMode::Percentage
             | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
-            _ => self
-                .series_formatters
-                .get(&id)
-                .cloned()
-                .or_else(|| self.price_formatter.clone())
-                .or_else(|| Some(std::sync::Arc::new(self.series_style(id)?.display_format?))),
+            _ => {
+                self.series_formatters
+                    .get(&id)
+                    .cloned()
+                    .or_else(|| self.price_formatter.clone())
+                    .or_else(|| {
+                        Some(std::sync::Arc::new(DisplayFormatLabels {
+                            format: self.series_style(id)?.display_format?,
+                            thousands_sep: self.config.thousands_sep.filter(|separator| {
+                                *separator != '.' && !separator.is_ascii_digit()
+                            }),
+                        }))
+                    })
+            }
         }
     }
 
     /// Raw-value formatting: the series' host hook, the chart's, then the saved declaration.
-    pub(super) fn series_price_formatter(
+    pub(crate) fn series_price_formatter(
         &self,
         id: super::SeriesId,
-    ) -> Option<&dyn crate::scales::PriceFormatter> {
-        self.series_formatters
-            .get(&id)
-            .or(self.price_formatter.as_ref())
-            .map(|formatter| formatter.as_ref())
-            .or_else(|| {
-                self.series_style(id)?
-                    .display_format
-                    .as_ref()
-                    .map(|format| format as &dyn crate::scales::PriceFormatter)
-            })
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        self.series_label_formatter(id, crate::scales::PriceScaleMode::Normal)
     }
 
     /// First visible bar series owning an axis. The main series precedes added series.
@@ -334,9 +364,12 @@ impl Chart {
             .map_or(map, |format| map.with_display_format(format))
     }
 
-    pub(crate) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
+    pub(crate) fn value_formatters<'a>(
+        &'a self,
+        price: Option<&'a dyn crate::scales::PriceFormatter>,
+    ) -> rendering::ValueFormatters<'a> {
         rendering::ValueFormatters {
-            price: self.series_price_formatter(super::SeriesId::MAIN),
+            price,
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),
         }
