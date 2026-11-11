@@ -201,7 +201,7 @@ impl IndicatorSettingsDialog {
                 }
                 if !enabled {
                     let mut settings = study.settings();
-                    settings.user_edit_enabled = false;
+                    settings.user_edit_enabled = Some(false);
                     study.apply_settings(&[], settings).ok()?;
                 }
                 ctx.request_repaint();
