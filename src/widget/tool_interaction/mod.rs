@@ -355,8 +355,12 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
-        let area_input =
-            drawing_manager.active_tool.is_none() && drawing_manager.box_selection_input(ui);
+        // Only an area gesture in this pane repaints for its input; drags and other panes do not.
+        let area_input = drawing_manager.active_tool.is_none()
+            && drawing_manager.dragging_handle.is_none()
+            && drawing_manager.box_selection_input(ui)
+            && (drawing_manager.selection_area())
+                .is_none_or(|area| area.pane == pane.map(|id| id.0));
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
