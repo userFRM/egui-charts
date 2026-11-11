@@ -44,10 +44,8 @@ impl Chart {
             item.bars.partition_point(|bar| bar.time < time)
         };
         let tolerance = item.options.style.hit_tolerance;
-        let column_half_width = self.state.time_scale().bar_spacing()
-            * self.series_slot_gap(&item.bars) as f32
-            * self.config.candle_width
-            / 2.0;
+        let slot = self.state.time_scale().bar_spacing() * self.series_slot_gap(&item.bars) as f32;
+        let column_half_width = slot * self.config.candle_width / 2.0;
         let near = at.saturating_sub(1)..(at + 2).min(item.bars.len());
         let mut range = near.clone();
         if columns {
@@ -71,7 +69,7 @@ impl Chart {
             let px = x(bar)?;
             let close = Pos2::new(px, map.price_to_y(bar.close));
             let hit = if item.options.chart_type.uses_ohlc() {
-                let half_width = self.state.time_scale().bar_spacing() * 0.35;
+                let half_width = slot * 0.35;
                 let body = Rect::from_two_pos(
                     Pos2::new(px - half_width, map.price_to_y(bar.open)),
                     Pos2::new(px + half_width, close.y),

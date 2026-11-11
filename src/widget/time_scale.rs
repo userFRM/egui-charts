@@ -1429,6 +1429,7 @@ mod tests {
         use crate::model::{BarColors, ChartType};
         use crate::scales::{CustomHorizontalScale, HorizontalScale};
         use crate::theme::{Theme, apply_to_egui};
+        use crate::widget::ChartElementId;
         use std::sync::Arc;
 
         let custom = Arc::new(CustomHorizontalScale::new(0..10, |key| key.to_string()));
@@ -1456,14 +1457,17 @@ mod tests {
                         })
                         .collect();
                     let mut chart = Chart::new(BarData::from_bars(bars));
-                    if added {
+                    let series = if added {
                         let series = chart.add_series(crate::widget::SeriesOptions {
                             chart_type,
                             ..Default::default()
                         });
                         chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
                         chart.set_main_series_visible(false);
-                    }
+                        series
+                    } else {
+                        SeriesId::MAIN
+                    };
                     chart.set_horizontal_scale(Some(scale.clone()));
                     chart.set_chart_type(chart_type);
                     let mut options = chart.chart_options().clone();
@@ -1495,12 +1499,52 @@ mod tests {
                         gap,
                         "neighbouring key gap",
                     );
+                    // A click inside the second body, where a mean-gap body of the first would reach.
+                    let mut clicks = vec![(
+                        egui::pos2(bodies[1].left() + 1.5, bodies[1].top() + 1.0),
+                        ChartElementId::Series(series),
+                    )];
                     if !added {
                         let volume = volume_bodies(&painted, plot, &ctx);
                         assert!(!volume.is_empty(), "missing volume bars");
-                        for bar in volume {
+                        for bar in &volume {
                             assert_close(bar.width().into(), gap * 0.8, "numeric volume width");
                         }
+                        let second = volume
+                            .iter()
+                            .find(|bar| (bar.center().x - bodies[1].center().x).abs() < 0.01)
+                            .expect("second volume bar");
+                        // Builds with studies paint volume as a study, others as the series.
+                        let id = chart
+                            .indicators()
+                            .find(|(_, study)| study.is_volume())
+                            .map_or(ChartElementId::Series(SeriesId::VOLUME), |(id, _)| {
+                                ChartElementId::Indicator(id)
+                            });
+                        // Its centre, past the tolerance band of the first volume bar.
+                        clicks.push((egui::pos2(second.center().x, second.bottom() - 1.0), id));
+                    }
+                    for (step, (pos, hit)) in clicks.into_iter().enumerate() {
+                        let time = 0.1 + step as f64 * 0.1;
+                        frame(&ctx, &mut chart, time, vec![egui::Event::PointerMoved(pos)]);
+                        for pressed in [true, false] {
+                            let button = egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Secondary,
+                                pressed,
+                                modifiers: Default::default(),
+                            };
+                            frame(&ctx, &mut chart, time + 0.05, vec![button]);
+                        }
+                        let target = chart.take_right_click();
+                        assert!(
+                            matches!(target, Some(crate::widget::RightClickTarget::Element {
+                                id,
+                                bar_idx: 1,
+                                ..
+                            }) if id == hit),
+                            "{chart_type:?}, added {added}: {target:?}"
+                        );
                     }
                 }
             }

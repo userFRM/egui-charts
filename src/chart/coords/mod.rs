@@ -157,10 +157,10 @@ impl ChartMapping {
         Some((global_idx as usize) - self.start_idx)
     }
 
-    /// Calculate the bar width based on spacing.
+    /// Calculate the bar width based on spacing, capped by the closest numeric keys in view.
     #[inline]
     pub fn bar_width(&self) -> f32 {
-        (self.bar_spacing * 0.6).max(1.0)
+        (self.bar_spacing_for_width() * 0.6).max(1.0)
     }
 
     // =========================================================================
