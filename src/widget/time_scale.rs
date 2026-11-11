@@ -905,6 +905,12 @@ mod tests {
                         3.0,
                         "streamed gaps",
                     );
+                    // A lone first key has no gap to retain, so the first gap is the unit.
+                    assert_close(
+                        f64::from(x(1.0) - x(0.0)),
+                        chart.get_time_scale_state().0.into(),
+                        "streamed unit",
+                    );
                     continue;
                 }
                 let xs: Vec<_> = (0..keys.len())

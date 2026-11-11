@@ -16,7 +16,7 @@ use std::sync::Arc;
 ///
 /// Obtained from the chart's time scale or rendering mapping. Logical indices still address
 /// rows; their positions are proportional to the encoded numeric keys. One spacing unit is
-/// the initial mean key gap, or one numeric unit for a single point, retained across updates.
+/// the first mean key gap, retained across updates, or one numeric unit until keys differ.
 #[derive(Debug, Clone)]
 pub struct NumericPositions {
     // Two edge slots retain both the first step and the later cadence of key interpolation.

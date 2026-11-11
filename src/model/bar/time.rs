@@ -258,13 +258,9 @@ pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model
     };
     let last = bars.len() - 1;
     let span = seconds(bars[last].time - first.time);
-    let unit = unit.unwrap_or_else(|| {
-        if last > 0 && span > 0.0 {
-            span / last as f64
-        } else {
-            1.0
-        }
-    });
+    // A lone key has no gap to retain, so its key unit lasts only until keys differ.
+    let retained = unit.or_else(|| (last > 0 && span > 0.0).then_some(span / last as f64));
+    let unit = retained.unwrap_or(1.0);
     let mut points = Vec::with_capacity(bars.len() + 4);
     // Keep the last sample at the row anchor even when a fixed unit leaves missing ranks.
     let offset = last as f64 - span / unit;
@@ -279,5 +275,5 @@ pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model
         last as f64 + near / unit,
         last as f64 + (near + step) / unit,
     ]);
-    crate::model::NumericPositions::new(points, Some(unit), first.time)
+    crate::model::NumericPositions::new(points, retained, first.time)
 }
