@@ -5,7 +5,7 @@ use crate::data::FeedState;
 use crate::model::{
     AreaStyle, Bar, BarsStyle, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles,
     LastPriceAnimation, LinePlotStyle, LineStyle, Marker, MarkerOptions, PriceLine, SeriesScale,
-    SeriesStyle,
+    SeriesStyle, Timeframe,
 };
 use crate::scales::StudyFormat;
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode};
@@ -293,6 +293,11 @@ pub(in crate::widget) struct PriceSeries {
     pub visible: bool,
     /// Feed ownership travels with the series through undo and redo.
     pub fed: bool,
+    /// The name, interval and feed generation the feed last filled the bars of a fed series under.
+    pub filled: Option<(String, Timeframe, u64)>,
+    /// Whether undo or redo brought the series back with bars that stand in for its history until
+    /// the feed answers it with a page.
+    pub restored: bool,
     pub bars: Vec<Bar>,
     /// Changes when bars other than the last one change, as the main bars' revision does.
     pub revision: u64,
@@ -448,6 +453,8 @@ impl Chart {
             options,
             visible: true,
             fed: false,
+            filled: None,
+            restored: false,
             bars: Vec::new(),
             revision: crate::model::next_revision(),
             last_price_pulse: std::cell::Cell::new(None),
@@ -527,14 +534,11 @@ impl Chart {
         requests
     }
 
-    /// Replaces the bars of the fed series with what the feed supplied for their symbols.
+    /// Replaces the bars of the fed series with what the feed supplied for their symbols. A series
+    /// that undo or redo brought back keeps its bars until a page of each of its histories
+    /// arrives, merging the live bars before it, while the feed filled them under the chart's
+    /// current interval and request settings.
     pub(in crate::widget) fn fill_fed_series(&mut self) {
-        self.fill_fed_series_keeping(&[]);
-    }
-
-    /// As [`fill_fed_series`](Self::fill_fed_series), but a series in `keep` whose symbols have no
-    /// history yet keeps its bars until the feed supplies it.
-    pub(in crate::widget) fn fill_fed_series_keeping(&mut self, keep: &[SeriesId]) {
         let fed = self.fed_series();
         if fed.is_empty() {
             return;
@@ -548,24 +552,38 @@ impl Chart {
                     .find(|data| data.request.symbol == symbol)
                     .map(|data| data.bars)
             };
-            fed.iter()
+            fed.into_iter()
                 .map(|(id, name)| {
-                    let bars = match spread_of(name) {
-                        Some(spread) => spread.bars(history).ok(),
-                        None => fed_symbols(name)
+                    let bars = match spread_of(&name) {
+                        Some(spread) => spread.bars(history).unwrap_or_default(),
+                        None => fed_symbols(&name)
                             .first()
                             .and_then(|symbol| history(symbol))
-                            .map(<[_]>::to_vec),
+                            .unwrap_or_default()
+                            .to_vec(),
                     };
-                    (*id, bars)
+                    (id, name, bars)
                 })
                 .collect()
         };
-        for (id, bars) in updates {
-            let bars = match bars {
-                Some(bars) => bars,
-                None if keep.contains(&id) => continue,
-                None => Vec::new(),
+        let timeframe = self.timeframe().unwrap_or_default();
+        let generation = self.study_data.generation();
+        for (id, name, bars) in updates {
+            let request = (name, timeframe, generation);
+            let Some(item) = self.price_series.iter_mut().find(|item| item.id == id) else {
+                continue;
+            };
+            item.restored = item.restored
+                && item.filled.as_ref() == Some(&request)
+                && fed_symbols(&request.0)
+                    .iter()
+                    .any(|symbol| self.study_data.awaits_page(symbol, timeframe));
+            let bars = if item.restored {
+                // Of a held and a live bar in one slot, the later, live one stays.
+                super::clean([self.bars(id), bars.as_slice()].concat(), &self.clock()).0
+            } else {
+                item.filled = Some(request);
+                bars
             };
             if self.bars(id) != bars.as_slice() {
                 self.set_data(id, bars);

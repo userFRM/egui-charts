@@ -4226,52 +4226,114 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
     assert!(!manual.is_fed(id));
 }
 
-/// Undo of a removed feed-backed series shows the bars it held at once, and the feed resumes it;
-/// held bars of another interval are not shown.
+/// Undo of a removed feed-backed series shows the bars it held over the frames before its history
+/// reply, merges a live bar into them and then leaves the series to the reply. Bars held under
+/// another interval, hours, conversion or adjustment than the chart's are not shown, also when the
+/// interval changed just before the removal, while the series still had its old bars.
 #[test]
 fn undo_of_a_removed_fed_series_keeps_its_bars() {
-    let feed = Arc::new(Instant::default());
-    let mut chart = ChartBuilder::new()
-        .with_feed(feed.clone())
-        .with_symbol("AAPL")
-        .build();
-    let msft = chart.add_feed_series(crate::widget::SeriesOptions {
-        name: "MSFT".into(),
-        ..Default::default()
-    });
-    let mut frames = Frames::new();
-    for _ in 0..3 {
+    // MSFT closes at 40 plus the index of the one-minute bar.
+    let msft = |range: std::ops::Range<usize>| -> Vec<Bar> {
+        bars(7)[range]
+            .iter()
+            .map(|bar| {
+                let close = bar.close - 60.0;
+                Bar::new(bar.time, close, close, close, close, 1.0)
+            })
+            .collect()
+    };
+    let held = [40.0, 41.0, 42.0, 43.0, 44.0, 45.0];
+    // The change, whether it comes before the removal, and the closes from undo to the reply,
+    // without and with a live bar of 50 in the last slot.
+    let rows: [(&str, bool, fn(&mut Chart), &[f64], &[f64]); 5] = [
+        (
+            "none",
+            false,
+            |_| {},
+            &held,
+            &[40.0, 41.0, 42.0, 43.0, 44.0, 50.0],
+        ),
+        (
+            "interval",
+            true,
+            |chart| chart.set_timeframe(Timeframe::Sec30),
+            &[],
+            &[50.0],
+        ),
+        (
+            "hours",
+            false,
+            |chart| chart.set_extended_hours(true),
+            &[],
+            &[50.0],
+        ),
+        (
+            "conversion",
+            false,
+            |chart| chart.set_conversion(Some("EUR".into())),
+            &[],
+            &[50.0],
+        ),
+        (
+            "adjustment",
+            false,
+            |chart| chart.set_dividend_adjusted(true),
+            &[],
+            &[50.0],
+        ),
+    ];
+    for (change, before_removal, apply, shown, live) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, None);
+        let id = chart.add_feed_series(crate::widget::SeriesOptions {
+            name: "MSFT".into(),
+            ..Default::default()
+        });
+        let mut frames = Frames::new();
         frames.run(&mut chart);
-    }
-    assert_eq!(closes(&chart, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
-
-    assert!(chart.user_action(|chart| chart.remove_series(msft)));
-    frames.run(&mut chart);
-    assert!(chart.undo());
-    assert_eq!(closes(&chart, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
-    for _ in 0..3 {
+        feed.resolve().send(Ok(Instrument::new("MSFT")));
         frames.run(&mut chart);
-    }
-    let sink = feed
-        .subscriptions
-        .lock()
-        .unwrap()
-        .iter()
-        .rev()
-        .find(|(symbol, sink)| symbol == "MSFT" && sink.is_active())
-        .unwrap()
-        .1
-        .clone();
-    let time = chart.bars(msft).last().unwrap().time;
-    sink.push_bar(Bar::new(time, 50.0, 50.0, 50.0, 50.0, 1.0));
-    frames.run(&mut chart);
-    assert_eq!(closes(&chart, msft)[4..], [44.0, 50.0]);
+        feed.page().send(page(msft(0..6), true));
+        frames.run(&mut chart);
+        assert_eq!(closes(&chart, id), held);
 
-    assert!(chart.user_action(|chart| chart.remove_series(msft)));
-    frames.run(&mut chart);
-    chart.set_timeframe(Timeframe::Min5);
-    assert!(chart.undo());
-    assert!(chart.bars(msft).is_empty());
+        if before_removal {
+            apply(&mut chart);
+        }
+        assert!(chart.user_action(|chart| chart.remove_series(id)));
+        if !before_removal {
+            apply(&mut chart);
+        }
+        frames.run(&mut chart);
+        assert!(chart.undo());
+        assert_eq!(closes(&chart, id), shown, "{change}: right after undo");
+        frames.run(&mut chart);
+        feed.resolve().send(Ok(Instrument::new("MSFT")));
+        for frame in 0..3 {
+            frames.run(&mut chart);
+            assert_eq!(
+                closes(&chart, id),
+                shown,
+                "{change}: frame {frame} before the reply"
+            );
+        }
+        let last = msft(5..6)[0].time;
+        feed.sink()
+            .push_bar(Bar::new(last, 50.0, 50.0, 50.0, 50.0, 1.0));
+        frames.run(&mut chart);
+        assert_eq!(
+            closes(&chart, id),
+            live,
+            "{change}: a live bar before the reply"
+        );
+        feed.page().send(page(msft(1..7), true));
+        frames.run(&mut chart);
+        assert_eq!(
+            closes(&chart, id),
+            [41.0, 42.0, 43.0, 44.0, 50.0, 46.0],
+            "{change}: the reply replaces the held bars"
+        );
+    }
 }
 
 /// Dividend adjustment is asked of the feed for the main series and the comparisons, and

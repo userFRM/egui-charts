@@ -173,11 +173,9 @@ impl SeriesSet {
 }
 
 /// An added series that one state of the chart lacks, with all its bars, whatever the replay
-/// cutoff, and the price formatter and bar limit that the chart keeps apart from it. `timeframe`
-/// is the interval of the bars it left the chart with.
+/// cutoff, and the price formatter and bar limit that the chart keeps apart from it.
 struct HeldSeries {
     series: PriceSeries,
-    timeframe: Option<Timeframe>,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     bar_limit: Option<std::num::NonZeroUsize>,
 }
@@ -630,7 +628,6 @@ impl Chart {
         self.replay_release(&mut series);
         let mut held = HeldSeries {
             series,
-            timeframe: self.timeframe(),
             formatter: None,
             bar_limit: None,
         };
@@ -639,10 +636,12 @@ impl Chart {
     }
 
     /// Gives a held series its price formatter and bar limit back as it enters the chart, under
-    /// the cutoff of a running replay.
+    /// the cutoff of a running replay. The bars of a fed series stand in for its history until the
+    /// feed answers it.
     fn restore_series(&mut self, mut held: HeldSeries) -> PriceSeries {
         self.swap_series_settings(held.series.id, &mut held.formatter, &mut held.bar_limit);
         self.replay_admit(&mut held.series);
+        held.series.restored = true;
         held.series
     }
 
@@ -766,15 +765,10 @@ impl Chart {
         let restored = set.ids();
         let mut pool = std::mem::take(&mut self.price_series);
         let mut held = std::mem::take(&mut set.held);
-        // Held bars of the chart's interval show until the feed supplies the history again.
-        let mut kept = Vec::new();
         for (id, options, visible) in set.props.drain(..) {
             let mut item = if let Some(at) = pool.iter().position(|item| item.id == id) {
                 pool.remove(at)
             } else if let Some(at) = held.iter().position(|item| item.series.id == id) {
-                if held[at].timeframe == self.timeframe() {
-                    kept.push(id);
-                }
                 self.restore_series(held.swap_remove(at))
             } else {
                 continue;
@@ -818,7 +812,7 @@ impl Chart {
         {
             self.selection.deselect();
         }
-        self.fill_fed_series_keeping(&kept);
+        self.fill_fed_series();
     }
 
     /// Whether a chart user action can be undone (also drives toolbar availability).
