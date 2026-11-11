@@ -50,7 +50,12 @@ pub fn render_price_labels_at_pos(
     slot: ShapeIdx,
     formatter: Option<&dyn PriceFormatter>,
 ) {
-    let mut marks = price_scale.marks();
+    let marks = price_axis_marks(
+        context.painter,
+        price_scale,
+        axis.edge_ticks_visible.then_some(context.rect),
+        formatter,
+    );
 
     // Determine positioning based on scale position
     let (edge, side, alignment) = match position {
@@ -60,38 +65,6 @@ pub fn render_price_labels_at_pos(
     let x_offset = edge + side * PRICE_LABEL_GAP;
 
     let font = axis_font(context.painter.ctx());
-    if axis.edge_ticks_visible {
-        // Edge labels sit half a line inside the pane, so they show whole.
-        let inset = context
-            .painter
-            .layout_no_wrap("0".to_owned(), font.clone(), colors.text)
-            .size()
-            .y
-            / 2.0;
-        // A pane too short for two labels gets none at its edges.
-        if context.rect.height() >= inset * 4.0 {
-            let edges = [context.rect.top() + inset, context.rect.bottom() - inset];
-            // An edge label replaces the marks closer to it than they are to each other.
-            let step = marks
-                .windows(2)
-                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
-                .reduce(f32::min)
-                .unwrap_or(inset * 4.0);
-            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
-            marks.extend(edges.map(|y| {
-                let value = price_scale.y_to_scale(y);
-                PriceMark {
-                    price: price_scale.transform().axis_value(value),
-                    label: price_scale.label(value, tick_decimals(price_scale, y), None),
-                    y_coord: y,
-                    weight: 0,
-                }
-            }));
-            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
-        }
-    }
-    format_price_marks(&mut marks, formatter);
-
     let painter = if axis.hide_clipped_labels {
         context.painter.clone()
     } else {
@@ -156,6 +129,47 @@ pub(crate) fn price_marks(
     formatter: Option<&dyn PriceFormatter>,
 ) -> Vec<PriceMark> {
     let mut marks = price_scale.marks();
+    format_price_marks(&mut marks, formatter);
+    marks
+}
+
+/// The complete list for painting and measuring an axis, with edge values inside `pane`.
+pub(super) fn price_axis_marks(
+    painter: &egui::Painter,
+    price_scale: &PriceMap,
+    pane: Option<Rect>,
+    formatter: Option<&dyn PriceFormatter>,
+) -> Vec<PriceMark> {
+    let mut marks = price_scale.marks();
+    if let Some(pane) = pane {
+        // Edge labels sit half a line inside the pane, so they show whole.
+        let inset = painter
+            .layout_no_wrap("0".to_owned(), axis_font(painter.ctx()), Color32::WHITE)
+            .size()
+            .y
+            / 2.0;
+        // A pane too short for two labels gets none at its edges.
+        if pane.height() >= inset * 4.0 {
+            let edges = [pane.top() + inset, pane.bottom() - inset];
+            // An edge label replaces the marks closer to it than they are to each other.
+            let step = marks
+                .windows(2)
+                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
+                .reduce(f32::min)
+                .unwrap_or(inset * 4.0);
+            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
+            marks.extend(edges.map(|y| {
+                let value = price_scale.y_to_scale(y);
+                PriceMark {
+                    price: price_scale.transform().axis_value(value),
+                    label: price_scale.label(value, tick_decimals(price_scale, y), None),
+                    y_coord: y,
+                    weight: 0,
+                }
+            }));
+            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
+        }
+    }
     format_price_marks(&mut marks, formatter);
     marks
 }
@@ -235,12 +249,18 @@ pub(crate) fn time_axis_marks(
     // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
     let left = right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing);
-    let (left, right) = coords
-        .numeric_positions
-        .as_ref()
-        .map_or((left.floor(), right), |positions| {
-            (positions.index(left).floor(), positions.index(right))
-        });
+    let (left, right) =
+        coords
+            .numeric_positions
+            .as_ref()
+            .map_or((left.floor(), right), |positions| {
+                let right = right + 0.5;
+                let left = right - f64::from(context.rect.width()) / f64::from(coords.bar_spacing);
+                (
+                    (positions.index(left) + 0.5).floor(),
+                    positions.index(right) - 0.5,
+                )
+            });
     let first = if visible_data.is_empty() {
         left.max(0.0) as usize
     } else {
@@ -325,7 +345,7 @@ pub(crate) fn time_axis_marks(
             .numeric_positions
             .as_ref()
             .map_or(coords.bar_spacing, |positions| {
-                (f64::from(coords.bar_spacing) / positions.unit) as f32
+                (f64::from(coords.bar_spacing) / positions.unit.unwrap_or(1.0)) as f32
             }),
         min_spacing: min_time_label_spacing(options),
         uniform_distribution: options.uniform_distribution,
@@ -574,6 +594,139 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
+
+    #[test]
+    fn display_format_keeps_thousands_grouping_and_change_sign() {
+        use crate::model::{Instrument, SeriesDisplayFormat, SeriesFormat};
+        use crate::scales::CustomPriceFormatter;
+        use crate::widget::{SeriesId, SeriesOptions};
+        use std::sync::Arc;
+
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 760.0),
+            (crate::theme::Theme::dark(), 320.0),
+        ] {
+            for (kind, separator, host, close, change) in [
+                (
+                    SeriesFormat::Price,
+                    Some(','),
+                    false,
+                    "1,234,568.14",
+                    "+0.25",
+                ),
+                (
+                    SeriesFormat::Price,
+                    Some(' '),
+                    false,
+                    "1 234 568.14",
+                    "+0.25",
+                ),
+                (SeriesFormat::Price, None, false, "1234568.14", "+0.25"),
+                (
+                    SeriesFormat::Percentage,
+                    Some(','),
+                    false,
+                    "1,234,568.14%",
+                    "+0.25%",
+                ),
+                (
+                    SeriesFormat::Price,
+                    Some(','),
+                    true,
+                    "host 1234568.14",
+                    "host 0.25",
+                ),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[1_234_500.0], &[1_234_567.89, 1_234_568.14]);
+                chart.set_theme(&ctx, &theme);
+                chart.set_size(Some(egui::vec2(width, 580.0)));
+                chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
+                chart.config_mut().show_volume = false;
+                chart.config_mut().thousands_sep = separator;
+                chart
+                    .series_style_mut(SeriesId::MAIN)
+                    .unwrap()
+                    .display_format = Some(SeriesDisplayFormat {
+                    kind,
+                    ..Default::default()
+                });
+                if host {
+                    chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|value| {
+                        format!("host {value:.2}")
+                    }))));
+                }
+                let id = chart.add_series(SeriesOptions {
+                    name: "Peer".into(),
+                    ..Default::default()
+                });
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                chart.series_style_mut(id).unwrap().display_format =
+                    chart.series_style(SeriesId::MAIN).unwrap().display_format;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let texts: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(texts.contains(&close), "tag: {texts:?}");
+                assert!(
+                    texts
+                        .iter()
+                        .any(|text| text.contains(&format!("C {close}"))),
+                    "legend close: {texts:?}"
+                );
+                assert!(
+                    texts
+                        .iter()
+                        .any(|text| text.starts_with(&format!("{change} ("))),
+                    "legend change: {texts:?}"
+                );
+                assert!(
+                    texts.iter().any(|text| text == &format!("Peer  {close}")),
+                    "added legend: {texts:?}"
+                );
+                for id in [SeriesId::MAIN, id] {
+                    assert_eq!(
+                        chart.format_series_price(id, 1_234_568.14).as_deref(),
+                        Some(close)
+                    );
+                }
+                chart.chart_options.tooltip.on_long_press = false;
+                let plot = chart.get_rendered_price_rect();
+                let pointer =
+                    egui::Pos2::new(chart.get_chart_mapping().idx_to_x(99), plot.center().y);
+                let hovered = shapes(
+                    &ctx,
+                    &mut chart,
+                    0.2,
+                    vec![egui::Event::PointerMoved(pointer)],
+                );
+                assert!(
+                hovered.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.galley.text() == format!("{change} (+0.00%)")
+                        && text.pos.y > plot.top() + 50.0
+                )),
+                "tooltip change"
+            );
+                #[cfg(feature = "ui")]
+                {
+                    let data =
+                        crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(
+                            &chart,
+                        );
+                    assert_eq!(data.formatted_prices.as_ref().unwrap()[3], close);
+                    assert_eq!(
+                        data.formatted_change.as_deref(),
+                        Some(format!("{change} (+0.00%)").as_str())
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn combined_grid_preserves_geometry_and_independent_styles() {

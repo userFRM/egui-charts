@@ -183,7 +183,7 @@ impl Drawing {
 
             // Fibonacci (10 tools)
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
-                self.render_fibonacci(painter, rect, view)
+                self.render_fibonacci(painter, rect, view, selected)
             }
             DrawingToolType::FibonacciSpeedResistanceArcs => self.render_fibonacci_arc(painter),
             DrawingToolType::FibonacciTimeZones => self.render_fibonacci_time_zones(painter, rect),
@@ -300,10 +300,10 @@ impl Drawing {
             | DrawingToolType::ArrowCursor
             | DrawingToolType::Eraser => {}
         }
+        self.finish_style(painter, start, rect);
         if self.tool_type.supports_line_measurements() {
             self.render_line_measurements(painter, view, selected);
         }
-        self.finish_style(painter, start, rect);
         if self.tool_type == DrawingToolType::Rect {
             self.render_rect_middle_line(painter, rect);
         }
@@ -1710,7 +1710,7 @@ mod tests {
             panic!("box and pointer are one shape");
         };
         assert!(outline.closed && outline.points.contains(&pos(100.0, 300.0)));
-        assert_eq!(outline.stroke.width, 1.0);
+        assert_eq!(outline.stroke.width, 2.0);
         let inside = draw(
             DrawingToolType::Callout,
             &[(205., 105.), (200., 100.)],
@@ -1719,6 +1719,7 @@ mod tests {
         );
         assert!(inside.paths.is_empty());
         assert_eq!(inside.rects.len(), 1);
+        assert_eq!(inside.rects[0].stroke.width, 2.0);
 
         let label = draw(
             DrawingToolType::PriceLabel,
@@ -1813,5 +1814,57 @@ mod tests {
                 .all(|s| s.clip_rect == pane.intersect(parent)),
             "drawing or handle escaped its pane"
         );
+    }
+
+    /// An annotation that offers line controls draws differently at 2 and 7 px; annotations
+    /// with fixed borders or guides must hide those controls.
+    #[test]
+    fn offered_line_width_changes_the_drawing() {
+        let mut inert = Vec::new();
+        for tool in [
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::Note,
+            DrawingToolType::PriceNote,
+            DrawingToolType::AnchoredNote,
+            DrawingToolType::Table,
+            DrawingToolType::Callout,
+            DrawingToolType::Comment,
+            DrawingToolType::PriceLabel,
+            DrawingToolType::Signpost,
+            DrawingToolType::FlagNote,
+        ] {
+            if !tool.draws_line() {
+                continue;
+            }
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = [
+                (100., 100.),
+                (300., 300.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+                (450., 180.),
+                (500., 250.),
+            ]
+            .map(|(x, y)| Pos2::new(x, y))
+            .to_vec();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            if drawing.text.is_none() {
+                drawing.text = Some("Label".into());
+            }
+            let mut thin = drawing.clone();
+            thin.stroke_width = 2.0;
+            let mut wide = drawing;
+            wide.stroke_width = 7.0;
+            if format!("{:?}", paint(&thin)) == format!("{:?}", paint(&wide)) {
+                inert.push(tool);
+            }
+        }
+        assert_eq!(inert, Vec::<DrawingToolType>::new());
     }
 }

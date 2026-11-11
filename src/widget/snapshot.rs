@@ -3,7 +3,9 @@
 
 use super::{Chart, ChartLayoutMode, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
-use crate::model::{ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, Timeframe};
+use crate::model::{
+    ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, SeriesStyle, Timeframe,
+};
 use crate::studies::{IndicatorFactory, StudyTemplate};
 use crate::widget::settings::{ChartSettingsState, WatermarkMode};
 use serde::{Deserialize, Serialize};
@@ -150,6 +152,10 @@ pub struct ChartSnapshot {
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
     pub bar_spacing: f32,
+    /// Numeric key units per spacing unit. Absent in older layouts, on time charts and
+    /// before the numeric keys differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_unit: Option<f64>,
     /// The space after the last bar, in bars.
     pub right_offset: f32,
     /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
@@ -241,7 +247,11 @@ impl Chart {
             .iter()
             .map(|item| SavedSeries {
                 id: item.id.0,
-                options: item.options.clone(),
+                options: {
+                    let mut options = item.options.clone();
+                    options.style = saved_style(options.style);
+                    options
+                },
                 visible: item.visible,
                 fed: self.is_fed(item.id),
                 price_scale: self.series_price_scale(item.id).cloned(),
@@ -263,7 +273,7 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
-            main_series_display_format: self.main_series_style.display_format,
+            main_series_display_format: saved_style(self.main_series_style.clone()).display_format,
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
@@ -340,6 +350,11 @@ impl Chart {
                 })
                 .collect(),
             bar_spacing,
+            numeric_unit: self
+                .state
+                .time_scale()
+                .numeric_positions()
+                .and_then(|positions| positions.unit),
             right_offset,
             drawings,
         };
@@ -629,6 +644,14 @@ impl Chart {
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
+        if self.state.time_scale().numeric_positions().is_some() {
+            let positions =
+                crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);
+            self.state
+                .time_scale_mut()
+                .set_numeric_positions(Some(positions));
+            self.refresh_time_scale_content();
+        }
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
             Some(json) => {
@@ -663,6 +686,19 @@ impl Chart {
             .copied()
             .map(super::SeriesId)
     }
+}
+
+/// Finite equivalents of ignored values, without changing the live series' style.
+fn saved_style(mut style: SeriesStyle) -> SeriesStyle {
+    if let Some(format) = &mut style.display_format
+        && !format.min_move.is_finite()
+    {
+        format.min_move = 0.0;
+    }
+    if !style.base_line_width.is_finite() {
+        style.base_line_width = 0.0;
+    }
+    style
 }
 
 /// The studies of a checked snapshot, built in order, and its drawings document.
@@ -809,6 +845,7 @@ fn check(
             .is_finite()
         || !snapshot.bar_spacing.is_finite()
         || snapshot.bar_spacing <= 0.0
+        || snapshot.numeric_unit.is_some_and(|unit| !unit.is_finite() || unit <= 0.0)
         || !snapshot.right_offset.is_finite()
         || snapshot
             .maximized
@@ -1259,10 +1296,16 @@ mod tests {
         restored.restore(&snapshot).unwrap();
         assert_eq!(restored.timeframe(), None);
         for bad in [0.0, f32::NAN, f32::INFINITY] {
-            snapshot.bar_spacing = bad;
-            snapshot.symbol = "Invalid".into();
-            assert!(restored.restore(&snapshot).is_err());
-            assert_eq!(restored.symbol(), "A");
+            for (spacing, unit) in [
+                (bad, None),
+                (layout.charts[0].bar_spacing, Some(f64::from(bad))),
+            ] {
+                snapshot.bar_spacing = spacing;
+                snapshot.numeric_unit = unit;
+                snapshot.symbol = "Invalid".into();
+                assert!(restored.restore(&snapshot).is_err());
+                assert_eq!(restored.symbol(), "A");
+            }
         }
         for key in ["price_scale", "panes"] {
             let mut invalid: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1381,6 +1424,132 @@ mod tests {
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// Ignored style values save as finite equivalents, and the restored chart keeps their
+    /// labels and hidden base lines. Finite values keep their saved representation, including
+    /// negative zero.
+    #[test]
+    fn display_format_with_an_ignored_min_move_saves() {
+        use crate::model::SeriesDisplayFormat;
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::{chart, shapes};
+
+        for added in [false, true] {
+            for (min_move, base_line_width, expected) in [
+                (0.0, 1.0, "12.62"),
+                (f64::NAN, 1.0, "12.62"),
+                (f64::INFINITY, 1.0, "12.62"),
+                (f64::NEG_INFINITY, 1.0, "12.62"),
+                (f64::NAN, f32::NAN, "12.62"),
+                (0.0, f32::NAN, "12.62"),
+                (0.0, f32::INFINITY, "12.62"),
+                (0.0, f32::NEG_INFINITY, "12.62"),
+                (-0.0, -0.0, "12.62"),
+                (-0.25, -1.0, "12.62"),
+                (0.25, 2.0, "12.50"),
+            ] {
+                let mut live = chart(&[12.0], &[12.624]);
+                let ctx = egui::Context::default();
+                let data = live.bars(SeriesId::MAIN).to_vec();
+                let id = if added {
+                    let id = live.add_series(SeriesOptions::default());
+                    live.set_data(id, data.clone());
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                let style = live.series_style_mut(id).unwrap();
+                style.display_format = Some(SeriesDisplayFormat {
+                    min_move,
+                    ..Default::default()
+                });
+                style.base_line_width = base_line_width;
+                style.base_line_color = egui::Color32::MAGENTA;
+                shapes(&ctx, &mut live, 0.0, vec![]);
+                assert_eq!(
+                    live.format_series_price(id, 12.624).as_deref(),
+                    Some(expected)
+                );
+
+                let snapshot = live.snapshot().unwrap();
+                let saved_format = if added {
+                    let style = &snapshot.series.as_ref().unwrap()[0].options.style;
+                    let width = if base_line_width.is_finite() {
+                        base_line_width
+                    } else {
+                        0.0
+                    };
+                    assert_eq!(style.base_line_width.to_bits(), width.to_bits());
+                    style.display_format.unwrap()
+                } else {
+                    snapshot.main_series_display_format.unwrap()
+                };
+                let step = if min_move.is_finite() { min_move } else { 0.0 };
+                assert_eq!(saved_format.min_move.to_bits(), step.to_bits());
+
+                let json = SavedLayout {
+                    mode: ChartLayoutMode::Single,
+                    charts: vec![snapshot],
+                }
+                .to_json()
+                .unwrap();
+                let layout = SavedLayout::from_json(&json).unwrap();
+                let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored.restore(&layout.charts[0]).unwrap();
+                let saved_id = id;
+                let id = if added {
+                    restored.restored_series_id(id.0).unwrap()
+                } else {
+                    id
+                };
+                restored.set_data(id, data);
+                let painted = shapes(&ctx, &mut restored, 1.0, vec![]);
+                if !min_move.is_finite() || (added && !base_line_width.is_finite()) {
+                    let mut invalid = layout.charts[0].clone();
+                    if added {
+                        let style = &mut invalid.series.as_mut().unwrap()[0].options.style;
+                        style.display_format.as_mut().unwrap().min_move = min_move;
+                        style.base_line_width = base_line_width;
+                    } else {
+                        invalid
+                            .main_series_display_format
+                            .as_mut()
+                            .unwrap()
+                            .min_move = min_move;
+                    }
+                    assert!(matches!(
+                        restored.restore(&invalid),
+                        Err(RestoreError::Layout("Layout values must be finite"))
+                    ));
+                }
+                assert_eq!(
+                    restored.format_series_price(id, 12.624).as_deref(),
+                    Some(expected)
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == expected
+                    )),
+                    "added {added}, step {min_move}, width {base_line_width}"
+                );
+                if added {
+                    for (chart, id) in [(&mut live, saved_id), (&mut restored, id)] {
+                        chart.series_price_scale_mut(id).unwrap().options_mut().mode =
+                            crate::scales::PriceScaleMode::IndexedTo100;
+                        let painted = shapes(&ctx, chart, 2.0, vec![]);
+                        assert_eq!(
+                            painted.iter().any(|shape| matches!(shape,
+                                egui::Shape::LineSegment { stroke, .. }
+                                    if stroke.color == egui::Color32::MAGENTA
+                            )),
+                            base_line_width.is_finite() && base_line_width > 0.0,
+                            "base line width {base_line_width}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A layout that does not record the main series' assignment keeps the chart's, and series
@@ -1618,6 +1787,85 @@ mod tests {
             [removed, redone, kept(&mut emptied), kept(&mut restored)],
             [(limit, 70); 4],
             "removed, redone, emptied, restored"
+        );
+    }
+
+    /// Missing axis label switches inherit their saved lines through restore and resave.
+    #[test]
+    fn layout_saved_with_hidden_crosshair_lines_restores_without_labels() {
+        use crate::config::CrosshairOptions;
+        use crate::widget::{ChartLayoutMode, SavedLayout};
+        use serde::Deserialize;
+
+        for (vertical, horizontal, switches) in [
+            (true, true, (None, None)),
+            (false, false, (None, None)),
+            (false, true, (None, None)),
+            (true, false, (None, None)),
+            (false, false, (Some(true), Some(true))),
+            (true, true, (Some(false), Some(false))),
+            (false, true, (Some(true), Some(false))),
+            (false, false, (Some(true), None)),
+            (false, false, (None, Some(true))),
+        ] {
+            let expected = CrosshairOptions {
+                vert_line_visible: vertical,
+                horz_line_visible: horizontal,
+                horz_line_width: 3.0,
+                vert_label_visible: switches.0.unwrap_or(vertical),
+                horz_label_visible: switches.1.unwrap_or(horizontal),
+                ..Default::default()
+            };
+            let mut fields = vec![
+                ("vert_line_visible", vertical),
+                ("horz_line_visible", horizontal),
+            ];
+            if let Some(visible) = switches.0 {
+                fields.push(("vert_label_visible", visible));
+            }
+            if let Some(visible) = switches.1 {
+                fields.push(("horz_label_visible", visible));
+            }
+            // These values distinguish booleans from optional booleans, unlike JSON.
+            let fields = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(
+                fields.into_iter(),
+            );
+            assert_eq!(
+                CrosshairOptions::deserialize(fields).unwrap(),
+                CrosshairOptions {
+                    horz_line_width: 1.0,
+                    ..expected
+                },
+            );
+            let mut saved = serde_json::to_value(expected).unwrap();
+            let fields = saved.as_object_mut().unwrap();
+            if switches.0.is_none() {
+                fields.remove("vert_label_visible");
+            }
+            if switches.1.is_none() {
+                fields.remove("horz_label_visible");
+            }
+            assert_eq!(
+                serde_json::from_value::<CrosshairOptions>(saved.clone()).unwrap(),
+                expected
+            );
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let layout = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+            };
+            let mut document: serde_json::Value =
+                serde_json::from_str(&layout.to_json().unwrap()).unwrap();
+            document["charts"][0]["options"]["crosshair"] = saved;
+            let restored = SavedLayout::from_json(&document.to_string()).unwrap();
+            chart.restore(&restored.charts[0]).unwrap();
+            assert_eq!(chart.chart_options().crosshair, expected);
+            let saved_again = chart.snapshot().unwrap();
+            assert_eq!(saved_again.options.as_ref().unwrap().crosshair, expected);
+        }
+        assert_eq!(
+            serde_json::from_str::<CrosshairOptions>("{}").unwrap(),
+            CrosshairOptions::default()
         );
     }
 

@@ -599,22 +599,31 @@ impl IndicatorPane {
                     self.axis_rect.map_or_else(
                         || {
                             if left_axis {
-                                chart_rect.left()
+                                egui::emath::Rangef::new(rect.left(), chart_rect.left())
                             } else {
-                                rect.right()
+                                egui::emath::Rangef::new(chart_rect.right(), rect.right())
                             }
                         },
-                        |axis| axis.right(),
+                        |axis| axis.x_range(),
                     ),
                     None,
-                    Some(match self.price_formatter.as_deref() {
-                        Some(formatter) => mapping.price.transform().label(
-                            mapping.price.y_to_scale(pos.y),
-                            indicator.precision().unwrap_or(2),
-                            Some(formatter),
-                        ),
-                        None => indicator.format_value(mapping.price.y_to_price(pos.y)),
-                    }),
+                    Some(
+                        if self.price_formatter.is_some()
+                            || matches!(
+                                mapping.price.transform().mode,
+                                crate::scales::PriceScaleMode::Percentage
+                                    | crate::scales::PriceScaleMode::IndexedTo100
+                            )
+                        {
+                            mapping.price.label(
+                                mapping.price.y_to_scale(pos.y),
+                                indicator.precision().unwrap_or(2),
+                                self.price_formatter.as_deref(),
+                            )
+                        } else {
+                            indicator.format_value(mapping.price.y_to_price(pos.y))
+                        },
+                    ),
                 )
             });
             axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
@@ -726,6 +735,11 @@ impl IndicatorPane {
             }
         }
 
+        for price in crate::studies::plots::fill_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
+        }
+
         for candle in indicator.candles().iter().filter(|candle| {
             candle.bars.end > visible_range.start
                 && candle.bars.start < visible_range.end
@@ -774,6 +788,16 @@ impl IndicatorPane {
             {
                 min_val = min_val.min(*level);
                 max_val = max_val.max(*level);
+            }
+        }
+        for (index, (value, ..)) in indicator.pane().levels.into_iter().enumerate() {
+            if value.is_finite()
+                && indicator
+                    .level_price_line(index)
+                    .is_some_and(|color| color != egui::Color32::TRANSPARENT)
+            {
+                min_val = min_val.min(value);
+                max_val = max_val.max(value);
             }
         }
 
@@ -840,7 +864,7 @@ mod tests {
     }
 
     /// A fitted pane keeps a study's levels in view when its values lie between them, and a
-    /// hidden level no longer holds the scale open.
+    /// hidden level holds the scale open only when its value line is visible.
     #[test]
     fn fitted_panes_keep_visible_levels_in_view() {
         let bars: Vec<_> = [(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]
@@ -864,8 +888,17 @@ mod tests {
 
         let mut settings = study.settings();
         settings.levels[0].visible = false;
-        study.apply_settings(&[], settings).unwrap();
-        let (low, high) = fit(&study);
-        assert!(low < 38.2 && high < 61.8, "{low}..{high}");
+        for (enabled, color, shown) in [
+            (false, egui::Color32::RED, false),
+            (true, egui::Color32::RED, true),
+            (true, egui::Color32::TRANSPARENT, false),
+        ] {
+            settings.levels[0].price_line = enabled;
+            settings.levels[0].color = color;
+            study.apply_settings(&[], settings.clone()).unwrap();
+            let (low, high) = fit(&study);
+            assert!(low < 38.2, "{low}..{high}");
+            assert_eq!(high > 61.8, shown, "{low}..{high}");
+        }
     }
 }

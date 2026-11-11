@@ -19,8 +19,8 @@ pub(crate) fn plot_value_color(
         .filter(|color| *color != egui::Color32::TRANSPARENT)
 }
 
-/// Horizontal line at each enabled output's latest value, across the clip rect. A missing latest
-/// value, a hidden output or a bar-colouring plot draws none.
+/// Horizontal line at each enabled output's latest value and enabled pane guide, across the
+/// clip rect. A missing latest value, a hidden output or a bar-colouring plot draws none.
 pub(crate) fn paint_price_lines(
     painter: &egui::Painter,
     study: &dyn crate::studies::Indicator,
@@ -33,6 +33,20 @@ pub(crate) fn paint_price_lines(
         return;
     };
     let rect = painter.clip_rect();
+    let paint = |value, color| {
+        let y = price.price_to_y(value);
+        if !y.is_finite() || !rect.y_range().contains(y) || color == egui::Color32::TRANSPARENT {
+            return;
+        }
+        crate::painting::dashed_line::draw_dashed_line(
+            painter,
+            egui::pos2(rect.left(), y),
+            egui::pos2(rect.right(), y),
+            egui::Stroke::new(1.0, color),
+            1.0,
+            3.0,
+        );
+    };
     for line in 0..study.line_count() {
         let style = study.plot_style(line);
         if !style.visible
@@ -52,20 +66,14 @@ pub(crate) fn paint_price_lines(
         let Some(value) = value else {
             continue;
         };
-        let y = price.price_to_y(value);
-        if !y.is_finite() || !rect.y_range().contains(y) {
-            continue;
-        }
         let color = plot_value_color(study, line, bar.checked_add_signed(study.plot_offset(line)))
             .unwrap_or(style.color);
-        crate::painting::dashed_line::draw_dashed_line(
-            painter,
-            egui::pos2(rect.left(), y),
-            egui::pos2(rect.right(), y),
-            egui::Stroke::new(1.0, color),
-            1.0,
-            3.0,
-        );
+        paint(value, color);
+    }
+    for (index, (value, ..)) in study.pane().levels.into_iter().enumerate() {
+        if let Some(color) = study.level_price_line(index) {
+            paint(value, color);
+        }
     }
 }
 
@@ -153,14 +161,15 @@ pub(crate) fn zone_rect(
 pub(crate) fn candle_geometry(
     candle: &StudyCandle,
     coords: &crate::chart::coords::ChartMapping,
+    bar_spacing: f32,
     price_to_y: impl Fn(f64) -> f32,
 ) -> Option<(egui::Rect, [egui::Pos2; 2])> {
     use egui::{Pos2, Rect};
     if candle.bars.is_empty() {
         return None;
     }
-    let half = coords.bar_spacing * 0.5;
-    let inset = (coords.bar_spacing * 0.1).min(2.0);
+    let half = bar_spacing * 0.5;
+    let inset = (bar_spacing * 0.1).min(2.0);
     let left = coords.idx_to_x(candle.bars.start) - half + inset;
     let right = coords.idx_to_x(candle.bars.end - 1) + half - inset;
     let x = (left + right) * 0.5;
@@ -190,18 +199,21 @@ pub(crate) fn paint_candles(
     coords: &crate::chart::coords::ChartMapping,
 ) {
     let painter = context.painter.with_clip_rect(context.rect);
+    let bar_spacing = coords.bar_spacing_for_width();
     let candles = study.candles();
     let start = candles
         .partition_point(|c| c.bars.end <= coords.x_to_idx(context.rect.left()).saturating_sub(1));
     for candle in &candles[start..] {
-        if coords.idx_to_x(candle.bars.start) - coords.bar_spacing * 0.5 > context.rect.right() {
+        if coords.idx_to_x(candle.bars.start) - bar_spacing * 0.5 > context.rect.right() {
             break;
         }
         let style = study.plot_style(candle.plot);
         if !style.visible {
             continue;
         }
-        if let Some((body, wick)) = candle_geometry(candle, coords, |p| price.price_to_y(p)) {
+        if let Some((body, wick)) =
+            candle_geometry(candle, coords, bar_spacing, |p| price.price_to_y(p))
+        {
             let stroke = egui::Stroke::new(style.width, style.color);
             painter.line_segment(wick, stroke);
             painter.rect(

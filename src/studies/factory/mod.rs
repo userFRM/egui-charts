@@ -113,7 +113,7 @@ impl IndicatorFactory {
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
-        register_builtins!(@help self, "struct", CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns);
+        register_builtins!(@help self, "struct", CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns, OptionsVolumeProfile);
         #[cfg(feature = "drawings")]
         register_builtins!(@help self, "struct", AutoDrawing);
         let unlisted: [fn() -> Box<dyn Indicator>; 7] = [

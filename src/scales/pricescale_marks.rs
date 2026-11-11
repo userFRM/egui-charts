@@ -722,6 +722,32 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "widget")]
+    fn volume_display_format_keeps_the_low_decades_of_a_log_axis() {
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Volume,
+            precision: 2,
+            min_move: 1.0,
+        };
+        let map = map(
+            PriceScaleMode::Logarithmic,
+            1_000f64.ln(),
+            10_000_000f64.ln(),
+        );
+        for map in [map, map.with_display_format(format)] {
+            let marks = map.marks();
+            assert!(marks.iter().any(|mark| mark.price < 10_000.0), "{marks:?}");
+            assert!(marks.iter().all(|mark| mark.price.fract() == 0.0));
+        }
+        // On a linear axis the hundredth of a million still sets a 10,000-unit grid.
+        let marks = self::map(PriceScaleMode::Normal, 1_000.0, 10_000_000.0)
+            .with_display_format(format)
+            .marks();
+        assert!(!marks.is_empty());
+        assert!(marks.iter().all(|mark| mark.price % 10_000.0 == 0.0));
+    }
+
+    #[test]
     fn test_log_marks_generation() {
         let generator = PriceMarkGenerator::new();
         let (lo, hi) = (10f64.ln(), 1000f64.ln());
