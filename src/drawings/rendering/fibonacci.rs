@@ -428,31 +428,16 @@ impl Drawing {
             };
             previous = radius;
             paint_level_path(painter, points, &config, level);
-            for (angle, align) in [
-                (0.0, egui::Align2::LEFT_CENTER),
-                (std::f32::consts::PI, egui::Align2::RIGHT_CENTER),
-                (
-                    std::f32::consts::FRAC_PI_2,
-                    if end.y <= start.y {
-                        egui::Align2::CENTER_BOTTOM
-                    } else {
-                        egui::Align2::CENTER_TOP
-                    },
-                ),
-                (
-                    -std::f32::consts::FRAC_PI_2,
-                    if end.y <= start.y {
-                        egui::Align2::CENTER_TOP
-                    } else {
-                        egui::Align2::CENTER_BOTTOM
-                    },
-                ),
-            ]
-            .into_iter()
-            .take(if config.close_arcs { 4 } else { 3 })
-            {
-                let at = speed_arc_point(start, end, radius + 2.0, angle);
-                paint_ratio_label(painter, &config, level, at, align);
+            let (near, far) = if end.y <= start.y {
+                (egui::Align2::CENTER_BOTTOM, egui::Align2::CENTER_TOP)
+            } else {
+                (egui::Align2::CENTER_TOP, egui::Align2::CENTER_BOTTOM)
+            };
+            let top = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
+            paint_ratio_label(painter, &config, level, top, near);
+            if config.close_arcs {
+                let bottom = speed_arc_point(start, end, radius, -std::f32::consts::FRAC_PI_2);
+                paint_ratio_label(painter, &config, level, bottom, far);
             }
         }
         self.render_fib_trend(painter);
@@ -1662,12 +1647,10 @@ mod tests {
                 assert!(red > 1 && green == 1, "{tool:?}: assigned strokes");
                 assert_eq!(
                     labels,
-                    if tool == Tool::FibonacciCircles {
-                        2
-                    } else if closed {
-                        8
+                    if tool == Tool::FibonacciSpeedResistanceArcs && closed {
+                        4
                     } else {
-                        6
+                        2
                     }
                 );
                 if tool == Tool::FibonacciSpeedResistanceArcs {
