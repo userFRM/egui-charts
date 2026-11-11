@@ -717,8 +717,8 @@ impl Chart {
         self.feed.history_complete |= (page.end_of_history
             || (empty && page.continue_before.is_none()))
             && !self.bar_limit_reached();
-        // The held bars from the start on came from pushes. One the page holds as it is is
-        // history, so the stream starts at the oldest of them the page lacks or holds otherwise.
+        // From the start on, a held bar the page holds with the same values is history, so the
+        // stream starts at the oldest held bar the page lacks or holds with other values.
         link.pushed_from = link.pushed_from.and_then(|from| {
             let held = self.bars(SeriesId::MAIN);
             held[held.partition_point(|bar| bar.time < from)..]
