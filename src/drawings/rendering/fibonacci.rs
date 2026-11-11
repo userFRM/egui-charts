@@ -1650,9 +1650,9 @@ mod tests {
                 );
                 let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
                 saved["levels"] = serde_json::json!([
-                    {"value":0.25,"label":"","color":[255,0,0,255],"visible":true,"show_price":false,"width":4.0,"style":"Dashed"},
-                    {"value":0.5,"label":"","color":[0,255,0,255],"visible":true,"show_price":false,"width":6.0,"style":"Solid"},
-                    {"value":0.75,"label":"","color":[0,0,255,255],"visible":false,"show_price":false,"width":8.0,"style":"Dotted"}
+                    {"value":0.25,"label":"","color":[255,0,0,255],"visible":true,"show_price":false,"width":4.0,"line_style":"Dashed"},
+                    {"value":0.5,"label":"","color":[0,255,0,255],"visible":true,"show_price":false,"width":6.0,"line_style":"Solid"},
+                    {"value":0.75,"label":"","color":[0,0,255,255],"visible":false,"show_price":false,"width":8.0,"line_style":"Dotted"}
                 ]);
                 saved["show_levels"] = true.into();
                 saved["show_prices"] = false.into();
