@@ -175,9 +175,10 @@ impl StudyTemplate {
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change. `own` holds the inputs of the study registered under the saved name; a saved input
-    /// that study takes as saved is neither renamed nor converted.
-    fn upgraded(&self, own: &[StudyInput]) -> Option<Self> {
+    /// change. `own` holds the inputs of the study registered under the saved name, or the
+    /// chart's study a stored pane is matched against; a saved input that study takes as saved
+    /// is neither renamed nor converted.
+    pub(crate) fn upgraded(&self, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
         // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
@@ -285,6 +286,7 @@ impl StudyTemplate {
                         pattern: crate::model::LineStyle::Dashed,
                         width: 1.0,
                         visible: false,
+                        price_line: false,
                     });
                 }
             }

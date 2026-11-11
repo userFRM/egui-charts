@@ -145,6 +145,16 @@ impl FillStyle {
     }
 }
 
+/// Independent colours and visibility of a declared vertical gradient.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct GradientStyle {
+    /// Colours at the two values in the declared ramp, including their opacity.
+    pub colors: [Color32; 2],
+    /// Whether the fill is drawn, independently of its plot and guides.
+    pub visible: bool,
+}
+
 /// Editable presentation of one reference level in a study's pane, such as 70 for RSI.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -159,8 +169,11 @@ pub struct LevelStyle {
     /// Stroke width in logical pixels, from 0.5 to 10. Older settings use one pixel.
     #[serde(default = "default_level_width")]
     pub width: f32,
-    /// Whether the line is drawn. A hidden boundary still bounds the fill.
+    /// Whether the guide stroke is drawn. A hidden boundary still bounds the fill.
     pub visible: bool,
+    /// Draw a dotted value line independently of guide visibility. Off in older settings.
+    #[serde(default)]
+    pub price_line: bool,
 }
 
 fn default_level_width() -> f32 {
@@ -184,6 +197,7 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
                 pattern,
                 width,
                 visible: true,
+                price_line: study.level_price_line(index).is_some(),
             }
         })
         .collect();
@@ -220,6 +234,14 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     }
     // Saved band styles are kept whatever the study declares so far, since a study can declare
     // a band only once it has data. Bands beyond them start with the study's own style.
+    let gradients = study.gradients();
+    let saved = settings.gradients.len().min(gradients.len());
+    settings
+        .gradients
+        .extend(gradients[saved..].iter().map(|fill| GradientStyle {
+            colors: fill.colors,
+            visible: true,
+        }));
     let fills = study.fills();
     let saved = settings.fills.len().min(fills.len());
     settings
@@ -334,6 +356,10 @@ pub struct StudySettings {
     /// does not declare yet are kept for when it does.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
+    /// Independent styles for [`Indicator::gradients`], in declaration order.
+    /// Older settings inherit the study's declared ramps.
+    #[serde(default)]
+    pub gradients: Vec<GradientStyle>,
 }
 
 fn enabled_by_default() -> bool {
@@ -1081,6 +1107,23 @@ impl Indicator for ConfiguredStudy {
             })
             .collect()
     }
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        self.study
+            .gradients()
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut fill)| {
+                if let Some(style) = self.settings.gradients.get(index) {
+                    fill.colors = if style.visible {
+                        style.colors
+                    } else {
+                        [Color32::TRANSPARENT; 2]
+                    };
+                }
+                fill
+            })
+            .collect()
+    }
     fn snapshot_settings(&self) -> StudySettingsSnapshot {
         let mut snapshot =
             StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
@@ -1430,6 +1473,13 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
         self.study.level_fill_indices()
+    }
+    fn level_price_line(&self, index: usize) -> Option<Color32> {
+        self.settings
+            .levels
+            .get(index)
+            .filter(|style| style.price_line)
+            .map(|style| style.color)
     }
     fn level_stroke(&self, index: usize, value: f64) -> (LineStyle, f32) {
         self.settings

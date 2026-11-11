@@ -16,7 +16,7 @@ pub struct StochasticMomentumIndex {
     smooth1: usize,
     /// Second EMA smoothing (typically 3)
     smooth2: usize,
-    /// Signal line period (typically 10)
+    /// Signal line period (typically 3)
     signal_period: usize,
     values: IndicatorValues,
     stepper: Stepper<(std::collections::VecDeque<[f64; 2]>, [Smoothing; 5])>,
@@ -53,17 +53,76 @@ impl StochasticMomentumIndex {
 
 impl Default for StochasticMomentumIndex {
     fn default() -> Self {
-        Self::new(10, 3, 3, 10)
+        Self::new(10, 3, 3, 3)
     }
 }
 
 impl Indicator for StochasticMomentumIndex {
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        smooth1: length("Smooth1", 1, usize::MAX),
-        smooth2: length("Smooth2", 1, usize::MAX),
-        signal_period: length("Signal period", 1, usize::MAX)
-    ; {});
+    fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+        use crate::studies::{InputKind, InputValue, StudyInput};
+        let length = |id, label, value, default| {
+            StudyInput::new(
+                id,
+                label,
+                InputValue::Length(value),
+                InputKind::Length(1, usize::MAX),
+            )
+            .with_default(InputValue::Length(default))
+        };
+        let mut inputs = vec![length("period", "Range length", self.period, 10)];
+        if self.smooth1 == self.smooth2 {
+            inputs.push(length("smoothing", "Smoothing length", self.smooth1, 3));
+        } else {
+            // Retain independently chosen lengths from constructors and older saved studies.
+            inputs.push(length("smooth1", "First smoothing length", self.smooth1, 3));
+            inputs.push(length(
+                "smooth2",
+                "Second smoothing length",
+                self.smooth2,
+                3,
+            ));
+        }
+        inputs.push(length(
+            "signal_period",
+            "Signal length",
+            self.signal_period,
+            3,
+        ));
+        inputs
+    }
+
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), crate::studies::StudyError> {
+        use crate::studies::{InputValue, StudyError};
+        if !matches!(
+            id,
+            "period" | "smoothing" | "smooth1" | "smooth2" | "signal_period"
+        ) {
+            return Err(StudyError::UnknownInput(id.into()));
+        }
+        let InputValue::Length(value) = value else {
+            return Err(StudyError::invalid_input(id));
+        };
+        if value == 0 {
+            return Err(StudyError::invalid_input(id));
+        }
+        match id {
+            "period" => self.period = value,
+            "smoothing" => {
+                self.smooth1 = value;
+                self.smooth2 = value;
+            }
+            "smooth1" => self.smooth1 = value,
+            "smooth2" => self.smooth2 = value,
+            "signal_period" => self.signal_period = value,
+            _ => unreachable!(),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn name(&self) -> &str {
         "SMI"
@@ -140,6 +199,51 @@ impl Indicator for StochasticMomentumIndex {
         false
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: None,
+            levels: vec![
+                (40.0, palette::MUTED, "Upper guide"),
+                (-40.0, palette::MUTED, "Lower guide"),
+                (0.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+            ],
+            fill_between_levels: true,
+        }
+    }
+
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::BLUE.gamma_multiply_u8(26)
+    }
+
+    fn gradients(&self) -> Vec<crate::studies::StudyGradient> {
+        [
+            (
+                "Upper shading",
+                [100.0, 40.0],
+                [palette::GREEN.gamma_multiply_u8(128), Color32::TRANSPARENT],
+            ),
+            (
+                "Lower shading",
+                [-40.0, -100.0],
+                [Color32::TRANSPARENT, palette::RED.gamma_multiply_u8(128)],
+            ),
+        ]
+        .into_iter()
+        .map(|(name, range, colors)| crate::studies::StudyGradient {
+            name,
+            plot: 0,
+            baseline: 0.0,
+            range,
+            colors,
+        })
+        .collect()
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -186,6 +290,59 @@ mod tests {
                 assert!((got - want).abs() < 1e-12, "line {line}, bar {bar}: {got}");
             }
         }
+        // The shared length sets both EMA stages. A correction gives d2=23/9,
+        // then appending gives d2=61/27; the range stays 8 throughout.
+        smi.set_input("smoothing", crate::studies::InputValue::Length(2))
+            .unwrap();
+        smi.calculate(&data);
+        data[5].close = 105.0;
+        smi.update(&data, 5);
+        for (line, expected) in [575.0 / 9.0, 625.0 / 9.0].into_iter().enumerate() {
+            assert!((smi.values().value(line, 5).unwrap() - expected).abs() < 1e-12);
+        }
+        data.push(make_bar(108.0, 104.0, 106.0));
+        smi.update(&data, 6);
+        for (line, expected) in [1525.0 / 27.0, 1700.0 / 27.0].into_iter().enumerate() {
+            assert!((smi.values().value(line, 6).unwrap() - expected).abs() < 1e-12);
+        }
+        // Older saved lengths keep their exact values, even when unequal.
+        let study = crate::studies::ConfiguredStudy::new(Box::new(smi.clone()));
+        let mut saved = crate::studies::StudyTemplate::from_study(&study);
+        saved.inputs.retain(|(id, _)| id != "smoothing");
+        saved.inputs.extend([
+            ("smooth1".into(), crate::studies::InputValue::Length(2)),
+            ("smooth2".into(), crate::studies::InputValue::Length(4)),
+        ]);
+        let mut older = serde_json::to_value(saved).unwrap();
+        older["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("gradients");
+        let restored = serde_json::from_value::<crate::studies::StudyTemplate>(older)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(restored.settings()).unwrap()["gradients"]
+                .as_array()
+                .map(Vec::len),
+            Some(2)
+        );
+        for (id, value) in [("smooth1", 2), ("smooth2", 4)] {
+            assert_eq!(
+                restored.inputs().iter().find(|i| i.id == id).unwrap().value,
+                crate::studies::InputValue::Length(value)
+            );
+        }
+        assert_eq!(
+            StochasticMomentumIndex::default()
+                .inputs()
+                .iter()
+                .find(|input| input.id == "signal_period")
+                .unwrap()
+                .value,
+            crate::studies::InputValue::Length(3)
+        );
         // A zero high-low range has no defined ratio.
         smi.calculate(&vec![make_bar(100.0, 100.0, 100.0); 6]);
         assert_eq!(smi.values().len(), 6);

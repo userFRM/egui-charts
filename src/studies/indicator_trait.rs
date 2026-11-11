@@ -202,6 +202,12 @@ pub trait Indicator: Send {
         1.0
     }
 
+    /// Colour of an enabled dotted value line at a pane guide. Off by default, independent of
+    /// plot value tags and guide visibility. Hidden guides retain their value-line colour.
+    fn level_price_line(&self, _index: usize) -> Option<Color32> {
+        None
+    }
+
     /// Pattern and width for a level by its position in the pane's levels. The value is the
     /// drawn value, including a host's zone override. Defaults to the value-based methods.
     fn level_stroke(&self, _index: usize, value: f64) -> (crate::model::LineStyle, f32) {
@@ -323,6 +329,11 @@ pub trait Indicator: Send {
         Vec::new()
     }
 
+    /// Vertical colour ramps beneath the plots. Missing values break the filled area.
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        Vec::new()
+    }
+
     /// Value at a displayed bar, accounting for the plot's displacement.
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         let source = bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?;
@@ -354,6 +365,14 @@ pub trait Indicator: Send {
                 .collect(),
             plot_variants: (0..self.line_count())
                 .map(|line| self.plot_variants(line))
+                .collect(),
+            gradients: self
+                .gradients()
+                .iter()
+                .map(|fill| super::GradientStyle {
+                    colors: fill.colors,
+                    visible: true,
+                })
                 .collect(),
             background: self.background(),
             background_visible: true,

@@ -3,7 +3,9 @@
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use crate::model::Timeframe;
-use crate::studies::{Indicator, InputValue, PlotType, StudyInput, StudyScale, StudySettings};
+use crate::studies::{
+    Indicator, InputKind, InputValue, PlotType, StudyInput, StudyScale, StudySettings,
+};
 use crate::theme::Theme;
 use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
 use crate::widget::SeriesId;
@@ -36,6 +38,7 @@ pub struct IndicatorSettingsDialog {
     title: String,
     line_names: Vec<String>,
     levels: Vec<(f64, &'static str)>,
+    gradient_names: Vec<&'static str>,
     tab: Tab,
     current_interval: Option<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
@@ -94,6 +97,7 @@ impl IndicatorSettingsDialog {
         self.inputs = study.inputs();
         self.title = format!("{} settings", study.name());
         self.line_names = study.line_names();
+        self.gradient_names = study.gradients().iter().map(|fill| fill.name).collect();
         self.levels = study
             .pane()
             .levels
@@ -254,6 +258,7 @@ impl IndicatorSettingsDialog {
                     .max_height((ui.available_height() - 72.0).max(0.0))
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
+                            let mut choice_labels = Vec::new();
                             if self.inputs.is_empty() {
                                 ui.label(l10n::text(
                                     ui.ctx(),
@@ -296,13 +301,33 @@ impl IndicatorSettingsDialog {
                                     if !shown {
                                         continue;
                                     }
-                                    crate::ui::strategy_report::inputs::show_input(
+                                    if crate::ui::strategy_report::inputs::show_input(
                                         ui,
                                         input,
                                         &self.sources,
-                                    );
+                                    ) && let (
+                                        InputKind::Choice(choices),
+                                        InputValue::Choice(choice),
+                                    ) = (&input.kind, &input.value)
+                                        && let Some(label) = choices.get(*choice)
+                                    {
+                                        choice_labels.push((input.id.clone(), label.clone()));
+                                    }
                                 }
                             });
+                            // A stale saved label would otherwise override the user's choice on Apply.
+                            for (id, label) in choice_labels {
+                                let label_id = format!("{id}_label");
+                                if let Some(input) = self.inputs.iter_mut().find(|input| {
+                                    input.id == label_id
+                                        && matches!(input.kind, InputKind::Text)
+                                        && input.shown_when.as_ref().is_some_and(
+                                            |(choice, choices)| choice == &id && choices.is_empty(),
+                                        )
+                                }) {
+                                    input.value = InputValue::Text(label);
+                                }
+                            }
                         }
                         Tab::Style => {
                             ui.checkbox(
@@ -439,6 +464,10 @@ impl IndicatorSettingsDialog {
                                             .accessible_name(l10n::text(ui.ctx(), "Level colour"));
                                         pattern_combo(ui, &mut level.pattern);
                                         width_picker(ui, &mut level.width);
+                                        ui.checkbox(
+                                            &mut level.price_line,
+                                            l10n::text(ui.ctx(), "Latest value line"),
+                                        );
                                     });
                                 });
                             }
@@ -501,6 +530,34 @@ impl IndicatorSettingsDialog {
                                         if let Some(color) = &mut fill.inverted_color {
                                             ui.color_edit_button_srgba(color).accessible_name(
                                                 l10n::text(ui.ctx(), "Band colour below"),
+                                            );
+                                        }
+                                    });
+                                });
+                            }
+                            for (index, fill) in edit.settings.gradients.iter_mut().enumerate() {
+                                ui.push_id(("gradient", index), |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.checkbox(
+                                            &mut fill.visible,
+                                            l10n::text(
+                                                ui.ctx(),
+                                                self.gradient_names
+                                                    .get(index)
+                                                    .copied()
+                                                    .unwrap_or("Gradient"),
+                                            ),
+                                        );
+                                        for (end, color) in fill.colors.iter_mut().enumerate() {
+                                            ui.color_edit_button_srgba(color).accessible_name(
+                                                l10n::text(
+                                                    ui.ctx(),
+                                                    if end == 0 {
+                                                        "First colour"
+                                                    } else {
+                                                        "Second colour"
+                                                    },
+                                                ),
                                             );
                                         }
                                     });
@@ -591,16 +648,257 @@ mod tests {
     use super::*;
     use crate::studies::{ConfiguredStudy, SMA};
 
-    /// Both oscillators preview real inputs and independent guide styles, then cancel or commit
-    /// as one undoable edit. Reference values use rational SMA and Wilder calculations.
     #[test]
-    fn stochastic_preview_cancel_apply_and_stream_restore() {
+    fn smi_value_lines_apply_cancel_save_and_restore_independently() {
+        use crate::scales::{PriceMap, PriceRange, PriceTransform};
+        use crate::studies::{StochasticMomentumIndex, StudyTemplate};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut study = ConfiguredStudy::new(Box::new(StochasticMomentumIndex::new(5, 2, 2, 3)));
+        let mut bars: Vec<_> = (0..6)
+            .map(|i| {
+                crate::model::Bar::new(
+                    chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
+                    100.0 + i as f64,
+                    102.0 + i as f64,
+                    98.0 + i as f64,
+                    101.0 + i as f64,
+                    1000.0,
+                )
+            })
+            .collect();
+        bars[5].close = 104.0;
+        study.calculate(&bars);
+        let defaults = study.settings();
+        let before = study.snapshot_settings();
+        assert!(defaults.price_line_plots.is_empty());
+        assert!(defaults.levels.iter().all(|level| {
+            !serde_json::to_value(level).unwrap()["price_line"]
+                .as_bool()
+                .unwrap_or(false)
+        }));
+        assert_eq!(
+            study
+                .pane()
+                .levels
+                .iter()
+                .map(|level| level.0)
+                .collect::<Vec<_>>(),
+            [40.0, -40.0, 0.0]
+        );
+        assert_eq!(study.level_fill_indices(), Some([0, 1]));
+        let mut dialog = IndicatorSettingsDialog::default();
+        for (action, theme, size) in [
+            ("Cancel", Theme::dark(), egui::vec2(360.0, 640.0)),
+            ("Cancel", Theme::light(), egui::vec2(360.0, 640.0)),
+            ("Apply", Theme::light(), egui::vec2(1440.0, 900.0)),
+        ] {
+            dialog.open(SeriesId(2), &study, Some(Timeframe::Min1));
+            dialog.tab = Tab::Style;
+            let mut applied = None;
+            let setup_theme = theme.clone();
+            let mut harness = Harness::builder()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &setup_theme);
+                })
+                .with_size(size)
+                .build_ui(|ui| {
+                    if let Some(edit) = dialog.show(ui.ctx(), &theme) {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            assert_eq!(harness.query_all_by_label("Latest value line").count(), 5);
+            // Main, signal, upper and lower. The middle guide keeps its default.
+            for index in [0, 1, 2, 3] {
+                harness
+                    .query_all_by_label("Latest value line")
+                    .nth(index)
+                    .unwrap()
+                    .click();
+                harness.run();
+            }
+            assert!(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                    .contains_rect(harness.get_by_label(action).rect())
+            );
+            harness.get_by_label(action).click();
+            harness.run();
+            drop(harness);
+            assert!(study.snapshot_settings() == before);
+            if action == "Apply" {
+                let edit = applied.unwrap();
+                study.apply_settings(&edit.inputs, edit.settings).unwrap();
+            } else {
+                assert!(applied.is_none());
+            }
+        }
+        study.calculate(&bars);
+        let edited = study.settings();
+        let json = serde_json::to_value(&edited).unwrap();
+        assert_eq!(json["price_line_plots"], serde_json::json!([0, 1]));
+        for (index, enabled) in [(0, true), (1, true), (2, false)] {
+            assert_eq!(json["levels"][index]["price_line"], enabled);
+            assert_eq!(edited.levels[index].visible, defaults.levels[index].visible);
+        }
+        assert_eq!(edited.untagged_plots, defaults.untagged_plots);
+        let after = study.snapshot_settings();
+        let saved = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
+        let mut loaded = serde_json::from_value::<StudyTemplate>(saved.clone())
+            .unwrap()
+            .create()
+            .unwrap();
+        loaded.calculate(&bars);
+        assert_eq!(loaded.settings(), edited);
+        study.restore_settings(&before).unwrap();
+        assert_eq!(study.settings(), defaults);
+        study.restore_settings(&after).unwrap();
+        assert_eq!(study.settings(), edited);
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(study.clone_box());
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .apply_settings(&[], defaults.clone())
+                .unwrap();
+        });
+        assert!(chart.undo());
+        assert_eq!(
+            chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .settings(),
+            edited
+        );
+        assert!(chart.redo());
+        assert_eq!(
+            chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .settings(),
+            defaults
+        );
+
+        // Independent hand values at bar 5: SMI=475/9, signal=575/9.
+        // A 200 px pane from -100 to 100 maps a value v to y=100-v.
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 200.0));
+        for (plots, guides, expected) in [
+            (vec![], vec![], vec![]),
+            (vec![0], vec![], vec![475.0 / 9.0]),
+            (vec![1], vec![], vec![575.0 / 9.0]),
+            (vec![], vec![0], vec![40.0]),
+            (vec![], vec![1], vec![-40.0]),
+            (
+                vec![0, 1],
+                vec![0, 1],
+                vec![475.0 / 9.0, 575.0 / 9.0, 40.0, -40.0],
+            ),
+        ] {
+            for (inverted, visible) in [(false, true), (true, true), (false, false), (true, false)]
+            {
+                let mut settings = edited.clone();
+                settings.price_line_plots = plots.clone();
+                settings.untagged_plots = vec![0, 1];
+                for (index, level) in settings.levels.iter_mut().enumerate() {
+                    level.price_line = guides.contains(&index);
+                    level.visible = visible;
+                }
+                study.apply_settings(&[], settings).unwrap();
+                let price = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(-100.0, 100.0),
+                    0.0,
+                    200.0,
+                    inverted,
+                );
+                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    crate::chart::indicators::plots::paint_price_lines(
+                        &ui.painter().with_clip_rect(rect),
+                        &study,
+                        &price,
+                    );
+                });
+                let mut rows: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Mesh(mesh) if !mesh.vertices.is_empty() => {
+                            let bounds = mesh.calc_bounds();
+                            (bounds.width() >= 200.0 && bounds.height() <= 1.0)
+                                .then_some(bounds.center().y)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                let mut wanted: Vec<_> = expected
+                    .iter()
+                    .map(|value| {
+                        if inverted {
+                            100.0 + value
+                        } else {
+                            100.0 - value
+                        }
+                    })
+                    .collect();
+                rows.sort_by(f32::total_cmp);
+                wanted.sort_by(f64::total_cmp);
+                assert_eq!(
+                    rows.len(),
+                    wanted.len(),
+                    "plots={plots:?}, guides={guides:?}, visible={visible}"
+                );
+                for (got, want) in rows.iter().zip(wanted) {
+                    assert!(
+                        (f64::from(*got) - want).abs() <= 0.5,
+                        "{rows:?} vs {expected:?}"
+                    );
+                }
+            }
+        }
+        // Settings predating these switches keep every new guide line disabled.
+        let mut older = saved;
+        for level in older["settings"]["levels"].as_array_mut().unwrap() {
+            level.as_object_mut().unwrap().remove("price_line");
+        }
+        let older = serde_json::from_value::<StudyTemplate>(older)
+            .unwrap()
+            .create()
+            .unwrap();
+        let json = serde_json::to_value(older.settings()).unwrap();
+        assert!(
+            json["levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|level| level["price_line"] == false)
+        );
+    }
+
+    /// Oscillators preview real inputs and independent guide styles, then cancel or commit
+    /// as one undoable edit. Reference values use rational EMA, SMA and Wilder calculations.
+    #[test]
+    fn smi_and_stochastic_preview_cancel_apply_and_stream_restore() {
         use crate::model::{Bar, BarData, PriceSource};
         use crate::studies::{IndicatorFactory, StudySource, StudyTemplate};
         use crate::widget::Chart;
         use egui_kittest::{Harness, kittest::Queryable};
 
         for (name, expected) in [
+            (
+                "SMI",
+                [
+                    [24300.0 / 4577.0, -90248918812.0 / 92919667995.0],
+                    [-72900.0 / 4253.0, -1376112074668.0 / 86342003055.0],
+                    [92300.0 / 4969.0, 9100832864927708.0 / 1287100239540885.0],
+                ],
+            ),
             (
                 "Stochastic",
                 [
@@ -664,6 +962,28 @@ mod tests {
             edited.levels[2].value = Some(120.0);
             edited.level_fill_color = egui::Color32::from_rgba_unmultiplied(20, 120, 80, 60);
             edited.plots[0].plot_type = PlotType::StepLine;
+            if name == "SMI" {
+                let mut json = serde_json::to_value(&edited).unwrap();
+                assert_eq!(json["gradients"].as_array().map(Vec::len), Some(2));
+                assert_eq!(
+                    chart
+                        .indicators()
+                        .find(|(i, _)| *i == id)
+                        .unwrap()
+                        .1
+                        .inputs()
+                        .iter()
+                        .filter(|i| matches!(i.value, InputValue::Length(_)))
+                        .count(),
+                    3
+                );
+                json["gradients"][0]["colors"] =
+                    serde_json::json!([[20, 40, 80, 100], [10, 20, 30, 50]]);
+                json["gradients"][1]["colors"] =
+                    serde_json::json!([[80, 20, 40, 120], [0, 0, 0, 0]]);
+                json["gradients"][1]["visible"] = false.into();
+                edited = serde_json::from_value(json).unwrap();
+            }
             edited.price_line_plots = vec![1];
             let mut dialog = IndicatorSettingsDialog::default();
             for (action, theme, size) in [
@@ -677,7 +997,7 @@ mod tests {
                 for input in &mut dialog.inputs {
                     if matches!(input.value, InputValue::Length(_)) {
                         input.value = InputValue::Length(
-                            if matches!(input.id.as_str(), "k_period" | "stoch_period") {
+                            if matches!(input.id.as_str(), "k_period" | "stoch_period" | "period") {
                                 3
                             } else {
                                 2
@@ -731,12 +1051,32 @@ mod tests {
                     });
                 harness.run();
                 for caption in [
-                    "Overbought",
-                    "Oversold",
+                    if name == "SMI" {
+                        "Upper guide"
+                    } else {
+                        "Overbought"
+                    },
+                    if name == "SMI" {
+                        "Lower guide"
+                    } else {
+                        "Oversold"
+                    },
                     "Middle guide",
                     "Fill colour",
                     "Latest value line",
-                ] {
+                ]
+                .into_iter()
+                .chain(
+                    (name == "SMI")
+                        .then_some([
+                            "Upper shading",
+                            "Lower shading",
+                            "First colour",
+                            "Second colour",
+                        ])
+                        .into_iter()
+                        .flatten(),
+                ) {
                     assert!(
                         harness.query_all_by_label(caption).next().is_some(),
                         "{name}: {caption}"

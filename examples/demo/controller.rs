@@ -708,10 +708,6 @@ impl DemoApp {
                     .storage
                     .and_then(|storage| eframe::get_value(storage, "drawing_toolbar_preferences"))
                     .unwrap_or_default();
-                toolbar.state.cursor_favorites = cc
-                    .storage
-                    .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
-                    .unwrap_or_default();
                 toolbar
             },
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -955,6 +951,13 @@ impl DemoApp {
         } else {
             true
         };
+        // Keep the old key as a fallback for settings saved before cursor favourites.
+        if app.drawing_toolbar.state.cursor_favorites.is_empty() {
+            app.drawing_toolbar.state.cursor_favorites = cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
+                .unwrap_or_default();
+        }
         if recover_workspace {
             app.restore_workspace();
         }
@@ -1628,7 +1631,7 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "demo_formatting", &self.formatting);
         let current = self.user_settings();
-        self.settings.flush(&current);
+        let settings_saved = self.settings.flush(&current);
         eframe::set_value(storage, "detectors", &self.live.detectors().settings());
         storage.remove_string("api_samples");
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
@@ -1656,11 +1659,9 @@ impl eframe::App for DemoApp {
             "drawing_toolbar_preferences",
             &self.drawing_toolbar.state.preferences,
         );
-        eframe::set_value(
-            storage,
-            "cursor_favorites",
-            &self.drawing_toolbar.state.cursor_favorites,
-        );
+        if settings_saved {
+            storage.remove_string("cursor_favorites");
+        }
         eframe::set_value(
             storage,
             "chart_type_preferences",
@@ -5931,6 +5932,78 @@ mod tests {
     }
 
     #[test]
+    fn cursor_favourites_move_from_the_legacy_key_to_settings() {
+        use eframe::App;
+        use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+        let legacy = [CursorType::Dot, CursorType::Magic];
+        for (document, expected, readable) in [
+            (None, legacy.as_slice(), true),
+            (Some(r#"{"version":1}"#), legacy.as_slice(), true),
+            (
+                Some(r#"{"version":1,"cursor_favorites":[]}"#),
+                legacy.as_slice(),
+                true,
+            ),
+            (
+                Some(r#"{"version":1,"cursor_favorites":["Magic"]}"#),
+                &legacy[1..],
+                true,
+            ),
+            (Some(r#"{"version":2}"#), legacy.as_slice(), false),
+        ] {
+            let mut storage = AppStorage::default();
+            eframe::set_value(&mut storage, "cursor_favorites", &legacy.to_vec());
+            if let Some(document) = document {
+                eframe::set_value(
+                    &mut storage,
+                    "templates",
+                    &std::collections::HashMap::from([("Settings/settings", document)]),
+                );
+            }
+            let ctx = egui::Context::default();
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            assert_eq!(
+                app.drawing_toolbar.state.cursor_favorites, expected,
+                "{document:?}"
+            );
+            app.save(&mut storage);
+            assert_eq!(
+                eframe::Storage::get_string(&storage, "cursor_favorites").is_none(),
+                readable
+            );
+            let documents: std::collections::HashMap<String, String> =
+                eframe::get_value(&storage, "templates").unwrap();
+            if !readable {
+                assert_eq!(Some(documents["Settings/settings"].as_str()), document);
+                continue;
+            }
+            let settings: serde_json::Value =
+                serde_json::from_str(&documents["Settings/settings"]).unwrap();
+            assert_eq!(
+                settings["cursor_favorites"],
+                serde_json::to_value(expected).unwrap()
+            );
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new(&cc);
+            assert_eq!(restored.drawing_toolbar.state.cursor_favorites, expected);
+            restored.drawing_toolbar.state.cursor_favorites.clear();
+            restored.save(&mut storage);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx);
+            cc.storage = Some(&storage);
+            assert!(
+                DemoApp::new(&cc)
+                    .drawing_toolbar
+                    .state
+                    .cursor_favorites
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         // Repeated construction used to overflow this stack before checking the saved theme.
         std::thread::Builder::new()
@@ -5978,21 +6051,10 @@ mod tests {
                     ]),
                 );
             }
-            for (restart, explicit) in [false, true, true].into_iter().take(restarts).enumerate() {
+            for explicit in [false, true, true].into_iter().take(restarts) {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
-                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
-                assert_eq!(
-                    app.drawing_toolbar.state.cursor_favorites,
-                    if restart == 0 {
-                        &[][..]
-                    } else {
-                        CursorType::all()
-                    },
-                    "cursor favourites survive a restart; older settings start empty"
-                );
-                app.drawing_toolbar.state.cursor_favorites = CursorType::all().to_vec();
                 if legacy_document.is_some() {
                     assert_eq!(app.state.symbol, "AAPL");
                     assert_eq!(app.state.timeframe, Timeframe::Min5);
