@@ -65,7 +65,7 @@ pub(crate) fn fit_study_mapping(
             high = high.max(0.0);
         }
     }
-    for price in crate::studies::plots::gradient_prices(study, start..end) {
+    for price in crate::studies::plots::fill_prices(study, start..end) {
         low = low.min(price);
         high = high.max(price);
     }

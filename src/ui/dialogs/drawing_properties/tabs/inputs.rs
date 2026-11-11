@@ -666,6 +666,7 @@ struct LevelRow<'a> {
     text: Option<&'a mut String>,
     color: &'a mut [u8; 4],
     line_style: Option<&'a mut LineStyle>,
+    style_override: Option<(&'a mut Option<LineStyle>, LineStyle)>,
     width: Option<(&'a mut Option<f32>, f32)>,
     range: std::ops::RangeInclusive<f32>,
 }
@@ -731,21 +732,31 @@ fn level_grid<T>(
                         label.clear();
                     }
                     level_color(ui, fields.color, &mut pickers[i + 1]);
-                    if let Some(style) = fields.line_style {
+                    let mut inherited_style = fields
+                        .style_override
+                        .as_ref()
+                        .map(|(value, inherited)| value.unwrap_or(*inherited));
+                    if let Some(style) = fields.line_style.or(inherited_style.as_mut()) {
+                        let mut changed = false;
                         egui::ComboBox::from_id_salt("level_style")
                             .icon(crate::ui_kit::buttons::combo_chevron)
                             .selected_text(l10n::text(ui.ctx(), style.name()))
                             .show_ui(ui, |ui| {
                                 for choice in LineStyle::all() {
-                                    ui.selectable_value(
-                                        style,
-                                        *choice,
-                                        l10n::text(ui.ctx(), choice.name()),
-                                    );
+                                    changed |= ui
+                                        .selectable_value(
+                                            style,
+                                            *choice,
+                                            l10n::text(ui.ctx(), choice.name()),
+                                        )
+                                        .changed();
                                 }
                             })
                             .response
                             .accessible_name(name(ui, "line style"));
+                        if changed && let Some((target, _)) = fields.style_override {
+                            *target = inherited_style;
+                        }
                     }
                     if let Some((width, inherited)) = fields.width {
                         let mut value = width.unwrap_or(inherited);
@@ -814,6 +825,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
         });
     });
     let inherited_width = config.level_width;
+    let inherited_style = config.level_style;
     level_grid(
         ui,
         "Level",
@@ -824,11 +836,20 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             visible: &mut level.visible,
             value: &mut level.value,
             legacy_label: Some(&mut level.label),
-            text: (drawing.tool_type == Tool::FibonacciRetracement).then_some(&mut level.text),
+            text: (matches!(
+                drawing.tool_type,
+                Tool::FibonacciRetracement | Tool::FibonacciExtension
+            ))
+            .then_some(&mut level.text),
             color: &mut level.color,
             line_style: None,
-            width: (drawing.tool_type == Tool::FibonacciRetracement)
-                .then_some((&mut level.width, inherited_width)),
+            style_override: (drawing.tool_type == Tool::FibonacciWedge)
+                .then_some((&mut level.line_style, inherited_style)),
+            width: matches!(
+                drawing.tool_type,
+                Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciWedge
+            )
+            .then_some((&mut level.width, inherited_width)),
             range: if matches!(
                 drawing.tool_type,
                 Tool::FibonacciCircles | Tool::FibonacciSpeedResistanceArcs | Tool::FibonacciWedge
@@ -868,7 +889,10 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             &mut config.levels_as_percent,
             l10n::text(ui.ctx(), "Percent"),
         );
-        if drawing.tool_type != Tool::FibonacciRetracement {
+        if !matches!(
+            drawing.tool_type,
+            Tool::FibonacciRetracement | Tool::FibonacciExtension | Tool::FibonacciChannel
+        ) {
             ui.checkbox(
                 &mut config.labels_on_left,
                 l10n::text(ui.ctx(), "Labels on left"),
@@ -946,6 +970,7 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             text: None,
             color: &mut level.color,
             line_style: Some(&mut level.line_style),
+            style_override: None,
             width: Some((&mut level.width, drawing.stroke_width)),
             range: 0.0..=crate::drawings::validation::MAX_PITCHFORK_LEVEL,
         },
@@ -968,6 +993,7 @@ fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> Leve
         text: None,
         color: &mut level.color,
         line_style: None,
+        style_override: None,
         width: None,
         range,
     }
@@ -1311,99 +1337,188 @@ mod tests {
         }
     }
 
-    /// Retracement typography and construction controls preview without history; Cancel restores
-    /// them and confirmation stores one edit, including independent text and hidden levels.
+    /// Family controls preview without history; cancellation restores independent levels, and
+    /// confirmation stores one edit through templates, history and saved drawings.
     #[test]
-    fn retracement_controls_preview_cancel_and_restore() {
-        let ctx = Context::default();
-        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
-        let mut drawing = Drawing::new(7, Tool::FibonacciRetracement);
-        drawing.completed = true;
-        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
-        let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
-        saved["levels"][3]["text"] = "Halfway".into();
-        saved["levels"][3]["width"] = 4.0.into();
-        drawing.fib_config = Some(serde_json::from_value(saved.clone()).unwrap());
-        let mut peer = drawing.clone();
-        peer.id = 8;
-        let mut peer_config = saved.clone();
-        peer_config["levels"][3]["text"] = "Peer".into();
-        peer_config["levels"][3]["width"] = 6.0.into();
-        peer.fib_config = Some(serde_json::from_value(peer_config).unwrap());
-        chart
-            .drawings_mut()
-            .drawings
-            .extend([drawing.clone(), peer.clone()]);
-        chart.drawings_mut().select_drawings([7, 8]);
-        let mut dialog = DrawingPropertiesDialog::new();
-        for confirm in [false, true] {
-            dialog.open_for_chart(&chart, DrawingId(7));
-            dialog.active_tab = PropertiesTab::Text;
-            frame(&mut dialog, &mut chart, &ctx, vec![]);
-            enter(&mut dialog, &mut chart, &ctx, "Font size", "20");
-            let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-            for label in [
-                "Label position",
-                "Label height",
-                "Text position",
-                "Text height",
-                "Show level text",
-            ] {
-                assert!(texts.iter().any(|(text, _)| text == label), "{label}");
+    fn fibonacci_controls_preview_cancel_and_restore() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for tool in [
+            Tool::FibonacciRetracement,
+            Tool::FibonacciExtension,
+            Tool::FibonacciChannel,
+            Tool::FibonacciWedge,
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+            if tool != Tool::FibonacciRetracement {
+                drawing.chart_points.push(ChartPoint::new(2.0, 150.0));
             }
-            dialog.active_tab = PropertiesTab::Style;
-            let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-            let pos = texts
-                .iter()
-                .find(|(text, _)| text == "Visible")
-                .unwrap()
-                .1
-                .center();
-            click(&mut dialog, &mut chart, &ctx, pos);
-            assert!(!chart.can_undo());
-            let current =
-                serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
-                    .unwrap();
-            assert_eq!(current["label_size"], 20.0);
-            assert_eq!(current["trend_visible"], false);
-            assert_eq!(current["levels"], saved["levels"]);
-            assert_eq!(
-                chart.drawings().drawings[1]
-                    .fib_config
-                    .as_ref()
-                    .unwrap()
-                    .levels,
-                peer.fib_config.as_ref().unwrap().levels
-            );
-            if confirm {
-                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                let pos = texts
-                    .iter()
-                    .find(|(text, _)| text == "Ok")
-                    .unwrap()
-                    .1
-                    .center();
-                click(&mut dialog, &mut chart, &ctx, pos);
-                assert!(chart.undo());
-                assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
-                assert!(!chart.can_undo());
-                assert!(chart.redo());
-                let json = chart.save_drawings().unwrap().to_json().unwrap();
-                chart.load_drawings(&json).unwrap();
-                assert_eq!(
-                    serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
-                        .unwrap(),
-                    current
+            let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+            saved["levels"][3]["text"] = "Halfway".into();
+            saved["levels"][3]["width"] = 4.0.into();
+            if tool == Tool::FibonacciWedge {
+                saved["levels"][3]["line_style"] = "Dotted".into();
+            }
+            drawing.fib_config = Some(serde_json::from_value(saved.clone()).unwrap());
+            let mut peer = drawing.clone();
+            peer.id = 8;
+            let mut peer_config = saved.clone();
+            peer_config["levels"][3]["text"] = "Peer".into();
+            peer_config["levels"][3]["width"] = 6.0.into();
+            peer.fib_config = Some(serde_json::from_value(peer_config.clone()).unwrap());
+            chart
+                .drawings_mut()
+                .drawings
+                .extend([drawing.clone(), peer]);
+            chart.drawings_mut().select_drawings([7, 8]);
+            let mut dialog = DrawingPropertiesDialog::new();
+            dialog.config.height = 650.0;
+            let mut older = chart.drawings().drawings[0].clone();
+            older.fib_config = None;
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(1440.0, 900.0))
+                .with_accessibility_check(false)
+                .allow_missing_glyphs()
+                .build_ui_state(
+                    |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                        dialog.show_and_apply(ui.ctx(), chart);
+                    },
+                    (chart, dialog),
                 );
-                let template =
-                    crate::drawings::DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
-                let mut peer = Drawing::new(8, Tool::FibonacciRetracement);
-                template.apply_to(&mut peer).unwrap();
-                assert_eq!(peer.fib_config, chart.drawings().drawings[0].fib_config);
-            } else {
-                dialog.close();
-                frame(&mut dialog, &mut chart, &ctx, vec![]);
-                assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
+            // Merely inspecting an older drawing must not materialise its effective config.
+            if matches!(tool, Tool::FibonacciRetracement | Tool::FibonacciExtension) {
+                let current =
+                    std::mem::replace(&mut h.state_mut().0.drawings_mut().drawings[0], older);
+                for tab in [PropertiesTab::Style, PropertiesTab::Text] {
+                    let (chart, dialog) = h.state_mut();
+                    dialog.open_for_chart(chart, DrawingId(7));
+                    dialog.active_tab = tab;
+                    h.run();
+                    assert!(h.state().0.drawings().drawings[0].fib_config.is_none());
+                    h.get_by_role_and_label(Role::Button, "Ok").click();
+                    h.run();
+                    let chart = &mut h.state_mut().0;
+                    assert!(chart.drawings().drawings[0].fib_config.is_none());
+                    assert!(chart.undo());
+                    assert!(chart.drawings().drawings[0].fib_config.is_none());
+                    assert!(!chart.can_undo());
+                }
+                h.state_mut().0.drawings_mut().drawings[0] = current;
+            }
+            for confirm in [false, true] {
+                let (chart, dialog) = h.state_mut();
+                dialog.open_for_chart(chart, DrawingId(7));
+                if tool != Tool::FibonacciWedge {
+                    dialog.active_tab = PropertiesTab::Text;
+                }
+                h.run();
+                if tool != Tool::FibonacciWedge {
+                    h.get_by_role_and_label(Role::SpinButton, "Font size")
+                        .set_value_accesskit(20.0);
+                    h.run();
+                    for label in ["Label position", "Label height"] {
+                        h.get_by_role_and_label(Role::ComboBox, label);
+                    }
+                    if matches!(tool, Tool::FibonacciRetracement | Tool::FibonacciExtension) {
+                        h.get_by_role_and_label(Role::CheckBox, "Show level text");
+                        for label in ["Text position", "Text height"] {
+                            h.get_by_role_and_label(Role::ComboBox, label);
+                        }
+                    }
+                }
+                h.state_mut().1.active_tab = PropertiesTab::Style;
+                h.run();
+                h.get_all_by_role_and_label(Role::Button, "3 px")
+                    .last()
+                    .unwrap()
+                    .click();
+                h.run();
+                if tool != Tool::FibonacciChannel {
+                    h.get_by_role_and_label(Role::CheckBox, "Show construction line")
+                        .click();
+                    h.run();
+                }
+                if tool == Tool::FibonacciWedge {
+                    h.state_mut().1.active_tab = PropertiesTab::Inputs;
+                    h.run();
+                    h.get_by_role_and_label(Role::ComboBox, "Level 1 line style")
+                        .click();
+                    h.run();
+                    h.get_by_label("Dashed").click();
+                    h.run();
+                    h.get_by_role_and_label(Role::SpinButton, "Level 1 width")
+                        .set_value_accesskit(7.0);
+                    h.run();
+                }
+                let chart = &h.state().0;
+                assert!(!chart.can_undo());
+                let current =
+                    serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
+                        .unwrap();
+                assert_eq!(
+                    current["label_size"],
+                    if tool == Tool::FibonacciWedge {
+                        12.0
+                    } else {
+                        20.0
+                    }
+                );
+                assert_eq!(current["level_width"], 3.0);
+                assert_eq!(current["trend_visible"], tool == Tool::FibonacciChannel);
+                let mut expected_levels = saved["levels"].clone();
+                let mut peer_levels = peer_config["levels"].clone();
+                if tool == Tool::FibonacciWedge {
+                    for levels in [&mut expected_levels, &mut peer_levels] {
+                        levels[0]["line_style"] = "Dashed".into();
+                        levels[0]["width"] = 7.0.into();
+                    }
+                }
+                assert_eq!(current["levels"], expected_levels);
+                assert_eq!(
+                    serde_json::to_value(
+                        &chart.drawings().drawings[1]
+                            .fib_config
+                            .as_ref()
+                            .unwrap()
+                            .levels
+                    )
+                    .unwrap(),
+                    peer_levels
+                );
+                if confirm {
+                    h.get_by_role_and_label(Role::Button, "Ok").click();
+                    h.run();
+                    let chart = &mut h.state_mut().0;
+                    assert!(chart.undo());
+                    assert_eq!(chart.drawings().drawings[0].fib_config, drawing.fib_config);
+                    assert!(!chart.can_undo());
+                    assert!(chart.redo());
+                    let json = chart.save_drawings().unwrap().to_json().unwrap();
+                    chart.load_drawings(&json).unwrap();
+                    assert_eq!(
+                        serde_json::to_value(
+                            chart.drawings().drawings[0].fib_config.as_ref().unwrap()
+                        )
+                        .unwrap(),
+                        current
+                    );
+                    let template = crate::drawings::DrawingTemplate::from_drawing(
+                        &chart.drawings().drawings[0],
+                    );
+                    let mut peer = Drawing::new(8, tool);
+                    template.apply_to(&mut peer).unwrap();
+                    assert_eq!(peer.fib_config, chart.drawings().drawings[0].fib_config);
+                } else {
+                    h.state_mut().1.close();
+                    h.run();
+                    assert_eq!(
+                        h.state().0.drawings().drawings[0].fib_config,
+                        drawing.fib_config
+                    );
+                }
             }
         }
     }

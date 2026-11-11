@@ -599,22 +599,31 @@ impl IndicatorPane {
                     self.axis_rect.map_or_else(
                         || {
                             if left_axis {
-                                chart_rect.left()
+                                egui::emath::Rangef::new(rect.left(), chart_rect.left())
                             } else {
-                                rect.right()
+                                egui::emath::Rangef::new(chart_rect.right(), rect.right())
                             }
                         },
-                        |axis| axis.right(),
+                        |axis| axis.x_range(),
                     ),
                     None,
-                    Some(match self.price_formatter.as_deref() {
-                        Some(formatter) => mapping.price.transform().label(
-                            mapping.price.y_to_scale(pos.y),
-                            indicator.precision().unwrap_or(2),
-                            Some(formatter),
-                        ),
-                        None => indicator.format_value(mapping.price.y_to_price(pos.y)),
-                    }),
+                    Some(
+                        if self.price_formatter.is_some()
+                            || matches!(
+                                mapping.price.transform().mode,
+                                crate::scales::PriceScaleMode::Percentage
+                                    | crate::scales::PriceScaleMode::IndexedTo100
+                            )
+                        {
+                            mapping.price.label(
+                                mapping.price.y_to_scale(pos.y),
+                                indicator.precision().unwrap_or(2),
+                                self.price_formatter.as_deref(),
+                            )
+                        } else {
+                            indicator.format_value(mapping.price.y_to_price(pos.y))
+                        },
+                    ),
                 )
             });
             axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
@@ -726,7 +735,7 @@ impl IndicatorPane {
             }
         }
 
-        for price in crate::studies::plots::gradient_prices(indicator, visible_range.clone()) {
+        for price in crate::studies::plots::fill_prices(indicator, visible_range.clone()) {
             min_val = min_val.min(price);
             max_val = max_val.max(price);
         }

@@ -804,6 +804,7 @@ impl DemoApp {
         settings.interval = Some(self.state.timeframe);
         let toolbar = &self.drawing_toolbar.state;
         settings.drawing_favorites = toolbar.favorites.clone();
+        settings.cursor_favorites = toolbar.cursor_favorites.clone();
         settings.drawing_favorites_hidden = !toolbar.floating_visible;
         settings.drawing_favorites_pos = toolbar.floating_pos.map(|pos| (pos.x, pos.y));
         settings.magnet_hint_dismissed = toolbar.magnet_hint_dismissed;
@@ -841,6 +842,7 @@ impl DemoApp {
         }
         let toolbar = &mut self.drawing_toolbar.state;
         toolbar.favorites = settings.drawing_favorites;
+        toolbar.cursor_favorites = settings.cursor_favorites;
         toolbar.floating_visible = !settings.drawing_favorites_hidden;
         toolbar.floating_pos = settings
             .drawing_favorites_pos
