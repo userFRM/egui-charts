@@ -404,6 +404,22 @@ impl TextTab {
             });
             ui.end_row();
 
+            if settings.tool_type == DrawingToolType::Callout {
+                let label = ui.label(l10n::text(ui.ctx(), "Text wrap"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut settings.text_wrap, l10n::text(ui.ctx(), "Wrap text"))
+                        .labelled_by(label.id);
+                    ui.add_enabled(
+                        settings.text_wrap,
+                        egui::DragValue::new(&mut settings.text_wrap_width)
+                            .range(1.0..=crate::drawings::validation::MAX_TEXT_WRAP_WIDTH)
+                            .suffix(" px"),
+                    )
+                    .labelled_by(label.id);
+                });
+                ui.end_row();
+            }
+
             if !boxed {
                 return;
             }
