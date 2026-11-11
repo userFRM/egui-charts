@@ -390,10 +390,10 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
-    /// Width of every level line, in points.
+    /// Width of level lines without an assigned width, in points.
     #[serde(default = "fib_level_width")]
     pub level_width: f32,
-    /// Line pattern shared by every level.
+    /// Pattern of level lines without an assigned pattern.
     #[serde(default)]
     pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
@@ -423,12 +423,16 @@ pub struct FibonacciConfig {
     #[serde(default = "fib_font_size")]
     pub label_size: f32,
     /// Retracement, extension and channel labels sit outside the Left/Right endpoint or midway at Center.
+    /// Time projections place labels left of, on, or right of each vertical level.
     /// Absent follows `labels_on_left` for earlier drawings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_position: Option<LineTextHorizontalAlign>,
     /// Edge of a retracement, extension or channel label resting on its level; middle places it on the line.
     #[serde(default = "fib_vertical_align")]
     pub label_vertical: LineTextVerticalAlign,
+    /// Time projection labels at the top, middle or bottom of the pane; defaults to bottom.
+    #[serde(default = "fib_time_label_vertical")]
+    pub time_label_vertical: LineTextVerticalAlign,
     /// Whether custom retracement or extension text is visible, independently of prices and ratios.
     #[serde(default = "percent_levels")]
     pub show_text: bool,
@@ -442,6 +446,12 @@ pub struct FibonacciConfig {
     /// Show the construction line between anchors, using the drawing's line style.
     #[serde(default = "percent_levels")]
     pub trend_visible: bool,
+    /// Complete resistance arcs into circles, including their shaded bands.
+    #[serde(default)]
+    pub close_arcs: bool,
+    /// Grow a spiral counterclockwise in screen space instead of clockwise.
+    #[serde(default)]
+    pub spiral_counterclockwise: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
@@ -493,6 +503,10 @@ fn fib_vertical_align() -> LineTextVerticalAlign {
     LineTextVerticalAlign::Middle
 }
 
+fn fib_time_label_vertical() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Bottom
+}
+
 fn fib_level_width() -> f32 {
     2.0
 }
@@ -542,6 +556,7 @@ impl FibonacciConfig {
             label_size: fib_font_size(),
             label_position: None,
             label_vertical: fib_vertical_align(),
+            time_label_vertical: fib_time_label_vertical(),
             show_text: true,
             text_position: LineTextHorizontalAlign::Center,
             text_vertical: fib_vertical_align(),
@@ -555,6 +570,8 @@ impl FibonacciConfig {
             right_labels: true,
             top_labels: true,
             bottom_labels: true,
+            close_arcs: false,
+            spiral_counterclockwise: false,
         }
     }
 
@@ -584,6 +601,7 @@ impl FibonacciConfig {
             BLUE, CYAN, DEEP_PURPLE, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL,
         };
         let levels: Vec<(f32, [u8; 4], bool)> = match tool {
+            T::FibonacciSpiral => Vec::new(),
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
                 .map(|value| (value, if value == 0.0 { GREY } else { BLUE }, true))
                 .to_vec(),
@@ -673,7 +691,7 @@ impl FibonacciConfig {
         Self {
             time_levels: (tool == T::FibonacciSpeedFan).then(|| levels.clone()),
             levels,
-            show_background: tool != T::FibonacciTimeZones,
+            show_background: !matches!(tool, T::FibonacciTimeZones | T::FibonacciSpiral),
             background_opacity: 51,
             show_levels: (tool == T::FibonacciWedge).then_some(true),
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
@@ -730,6 +748,7 @@ impl FibonacciConfig {
             label_size,
             label_position,
             label_vertical,
+            time_label_vertical,
             show_text,
             text_position,
             text_vertical,
@@ -741,7 +760,9 @@ impl FibonacciConfig {
             left_labels,
             right_labels,
             top_labels,
-            bottom_labels
+            bottom_labels,
+            close_arcs,
+            spiral_counterclockwise
         );
         // A fan still sharing its price levels keeps its time levels apart from this edit.
         if self.time_levels.is_none() && edited.time_levels.is_some() && original != edited {
@@ -1037,6 +1058,58 @@ impl PositionReadout {
             persistent: true,
             ..Self::default()
         }
+    }
+}
+
+/// Lines, labels, zone fill and border of long and short position drawings. The target and
+/// stop colours, whose opacity is that of their zones, are
+/// [`Drawing::position_target_color`](crate::drawings::Drawing::position_target_color) and
+/// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionStyle {
+    /// Colour of the entry line, its price tag and the trade's path; `None` draws the lines in a
+    /// translucent shade of the theme's secondary text colour and the tag in that colour.
+    pub line_color: Option<[u8; 4]>,
+    /// Width of the entry line, the trade's path and the zone border, in points.
+    pub line_width: f32,
+    /// Colour of the label text; `None` is white on a plate and the level or result colour
+    /// without one, or the theme's secondary text on a label without a result.
+    pub text_color: Option<[u8; 4]>,
+    /// Size of the label text, in points.
+    pub font_size: f32,
+    /// Whether the labels sit on filled plates.
+    pub label_background: bool,
+    /// Plate colour of every label; `None` takes the target, stop or result colour.
+    pub label_color: Option<[u8; 4]>,
+    /// Whether the target and stop zones are filled.
+    pub fill: bool,
+    /// Whether the target and stop zones are outlined in [`Self::border_color`].
+    pub border: bool,
+    /// Colour of the zone outline.
+    pub border_color: [u8; 4],
+}
+
+impl Default for PositionStyle {
+    fn default() -> Self {
+        Self {
+            line_color: None,
+            line_width: 1.0,
+            text_color: None,
+            font_size: 12.0,
+            label_background: true,
+            label_color: None,
+            fill: true,
+            border: false,
+            border_color: [102, 123, 139, 255],
+        }
+    }
+}
+
+impl PositionStyle {
+    /// Whether the line width lies in 1 to 100 points and the font size in 1 to 256 points.
+    pub fn is_valid(&self) -> bool {
+        (1.0..=100.0).contains(&self.line_width) && (1.0..=256.0).contains(&self.font_size)
     }
 }
 

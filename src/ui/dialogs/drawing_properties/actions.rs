@@ -295,6 +295,8 @@ impl DrawingProps {
                     background,
                     border,
                     border_color,
+                    text_wrap,
+                    text_wrap_width,
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
@@ -309,6 +311,7 @@ impl DrawingProps {
                     position_readout.quantity_decimals,
                     position_target_color,
                     position_stop_color,
+                    position_style,
                     volume_profile,
                     regression_trend,
                     vwap,
@@ -336,10 +339,15 @@ impl DrawingProps {
                     if matches!(
                         drawing.tool_type,
                         crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciCircles
+                            | crate::drawings::DrawingToolType::FibonacciSpeedResistanceArcs
+                            | crate::drawings::DrawingToolType::FibonacciSpiral
                             | crate::drawings::DrawingToolType::FibonacciExtension
                             | crate::drawings::DrawingToolType::FibonacciChannel
                             | crate::drawings::DrawingToolType::FibonacciWedge
                             | crate::drawings::DrawingToolType::FibonacciSpeedFan
+                            | crate::drawings::DrawingToolType::FibonacciTimeZones
+                            | crate::drawings::DrawingToolType::TrendBasedFibTime
                     ) {
                         let original = target.fibonacci_config();
                         let edited = settings.fibonacci_config();
@@ -456,6 +464,9 @@ impl DrawingProps {
             }
             if !settings.position_readout.is_valid() {
                 return Err("Invalid position readout settings");
+            }
+            if !settings.position_style.is_valid() {
+                return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(
@@ -679,6 +690,7 @@ mod tests {
             let sizing = settings.position_sizing;
             settings.position_target_color = Some([40, 100, 220, 255]);
             settings.position_stop_color = Some([220, 140, 40, 255]);
+            settings.position_style.font_size = 16.0;
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -715,6 +727,8 @@ mod tests {
             settings.background = false;
             settings.border = false;
             settings.border_color = Some([4, 5, 6, 255]);
+            settings.text_wrap = true;
+            settings.text_wrap_width = 120.0;
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
@@ -741,6 +755,7 @@ mod tests {
             assert_eq!(saved.position_sizing, sizing);
             assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
+            assert_eq!(saved.position_style.font_size, 16.0);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.line_measurements, measurements);
@@ -754,6 +769,7 @@ mod tests {
             assert!(saved.italic && !saved.background && !saved.border);
             assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
+            assert_eq!((saved.text_wrap, saved.text_wrap_width), (true, 120.0));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
@@ -761,6 +777,7 @@ mod tests {
             assert!(!peer.italic && peer.background && peer.border);
             assert!(peer.price_axis_label && peer.time_axis_label);
             assert_eq!((peer.text_color, peer.border_color), (None, None));
+            assert_eq!((peer.text_wrap, peer.text_wrap_width), (false, 200.0));
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(

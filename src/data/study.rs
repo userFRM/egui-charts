@@ -17,6 +17,27 @@ pub struct StudyDataRequest {
     pub metric: Option<String>,
 }
 
+impl StudyDataRequest {
+    /// Dated exchange rates from the currency `from` into `to`, as the metric `fx:{from}/{to}`
+    /// of the chart symbol, whose rates do not depend on the symbol. Each point is the number of
+    /// `to` units one `from` unit buys from its time until the next point; a missing or
+    /// non-positive rate leaves the amounts it converts unavailable.
+    ///
+    /// ```
+    /// use egui_charts::data::StudyDataRequest;
+    ///
+    /// let request = StudyDataRequest::exchange_rate("USD", "EUR");
+    /// assert_eq!(request.metric.as_deref(), Some("fx:USD/EUR"));
+    /// ```
+    pub fn exchange_rate(from: &str, to: &str) -> Self {
+        Self {
+            symbol: String::new(),
+            timeframe: None,
+            metric: Some(format!("fx:{from}/{to}")),
+        }
+    }
+}
+
 /// A requested series available during calculation, sorted by time with unique bars.
 /// Metric points use their value for OHLC and zero volume, without interval aggregation.
 /// An unavailable history has no bars; it is never substituted with the chart's prices.

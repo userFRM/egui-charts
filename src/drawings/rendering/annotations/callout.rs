@@ -10,7 +10,8 @@ use egui::{
 
 impl Drawing {
     /// Renders a callout: a text box at the second anchor whose pointer reaches the first, filled
-    /// and outlined as one shape. An anchor at the box needs no pointer.
+    /// and outlined as one shape. An anchor at the box needs no pointer. Wrapped text breaks at
+    /// word boundaries, and inside a word wider than the wrap width.
     pub(crate) fn render_callout(&self, painter: &egui::Painter) {
         if self.points.len() < 2 {
             if self.points.len() == 1 {
@@ -34,7 +35,12 @@ impl Drawing {
 
         // Callout box
         let text = self.display_text(painter.ctx());
-        let galley = self.annotation_galley(painter, text, colors.text);
+        let mut galley = self.annotation_galley(painter, text, colors.text);
+        if self.text_wrap {
+            let mut job = (*galley.job).clone();
+            job.wrap.max_width = self.text_wrap_width;
+            galley = painter.layout_job(job);
+        }
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.callout_padding_y,

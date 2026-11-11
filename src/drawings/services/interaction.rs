@@ -229,6 +229,26 @@ impl DrawingInteraction {
                         }
                     }
                 }
+                DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime => {
+                    let config = drawing.fibonacci_config();
+                    let on_level = config.visible_levels().any(|level| {
+                        drawing
+                            .fibonacci_time_level_x(level.value)
+                            .is_some_and(|x| {
+                                (point.x - x).abs()
+                                    <= hit_distance
+                                        .max(level.width.unwrap_or(config.level_width) / 2.0)
+                            })
+                    });
+                    let on_trend = config.trend_visible
+                        && drawing.points.windows(2).any(|p| {
+                            point_to_line_distance(point, p[0], p[1])
+                                <= hit_distance.max(drawing.stroke_width / 2.0)
+                        });
+                    if on_level || on_trend {
+                        return Some(drawing.id);
+                    }
+                }
                 DrawingToolType::FibonacciChannel => {
                     // Extended levels are cut at a box around the anchors and the point, as below.
                     let reach = Rect::from_points(&drawing.points)
