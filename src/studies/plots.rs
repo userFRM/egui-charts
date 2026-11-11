@@ -140,11 +140,22 @@ pub(crate) fn drawing_prices(
             };
             let first = extent.iter().map(|p| p.bar_idx).reduce(f32::min)?;
             let last = extent.iter().map(|p| p.bar_idx).reduce(f32::max)?;
-            let left = drawing.extend_left
+            let (mut extend_left, mut extend_right) = (drawing.extend_left, drawing.extend_right);
+            if drawing.extends_past_anchors()
+                && let [a, b, ..] = drawing.chart_points.as_slice()
+            {
+                // Reversed anchors exchange the sides reached; vertical lines stay at one bar.
+                if a.bar_idx > b.bar_idx {
+                    std::mem::swap(&mut extend_left, &mut extend_right);
+                } else if a.bar_idx == b.bar_idx {
+                    (extend_left, extend_right) = (false, false);
+                }
+            }
+            let left = extend_left
                 || levels
                     .as_ref()
                     .is_some_and(|(c, _)| c.extend_left || c.show_background);
-            let right = drawing.extend_right
+            let right = extend_right
                 || drawing.tool_type == crate::drawings::DrawingToolType::Pitchfork
                 || levels
                     .as_ref()
