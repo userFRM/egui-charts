@@ -723,7 +723,7 @@ impl Drawing {
         };
     }
 
-    /// How many times its set size text drawn at screen `x` is: the bar spacing over
+    /// The factor that scales text drawn at screen `x` from its set size: the bar spacing over
     /// `text_zoom_spacing` for text that follows the zoom, and 1 otherwise.
     pub(crate) fn text_zoom(&self, bar_to_x: impl Fn(f32) -> f32, x: f32) -> f32 {
         let (true, Some(reference), Some(anchor)) = (
@@ -1150,8 +1150,8 @@ mod tests {
 
     /// Text that follows the zoom keeps the bar spacing it is first shown at and is drawn at the
     /// ratio of the current spacing to it. The widget maps bars in double precision and hands
-    /// out single-precision coordinates, which four million bars from the view are rounded to a
-    /// quarter of a point or more, so the spacing is read near the text.
+    /// out single-precision coordinates, which are rounded to a quarter of a point or more four
+    /// million bars from the view, so the spacing is read near the text.
     #[test]
     fn text_scales_by_the_bar_spacing_it_was_sized_at() {
         let x = |spacing: f64| move |bar: f32| ((f64::from(bar) - 4e6) * spacing) as f32;
