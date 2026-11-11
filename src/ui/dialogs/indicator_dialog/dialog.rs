@@ -752,10 +752,13 @@ impl IndicatorDialog {
                 let ring = theme.spacing.xs;
                 ui.add_space(ring);
                 for (i, indicator) in filtered.iter().enumerate() {
-                    if let Some(a) = self.draw_indicator_item(ui, config, theme, indicator, i == 0)
-                    {
-                        action = a;
-                    }
+                    ui.push_id(&indicator.id, |ui| {
+                        if let Some(a) =
+                            self.draw_indicator_item(ui, config, theme, indicator, i == 0)
+                        {
+                            action = a;
+                        }
+                    });
                 }
                 ui.add_space(ring);
             });
@@ -793,7 +796,9 @@ impl IndicatorDialog {
             ui.available_width(),
             32.0_f32.max(theme.text.title + 2.0 * theme.spacing.sm),
         );
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        // Automatic IDs include row position even inside a study's scope.
+        let (_, rect) = ui.allocate_space(desired_size);
+        let response = ui.interact(rect, ui.make_persistent_id("row"), Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
         let translated_label = l10n::text(ui.ctx(), &indicator.name);
@@ -815,6 +820,7 @@ impl IndicatorDialog {
             ui,
             config,
             rect,
+            &translated_label,
             is_favorite,
             response.hovered() || response.has_focus(),
         );
@@ -839,17 +845,18 @@ impl IndicatorDialog {
         ui: &mut Ui,
         config: &IndicatorDialogConfig,
         rect: Rect,
+        name: &str,
         is_favorite: bool,
         row_active: bool,
     ) -> Response {
         let star_rect = Self::star_rect(ui, rect);
-        let star_res = ui.allocate_rect(star_rect, Sense::click());
+        let star_res = ui.interact(star_rect, ui.make_persistent_id("favorite"), Sense::click());
         let tooltip = if is_favorite {
-            "Remove from favorites"
+            "Remove {name} from favorites"
         } else {
-            "Add to favorites"
+            "Add {name} to favorites"
         };
-        let translated_label = l10n::text(ui.ctx(), tooltip);
+        let translated_label = l10n::format_text(ui.ctx(), tooltip, &[("name", name)]);
         star_res.widget_info(|| {
             WidgetInfo::selected(
                 Role::Button,
@@ -872,7 +879,7 @@ impl IndicatorDialog {
                 .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
         }
         draw_focus_ring(ui, &star_res, 0.0);
-        star_res.on_hover_text(l10n::text(ui.ctx(), tooltip))
+        star_res.on_hover_text(translated_label)
     }
 
     /// The name centred on the row and cut off before `right`.
@@ -1153,6 +1160,172 @@ mod tests {
         assert!(dialog.add("SMA").is_none());
         dialog.set_full(false);
         assert!(dialog.add("SMA").is_some());
+    }
+
+    #[test]
+    fn space_twice_on_a_focused_star_leaves_favourites_unchanged() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (category, query) in [
+            (IndicatorCategory::BuiltIns, ""),
+            (IndicatorCategory::BuiltIns, "a"),
+            (IndicatorCategory::Favorites, ""),
+        ] {
+            let mut dialog = IndicatorDialog::new();
+            dialog.open();
+            dialog.sel_category = category;
+            *dialog.search.query_mut() = query.into();
+            // Favourites keeps a fourth study to catch focus moving onto the next row.
+            let studies: Vec<_> = if category == IndicatorCategory::Favorites {
+                dialog.indicators.iter().take(4).cloned().collect()
+            } else {
+                dialog
+                    .indicators
+                    .iter()
+                    .filter(|info| dialog.matches(&egui::Context::default(), info))
+                    .take(3)
+                    .cloned()
+                    .collect()
+            };
+            if category == IndicatorCategory::Favorites {
+                dialog
+                    .favorites
+                    .extend(studies.iter().map(|info| info.id.clone()));
+            }
+            let mut expected = dialog.favorites.clone();
+            if category == IndicatorCategory::Favorites {
+                expected.remove(&studies[2].id);
+            }
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &Theme::dark());
+                })
+                .build_ui_state(
+                    |ui, dialog: &mut IndicatorDialog| {
+                        dialog.show(ui.ctx(), &Theme::dark());
+                    },
+                    dialog,
+                );
+            harness.run();
+            harness.key_press(Key::ArrowDown);
+            harness.run();
+            assert!(
+                harness
+                    .get_by_role_and_label(Role::ListBoxOption, &studies[0].name)
+                    .is_focused()
+            );
+            harness.key_press(Key::Tab);
+            harness.run();
+            let first = harness
+                .get_by_role_and_label(Role::ListBoxOption, &studies[0].name)
+                .rect();
+            assert!(
+                harness
+                    .query_all_by_role(Role::Button)
+                    .any(|star| first.contains_rect(star.rect()) && star.is_focused())
+            );
+            let row = harness
+                .get_by_role_and_label(Role::ListBoxOption, &studies[2].name)
+                .rect();
+            harness
+                .query_all_by_role(Role::Button)
+                .find(|star| row.contains_rect(star.rect()))
+                .unwrap()
+                .focus();
+            harness.run();
+            for _ in 0..2 {
+                harness.key_press(Key::Space);
+                harness.run();
+            }
+            assert_eq!(
+                harness.state().favorites,
+                expected,
+                "{category:?} / {query:?}"
+            );
+            if category == IndicatorCategory::BuiltIns {
+                let row = harness
+                    .get_by_role_and_label(Role::ListBoxOption, &studies[2].name)
+                    .rect();
+                assert!(
+                    harness
+                        .query_all_by_role(Role::Button)
+                        .any(|star| row.contains_rect(star.rect()) && star.is_focused())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chooser_stars_name_their_study() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for translated in [false, true] {
+            let mut dialog = IndicatorDialog::new();
+            dialog.open();
+            let studies: Vec<_> = dialog
+                .indicators
+                .iter()
+                .filter(|info| dialog.matches(&egui::Context::default(), info))
+                .cloned()
+                .collect();
+            dialog.favorites.insert(studies[2].id.clone());
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    if translated {
+                        l10n::set_translator(ctx, |key| {
+                            Some(match key {
+                                "Add {name} to favorites" => "Ajouter {name} aux favoris".into(),
+                                "Remove {name} from favorites" => {
+                                    "Retirer {name} des favoris".into()
+                                }
+                                _ => format!("Local {key}"),
+                            })
+                        });
+                    }
+                })
+                .build_ui(|ui| {
+                    dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            let mut labels = HashSet::new();
+            for study in &studies {
+                let name = if translated {
+                    format!("Local {}", study.name)
+                } else {
+                    study.name.clone()
+                };
+                let row = harness
+                    .get_by_role_and_label(Role::ListBoxOption, &name)
+                    .rect();
+                let star = harness
+                    .query_all_by_role(Role::Button)
+                    .find(|star| row.contains_rect(star.rect()))
+                    .unwrap();
+                let label = star.accesskit_node().label().unwrap();
+                assert_eq!(
+                    star.accesskit_node().toggled(),
+                    Some(if study.id == studies[2].id {
+                        egui::accesskit::Toggled::True
+                    } else {
+                        egui::accesskit::Toggled::False
+                    })
+                );
+                assert!(labels.insert(label.clone()), "duplicate star name: {label}");
+                let favorite = study.id == studies[2].id;
+                let expected = match (translated, favorite) {
+                    (false, false) => format!("Add {name} to favorites"),
+                    (false, true) => format!("Remove {name} from favorites"),
+                    (true, false) => format!("Ajouter {name} aux favoris"),
+                    (true, true) => format!("Retirer {name} des favoris"),
+                };
+                assert_eq!(label, expected);
+            }
+        }
     }
 
     #[test]

@@ -38,7 +38,7 @@ impl Chart {
     /// Captures edited indices before the bars or the rendered element sequence change.
     pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();
-        let timeframe = self.timeframe();
+        let timeframe = self.calendar_timeframe();
         let timezone = self.calendar_timezone();
         let mut anchor = |point: &mut ChartPoint| {
             if point
@@ -61,7 +61,7 @@ impl Chart {
     /// Projects retained timestamps against the current rendered bars, including whitespace.
     pub(super) fn project_drawing_points(&mut self) {
         let bars = self.state.shown();
-        let timeframe = self.timeframe();
+        let timeframe = self.calendar_timeframe();
         let timezone = self.calendar_timezone();
         let state = &self.state;
         let chart_type = self.chart_type;
@@ -101,7 +101,8 @@ impl Chart {
     /// Between bars time is interpolated; outside them the known timeframe duration or most
     /// common positive spacing among the outermost 16 bars is extended (shorter spacing breaks
     /// ties, one second if none), retaining repeated-edge ranks. Known month and year intervals
-    /// step by calendar months in the display time zone. Empty charts export retained
+    /// step by calendar months in the display time zone. Numeric and custom axes use key
+    /// spacing regardless of the chart timeframe. Empty charts export retained
     /// anchors; an index with no loaded mapping returns an error rather than clamping or
     /// inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
@@ -246,7 +247,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
-    fn whitespace_anchors_keep_their_slots_and_axis_dates() {
+    fn custom_key_drawing_anchors_ignore_the_timeframe() {
         use crate::model::Timeframe;
         use chrono::Duration;
 
@@ -266,7 +267,7 @@ mod tests {
         .map(|(day, hour, minute)| Utc.with_ymd_and_hms(2024, 3, day, hour, minute, 0).unwrap())
         .to_vec();
         let bar = |time| Bar::new(time, 10.0, 12.0, 9.0, 11.0, 1.0);
-        for (times, timeframe, timezone, expected_left, expected_right, next) in [
+        for ((times, timeframe, timezone, expected_left, expected_right, next), custom) in [
             // Thursday, Friday, Monday: the weekend cannot turn one slot into three days.
             (
                 vec![date(2024, 2, 8), date(2024, 2, 9), date(2024, 2, 12)],
@@ -407,10 +408,34 @@ mod tests {
                 date(2024, 3, 4) + Duration::milliseconds(750),
                 date(2024, 3, 4) + Duration::milliseconds(750),
             ),
-        ] {
+        ]
+        .into_iter()
+        .map(|row| (row, false))
+        // Custom ranks remain one second apart under any displayed calendar interval.
+        .chain(
+            [None, Some(Timeframe::Day1), Some(Timeframe::Month1)].map(|timeframe| {
+                let key = |rank| Utc.timestamp_opt(rank, 0).unwrap();
+                (
+                    (
+                        (0..3).map(key).collect(),
+                        timeframe,
+                        "UTC",
+                        key(-1),
+                        key(4),
+                        key(3),
+                    ),
+                    true,
+                )
+            }),
+        ) {
             let last = times.len() - 1;
-            let right_index = (last + 1) as f32;
+            let right_index = (last + if custom { 2 } else { 1 }) as f32;
             let mut chart = Chart::new(BarData::from_bars(times.into_iter().map(bar).collect()));
+            if custom {
+                chart.set_horizontal_scale(Some(std::sync::Arc::new(
+                    crate::scales::CustomHorizontalScale::new(0..6_u8, |key| key.to_string()),
+                )));
+            }
             if let Some(timeframe) = timeframe {
                 chart.set_timeframe(timeframe);
             }
@@ -438,7 +463,7 @@ mod tests {
             for (index, left, right) in [
                 (-0.5, expected_left, chart.state.shown()[0].time),
                 (
-                    last as f64 + 0.5,
+                    (last as f64 + f64::from(right_index)) / 2.0,
                     chart.state.shown()[last].time,
                     expected_right,
                 ),
@@ -460,7 +485,7 @@ mod tests {
                 300.0,
                 false,
             );
-            for start in [0, last] {
+            for start in [0, last].into_iter().filter(|_| !custom) {
                 let coords = crate::chart::rendering::ChartMapping::new(
                     rect, 100.0, start, last, 5.0, price,
                 );
@@ -485,9 +510,19 @@ mod tests {
                     );
                 }
             }
+            chart.update(SeriesId::MAIN, bar(next));
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index,
+                "custom={custom}, {timeframe:?}, before save/load"
+            );
+            assert_eq!(
+                chart.drawing_points(7).unwrap()[1].0,
+                expected_right,
+                "custom={custom}, {timeframe:?}"
+            );
             let saved = chart.save_drawings().unwrap().to_json().unwrap();
             chart.load_drawings(&saved).unwrap();
-            chart.update(SeriesId::MAIN, bar(next));
             assert_eq!(
                 chart.drawings().drawings[0].chart_points[1].bar_idx,
                 right_index
@@ -690,6 +725,124 @@ mod tests {
             let error = target.paste_drawings(text).unwrap_err();
             assert!(refused(&error), "{symbol}: {error:?}");
             assert!(target.drawings().drawings.is_empty(), "{error}");
+        }
+    }
+
+    /// A drawing stored in a study pane opens in that pane after a later release changes the
+    /// study's inputs. Inputs renamed since, such as the RSI average's `ma_type` and `ma_length`,
+    /// are read as a study template reads them; then an input the record does not list must hold
+    /// the default its study declares. A different value puts the drawing in the price pane, and
+    /// a host study under a built-in's name, which never had the renamed inputs, is matched as
+    /// stored. Loading and pasting agree.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn stored_pane_survives_a_new_study_input() {
+        use crate::studies::{CustomIndicator, IndicatorValue, InputValue, RSI};
+        let bars = [0, 60, 180]
+            .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
+            .to_vec();
+        let chart = |host: bool| {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_symbol("A");
+            let rsi = if host {
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("RSI", |bars: &[Bar]| {
+                        vec![IndicatorValue::Single(50.0); bars.len()]
+                    })
+                    .with_overlay(false),
+                ))
+            } else {
+                chart.add_indicator(Box::new(RSI::new(14)))
+            };
+            (chart, rsi)
+        };
+        let copied = |host: bool| {
+            let (mut source, rsi) = chart(host);
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(1.0, 50.0)];
+            line.completed = true;
+            line.pane = Some(rsi.0);
+            let id = source.drawings_mut().add_drawing(line).unwrap();
+            source.drawings_mut().select(id);
+            source.copy_selected_drawings().unwrap().unwrap()
+        };
+        // A record written before the study had input `id`.
+        let without = |id: &'static str| {
+            move |inputs: &mut Vec<serde_json::Value>| {
+                let before = inputs.len();
+                inputs.retain(|input| input[0] != id);
+                assert_eq!(inputs.len() + 1, before, "{id}");
+            }
+        };
+        // The RSI average as written before the shared smoothing inputs: `choice` of None, SMA
+        // and EMA under `ma_type`, its length under `ma_length`, and no band deviation.
+        let earlier = |choice: usize| {
+            move |inputs: &mut Vec<serde_json::Value>| {
+                without("smoothing_deviation")(inputs);
+                let average = serde_json::to_value(InputValue::Choice(choice)).unwrap();
+                for (from, to) in [("smoothing", "ma_type"), ("smoothing_length", "ma_length")] {
+                    let input = inputs.iter_mut().find(|input| input[0] == from).unwrap();
+                    input[0] = to.into();
+                    if to == "ma_type" {
+                        input[1] = average.clone();
+                    }
+                }
+            }
+        };
+        let other_period = |inputs: &mut Vec<serde_json::Value>| {
+            let period = inputs
+                .iter_mut()
+                .find(|input| input[0] == "period")
+                .unwrap();
+            period[1] = serde_json::to_value(InputValue::Length(21)).unwrap();
+        };
+        let unchanged = |_: &mut Vec<serde_json::Value>| {};
+        let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
+        let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
+        let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
+        let smoothing = |choice| Some(("smoothing", InputValue::Choice(choice)));
+        // (host study, stored inputs edit, chart's input, study pane expected)
+        type Case<'a> = (
+            bool,
+            &'a dyn Fn(&mut Vec<serde_json::Value>),
+            Option<(&'a str, InputValue)>,
+            bool,
+        );
+        let cases: [Case<'_>; 8] = [
+            // From before an input existed: the last one, which the chart adds after the study's
+            // own, or one of the study's own, which comes before the chart's.
+            (false, &last, None, true),
+            (false, &inner, None, true),
+            (false, &last, wait(false), false),
+            (false, &other_period, None, false),
+            // From before the RSI average took the shared smoothing inputs, where EMA was 2.
+            (false, &sma, smoothing(1), true),
+            (false, &ema, smoothing(3), true),
+            // From before the RSI had an average: it drew none, whatever the default is now.
+            (false, &no_average, smoothing(1), false),
+            // A host study named like the built-in, without the inputs its upgrade adds.
+            (true, &unchanged, None, true),
+        ];
+        for (at, (host, edit, input, shown)) in cases.into_iter().enumerate() {
+            let text = copied(host);
+            let (prefix, json) = text.split_once('\n').unwrap();
+            let mut json: serde_json::Value = serde_json::from_str(json).unwrap();
+            let inputs = &mut json["drawings"][0]["pane"]["studies"][0][1];
+            edit(inputs.as_array_mut().unwrap());
+            for paste in [false, true] {
+                let (mut target, rsi) = chart(host);
+                if let Some((id, value)) = &input {
+                    let study = target.indicator_mut(rsi).unwrap();
+                    study.set_input(id, value.clone()).unwrap();
+                }
+                if paste {
+                    target.paste_drawings(&format!("{prefix}\n{json}")).unwrap();
+                } else {
+                    target.load_drawings(&json.to_string()).unwrap();
+                }
+                let pane = target.drawings().drawings[0].pane;
+                assert_eq!(pane, shown.then_some(rsi.0), "case {at}, paste {paste}");
+            }
         }
     }
 }
