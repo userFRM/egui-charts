@@ -251,6 +251,7 @@ impl Chart {
                 self.server_time_offset = None;
                 self.replace_main_data(Vec::new());
                 link.resumed_from = None;
+                link.pushed_from = None;
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
@@ -274,6 +275,12 @@ impl Chart {
                         *origin != Origin::Live || link.clock.bar_open(bar.time) >= from
                     });
                 }
+                link.pushed_from = link.pushed_from.or_else(|| {
+                    (incoming.iter())
+                        .filter(|(_, origin)| *origin == Origin::Live)
+                        .map(|(bar, _)| link.clock.bar_open(bar.time))
+                        .min()
+                });
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
                 if merged.first_changed.is_some() {
@@ -502,6 +509,7 @@ impl Chart {
         link.study_inputs.clear();
         link.footprint_input = None;
         link.time = None;
+        link.pushed_from = None;
         link.order_book = None;
         link.order_queue = None;
         if !resume {
