@@ -228,11 +228,15 @@ impl StoredDrawing {
         }
         if d.fib_config.as_ref().is_some_and(|c| {
             !(1.0..=256.0).contains(&c.label_size)
-                || c.levels.iter().any(|level| {
-                    level.width.is_some_and(|width| {
-                        !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
+                || !(c.grid_width > 0.0 && c.grid_width <= super::validation::MAX_STROKE_WIDTH)
+                || c.levels
+                    .iter()
+                    .chain(c.time_levels.iter().flatten())
+                    .any(|level| {
+                        level.width.is_some_and(|width| {
+                            !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
+                        })
                     })
-                })
         }) {
             return Some("fib_config".into());
         }
@@ -241,7 +245,8 @@ impl StoredDrawing {
                 "fib_config.levels",
                 d.fib_config
                     .iter()
-                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .flat_map(|c| c.levels.iter().chain(c.time_levels.iter().flatten()))
+                    .map(|l| l.value)
                     .collect::<Vec<_>>(),
             ),
             (

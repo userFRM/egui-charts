@@ -641,66 +641,92 @@ impl Drawing {
         self.render_fib_trend(painter);
     }
 
-    /// Price and time rays meet the edges of the anchors' box at complementary ratios.
+    /// Price and time rays meet the edges of the anchors' box at complementary ratios; the grid
+    /// and the ratio labels on each side of the box follow their own settings.
     pub(crate) fn render_fibonacci_speed_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
-        let &[start, end, ..] = self.points.as_slice() else {
+        let config = self.fibonacci_config();
+        let Some((start, end)) = self.speed_fan_corners(&config) else {
             return;
         };
-        let config = self.fibonacci_config();
-        let mut levels: Vec<_> = config.visible_levels().collect();
-        levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+        let families = [
+            (visible_sorted(&config.levels), false),
+            (visible_sorted(config.fan_time_levels()), true),
+        ];
         if config.show_background || self.fill_color.is_some() {
-            for pair in levels.windows(2) {
-                let a = speed_fan_line_end(start, end, pair[0].value, chart_rect);
-                let b = speed_fan_line_end(start, end, pair[1].value, chart_rect);
-                if a.is_finite() && b.is_finite() {
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![start, a, b],
-                        self.fill_color32()
-                            .unwrap_or_else(|| band_color(pair[1], config.background_opacity)),
-                        Stroke::NONE,
-                    ));
+            for (levels, time) in &families {
+                for pair in levels.windows(2) {
+                    let a = speed_fan_ray_end(start, end, pair[0].value, *time, chart_rect);
+                    let b = speed_fan_ray_end(start, end, pair[1].value, *time, chart_rect);
+                    if a.is_finite() && b.is_finite() {
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![start, a, b],
+                            self.fill_color32()
+                                .unwrap_or_else(|| band_color(pair[1], config.background_opacity)),
+                            Stroke::NONE,
+                        ));
+                    }
                 }
             }
         }
-        let d = end - start;
-        for level in levels {
-            paint_level_line(
-                painter,
-                [
-                    start,
-                    speed_fan_line_end(start, end, level.value, chart_rect),
-                ],
-                &config,
-                level,
+        if config.grid_visible {
+            let stroke = Stroke::new(
+                config
+                    .grid_width
+                    .clamp(0.1, crate::drawings::validation::MAX_STROKE_WIDTH),
+                Color32::from_rgba_unmultiplied(
+                    config.grid_color[0],
+                    config.grid_color[1],
+                    config.grid_color[2],
+                    config.grid_color[3],
+                ),
             );
-            for line in speed_fan_level_lines(start, end, level.value, chart_rect) {
-                paint_level_line(painter, line, &config, level);
+            for [a, b] in speed_fan_grid(start, end, &config) {
+                if let Some((dash, gap)) = config.grid_style.dash_pattern() {
+                    super::utils::draw_dashed_line(painter, a, b, stroke, dash, gap);
+                } else {
+                    painter.line_segment([a, b], stroke);
+                }
             }
-            let price_at = start + egui::vec2(d.x, d.y * (1.0 - level.value));
-            let time_at = start + egui::vec2(d.x * (1.0 - level.value), d.y);
-            paint_ratio_label(
-                painter,
-                &config,
-                level,
-                price_at + egui::vec2(if d.x >= 0.0 { 4.0 } else { -4.0 }, 0.0),
-                if d.x >= 0.0 {
-                    egui::Align2::LEFT_CENTER
+        }
+        let (min, max) = (start.min(end), start.max(end));
+        for (levels, time) in &families {
+            for &level in levels {
+                let ray = speed_fan_ray_end(start, end, level.value, *time, chart_rect);
+                paint_level_line(painter, [start, ray], &config, level);
+                let at = start + (end - start) * (1.0 - level.value);
+                let labels = if *time {
+                    [
+                        (
+                            config.top_labels,
+                            Pos2::new(at.x, min.y - 4.0),
+                            egui::Align2::CENTER_BOTTOM,
+                        ),
+                        (
+                            config.bottom_labels,
+                            Pos2::new(at.x, max.y + 4.0),
+                            egui::Align2::CENTER_TOP,
+                        ),
+                    ]
                 } else {
-                    egui::Align2::RIGHT_CENTER
-                },
-            );
-            paint_ratio_label(
-                painter,
-                &config,
-                level,
-                time_at + egui::vec2(0.0, if d.y >= 0.0 { 4.0 } else { -4.0 }),
-                if d.y >= 0.0 {
-                    egui::Align2::CENTER_TOP
-                } else {
-                    egui::Align2::CENTER_BOTTOM
-                },
-            );
+                    [
+                        (
+                            config.left_labels,
+                            Pos2::new(min.x - 4.0, at.y),
+                            egui::Align2::RIGHT_CENTER,
+                        ),
+                        (
+                            config.right_labels,
+                            Pos2::new(max.x + 4.0, at.y),
+                            egui::Align2::LEFT_CENTER,
+                        ),
+                    ]
+                };
+                for (shown, at, align) in labels {
+                    if shown {
+                        paint_ratio_label(painter, &config, level, at, align);
+                    }
+                }
+            }
         }
     }
 
@@ -954,22 +980,29 @@ fn fib_channel_level_line(start: Pos2, end: Pos2, width_point: Pos2, level: f32)
     [start + offset, end + offset]
 }
 
-fn speed_fan_level_lines(start: Pos2, end: Pos2, ratio: f32, rect: Rect) -> Vec<[Pos2; 2]> {
-    let d = end - start;
-    let at = start + d * (1.0 - ratio);
-    let mut lines = vec![
-        [Pos2::new(at.x, start.y), Pos2::new(at.x, end.y)],
-        [Pos2::new(start.x, at.y), Pos2::new(end.x, at.y)],
-    ];
-    if ratio != 0.0 {
-        let through = if ratio == 1.0 && d.y == 0.0 {
-            start + egui::vec2(0.0, 1.0)
-        } else {
-            Pos2::new(at.x, end.y)
-        };
-        lines.push([start, super::lines::ray_end(start, through, rect)]);
-    }
-    lines
+fn visible_sorted(levels: &[FibonacciLevel]) -> Vec<&FibonacciLevel> {
+    let mut levels: Vec<_> = levels.iter().filter(|l| l.visible).collect();
+    levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+    levels
+}
+
+/// The grid of a speed resistance fan from `start` to `end`: across the box at each visible
+/// price level and down it at each visible time level.
+fn speed_fan_grid(start: Pos2, end: Pos2, config: &FibonacciConfig) -> Vec<[Pos2; 2]> {
+    let at = |level: &FibonacciLevel| start + (end - start) * (1.0 - level.value);
+    let price = config.visible_levels().map(|level| {
+        let y = at(level).y;
+        [Pos2::new(start.x, y), Pos2::new(end.x, y)]
+    });
+    let time = config
+        .fan_time_levels()
+        .iter()
+        .filter(|l| l.visible)
+        .map(|level| {
+            let x = at(level).x;
+            [Pos2::new(x, start.y), Pos2::new(x, end.y)]
+        });
+    price.chain(time).collect()
 }
 
 impl Drawing {
@@ -990,15 +1023,45 @@ impl Drawing {
     }
 
     pub(super) fn fibonacci_speed_fan_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
-        let (start, end) = (self.points[0], self.points[1]);
-        self.fibonacci_config()
+        let config = self.fibonacci_config();
+        let Some((start, end)) = self.speed_fan_corners(&config) else {
+            return Vec::new();
+        };
+        let ray = |level: &FibonacciLevel, time| {
+            [
+                start,
+                speed_fan_ray_end(start, end, level.value, time, rect),
+            ]
+        };
+        let mut lines: Vec<_> = config
             .visible_levels()
-            .flat_map(|level| {
-                std::iter::once([start, speed_fan_line_end(start, end, level.value, rect)])
-                    .chain(speed_fan_level_lines(start, end, level.value, rect))
-            })
-            .filter(|line| line.iter().all(|p| p.is_finite()))
-            .collect()
+            .map(|level| ray(level, false))
+            .chain(
+                config
+                    .fan_time_levels()
+                    .iter()
+                    .filter(|l| l.visible)
+                    .map(|level| ray(level, true)),
+            )
+            .collect();
+        if config.grid_visible {
+            lines.extend(speed_fan_grid(start, end, &config));
+        }
+        lines.retain(|line| line.iter().all(|p| p.is_finite()));
+        lines
+    }
+
+    /// The fan's origin and the opposite corner of its box. A reversed fan is mirrored
+    /// vertically: it starts at the first anchor's time and the second anchor's price.
+    fn speed_fan_corners(&self, config: &FibonacciConfig) -> Option<(Pos2, Pos2)> {
+        let &[start, end, ..] = self.points.as_slice() else {
+            return None;
+        };
+        Some(if config.reverse {
+            (Pos2::new(start.x, end.y), Pos2::new(end.x, start.y))
+        } else {
+            (start, end)
+        })
     }
 }
 
@@ -1216,13 +1279,16 @@ fn speed_arc_direction(start: Pos2, end: Pos2, angle: f32) -> egui::Vec2 {
     egui::vec2(angle.cos(), side * angle.sin())
 }
 
-/// Where the price ray through `start` and `end.x` at `1 - ratio` of the
-/// price swing leaves the chart on the side of `end`.
-fn speed_fan_line_end(start: Pos2, end: Pos2, ratio: f32, chart_rect: Rect) -> Pos2 {
-    let through = if ratio == 1.0 && end.x == start.x {
-        start + egui::vec2(1.0, 0.0)
-    } else {
-        Pos2::new(end.x, start.y + (end.y - start.y) * (1.0 - ratio))
+/// Where the fan ray from `start` leaves the chart on the side of `end`. A price ray passes
+/// `end.x` at `1 - ratio` of the price swing; a `time` ray passes `end.y` at `1 - ratio` of the
+/// time span. Ratio 1 lies along the box edge through `start`, even when the box is flat.
+fn speed_fan_ray_end(start: Pos2, end: Pos2, ratio: f32, time: bool, chart_rect: Rect) -> Pos2 {
+    let at = start + (end - start) * (1.0 - ratio);
+    let through = match (time, ratio == 1.0) {
+        (false, true) if end.x == start.x => start + egui::vec2(1.0, 0.0),
+        (true, true) if end.y == start.y => start + egui::vec2(0.0, 1.0),
+        (false, _) => Pos2::new(end.x, at.y),
+        (true, _) => Pos2::new(at.x, end.y),
     };
     super::lines::ray_end(start, through, chart_rect)
 }
@@ -1765,9 +1831,15 @@ mod tests {
                                 _ => None,
                             })
                             .collect();
-                        assert_eq!(labels.len(), 2);
+                        // Price ratios beside both box edges, time ratios above and below it.
+                        assert_eq!(labels.len(), 4);
+                        let size = |t: &egui::epaint::TextShape| t.galley.size();
                         assert!(labels.iter().any(|t| t.pos.x > 200.0 && t.pos.y < 125.0));
+                        assert!(labels.iter().any(|t| t.pos.x + size(t).x < 100.0
+                            && t.pos.y < 125.0
+                            && t.pos.y + size(t).y > 125.0));
                         assert!(labels.iter().any(|t| t.pos.y < 100.0 && t.pos.x < 175.0));
+                        assert!(labels.iter().any(|t| t.pos.y > 200.0 && t.pos.x < 175.0));
                         let line = |a: Pos2, b: Pos2| lines.iter().any(|l| l[0] == a && l[1] == b);
                         assert!(
                             line(Pos2::new(100.0, 200.0), Pos2::new(500.0, -100.0)),
@@ -1812,6 +1884,92 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
             }
+        }
+    }
+
+    /// A fan from (100,200) to (200,100) keeps its price and time levels apart, draws the grid in
+    /// its own stroke only when shown, labels only the enabled sides, and when reversed starts at
+    /// (100,100) with its far corner at (200,200).
+    #[test]
+    fn speed_fan_levels_grid_labels_and_reverse_are_independent() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        for (reverse, grid) in [(false, true), (true, false)] {
+            let mut fan = Drawing::new(0, Tool::FibonacciSpeedFan);
+            fan.points = vec![Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+            let mut json = serde_json::to_value(fan.fib_config.as_ref().unwrap()).unwrap();
+            json["levels"] = serde_json::json!([
+                {"value":0.5,"label":"","color":[211,41,73,255],"visible":true,"show_price":true}
+            ]);
+            json["time_levels"] = serde_json::json!([
+                {"value":0.25,"label":"","color":[37,157,89,255],"visible":true,"show_price":true}
+            ]);
+            json["reverse"] = reverse.into();
+            json["grid_visible"] = grid.into();
+            json["grid_color"] = serde_json::json!([61, 79, 199, 255]);
+            json["grid_width"] = 2.5.into();
+            json["left_labels"] = false.into();
+            json["bottom_labels"] = false.into();
+            fan.fib_config = Some(serde_json::from_value(json).unwrap());
+            let (origin, far) = if reverse {
+                (Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0))
+            } else {
+                (Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0))
+            };
+            let lines = fan.fibonacci_speed_fan_lines(rect);
+            let ray = |through: Pos2| {
+                lines.iter().any(|l| {
+                    let (a, b) = (l[1] - origin, through - origin);
+                    l[0] == origin && (a.x * b.y - a.y * b.x).abs() < 1e-2 && a.dot(b) > 0.0
+                })
+            };
+            // Price 0.5 passes the far edge midway; time 0.25 passes it three quarters across.
+            assert!(ray(Pos2::new(200.0, 150.0)), "reverse {reverse}: price ray");
+            assert!(ray(Pos2::new(175.0, far.y)), "reverse {reverse}: time ray");
+            assert!(
+                !ray(Pos2::new(150.0, far.y)),
+                "reverse {reverse}: shared time ray"
+            );
+            let grid_lines = [
+                [Pos2::new(100.0, 150.0), Pos2::new(200.0, 150.0)],
+                [Pos2::new(175.0, origin.y), Pos2::new(175.0, far.y)],
+            ];
+            for line in grid_lines {
+                assert_eq!(
+                    lines.contains(&line),
+                    grid,
+                    "reverse {reverse}: grid {line:?}"
+                );
+            }
+
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                fan.render_fibonacci_speed_fan(ui.painter(), rect)
+            });
+            output.textures_delta.clear();
+            let grid_stroke = Stroke::new(2.5, Color32::from_rgb(61, 79, 199));
+            let painted = output.shapes.iter().filter(|s| {
+                matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if *stroke == grid_stroke)
+            });
+            assert_eq!(painted.count(), if grid { 2 } else { 0 }, "grid stroke");
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 2, "reverse {reverse}: {labels:?}");
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, pos)| text == "0.5" && pos.x > 200.0)
+            );
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, pos)| text == "0.25" && pos.y < 100.0)
+            );
+            output.drop_without_applying_deltas();
         }
     }
 
@@ -2430,8 +2588,13 @@ mod tests {
         // edge: slope 0.5 * (1-ratio), so at x = 0, y = 100 * ratio.
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
         for (ratio, want) in [(0.0, (0.0, 0.0)), (0.5, (0.0, 50.0)), (1.0, (0.0, 100.0))] {
-            let got =
-                speed_fan_line_end(Pos2::new(200.0, 100.0), Pos2::new(100.0, 50.0), ratio, rect);
+            let got = speed_fan_ray_end(
+                Pos2::new(200.0, 100.0),
+                Pos2::new(100.0, 50.0),
+                ratio,
+                false,
+                rect,
+            );
             if !near(got, Pos2::from(want)) {
                 wrong.push(format!("fan ratio {ratio}: got {got:?}, want {want:?}"));
             }
@@ -2442,18 +2605,25 @@ mod tests {
             (1.0, Pos2::new(400.0, 100.0)),
         ] {
             assert_eq!(
-                speed_fan_line_end(
+                speed_fan_ray_end(
                     Pos2::new(100.0, 100.0),
                     Pos2::new(100.0, 200.0),
                     ratio,
+                    false,
                     rect
                 ),
                 want
             );
         }
-        assert!(
-            speed_fan_level_lines(Pos2::new(100.0, 100.0), Pos2::new(200.0, 100.0), 1.0, rect)
-                .contains(&[Pos2::new(100.0, 100.0), Pos2::new(100.0, 300.0)])
+        assert_eq!(
+            speed_fan_ray_end(
+                Pos2::new(100.0, 100.0),
+                Pos2::new(200.0, 100.0),
+                1.0,
+                true,
+                rect
+            ),
+            Pos2::new(100.0, 300.0)
         );
 
         // Time zones 10 px apart from x = 100: one line per Fibonacci number.

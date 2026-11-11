@@ -339,6 +339,7 @@ impl DrawingProps {
                             | crate::drawings::DrawingToolType::FibonacciExtension
                             | crate::drawings::DrawingToolType::FibonacciChannel
                             | crate::drawings::DrawingToolType::FibonacciWedge
+                            | crate::drawings::DrawingToolType::FibonacciSpeedFan
                     ) {
                         let original = target.fibonacci_config();
                         let edited = settings.fibonacci_config();
