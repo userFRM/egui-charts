@@ -158,7 +158,9 @@ impl StoredDrawing {
     /// The first field holding NaN or an infinity, which JSON cannot store, or a size or
     /// pitchfork level outside the range drawings are drawn at.
     pub(super) fn invalid_field(&self) -> Option<String> {
-        use super::validation::{MAX_IMAGE_SIDE, MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
+        use super::validation::{
+            MAX_IMAGE_SIDE, MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH, MAX_TEXT_WRAP_WIDTH,
+        };
         use crate::styles::typography::FONT_SIZES;
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
@@ -186,6 +188,9 @@ impl StoredDrawing {
         }
         if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
+        }
+        if !(1.0..=MAX_TEXT_WRAP_WIDTH).contains(&d.text_wrap_width) {
+            return Some("text_wrap_width".into());
         }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
@@ -229,13 +234,14 @@ impl StoredDrawing {
         }) {
             return Some("fib_config.level_width".into());
         }
+        let bad_width = |width: f32| !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH);
         if d.fib_config.as_ref().is_some_and(|c| {
             !(1.0..=256.0).contains(&c.label_size)
-                || c.levels.iter().any(|level| {
-                    level.width.is_some_and(|width| {
-                        !(width > 0.0 && width <= super::validation::MAX_STROKE_WIDTH)
-                    })
-                })
+                || bad_width(c.grid_width)
+                || c.levels
+                    .iter()
+                    .chain(c.time_levels.iter().flatten())
+                    .any(|level| level.width.is_some_and(bad_width))
         }) {
             return Some("fib_config".into());
         }
@@ -244,7 +250,8 @@ impl StoredDrawing {
                 "fib_config.levels",
                 d.fib_config
                     .iter()
-                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .flat_map(|c| c.levels.iter().chain(c.time_levels.iter().flatten()))
+                    .map(|l| l.value)
                     .collect::<Vec<_>>(),
             ),
             (
@@ -1338,6 +1345,8 @@ mod tests {
         d.background = false;
         d.border = false;
         d.border_color = Some([17, 18, 19, 20]);
+        d.text_wrap = true;
+        d.text_wrap_width = 120.0;
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1622,6 +1631,8 @@ mod tests {
             want.background = true;
             want.border = true;
             want.border_color = None;
+            want.text_wrap = false;
+            want.text_wrap_width = 200.0;
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2528,7 +2539,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 35] = [
+        let cases: [(Spoil, &str); 36] = [
             (
                 |s| {
                     first(s)
@@ -2612,6 +2623,10 @@ mod tests {
                 "invalid stroke_width",
             ),
             (|s| first(s).drawing.font_size = 0.0, "invalid font_size"),
+            (
+                |s| first(s).drawing.text_wrap_width = f32::NAN,
+                "invalid text_wrap_width",
+            ),
             (
                 |s| first(s).points[1].price = f64::NAN,
                 "invalid points[1].price",

@@ -79,9 +79,13 @@ impl StyleTab {
                 if matches!(
                     settings.tool_type,
                     DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
                         | DrawingToolType::FibonacciExtension
                         | DrawingToolType::FibonacciChannel
                         | DrawingToolType::FibonacciWedge
+                        | DrawingToolType::FibonacciTimeZones
+                        | DrawingToolType::TrendBasedFibTime
                 ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
@@ -107,7 +111,14 @@ impl StyleTab {
                     }
                     ui.end_row();
                     if settings.tool_type != DrawingToolType::FibonacciChannel {
-                        ui.label(l10n::text(ui.ctx(), "Trend line"));
+                        ui.label(l10n::text(
+                            ui.ctx(),
+                            if settings.tool_type == DrawingToolType::FibonacciTimeZones {
+                                "Initial line"
+                            } else {
+                                "Trend line"
+                            },
+                        ));
                         ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
                             .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
                         ui.end_row();
@@ -118,6 +129,20 @@ impl StyleTab {
                     if config != original {
                         settings.fib_config = Some(config);
                     }
+                }
+                if settings.tool_type == DrawingToolType::FibonacciSpiral {
+                    let mut config = settings.fibonacci_config().into_owned();
+                    ui.label("");
+                    if ui
+                        .checkbox(
+                            &mut config.spiral_counterclockwise,
+                            l10n::text(ui.ctx(), "Counterclockwise"),
+                        )
+                        .changed()
+                    {
+                        settings.fib_config = Some(config);
+                    }
+                    ui.end_row();
                 }
                 if position {
                     let style = &mut settings.position_style;

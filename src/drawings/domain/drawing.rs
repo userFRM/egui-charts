@@ -183,6 +183,13 @@ pub struct Drawing {
     /// Border colour of annotation boxes; `None` uses the drawing colour.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
+    /// Whether a callout breaks its text into lines no wider than `text_wrap_width`. Older
+    /// drawings keep each line of their text whole.
+    #[serde(default)]
+    pub text_wrap: bool,
+    /// Widest line of wrapped callout text, in points.
+    #[serde(default = "default_text_wrap_width")]
+    pub text_wrap_width: f32,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
     /// extends past its first anchor, whichever way it was drawn
     pub extend_left: bool,
@@ -275,6 +282,10 @@ pub struct Drawing {
 
 fn enabled() -> bool {
     true
+}
+
+fn default_text_wrap_width() -> f32 {
+    200.0
 }
 
 pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
@@ -519,6 +530,8 @@ impl Drawing {
             background: !plain_text,
             border: !plain_text,
             border_color: plain_text.then_some([112, 112, 112, 255]),
+            text_wrap: false,
+            text_wrap_width: default_text_wrap_width(),
             extend_left: tool_type == DrawingToolType::ExtendedLine,
             extend_right: matches!(
                 tool_type,
@@ -552,6 +565,7 @@ impl Drawing {
                     | DrawingToolType::TrendBasedFibTime
                     | DrawingToolType::FibonacciCircles
                     | DrawingToolType::FibonacciSpeedResistanceArcs
+                    | DrawingToolType::FibonacciSpiral
             )
             .then(|| FibonacciConfig::for_tool(tool_type)),
             volume_profile: matches!(

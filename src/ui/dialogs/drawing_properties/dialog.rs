@@ -259,6 +259,8 @@ impl DrawingPropertiesDialog {
                 drawing.elliott_degree = old.elliott_degree;
                 drawing.font_weight = old.font_weight;
                 drawing.italic = old.italic;
+                drawing.text_wrap = old.text_wrap;
+                drawing.text_wrap_width = old.text_wrap_width;
                 drawing.text_color = old.text_color;
                 drawing.background = old.background;
                 drawing.border = old.border;
@@ -807,6 +809,8 @@ mod tests {
                 settings.price_axis_label = false;
                 settings.time_axis_label = false;
                 settings.italic = true;
+                settings.text_wrap = true;
+                settings.text_wrap_width = 120.0;
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
                 dialog.coordinates.points[1].price = "125".into();
@@ -823,6 +827,7 @@ mod tests {
                 assert!(preview.position_style.border);
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
+                assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
@@ -872,6 +877,11 @@ mod tests {
                 "{finish}"
             );
             assert!(!restored.italic, "{finish}");
+            assert_eq!(
+                (restored.text_wrap, restored.text_wrap_width),
+                (false, 200.0),
+                "{finish}"
+            );
             assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");

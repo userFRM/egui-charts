@@ -390,10 +390,10 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
-    /// Width of every level line, in points.
+    /// Width of level lines without an assigned width, in points.
     #[serde(default = "fib_level_width")]
     pub level_width: f32,
-    /// Line pattern shared by every level.
+    /// Pattern of level lines without an assigned pattern.
     #[serde(default)]
     pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
@@ -423,12 +423,16 @@ pub struct FibonacciConfig {
     #[serde(default = "fib_font_size")]
     pub label_size: f32,
     /// Retracement, extension and channel labels sit outside the Left/Right endpoint or midway at Center.
+    /// Time projections place labels left of, on, or right of each vertical level.
     /// Absent follows `labels_on_left` for earlier drawings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_position: Option<LineTextHorizontalAlign>,
     /// Edge of a retracement, extension or channel label resting on its level; middle places it on the line.
     #[serde(default = "fib_vertical_align")]
     pub label_vertical: LineTextVerticalAlign,
+    /// Time projection labels at the top, middle or bottom of the pane; defaults to bottom.
+    #[serde(default = "fib_time_label_vertical")]
+    pub time_label_vertical: LineTextVerticalAlign,
     /// Whether custom retracement or extension text is visible, independently of prices and ratios.
     #[serde(default = "percent_levels")]
     pub show_text: bool,
@@ -442,9 +446,53 @@ pub struct FibonacciConfig {
     /// Show the construction line between anchors, using the drawing's line style.
     #[serde(default = "percent_levels")]
     pub trend_visible: bool,
+    /// Complete resistance arcs into circles, including their shaded bands.
+    #[serde(default)]
+    pub close_arcs: bool,
+    /// Grow a spiral counterclockwise in screen space instead of clockwise.
+    #[serde(default)]
+    pub spiral_counterclockwise: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+    /// Time levels of a speed resistance fan, read along the time axis as `levels` are along the
+    /// price axis. Absent on fans saved before the two families were separate, which share
+    /// `levels`; see [`FibonacciConfig::fan_time_levels`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_levels: Option<Vec<FibonacciLevel>>,
+    /// Whether a speed resistance fan draws its grid: a line through each visible level inside
+    /// the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub grid_visible: bool,
+    /// Colour of the speed resistance fan grid as RGBA.
+    #[serde(default = "fib_grid_color")]
+    pub grid_color: [u8; 4],
+    /// Width of the speed resistance fan grid lines, in points.
+    #[serde(default = "fib_grid_width")]
+    pub grid_width: f32,
+    /// Line pattern of the speed resistance fan grid.
+    #[serde(default)]
+    pub grid_style: crate::model::LineStyle,
+    /// Speed resistance fan price level ratios on the left of the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub left_labels: bool,
+    /// Speed resistance fan price level ratios on the right of the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub right_labels: bool,
+    /// Speed resistance fan time level ratios above the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub top_labels: bool,
+    /// Speed resistance fan time level ratios below the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub bottom_labels: bool,
+}
+
+fn fib_grid_color() -> [u8; 4] {
+    [21, 56, 153, 204]
+}
+
+fn fib_grid_width() -> f32 {
+    1.0
 }
 
 fn fib_font_size() -> f32 {
@@ -453,6 +501,10 @@ fn fib_font_size() -> f32 {
 
 fn fib_vertical_align() -> LineTextVerticalAlign {
     LineTextVerticalAlign::Middle
+}
+
+fn fib_time_label_vertical() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Bottom
 }
 
 fn fib_level_width() -> f32 {
@@ -504,10 +556,22 @@ impl FibonacciConfig {
             label_size: fib_font_size(),
             label_position: None,
             label_vertical: fib_vertical_align(),
+            time_label_vertical: fib_time_label_vertical(),
             show_text: true,
             text_position: LineTextHorizontalAlign::Center,
             text_vertical: fib_vertical_align(),
             trend_visible: true,
+            time_levels: None,
+            grid_visible: true,
+            grid_color: fib_grid_color(),
+            grid_width: fib_grid_width(),
+            grid_style: crate::model::LineStyle::Solid,
+            left_labels: true,
+            right_labels: true,
+            top_labels: true,
+            bottom_labels: true,
+            close_arcs: false,
+            spiral_counterclockwise: false,
         }
     }
 
@@ -537,6 +601,7 @@ impl FibonacciConfig {
             BLUE, CYAN, DEEP_PURPLE, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL,
         };
         let levels: Vec<(f32, [u8; 4], bool)> = match tool {
+            T::FibonacciSpiral => Vec::new(),
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
                 .map(|value| (value, if value == 0.0 { GREY } else { BLUE }, true))
                 .to_vec(),
@@ -616,15 +681,17 @@ impl FibonacciConfig {
             ],
             _ => return Self::default(),
         };
+        let levels: Vec<_> = levels
+            .into_iter()
+            .map(|(value, color, visible)| FibonacciLevel {
+                visible,
+                ..FibonacciLevel::new(value, "", color)
+            })
+            .collect();
         Self {
-            levels: levels
-                .into_iter()
-                .map(|(value, color, visible)| FibonacciLevel {
-                    visible,
-                    ..FibonacciLevel::new(value, "", color)
-                })
-                .collect(),
-            show_background: tool != T::FibonacciTimeZones,
+            time_levels: (tool == T::FibonacciSpeedFan).then(|| levels.clone()),
+            levels,
+            show_background: !matches!(tool, T::FibonacciTimeZones | T::FibonacciSpiral),
             background_opacity: 51,
             show_levels: (tool == T::FibonacciWedge).then_some(true),
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
@@ -636,11 +703,19 @@ impl FibonacciConfig {
     pub fn is_valid(&self) -> bool {
         let width = |value: f32| value > 0.0 && value <= super::super::validation::MAX_STROKE_WIDTH;
         width(self.level_width)
+            && width(self.grid_width)
             && (1.0..=256.0).contains(&self.label_size)
             && self
                 .levels
                 .iter()
+                .chain(self.time_levels.iter().flatten())
                 .all(|level| level.value.is_finite() && level.width.is_none_or(width))
+    }
+
+    /// The time levels of a speed resistance fan: its own, or `levels` on fans saved before it
+    /// had them.
+    pub fn fan_time_levels(&self) -> &[FibonacciLevel] {
+        self.time_levels.as_deref().unwrap_or(&self.levels)
     }
 
     /// Apply just the fields edited against `original`, keeping the rest of this drawing's
@@ -673,26 +748,44 @@ impl FibonacciConfig {
             label_size,
             label_position,
             label_vertical,
+            time_label_vertical,
             show_text,
             text_position,
             text_vertical,
-            trend_visible
+            trend_visible,
+            grid_visible,
+            grid_color,
+            grid_width,
+            grid_style,
+            left_labels,
+            right_labels,
+            top_labels,
+            bottom_labels,
+            close_arcs,
+            spiral_counterclockwise
         );
-        if original.levels.len() == edited.levels.len() {
-            for ((target, original), edited) in self
-                .levels
-                .iter_mut()
-                .zip(&original.levels)
-                .zip(&edited.levels)
-            {
-                fields!(
-                    target, original, edited, value, label, color, visible, show_price, text,
-                    width, line_style
-                );
-            }
-        } else {
-            self.levels.clone_from(&edited.levels);
+        // A fan still sharing its price levels keeps its time levels apart from this edit.
+        if self.time_levels.is_none() && edited.time_levels.is_some() && original != edited {
+            self.time_levels = Some(self.levels.clone());
         }
+        let apply = |target: &mut Vec<FibonacciLevel>,
+                     original: &[FibonacciLevel],
+                     edited: &[FibonacciLevel]| {
+            if original.len() == edited.len() {
+                for ((target, original), edited) in target.iter_mut().zip(original).zip(edited) {
+                    fields!(
+                        target, original, edited, value, label, color, visible, show_price, text,
+                        width, line_style
+                    );
+                }
+            } else {
+                *target = edited.to_vec();
+            }
+        };
+        if let Some(target) = &mut self.time_levels {
+            apply(target, original.fan_time_levels(), edited.fan_time_levels());
+        }
+        apply(&mut self.levels, &original.levels, &edited.levels);
     }
 
     /// Label content; a tool without a price passes `None`.

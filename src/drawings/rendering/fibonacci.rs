@@ -399,8 +399,17 @@ impl Drawing {
                 continue;
             }
             let axes = egui::vec2(radius, if end.y >= start.y { radius } else { -radius });
-            let angles = [0.0, std::f64::consts::PI];
-            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let angles = [
+                0.0,
+                if config.close_arcs {
+                    std::f64::consts::TAU
+                } else {
+                    std::f64::consts::PI
+                },
+            ];
+            let clip = painter
+                .clip_rect()
+                .expand(effective_width(&config, level) + 2.0);
             let ppp = painter.pixels_per_point();
             let points = if config.show_background {
                 let (inner, outer) = sampled_band(
@@ -430,44 +439,34 @@ impl Drawing {
             };
             previous = radius;
             paint_level_path(painter, points, &config, level);
-            let at = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
-            paint_ratio_label(
-                painter,
-                &config,
-                level,
-                at,
-                if end.y <= start.y {
-                    egui::Align2::CENTER_BOTTOM
-                } else {
-                    egui::Align2::CENTER_TOP
-                },
-            );
+            let (near, far) = if end.y <= start.y {
+                (egui::Align2::CENTER_BOTTOM, egui::Align2::CENTER_TOP)
+            } else {
+                (egui::Align2::CENTER_TOP, egui::Align2::CENTER_BOTTOM)
+            };
+            let top = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
+            paint_ratio_label(painter, &config, level, top, near);
+            if config.close_arcs {
+                let bottom = speed_arc_point(start, end, radius, -std::f32::consts::FRAC_PI_2);
+                paint_ratio_label(painter, &config, level, bottom, far);
+            }
         }
         self.render_fib_trend(painter);
     }
 
     /// Vertical projections from the first anchor, or from C for trend-based time.
     pub(crate) fn render_fibonacci_time_zones(&self, painter: &egui::Painter, chart_rect: Rect) {
-        let &[start, end, ..] = self.points.as_slice() else {
-            return;
-        };
-        let unit = end.x - start.x;
-        if unit.abs() < 1.0 {
+        if self.points.len() < 2 {
             return;
         }
-        let origin = if self.tool_type == Tool::TrendBasedFibTime {
-            self.points.get(2).unwrap_or(&start).x
-        } else {
-            start.x
-        };
         let config = self.fibonacci_config();
         let mut levels: Vec<_> = config.visible_levels().collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
         if config.show_background {
             for pair in levels.windows(2) {
-                let a = origin + unit * pair[0].value;
-                let b = origin + unit * pair[1].value;
-                if a.is_finite() && b.is_finite() {
+                if let Some(a) = self.fibonacci_time_level_x(pair[0].value)
+                    && let Some(b) = self.fibonacci_time_level_x(pair[1].value)
+                {
                     painter.rect_filled(
                         Rect::from_x_y_ranges(a.min(b)..=a.max(b), chart_rect.y_range()),
                         0.0,
@@ -477,7 +476,9 @@ impl Drawing {
             }
         }
         for level in levels {
-            let x = origin + unit * level.value;
+            let Some(x) = self.fibonacci_time_level_x(level.value) else {
+                continue;
+            };
             if !chart_rect.x_range().contains(x) {
                 continue;
             }
@@ -490,19 +491,27 @@ impl Drawing {
                 &config,
                 level,
             );
+            use crate::drawings::{LineTextHorizontalAlign as H, LineTextVerticalAlign as V};
+            let (x, horizontal) = match config.label_position.unwrap_or(if config.labels_on_left {
+                H::Left
+            } else {
+                H::Right
+            }) {
+                H::Left => (x - 4.0, egui::Align::Max),
+                H::Center => (x, egui::Align::Center),
+                H::Right => (x + 4.0, egui::Align::Min),
+            };
+            let (y, vertical) = match config.time_label_vertical {
+                V::Top => (chart_rect.top() + 4.0, egui::Align::Min),
+                V::Middle => (chart_rect.center().y, egui::Align::Center),
+                V::Bottom => (chart_rect.bottom() - 4.0, egui::Align::Max),
+            };
             paint_ratio_label(
                 painter,
                 &config,
                 level,
-                Pos2::new(
-                    x + if config.labels_on_left { -4.0 } else { 4.0 },
-                    chart_rect.bottom() - 4.0,
-                ),
-                if config.labels_on_left {
-                    egui::Align2::RIGHT_BOTTOM
-                } else {
-                    egui::Align2::LEFT_BOTTOM
-                },
+                Pos2::new(x, y),
+                egui::Align2([horizontal, vertical]),
             );
         }
         self.render_fib_trend(painter);
@@ -601,7 +610,9 @@ impl Drawing {
             if !radii.is_finite() {
                 continue;
             }
-            let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
+            let clip = painter
+                .clip_rect()
+                .expand(effective_width(&config, level) + 2.0);
             let ppp = painter.pixels_per_point();
             let angles = [0.0, std::f64::consts::TAU];
             let mut points = if config.show_background {
@@ -621,10 +632,15 @@ impl Drawing {
                 continue;
             }
             points.pop();
-            if config.level_style.dash_pattern().is_none() {
+            if level
+                .line_style
+                .unwrap_or(config.level_style)
+                .dash_pattern()
+                .is_none()
+            {
                 painter.add(egui::Shape::closed_line(
                     points,
-                    Stroke::new(level_width(&config), level_color(level)),
+                    Stroke::new(effective_width(&config, level), level_color(level)),
                 ));
             } else {
                 points.push(points[0]);
@@ -641,66 +657,92 @@ impl Drawing {
         self.render_fib_trend(painter);
     }
 
-    /// Price and time rays meet the edges of the anchors' box at complementary ratios.
+    /// Price and time rays meet the edges of the anchors' box at complementary ratios; the grid
+    /// and the ratio labels on each side of the box follow their own settings.
     pub(crate) fn render_fibonacci_speed_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
-        let &[start, end, ..] = self.points.as_slice() else {
+        let config = self.fibonacci_config();
+        let Some((start, end)) = self.speed_fan_corners(&config) else {
             return;
         };
-        let config = self.fibonacci_config();
-        let mut levels: Vec<_> = config.visible_levels().collect();
-        levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+        let families = [
+            (visible_sorted(&config.levels), false),
+            (visible_sorted(config.fan_time_levels()), true),
+        ];
         if config.show_background || self.fill_color.is_some() {
-            for pair in levels.windows(2) {
-                let a = speed_fan_line_end(start, end, pair[0].value, chart_rect);
-                let b = speed_fan_line_end(start, end, pair[1].value, chart_rect);
-                if a.is_finite() && b.is_finite() {
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![start, a, b],
-                        self.fill_color32()
-                            .unwrap_or_else(|| band_color(pair[1], config.background_opacity)),
-                        Stroke::NONE,
-                    ));
+            for (levels, time) in &families {
+                for pair in levels.windows(2) {
+                    let a = speed_fan_ray_end(start, end, pair[0].value, *time, chart_rect);
+                    let b = speed_fan_ray_end(start, end, pair[1].value, *time, chart_rect);
+                    if a.is_finite() && b.is_finite() {
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![start, a, b],
+                            self.fill_color32()
+                                .unwrap_or_else(|| band_color(pair[1], config.background_opacity)),
+                            Stroke::NONE,
+                        ));
+                    }
                 }
             }
         }
-        let d = end - start;
-        for level in levels {
-            paint_level_line(
-                painter,
-                [
-                    start,
-                    speed_fan_line_end(start, end, level.value, chart_rect),
-                ],
-                &config,
-                level,
+        if config.grid_visible {
+            let stroke = Stroke::new(
+                config
+                    .grid_width
+                    .clamp(0.1, crate::drawings::validation::MAX_STROKE_WIDTH),
+                Color32::from_rgba_unmultiplied(
+                    config.grid_color[0],
+                    config.grid_color[1],
+                    config.grid_color[2],
+                    config.grid_color[3],
+                ),
             );
-            for line in speed_fan_level_lines(start, end, level.value, chart_rect) {
-                paint_level_line(painter, line, &config, level);
+            for [a, b] in speed_fan_grid(start, end, &config) {
+                if let Some((dash, gap)) = config.grid_style.dash_pattern() {
+                    super::utils::draw_dashed_line(painter, a, b, stroke, dash, gap);
+                } else {
+                    painter.line_segment([a, b], stroke);
+                }
             }
-            let price_at = start + egui::vec2(d.x, d.y * (1.0 - level.value));
-            let time_at = start + egui::vec2(d.x * (1.0 - level.value), d.y);
-            paint_ratio_label(
-                painter,
-                &config,
-                level,
-                price_at + egui::vec2(if d.x >= 0.0 { 4.0 } else { -4.0 }, 0.0),
-                if d.x >= 0.0 {
-                    egui::Align2::LEFT_CENTER
+        }
+        let (min, max) = (start.min(end), start.max(end));
+        for (levels, time) in &families {
+            for &level in levels {
+                let ray = speed_fan_ray_end(start, end, level.value, *time, chart_rect);
+                paint_level_line(painter, [start, ray], &config, level);
+                let at = start + (end - start) * (1.0 - level.value);
+                let labels = if *time {
+                    [
+                        (
+                            config.top_labels,
+                            Pos2::new(at.x, min.y - 4.0),
+                            egui::Align2::CENTER_BOTTOM,
+                        ),
+                        (
+                            config.bottom_labels,
+                            Pos2::new(at.x, max.y + 4.0),
+                            egui::Align2::CENTER_TOP,
+                        ),
+                    ]
                 } else {
-                    egui::Align2::RIGHT_CENTER
-                },
-            );
-            paint_ratio_label(
-                painter,
-                &config,
-                level,
-                time_at + egui::vec2(0.0, if d.y >= 0.0 { 4.0 } else { -4.0 }),
-                if d.y >= 0.0 {
-                    egui::Align2::CENTER_TOP
-                } else {
-                    egui::Align2::CENTER_BOTTOM
-                },
-            );
+                    [
+                        (
+                            config.left_labels,
+                            Pos2::new(min.x - 4.0, at.y),
+                            egui::Align2::RIGHT_CENTER,
+                        ),
+                        (
+                            config.right_labels,
+                            Pos2::new(max.x + 4.0, at.y),
+                            egui::Align2::LEFT_CENTER,
+                        ),
+                    ]
+                };
+                for (shown, at, align) in labels {
+                    if shown {
+                        paint_ratio_label(painter, &config, level, at, align);
+                    }
+                }
+            }
         }
     }
 
@@ -710,6 +752,7 @@ impl Drawing {
         }
         let center = self.points[0];
         let edge = self.points[1];
+        let config = self.fibonacci_config();
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
             self.color[1],
@@ -742,15 +785,15 @@ impl Drawing {
                     y: bound,
                     length: bound,
                 },
-                painter.clip_rect().expand(2.0),
+                painter.clip_rect().expand(self.stroke_width + 2.0),
                 painter.pixels_per_point(),
-                |theta| fib_spiral_point(center, edge, theta),
+                |theta| fib_spiral_point(center, edge, theta, config.spiral_counterclockwise),
             );
             points.extend(span.into_iter().skip(usize::from(quarter != -8)));
         }
         painter.add(egui::Shape::line(
             points,
-            Stroke::new(stroke::HAIRLINE, color),
+            Stroke::new(self.stroke_width, color),
         ));
     }
 
@@ -954,51 +997,113 @@ fn fib_channel_level_line(start: Pos2, end: Pos2, width_point: Pos2, level: f32)
     [start + offset, end + offset]
 }
 
-fn speed_fan_level_lines(start: Pos2, end: Pos2, ratio: f32, rect: Rect) -> Vec<[Pos2; 2]> {
-    let d = end - start;
-    let at = start + d * (1.0 - ratio);
-    let mut lines = vec![
-        [Pos2::new(at.x, start.y), Pos2::new(at.x, end.y)],
-        [Pos2::new(start.x, at.y), Pos2::new(end.x, at.y)],
-    ];
-    if ratio != 0.0 {
-        let through = if ratio == 1.0 && d.y == 0.0 {
-            start + egui::vec2(0.0, 1.0)
-        } else {
-            Pos2::new(at.x, end.y)
-        };
-        lines.push([start, super::lines::ray_end(start, through, rect)]);
-    }
-    lines
+fn visible_sorted(levels: &[FibonacciLevel]) -> Vec<&FibonacciLevel> {
+    let mut levels: Vec<_> = levels.iter().filter(|l| l.visible).collect();
+    levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+    levels
+}
+
+/// The grid of a speed resistance fan from `start` to `end`: across the box at each visible
+/// price level and down it at each visible time level.
+fn speed_fan_grid(start: Pos2, end: Pos2, config: &FibonacciConfig) -> Vec<[Pos2; 2]> {
+    let at = |level: &FibonacciLevel| start + (end - start) * (1.0 - level.value);
+    let price = config.visible_levels().map(|level| {
+        let y = at(level).y;
+        [Pos2::new(start.x, y), Pos2::new(end.x, y)]
+    });
+    let time = config
+        .fan_time_levels()
+        .iter()
+        .filter(|l| l.visible)
+        .map(|level| {
+            let x = at(level).x;
+            [Pos2::new(x, start.y), Pos2::new(x, end.y)]
+        });
+    price.chain(time).collect()
 }
 
 impl Drawing {
-    pub(super) fn fibonacci_time_zone_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
-        let unit = self.points[1].x - self.points[0].x;
-        if unit.abs() < 1.0 {
-            return Vec::new();
+    /// Signed time interval from A to B, applied at A for zones and C for trend time.
+    pub(crate) fn fibonacci_time_level_x(&self, ratio: f32) -> Option<f32> {
+        let &[start, end, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let unit = end.x - start.x;
+        if !unit.is_finite() || unit == 0.0 {
+            return None;
         }
-        self.fibonacci_config()
+        let origin = if self.tool_type == Tool::TrendBasedFibTime {
+            self.points.get(2).unwrap_or(&start).x
+        } else {
+            start.x
+        };
+        let x = origin + unit * ratio;
+        x.is_finite().then_some(x)
+    }
+
+    /// Visible projection lines inside `rect`, then the construction segments when shown.
+    pub(super) fn fibonacci_time_zone_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
+        let config = self.fibonacci_config();
+        let mut lines: Vec<_> = config
             .visible_levels()
             .filter_map(|level| {
-                let x = self.points[0].x + unit * level.value;
+                let x = self.fibonacci_time_level_x(level.value)?;
                 rect.x_range()
                     .contains(x)
                     .then(|| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
             })
-            .collect()
+            .collect();
+        if config.trend_visible {
+            lines.extend(
+                self.points
+                    .windows(2)
+                    .filter(|p| p.iter().all(|p| p.is_finite()))
+                    .map(|p| [p[0], p[1]]),
+            );
+        }
+        lines
     }
 
     pub(super) fn fibonacci_speed_fan_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
-        let (start, end) = (self.points[0], self.points[1]);
-        self.fibonacci_config()
+        let config = self.fibonacci_config();
+        let Some((start, end)) = self.speed_fan_corners(&config) else {
+            return Vec::new();
+        };
+        let ray = |level: &FibonacciLevel, time| {
+            [
+                start,
+                speed_fan_ray_end(start, end, level.value, time, rect),
+            ]
+        };
+        let mut lines: Vec<_> = config
             .visible_levels()
-            .flat_map(|level| {
-                std::iter::once([start, speed_fan_line_end(start, end, level.value, rect)])
-                    .chain(speed_fan_level_lines(start, end, level.value, rect))
-            })
-            .filter(|line| line.iter().all(|p| p.is_finite()))
-            .collect()
+            .map(|level| ray(level, false))
+            .chain(
+                config
+                    .fan_time_levels()
+                    .iter()
+                    .filter(|l| l.visible)
+                    .map(|level| ray(level, true)),
+            )
+            .collect();
+        if config.grid_visible {
+            lines.extend(speed_fan_grid(start, end, &config));
+        }
+        lines.retain(|line| line.iter().all(|p| p.is_finite()));
+        lines
+    }
+
+    /// The fan's origin and the opposite corner of its box. A reversed fan is mirrored
+    /// vertically: it starts at the first anchor's time and the second anchor's price.
+    fn speed_fan_corners(&self, config: &FibonacciConfig) -> Option<(Pos2, Pos2)> {
+        let &[start, end, ..] = self.points.as_slice() else {
+            return None;
+        };
+        Some(if config.reverse {
+            (Pos2::new(start.x, end.y), Pos2::new(end.x, start.y))
+        } else {
+            (start, end)
+        })
     }
 }
 
@@ -1216,26 +1321,29 @@ fn speed_arc_direction(start: Pos2, end: Pos2, angle: f32) -> egui::Vec2 {
     egui::vec2(angle.cos(), side * angle.sin())
 }
 
-/// Where the price ray through `start` and `end.x` at `1 - ratio` of the
-/// price swing leaves the chart on the side of `end`.
-fn speed_fan_line_end(start: Pos2, end: Pos2, ratio: f32, chart_rect: Rect) -> Pos2 {
-    let through = if ratio == 1.0 && end.x == start.x {
-        start + egui::vec2(1.0, 0.0)
-    } else {
-        Pos2::new(end.x, start.y + (end.y - start.y) * (1.0 - ratio))
+/// Where the fan ray from `start` leaves the chart on the side of `end`. A price ray passes
+/// `end.x` at `1 - ratio` of the price swing; a `time` ray passes `end.y` at `1 - ratio` of the
+/// time span. Ratio 1 lies along the box edge through `start`, even when the box is flat.
+fn speed_fan_ray_end(start: Pos2, end: Pos2, ratio: f32, time: bool, chart_rect: Rect) -> Pos2 {
+    let at = start + (end - start) * (1.0 - ratio);
+    let through = match (time, ratio == 1.0) {
+        (false, true) if end.x == start.x => start + egui::vec2(1.0, 0.0),
+        (true, true) if end.y == start.y => start + egui::vec2(0.0, 1.0),
+        (false, _) => Pos2::new(end.x, at.y),
+        (true, _) => Pos2::new(at.x, end.y),
     };
     super::lines::ray_end(start, through, chart_rect)
 }
 
 /// The point of the golden spiral around `center` that passes through `edge`,
 /// `theta` radians past it: the radius grows by the golden ratio every quarter turn.
-fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64) -> Pos2 {
+fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64, counterclockwise: bool) -> Pos2 {
     if theta == 0.0 {
         return edge;
     }
     let growth = std::f64::consts::GOLDEN_RATIO.ln() / std::f64::consts::FRAC_PI_2;
     let factor = (growth * theta).exp();
-    let (s, c) = theta.sin_cos();
+    let (s, c) = if counterclockwise { -theta } else { theta }.sin_cos();
     let dx = f64::from(edge.x) - f64::from(center.x);
     let dy = f64::from(edge.y) - f64::from(center.y);
     Pos2::new(
@@ -1248,6 +1356,178 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64) -> Pos2 {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    /// A quarter of A=200 to B=400 is 50 bars, projected from A for zones and C=500
+    /// for trend time. Reversing A and B changes the sign, even on a logarithmic price scale.
+    #[test]
+    fn time_levels_keep_patterns_widths_alignment_and_hit_geometry() {
+        use crate::drawings::ChartPoint;
+        use crate::drawings::services::DrawingInteraction;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 700.0));
+        for tool in [Tool::FibonacciTimeZones, Tool::TrendBasedFibTime] {
+            for reverse in [false, true] {
+                for (horizontal, vertical) in
+                    [("Left", "Top"), ("Center", "Middle"), ("Right", "Bottom")]
+                {
+                    let mut drawing = Drawing::new(7, tool);
+                    drawing.chart_points = vec![
+                        ChartPoint::new(if reverse { 400.0 } else { 200.0 }, 100.0),
+                        ChartPoint::new(if reverse { 200.0 } else { 400.0 }, 400.0),
+                    ];
+                    if tool == Tool::TrendBasedFibTime {
+                        drawing.chart_points.push(ChartPoint::new(500.0, 200.0));
+                    }
+                    let mut config =
+                        serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+                    config["levels"] = serde_json::json!([
+                        {"value":0.25,"color":[255,0,0,255],"visible":true,"show_price":true,"width":40.0,"line_style":"Dashed"},
+                        {"value":0.5,"color":[0,255,0,255],"visible":true,"show_price":true},
+                        {"value":0.75,"color":[0,0,255,255],"visible":false,"show_price":true}
+                    ]);
+                    config["show_background"] = false.into();
+                    config["trend_visible"] = false.into();
+                    config["label_size"] = 20.0.into();
+                    config["label_position"] = horizontal.into();
+                    config["time_label_vertical"] = vertical.into();
+                    drawing.fib_config = Some(serde_json::from_value(config).unwrap());
+                    drawing.update_screen_coords(
+                        |bar| bar,
+                        |price| (700.0 - price.ln() * 50.0) as f32,
+                    );
+                    let origin = if tool == Tool::TrendBasedFibTime {
+                        500.0
+                    } else if reverse {
+                        400.0
+                    } else {
+                        200.0
+                    };
+                    let x = origin + if reverse { -50.0 } else { 50.0 };
+                    let ctx = egui::Context::default();
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(rect),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            drawing.render_fibonacci_time_zones(
+                                &ui.painter().with_clip_rect(rect),
+                                rect,
+                            );
+                        },
+                    );
+                    let shapes = output.shapes.clone();
+                    output.drop_without_applying_deltas();
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                            _ => None,
+                        })
+                        .collect();
+                    let red: Vec<_> = lines
+                        .iter()
+                        .filter(|(_, stroke)| stroke.color == Color32::RED)
+                        .collect();
+                    assert!(red.len() > 2, "{tool:?}: assigned dashed pattern");
+                    assert!(red.iter().all(|(points, stroke)| points[0].x == x
+                        && points[1].x == x
+                        && stroke.width == 40.0));
+                    assert!(
+                        lines.iter().any(
+                            |(_, stroke)| stroke.color == Color32::GREEN && stroke.width == 2.0
+                        )
+                    );
+                    assert!(
+                        lines.iter().all(|(_, stroke)| stroke.color == Color32::RED
+                            || stroke.color == Color32::GREEN),
+                        "hidden construction and levels"
+                    );
+                    let label = shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "0.25" => Some(text),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(label.galley.job.sections[0].format.font_id.size, 20.0);
+                    assert_eq!(label.galley.job.sections[0].format.color, Color32::RED);
+                    let bounds = Rect::from_min_size(label.pos, label.galley.size());
+                    match horizontal {
+                        "Left" => assert!((bounds.right() - (x - 4.0)).abs() < 0.01),
+                        "Center" => assert!((bounds.center().x - x).abs() < 0.01),
+                        _ => assert!((bounds.left() - (x + 4.0)).abs() < 0.01),
+                    }
+                    match vertical {
+                        "Top" => assert!((bounds.top() - 4.0).abs() < 0.01),
+                        "Middle" => assert!((bounds.center().y - 350.0).abs() < 0.01),
+                        _ => assert!((bounds.bottom() - 696.0).abs() < 0.01),
+                    }
+                    let hit = DrawingInteraction::default();
+                    assert_eq!(
+                        hit.hit_test(
+                            Pos2::new(x + 18.0, 100.0),
+                            std::slice::from_ref(&drawing),
+                            "1D"
+                        ),
+                        Some(7)
+                    );
+                    let second_x = origin + if reverse { -100.0 } else { 100.0 };
+                    assert_eq!(
+                        hit.hit_test(
+                            Pos2::new(second_x + 18.0, 100.0),
+                            std::slice::from_ref(&drawing),
+                            "1D"
+                        ),
+                        None
+                    );
+                    let lines = drawing.outline(rect).unwrap().lines;
+                    assert_eq!(lines.len(), 2);
+                    assert!(lines.iter().any(|line| line[0].x == x && line[1].x == x));
+                    drawing
+                        .fib_config
+                        .as_mut()
+                        .unwrap()
+                        .levels
+                        .iter_mut()
+                        .for_each(|level| level.visible = false);
+                    let middle = drawing.points[0].lerp(drawing.points[1], 0.5);
+                    assert_eq!(
+                        hit.hit_test(middle, std::slice::from_ref(&drawing), "1D"),
+                        None
+                    );
+                    drawing.fib_config.as_mut().unwrap().trend_visible = true;
+                    assert_eq!(
+                        hit.hit_test(middle, std::slice::from_ref(&drawing), "1D"),
+                        Some(7)
+                    );
+                }
+            }
+            // Half a pixel per interval still projects ratio 89 by 44.5 pixels.
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = vec![Pos2::new(200.0, 100.0), Pos2::new(200.5, 200.0)];
+            if tool == Tool::TrendBasedFibTime {
+                drawing.points.push(Pos2::new(300.0, 100.0));
+            }
+            let config = drawing.fib_config.as_mut().unwrap();
+            config.levels = vec![FibonacciLevel::new(89.0, "", [255, 0, 0, 255])];
+            config.show_background = false;
+            config.trend_visible = false;
+            let x = if tool == Tool::TrendBasedFibTime {
+                344.5
+            } else {
+                244.5
+            };
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                drawing.render_fibonacci_time_zones(ui.painter(), rect)
+            });
+            let projected = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::LineSegment { points, .. } if points[0].x == x && points[1].x == x)
+            });
+            output.drop_without_applying_deltas();
+            assert!(projected, "subpixel interval keeps distant time levels");
+        }
+    }
 
     /// A quarter retracement of 100 to 200 is 175; a half log retracement of 100 to
     /// 400 is 200. Extensions project from 150. Width and custom text choices do not change either geometry.
@@ -1601,6 +1881,191 @@ mod tests {
         }
     }
 
+    /// Assigned patterns and widths survive anchor reversal and logarithmic mapping. Closing an
+    /// arc fills the other half too, while hidden construction and spare levels paint nothing.
+    #[test]
+    fn round_controls_keep_independent_strokes_and_geometry() {
+        use crate::drawings::ChartPoint;
+        let rect = Rect::from_min_max(Pos2::new(-800.0, -800.0), Pos2::new(1200.0, 1200.0));
+        for tool in [Tool::FibonacciCircles, Tool::FibonacciSpeedResistanceArcs] {
+            for (reverse, log, closed) in [
+                (false, false, false),
+                (true, false, true),
+                (false, true, true),
+                (true, true, false),
+            ] {
+                let mut drawing = Drawing::new(0, tool);
+                drawing.chart_points = vec![
+                    ChartPoint::new(200.0, 100.0),
+                    ChartPoint::new(400.0, 1000.0),
+                ];
+                if reverse {
+                    drawing.chart_points.reverse();
+                }
+                drawing.update_screen_coords(
+                    |b| b,
+                    |p| {
+                        if log {
+                            (1100.0 / p).ln() as f32 * 200.0
+                        } else {
+                            (1100.0 - p) as f32 / 2.0
+                        }
+                    },
+                );
+                let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+                saved["levels"] = serde_json::json!([
+                    {"value":0.25,"label":"","color":[255,0,0,255],"visible":true,"show_price":false,"width":4.0,"line_style":"Dashed"},
+                    {"value":0.5,"label":"","color":[0,255,0,255],"visible":true,"show_price":false,"width":6.0,"line_style":"Solid"},
+                    {"value":0.75,"label":"","color":[0,0,255,255],"visible":false,"show_price":false,"width":8.0,"line_style":"Dotted"}
+                ]);
+                saved["show_levels"] = true.into();
+                saved["show_prices"] = false.into();
+                saved["level_style"] = "Dotted".into();
+                saved["trend_visible"] = false.into();
+                saved["close_arcs"] = closed.into();
+                saved["label_size"] = 20.0.into();
+                drawing.fib_config = Some(serde_json::from_value(saved).unwrap());
+                let mut output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let painter = ui.painter().with_clip_rect(rect);
+                        if tool == Tool::FibonacciCircles {
+                            drawing.render_fibonacci_circles(&painter);
+                        } else {
+                            drawing.render_fibonacci_arc(&painter);
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                let mut red = 0;
+                let mut green = 0;
+                let mut labels = 0;
+                let start = drawing.points[0];
+                let end = drawing.points[1];
+                let radius = start.distance(end) * 0.5;
+                let side = if end.y >= start.y { 1.0 } else { -1.0 };
+                let opposite = start - egui::vec2(0.0, side * radius);
+                let mut filled_opposite = false;
+                for shape in &output.shapes {
+                    let stroke = match &shape.shape {
+                        egui::Shape::Path(path) => {
+                            if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::GREEN) {
+                                green += 1;
+                                assert_eq!(path.stroke.width, 6.0);
+                            }
+                            None
+                        }
+                        egui::Shape::LineSegment { points, stroke } => {
+                            if stroke.color == Color32::RED {
+                                red += 1;
+                                assert_eq!(stroke.width, 4.0);
+                                assert!(
+                                    points[0].distance(points[1]) <= 8.01,
+                                    "independent dashes"
+                                );
+                            }
+                            Some(stroke)
+                        }
+                        egui::Shape::Mesh(mesh) => {
+                            filled_opposite |= mesh
+                                .vertices
+                                .iter()
+                                .any(|v| v.pos.distance(opposite) < 0.01);
+                            None
+                        }
+                        egui::Shape::Text(text) => {
+                            labels += 1;
+                            assert!(
+                                text.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|s| s.format.font_id.size == 20.0)
+                            );
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(stroke) = stroke {
+                        assert_ne!(stroke.color, drawing.color32(), "hidden construction line");
+                        assert_ne!(stroke.color, Color32::BLUE, "hidden level");
+                    }
+                }
+                assert!(red > 1 && green == 1, "{tool:?}: assigned strokes");
+                assert_eq!(
+                    labels,
+                    if tool == Tool::FibonacciSpeedResistanceArcs && closed {
+                        4
+                    } else {
+                        2
+                    }
+                );
+                if tool == Tool::FibonacciSpeedResistanceArcs {
+                    assert_eq!(filled_opposite, closed, "full-circle background");
+                    assert_eq!(
+                        crate::drawings::services::DrawingInteraction::hit_test_painted(
+                            opposite,
+                            &output.shapes
+                        ),
+                        closed,
+                        "select the added half"
+                    );
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    /// A 100-point radius grows to 161.8034 after a quarter turn in either direction.
+    /// Curve width follows the drawing instead of the previous fixed one-point stroke.
+    #[test]
+    fn spiral_direction_and_width_reach_the_curve() {
+        let rect = Rect::from_min_max(Pos2::new(-1000.0, -1000.0), Pos2::new(1000.0, 1000.0));
+        for counterclockwise in [false, true] {
+            let mut drawing = Drawing::new(0, Tool::FibonacciSpiral);
+            drawing.points = vec![Pos2::ZERO, Pos2::new(100.0, 0.0)];
+            drawing.stroke_width = 5.0;
+            let mut saved = serde_json::to_value(FibonacciConfig::default()).unwrap();
+            saved["spiral_counterclockwise"] = counterclockwise.into();
+            drawing.fib_config = Some(serde_json::from_value(saved).unwrap());
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    drawing.render_fibonacci_spiral(&ui.painter().with_clip_rect(rect), rect);
+                },
+            );
+            output.textures_delta.clear();
+            let curve = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path) => Some(path),
+                    _ => None,
+                })
+                .unwrap();
+            let expected = Pos2::new(
+                0.0,
+                if counterclockwise {
+                    -161.8034
+                } else {
+                    161.8034
+                },
+            );
+            assert!(
+                curve.points.iter().any(|p| p.distance(expected) < 0.01),
+                "quarter-turn geometry"
+            );
+            assert_eq!(curve.stroke.width, 5.0);
+            output.drop_without_applying_deltas();
+        }
+    }
+
     /// Saved ratios, visibility and colours drive every formerly fixed renderer and its hit lines.
     #[test]
     fn configured_fibonacci_levels_drive_paint_and_selection() {
@@ -1765,9 +2230,15 @@ mod tests {
                                 _ => None,
                             })
                             .collect();
-                        assert_eq!(labels.len(), 2);
+                        // Price ratios beside both box edges, time ratios above and below it.
+                        assert_eq!(labels.len(), 4);
+                        let size = |t: &egui::epaint::TextShape| t.galley.size();
                         assert!(labels.iter().any(|t| t.pos.x > 200.0 && t.pos.y < 125.0));
+                        assert!(labels.iter().any(|t| t.pos.x + size(t).x < 100.0
+                            && t.pos.y < 125.0
+                            && t.pos.y + size(t).y > 125.0));
                         assert!(labels.iter().any(|t| t.pos.y < 100.0 && t.pos.x < 175.0));
+                        assert!(labels.iter().any(|t| t.pos.y > 200.0 && t.pos.x < 175.0));
                         let line = |a: Pos2, b: Pos2| lines.iter().any(|l| l[0] == a && l[1] == b);
                         assert!(
                             line(Pos2::new(100.0, 200.0), Pos2::new(500.0, -100.0)),
@@ -1812,6 +2283,92 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
             }
+        }
+    }
+
+    /// A fan from (100,200) to (200,100) keeps its price and time levels apart, draws the grid in
+    /// its own stroke only when shown, labels only the enabled sides, and when reversed starts at
+    /// (100,100) with its far corner at (200,200).
+    #[test]
+    fn speed_fan_levels_grid_labels_and_reverse_are_independent() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        for (reverse, grid) in [(false, true), (true, false)] {
+            let mut fan = Drawing::new(0, Tool::FibonacciSpeedFan);
+            fan.points = vec![Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+            let mut json = serde_json::to_value(fan.fib_config.as_ref().unwrap()).unwrap();
+            json["levels"] = serde_json::json!([
+                {"value":0.5,"label":"","color":[211,41,73,255],"visible":true,"show_price":true}
+            ]);
+            json["time_levels"] = serde_json::json!([
+                {"value":0.25,"label":"","color":[37,157,89,255],"visible":true,"show_price":true}
+            ]);
+            json["reverse"] = reverse.into();
+            json["grid_visible"] = grid.into();
+            json["grid_color"] = serde_json::json!([61, 79, 199, 255]);
+            json["grid_width"] = 2.5.into();
+            json["left_labels"] = false.into();
+            json["bottom_labels"] = false.into();
+            fan.fib_config = Some(serde_json::from_value(json).unwrap());
+            let (origin, far) = if reverse {
+                (Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0))
+            } else {
+                (Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0))
+            };
+            let lines = fan.fibonacci_speed_fan_lines(rect);
+            let ray = |through: Pos2| {
+                lines.iter().any(|l| {
+                    let (a, b) = (l[1] - origin, through - origin);
+                    l[0] == origin && (a.x * b.y - a.y * b.x).abs() < 1e-2 && a.dot(b) > 0.0
+                })
+            };
+            // Price 0.5 passes the far edge midway; time 0.25 passes it three quarters across.
+            assert!(ray(Pos2::new(200.0, 150.0)), "reverse {reverse}: price ray");
+            assert!(ray(Pos2::new(175.0, far.y)), "reverse {reverse}: time ray");
+            assert!(
+                !ray(Pos2::new(150.0, far.y)),
+                "reverse {reverse}: shared time ray"
+            );
+            let grid_lines = [
+                [Pos2::new(100.0, 150.0), Pos2::new(200.0, 150.0)],
+                [Pos2::new(175.0, origin.y), Pos2::new(175.0, far.y)],
+            ];
+            for line in grid_lines {
+                assert_eq!(
+                    lines.contains(&line),
+                    grid,
+                    "reverse {reverse}: grid {line:?}"
+                );
+            }
+
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                fan.render_fibonacci_speed_fan(ui.painter(), rect)
+            });
+            output.textures_delta.clear();
+            let grid_stroke = Stroke::new(2.5, Color32::from_rgb(61, 79, 199));
+            let painted = output.shapes.iter().filter(|s| {
+                matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if *stroke == grid_stroke)
+            });
+            assert_eq!(painted.count(), if grid { 2 } else { 0 }, "grid stroke");
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 2, "reverse {reverse}: {labels:?}");
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, pos)| text == "0.5" && pos.x > 200.0)
+            );
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, pos)| text == "0.25" && pos.y < 100.0)
+            );
+            output.drop_without_applying_deltas();
         }
     }
 
@@ -2430,8 +2987,13 @@ mod tests {
         // edge: slope 0.5 * (1-ratio), so at x = 0, y = 100 * ratio.
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
         for (ratio, want) in [(0.0, (0.0, 0.0)), (0.5, (0.0, 50.0)), (1.0, (0.0, 100.0))] {
-            let got =
-                speed_fan_line_end(Pos2::new(200.0, 100.0), Pos2::new(100.0, 50.0), ratio, rect);
+            let got = speed_fan_ray_end(
+                Pos2::new(200.0, 100.0),
+                Pos2::new(100.0, 50.0),
+                ratio,
+                false,
+                rect,
+            );
             if !near(got, Pos2::from(want)) {
                 wrong.push(format!("fan ratio {ratio}: got {got:?}, want {want:?}"));
             }
@@ -2442,18 +3004,25 @@ mod tests {
             (1.0, Pos2::new(400.0, 100.0)),
         ] {
             assert_eq!(
-                speed_fan_line_end(
+                speed_fan_ray_end(
                     Pos2::new(100.0, 100.0),
                     Pos2::new(100.0, 200.0),
                     ratio,
+                    false,
                     rect
                 ),
                 want
             );
         }
-        assert!(
-            speed_fan_level_lines(Pos2::new(100.0, 100.0), Pos2::new(200.0, 100.0), 1.0, rect)
-                .contains(&[Pos2::new(100.0, 100.0), Pos2::new(100.0, 300.0)])
+        assert_eq!(
+            speed_fan_ray_end(
+                Pos2::new(100.0, 100.0),
+                Pos2::new(200.0, 100.0),
+                1.0,
+                true,
+                rect
+            ),
+            Pos2::new(100.0, 300.0)
         );
 
         // Time zones 10 px apart from x = 100: one line per Fibonacci number.
@@ -2463,7 +3032,7 @@ mod tests {
         let got: Vec<_> = zones
             .fibonacci_time_zone_lines(rect)
             .into_iter()
-            .filter(|line| line[0].x <= 300.0)
+            .filter(|line| line[0].x == line[1].x && line[0].x <= 300.0)
             .map(|line| (((line[0].x - 100.0) / 10.0) as u32, line[0].x))
             .collect();
         let want = [
@@ -2503,7 +3072,7 @@ mod tests {
             ((100.0, 0.0), -FRAC_PI_2, (0.0, -61.8034)),
             ((0.0, 100.0), 0.0, (0.0, 100.0)),
         ] {
-            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), f64::from(theta));
+            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), f64::from(theta), false);
             if !near(got, Pos2::from(want)) {
                 wrong.push(format!(
                     "spiral edge {edge:?} theta {theta}: got {got:?}, want {want:?}"
