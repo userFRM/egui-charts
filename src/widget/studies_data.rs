@@ -271,7 +271,8 @@ impl Chart {
     /// The last error for a requested study history. Recoverable resolve and page failures retry
     /// with exponential backoff, respecting rate limits; success clears the error. An unavailable
     /// source leaves gaps. A live stream error does not stop history paging and clears on the
-    /// next stream update or subscription. A history error takes precedence over a stream error.
+    /// next live bar, stream reset or subscription. A history error takes precedence over a
+    /// stream error.
     pub fn study_data_error(&self, request: &StudyDataRequest) -> Option<&FeedError> {
         let request = resolved(request, self.symbol(), self.timeframe());
         let series = self
