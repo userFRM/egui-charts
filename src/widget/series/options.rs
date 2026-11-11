@@ -579,8 +579,14 @@ impl Chart {
                     .iter()
                     .any(|symbol| self.study_data.awaits_page(symbol, timeframe));
             let bars = if item.restored {
+                // The bars a replay retains, not the ones its cutoff shows.
+                let held = self
+                    .replay_window()
+                    .filter(|_| self.replay_retains(id))
+                    .and_then(|replay| replay.bars.get(&id))
+                    .map_or_else(|| self.bars(id), Vec::as_slice);
                 // Of a held and a live bar in one slot, the later, live one stays.
-                super::clean([self.bars(id), bars.as_slice()].concat(), &self.clock()).0
+                super::clean([held, bars.as_slice()].concat(), &self.clock()).0
             } else {
                 item.filled = Some(request);
                 bars

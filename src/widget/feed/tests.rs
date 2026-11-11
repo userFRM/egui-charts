@@ -4227,9 +4227,11 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
 }
 
 /// Undo of a removed feed-backed series shows the bars it held over the frames before its history
-/// reply, merges a live bar into them and then leaves the series to the reply. Bars held under
+/// reply, merges a live bar into them and then leaves the series to the reply. A candle replay
+/// entered before the reply windows the held bars with the live bar merged. Bars held under
 /// another interval, hours, conversion or adjustment than the chart's are not shown, also when the
-/// interval changed just before the removal, while the series still had its old bars.
+/// interval changed just before the removal, while the series still had its old bars, and neither
+/// are the live feed's bars under a market replay, whether the series left before or during it.
 #[test]
 fn undo_of_a_removed_fed_series_keeps_its_bars() {
     // MSFT closes at 40 plus the index of the one-minute bar.
@@ -4243,16 +4245,39 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
             .collect()
     };
     let held = [40.0, 41.0, 42.0, 43.0, 44.0, 45.0];
-    // The change, whether it comes before the removal, and the closes from undo to the reply,
-    // without and with a live bar of 50 in the last slot.
-    type Row<'a> = (&'a str, bool, fn(&mut Chart), &'a [f64], &'a [f64]);
-    let rows: [Row; 5] = [
+    let merged = [40.0, 41.0, 42.0, 43.0, 44.0, 50.0];
+    // A market replay in the fifth minute of a recording that lacks MSFT, run for a frame.
+    let market = |chart: &mut Chart| {
+        use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        let time = bars(5)[4].time + TimeDelta::seconds(30);
+        let fill = Tick::new(time, 70.0, 1.0, None).with_id(0);
+        let events = vec![ReplayEvent::new("A", time, 0, MarketEvent::Trade(fill))];
+        let driver = ReplayDriver::new(events, vec![Instrument::new("A")]).unwrap();
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time);
+        chart.set_market_replay(Some(Arc::new(driver)));
+        chart.pump(&egui::Context::default());
+    };
+    // How a row ends once a live bar has merged: the history reply arrives, a candle replay
+    // starts before it, or a market replay drives the series and no reply comes.
+    #[derive(PartialEq)]
+    enum End {
+        Reply,
+        CandleReplay,
+        MarketReplay,
+    }
+    // The change, whether it comes before the removal, the closes from undo to the reply,
+    // without and with a live bar of 50 in the last slot, and how the row ends.
+    type Row<'a> = (&'a str, bool, fn(&mut Chart), &'a [f64], &'a [f64], End);
+    let rows: [Row; 8] = [
+        ("none", false, |_| {}, &held, &merged, End::Reply),
         (
-            "none",
+            "candle replay",
             false,
             |_| {},
             &held,
-            &[40.0, 41.0, 42.0, 43.0, 44.0, 50.0],
+            &merged,
+            End::CandleReplay,
         ),
         (
             "interval",
@@ -4260,6 +4285,7 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
             |chart| chart.set_timeframe(Timeframe::Sec30),
             &[],
             &[50.0],
+            End::Reply,
         ),
         (
             "hours",
@@ -4267,6 +4293,7 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
             |chart| chart.set_extended_hours(true),
             &[],
             &[50.0],
+            End::Reply,
         ),
         (
             "conversion",
@@ -4274,6 +4301,7 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
             |chart| chart.set_conversion(Some("EUR".into())),
             &[],
             &[50.0],
+            End::Reply,
         ),
         (
             "adjustment",
@@ -4281,9 +4309,19 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
             |chart| chart.set_dividend_adjusted(true),
             &[],
             &[50.0],
+            End::Reply,
+        ),
+        ("market replay", false, market, &[], &[], End::MarketReplay),
+        (
+            "removed in a market replay",
+            true,
+            market,
+            &[],
+            &[],
+            End::MarketReplay,
         ),
     ];
-    for (change, before_removal, apply, shown, live) in rows {
+    for (change, before_removal, apply, shown, live, end) in rows {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, None);
         let id = chart.add_feed_series(crate::widget::SeriesOptions {
@@ -4309,7 +4347,9 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
         assert!(chart.undo());
         assert_eq!(closes(&chart, id), shown, "{change}: right after undo");
         frames.run(&mut chart);
-        feed.resolve().send(Ok(Instrument::new("MSFT")));
+        if end != End::MarketReplay {
+            feed.resolve().send(Ok(Instrument::new("MSFT")));
+        }
         for frame in 0..3 {
             frames.run(&mut chart);
             assert_eq!(
@@ -4327,6 +4367,19 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
             live,
             "{change}: a live bar before the reply"
         );
+        match end {
+            End::Reply => {}
+            End::CandleReplay => {
+                chart.set_replay_time(Some(msft(3..4)[0].time));
+                frames.run(&mut chart);
+                assert_eq!(closes(&chart, id), [40.0, 41.0, 42.0], "{change}: entered");
+                chart.set_replay_time(Some(msft(6..7)[0].time));
+                frames.run(&mut chart);
+                assert_eq!(closes(&chart, id), merged, "{change}: sought past the bars");
+                continue;
+            }
+            End::MarketReplay => continue,
+        }
         feed.page().send(page(msft(1..7), true));
         frames.run(&mut chart);
         assert_eq!(

@@ -625,6 +625,11 @@ impl Chart {
     /// Takes `series`, which has left the chart, with all its bars, its price formatter and its
     /// bar limit.
     fn hold_series(&mut self, mut series: PriceSeries) -> HeldSeries {
+        // Removed during a market replay, a fed series takes the live bars its window keeps for
+        // the exit, which its stamp does not describe.
+        if self.market_replay.is_some() && series.fed {
+            series.filled = None;
+        }
         self.replay_release(&mut series);
         let mut held = HeldSeries {
             series,
