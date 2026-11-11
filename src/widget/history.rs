@@ -1542,6 +1542,11 @@ mod tests {
         chart.set_timeframe(Timeframe::Min1);
         chart.config_mut().show_grid = false;
         let host = chart.add_indicator(Box::new(SMA::new(3)));
+        // As restored from settings saved without an editing permission.
+        let study = chart.indicator_mut(host).unwrap();
+        let mut legacy = study.settings();
+        legacy.user_edit_enabled = None;
+        study.apply_settings(&[], legacy).unwrap();
         chart
             .drawings_mut()
             .add_synced_drawing(host_line())
@@ -1561,7 +1566,10 @@ mod tests {
                 "an open action cannot consume completed history"
             );
             chart.set_timeframe(Timeframe::Min1);
-            chart.indicator_mut(host).unwrap().set_overlay(true);
+            let study = chart.indicator_mut(host).unwrap();
+            let unchanged = study.settings();
+            study.apply_settings(&[], unchanged).unwrap();
+            study.set_overlay(true);
             chart.set_indicator_scale(host, crate::studies::StudyScale::Main);
             chart
                 .set_indicator_source(

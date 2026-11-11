@@ -1085,6 +1085,8 @@ impl Indicator for ConfiguredStudy {
         let mut snapshot =
             StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
         snapshot.settings = self.settings.clone();
+        // As `settings` returns it, so applying unchanged settings adds no history step.
+        snapshot.settings.user_edit_enabled = Some(self.user_edit_enabled());
         snapshot.timeframe = self.timeframe;
         snapshot.overlay = self.overlay;
         snapshot.scale = self.scale;
