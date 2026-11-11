@@ -16,20 +16,20 @@ use std::sync::Arc;
 ///
 /// Obtained from the chart's time scale or rendering mapping. Logical indices still address
 /// rows; their positions are proportional to the encoded numeric keys. One spacing unit is
-/// the mean key gap, or one numeric unit for a single point.
+/// the first mean key gap, retained across updates, or one numeric unit until keys differ.
 #[derive(Debug, Clone)]
 pub struct NumericPositions {
     // Two edge slots retain both the first step and the later cadence of key interpolation.
     points: Arc<[f64]>,
     #[cfg(feature = "widget")]
-    pub(crate) unit: f64,
+    pub(crate) unit: Option<f64>,
     #[cfg(feature = "widget")]
     origin: DateTime<Utc>,
 }
 
 impl NumericPositions {
     #[cfg(feature = "widget")]
-    pub(crate) fn new(points: Vec<f64>, unit: f64, origin: DateTime<Utc>) -> Self {
+    pub(crate) fn new(points: Vec<f64>, unit: Option<f64>, origin: DateTime<Utc>) -> Self {
         Self {
             points: points.into(),
             unit,
@@ -39,9 +39,31 @@ impl NumericPositions {
 
     #[cfg(feature = "widget")]
     pub(crate) fn index_at(&self, time: DateTime<Utc>) -> f64 {
+        self.index(self.position_at(time))
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn position_at(&self, time: DateTime<Utc>) -> f64 {
         let elapsed = time - self.origin;
         let seconds = elapsed.num_seconds() as f64 + f64::from(elapsed.subsec_nanos()) / 1e9;
-        self.index(seconds / self.unit)
+        self.position(0.0) + seconds / self.unit.unwrap_or(1.0)
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn min_gap(&self, left: f64, right: f64) -> f64 {
+        if self.points.len() < 5 {
+            return 1.0;
+        }
+        let points = &self.points[2..self.points.len() - 2];
+        let start = points
+            .partition_point(|&point| point < left)
+            .saturating_sub(1);
+        let end = (points.partition_point(|&point| point <= right) + 1).min(points.len());
+        points[start.min(end)..end]
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .filter(|gap| *gap > 0.0)
+            .fold(1.0, f64::min)
     }
 
     pub(crate) fn position(&self, index: f64) -> f64 {
@@ -253,7 +275,8 @@ impl TimeScale {
     }
 
     fn content_range(&self) -> (f64, f64) {
-        self.content_range.unwrap_or((0.0, self.base_idx() as f64))
+        self.content_range
+            .unwrap_or((self.position(0.0), self.base_idx() as f64))
     }
 
     /// Numeric sample positions used by this scale, or `None` for ordinal time charts.
@@ -271,8 +294,22 @@ impl TimeScale {
     #[cfg(feature = "widget")]
     pub(crate) fn refresh_numeric_positions(&mut self, bars: &[crate::model::Bar], revision: u64) {
         let key = (revision, bars.len(), bars.last().map(|bar| bar.time));
-        if self.numeric_positions.is_some() && self.numeric_revision != Some(key) {
-            self.numeric_positions = Some(crate::model::numeric_positions(bars));
+        if let Some(old) = &self.numeric_positions
+            && self.numeric_revision != Some(key)
+        {
+            let new = crate::model::numeric_positions(bars, old.unit);
+            if !old.points.is_empty() && !bars.is_empty() {
+                let shift = new.position_at(old.origin) - old.position(0.0);
+                let base = self.base_idx() as f64;
+                let last = (bars.len() - 1) as f64;
+                self.right_offset += base + shift - last;
+                if let Some((left, right)) = &mut self.content_range {
+                    *left = (*left + shift).min(new.position(0.0));
+                    // set_bar_cnt moves this cached edge by the row-count change next.
+                    *right = (*right + shift).max(last) - (last - base);
+                }
+            }
+            self.numeric_positions = Some(new);
             self.numeric_revision = Some(key);
         }
     }
@@ -390,6 +427,24 @@ impl TimeScale {
             self.index(left_border) as f32,
             self.index(right_border) as f32,
         )
+    }
+
+    /// Numeric samples can be much closer than a mean-gap slot; cull at the plot edges.
+    pub(crate) fn visible_data_range(&self) -> LogicalRange {
+        if self.numeric_positions.is_none() {
+            return self.visible_logical_range();
+        }
+        let (left, right) = self.visible_positions();
+        LogicalRange::new(
+            (self.index(left) + 0.5) as f32,
+            (self.index(right) - 0.5) as f32,
+        )
+    }
+
+    /// Plot boundaries in spacing units, retaining precision across large numeric gaps.
+    pub(crate) fn visible_positions(&self) -> (f64, f64) {
+        let right = self.base_idx() as f64 + self.right_offset + 0.5;
+        (right - f64::from(self.width) / self.bar_spacing, right)
     }
 
     /// Convert logical index to x coord

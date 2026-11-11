@@ -101,7 +101,7 @@ pub(super) fn paint(
         }
         let histogram = matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns);
         if histogram {
-            plot.width = coords.bar_spacing * factor as f32 * 0.8;
+            plot.width = coords.bar_spacing_for_width() * factor as f32 * 0.8;
         }
         let mut points = Vec::new();
         for group in visible.start / factor..visible.end.div_ceil(factor) {
