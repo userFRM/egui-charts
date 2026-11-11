@@ -24,6 +24,45 @@ pub struct StudyFill {
     pub inverted_color: Option<Color32>,
 }
 
+/// A vertical colour ramp between a plot and a fixed baseline, beneath the plot.
+/// Values outside the ramp retain the nearest endpoint colour.
+#[derive(Clone, Copy, Debug)]
+pub struct StudyGradient {
+    /// Caption in the style editor.
+    pub name: &'static str,
+    /// Output bounding the fill. Its visibility does not hide the fill.
+    pub plot: usize,
+    /// Other boundary of the filled area.
+    pub baseline: f64,
+    /// Values at the two ends of the colour ramp, in either order.
+    pub range: [f64; 2],
+    /// Colours at the corresponding ends of the ramp.
+    pub colors: [Color32; 2],
+}
+
+/// Prices of visible ramps, including their baselines even when their plots are hidden.
+#[cfg(feature = "widget")]
+pub(crate) fn gradient_prices(
+    study: &dyn super::Indicator,
+    bars: std::ops::Range<usize>,
+) -> impl Iterator<Item = f64> + '_ {
+    study
+        .gradients()
+        .into_iter()
+        .filter(|fill| {
+            fill.colors
+                .iter()
+                .any(|color| *color != Color32::TRANSPARENT)
+        })
+        .flat_map(move |fill| {
+            bars.clone()
+                .filter_map(move |bar| study.plot_value(fill.plot, bar))
+                .filter(|value| value.is_finite())
+                .flat_map(move |value| [fill.baseline, value])
+        })
+        .filter(|value| value.is_finite())
+}
+
 /// One OHLCV candle spanning an exclusive range of source bar indices.
 #[derive(Clone, Debug)]
 pub struct StudyCandle {
@@ -101,11 +140,22 @@ pub(crate) fn drawing_prices(
             };
             let first = extent.iter().map(|p| p.bar_idx).reduce(f32::min)?;
             let last = extent.iter().map(|p| p.bar_idx).reduce(f32::max)?;
-            let left = drawing.extend_left
+            let (mut extend_left, mut extend_right) = (drawing.extend_left, drawing.extend_right);
+            if drawing.extends_past_anchors()
+                && let [a, b, ..] = drawing.chart_points.as_slice()
+            {
+                // Reversed anchors exchange the sides reached; vertical lines stay at one bar.
+                if a.bar_idx > b.bar_idx {
+                    std::mem::swap(&mut extend_left, &mut extend_right);
+                } else if a.bar_idx == b.bar_idx {
+                    (extend_left, extend_right) = (false, false);
+                }
+            }
+            let left = extend_left
                 || levels
                     .as_ref()
                     .is_some_and(|(c, _)| c.extend_left || c.show_background);
-            let right = drawing.extend_right
+            let right = extend_right
                 || drawing.tool_type == crate::drawings::DrawingToolType::Pitchfork
                 || levels
                     .as_ref()

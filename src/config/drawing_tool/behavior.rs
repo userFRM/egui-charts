@@ -192,12 +192,22 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the drawing has a line whose width and pattern its settings can change. The arrow
-    /// marker and arrow marks are solid shapes without one.
+    /// Whether the drawing paints a line whose width and pattern its settings can change.
+    /// Solid marks and annotations with fixed borders or guides offer no line controls.
     pub fn draws_line(&self) -> bool {
         !matches!(
             self,
-            Self::ArrowMarker
+            Self::TextLabel
+                | Self::AnchoredText
+                | Self::Note
+                | Self::PriceNote
+                | Self::AnchoredNote
+                | Self::Table
+                | Self::Comment
+                | Self::PriceLabel
+                | Self::Signpost
+                | Self::FlagNote
+                | Self::ArrowMarker
                 | Self::ArrowMarkUp
                 | Self::ArrowMarkDown
                 | Self::ArrowMarkLeft

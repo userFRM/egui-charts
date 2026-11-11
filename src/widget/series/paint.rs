@@ -287,7 +287,12 @@ impl Chart {
         item: &PriceSeries,
         map: PriceMap,
         index: usize,
+        background: impl FnOnce(Pos2) -> egui::Color32,
     ) {
+        let radius = item.options.crosshair_marker_radius;
+        if !radius.is_finite() || radius <= 0.0 {
+            return;
+        }
         let Some(time) = self.state.shown().get(index).map(|bar| bar.time) else {
             return;
         };
@@ -295,11 +300,11 @@ impl Chart {
             return;
         };
         let bar = &item.bars[at];
-        let params = item.options.type_params();
+        let styles = item.options.type_styles();
         if let Some(color) = rendering::candles::line_color_at(
             item.options.chart_type,
-            &params.styles,
-            params.baseline,
+            &styles,
+            crate::model::BaselineLevel::PercentOfPane(50.0),
             &map,
             rect,
             bar.close,
@@ -310,12 +315,13 @@ impl Chart {
                 rect.left(),
                 rect.width(),
             );
+            let point = Pos2::new(x, map.price_to_y(bar.close));
             rendering::candles::render_crosshair_marker(
                 &plot.with_clip_rect(plot.clip_rect().intersect(rect)),
-                Pos2::new(x, map.price_to_y(bar.close)),
-                &params.styles,
+                point,
+                &styles,
                 color,
-                self.config.background_color,
+                background(point),
             );
         }
     }

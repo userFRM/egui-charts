@@ -328,7 +328,7 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
-    /// Custom retracement text beside this level, independent of its numeric label.
+    /// Custom retracement or extension text beside this level, independent of its numeric label.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     /// Line width in points; absent inherits the drawing's level width.
@@ -336,7 +336,7 @@ pub struct FibonacciLevel {
     pub width: Option<f32>,
     /// Line pattern; absent inherits the drawing's level pattern.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<crate::model::LineStyle>,
+    pub line_style: Option<crate::model::LineStyle>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -355,7 +355,7 @@ impl FibonacciLevel {
             label: label.to_string(),
             text: String::new(),
             width: None,
-            style: None,
+            line_style: None,
             color,
             visible: true,
             show_price: true,
@@ -422,20 +422,21 @@ pub struct FibonacciConfig {
     /// Font size of level labels and custom text, in points (1 through 256).
     #[serde(default = "fib_font_size")]
     pub label_size: f32,
-    /// Retracement labels sit outside the Left/Right endpoint or midway at Center.
+    /// Retracement, extension and channel labels sit outside the Left/Right endpoint or midway at Center.
     /// Absent follows `labels_on_left` for earlier drawings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_position: Option<LineTextHorizontalAlign>,
-    /// Edge of a retracement label resting on its level; middle places it on the line.
+    /// Edge of a retracement, extension or channel label resting on its level; middle places it on the line.
     #[serde(default = "fib_vertical_align")]
     pub label_vertical: LineTextVerticalAlign,
-    /// Whether custom retracement text is visible, independently of prices and ratios.
+    /// Whether custom retracement or extension text is visible, independently of prices and ratios.
     #[serde(default = "percent_levels")]
     pub show_text: bool,
-    /// Retracement text sits outside the Left/Right endpoint or midway at Center.
+    /// Custom text sits outside retracement endpoints and inside extension endpoints;
+    /// Center places it midway along the level.
     #[serde(default)]
     pub text_position: LineTextHorizontalAlign,
-    /// Edge of the custom retracement text resting on its level.
+    /// Edge of the custom retracement or extension text resting on its level.
     #[serde(default = "fib_vertical_align")]
     pub text_vertical: LineTextVerticalAlign,
     /// Show the construction line between anchors, using the drawing's line style.
@@ -697,7 +698,7 @@ impl FibonacciConfig {
             {
                 fields!(
                     target, original, edited, value, label, color, visible, show_price, text,
-                    width, style
+                    width, line_style
                 );
             }
         } else {

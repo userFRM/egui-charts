@@ -357,6 +357,12 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
+        // Only an area gesture in this pane repaints for its input; drags and other panes do not.
+        let area_input = drawing_manager.active_tool.is_none()
+            && drawing_manager.dragging_handle.is_none()
+            && drawing_manager.box_selection_input(ui)
+            && (drawing_manager.selection_area())
+                .is_none_or(|area| area.pane == pane.map(|id| id.0));
         if owns_gesture {
             text::begin_fibonacci_edit(ui, drawing_manager, response, price_rect);
         }
@@ -393,13 +399,14 @@ impl Chart {
                     active_tool,
                 );
             }
-        } else {
+        } else if !area_input {
             selection::handle_selection(
                 ui,
                 drawing_manager,
                 cursor_modes,
                 response,
                 price_rect,
+                pane.map(|id| id.0),
                 &x_to_bar_edit,
                 &y_to_price,
                 &translate_price,
@@ -474,6 +481,26 @@ impl Chart {
             timeframe: self.drawing_timeframe(),
             finer: &finer,
         };
+        if area_input && owns_gesture && drawing_manager.text_editor.is_none() {
+            // Area input needs this frame's geometry, before the selected handles are painted.
+            let previous = ui
+                .ctx()
+                .graphics_mut(|g| std::mem::take(g.entry(painter.layer_id())));
+            drawing_manager.render_all(painter, price_rect, &view);
+            ui.ctx()
+                .graphics_mut(|g| *g.entry(painter.layer_id()) = previous);
+            selection::handle_selection(
+                ui,
+                drawing_manager,
+                cursor_modes,
+                response,
+                price_rect,
+                pane.map(|id| id.0),
+                &x_to_bar_edit,
+                &y_to_price,
+                &translate_price,
+            );
+        }
         drawing_manager.render_all(painter, price_rect, &view);
         if drawing_manager.text_editor.as_ref().is_some_and(|editor| {
             drawing_manager
@@ -1604,16 +1631,35 @@ mod tests {
     /// selected, unless it is locked or Escape has turned the eraser off.
     #[test]
     fn an_eraser_click_deletes_the_drawing_unless_it_is_locked() {
-        for (selected, locked, escaped, kept) in [
-            (false, false, false, 0),
-            (true, false, false, 0),
-            (true, true, false, 1),
-            (false, false, true, 1),
+        for (tool, selected, locked, escaped, kept) in [
+            (DrawingToolType::HorizontalLine, false, false, false, 0),
+            (DrawingToolType::HorizontalLine, true, false, false, 0),
+            (DrawingToolType::HorizontalLine, true, true, false, 1),
+            (DrawingToolType::HorizontalLine, false, false, true, 1),
+            (DrawingToolType::FibonacciExtension, false, false, false, 0),
+            (DrawingToolType::FibonacciExtension, true, false, false, 0),
+            (DrawingToolType::FibonacciExtension, true, true, false, 1),
+            (DrawingToolType::FibonacciExtension, false, false, true, 1),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            let mut line = Drawing::new(1, DrawingToolType::HorizontalLine);
-            line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
+            let mut line = Drawing::new(1, tool);
+            line.chart_points = if tool == DrawingToolType::FibonacciExtension {
+                let config = line.fib_config.as_mut().unwrap();
+                for (index, level) in config.levels.iter_mut().enumerate() {
+                    level.visible = index == 0;
+                }
+                if !selected {
+                    config.levels[0].text = "Target".into();
+                }
+                vec![
+                    ChartPoint::new(20.0, 12.0),
+                    ChartPoint::new(50.0, 18.0),
+                    ChartPoint::new(80.0, 15.0),
+                ]
+            } else {
+                vec![ChartPoint::new(50.0, 15.0)]
+            };
             line.locked = locked;
             chart.drawings_mut().drawings.push(line);
             if selected {
@@ -1621,7 +1667,12 @@ mod tests {
             }
             chart.drawings_mut().set_eraser_mode(true);
             frame(&ctx, &mut chart, 0.0, vec![]);
-            let pos = chart.drawings().drawings[0].points[0];
+            let points = &chart.drawings().drawings[0].points;
+            let pos = if tool == DrawingToolType::FibonacciExtension {
+                egui::pos2((points[1].x + points[2].x) * 0.5, points[2].y)
+            } else {
+                points[0]
+            };
             let button = |pressed| Event::PointerButton {
                 pos,
                 button: PointerButton::Primary,
@@ -1647,7 +1698,7 @@ mod tests {
             let left = chart.drawings().drawings.len();
             assert_eq!(
                 left, kept,
-                "selected {selected}, locked {locked}, escaped {escaped}"
+                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}"
             );
         }
     }
