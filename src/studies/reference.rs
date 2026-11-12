@@ -1170,8 +1170,24 @@ fn staple_studies_match_published_definitions() {
     };
     studies.extend(time_studies(&bars));
     studies.retain(|(name, _, _)| available(name));
-    for (_, study, data) in &mut studies {
-        study.calculate(data);
+    for (name, study, data) in &mut studies {
+        // The incremental paths of these studies must land on the same published values:
+        // append the live bar, then correct it back to its real prices.
+        if ["Aroon(", "DMI(", "PSAR("].iter().any(|p| name.starts_with(p)) {
+            let (last, history) = data.split_last().unwrap();
+            let mut live = last.clone();
+            live.high += 7.0;
+            live.low -= 5.0;
+            live.close += 3.0;
+            study.calculate(history);
+            let at = history.len();
+            let mut moved = history.to_vec();
+            moved.push(live);
+            study.update(&moved, at);
+            study.update(data, at);
+        } else {
+            study.calculate(data);
+        }
     }
 
     let mut failures = Vec::new();
