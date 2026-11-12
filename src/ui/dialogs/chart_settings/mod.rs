@@ -808,8 +808,9 @@ impl SettingsDialog {
             };
             let palette = crate::config::ChartConfig::default().with_theme(theme);
             // The default styles of the chart types hold the dark preset's candle colours.
+            let params = self.settings.chart_type_params.get_or_insert_default();
             crate::widget::palette::follow_candle_colors(
-                &mut self.settings.chart_type_params.get_or_insert_default().styles,
+                &mut params.styles,
                 &[crate::config::ChartConfig::default()],
                 &palette,
             );
