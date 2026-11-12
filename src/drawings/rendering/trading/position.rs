@@ -188,10 +188,6 @@ impl Drawing {
                 .filter(|amount| amount.is_finite())
         };
         let currency = self.position_readout.account_currency.as_deref();
-        let money_text = |amount: f64| match currency {
-            Some(currency) => format!("{amount:.2} {currency}"),
-            None => format!("{amount:.2}"),
-        };
         let (summary, summary_fill, summary_text) = match exit {
             Some((exit_price, closed, _)) => {
                 let change = side * (exit_price - entry_price);
@@ -258,15 +254,31 @@ impl Drawing {
             let balance = match self.position_size {
                 Some(crate::drawings::PositionSize::RiskPercent { account_size, .. }) => Some(
                     pnl.map(|change| account_size + change)
-                        .filter(|balance| balance.is_finite())
-                        .map_or_else(
-                            || l10n::text(ctx, "n/a"),
-                            |balance| egui::emath::format_with_decimals_in_range(balance, 0..=2),
-                        ),
+                        .filter(|balance| balance.is_finite()),
                 ),
                 _ => None,
             };
-            let pnl = pnl.map_or_else(|| l10n::text(ctx, "n/a"), money_text);
+            // The balance and the profit or loss beside it share their decimals, so the
+            // two add up to the account size as printed.
+            let decimals = pnl
+                .into_iter()
+                .chain(balance.flatten())
+                .map(money_decimals)
+                .max()
+                .unwrap_or(2);
+            let amount_text = |amount: Option<f64>| {
+                amount.map_or_else(
+                    || l10n::text(ctx, "n/a"),
+                    |amount| money_text(amount, decimals),
+                )
+            };
+            let balance = balance.map(amount_text);
+            let pnl = match (pnl, currency) {
+                (Some(pnl), Some(currency)) => {
+                    format!("{} {currency}", money_text(pnl, decimals))
+                }
+                _ => amount_text(pnl),
+            };
             if self.position_readout.condensed {
                 let mut level = figures;
                 for value in ticks
@@ -533,6 +545,29 @@ fn position_exit(
     Some((last.map_or(entry, |i| bars[i].close), false, last))
 }
 
+/// Decimals a money amount is printed with: two, or below one as many as its first four
+/// significant digits need, up to eight, so a small amount in a currency such as BTC
+/// does not round away.
+fn money_decimals(amount: f64) -> usize {
+    let size = amount.abs();
+    if !(size > 0.0 && size < 1.0) {
+        return 2;
+    }
+    let digits = (3 - size.log10().floor() as i32).min(8) as usize;
+    let rounded = format!("{size:.digits$}");
+    // Less the leading digit and the point.
+    (rounded.trim_end_matches('0').len() - 2).max(2)
+}
+
+/// A money amount with `decimals` decimals; a loss that rounds to zero prints unsigned.
+fn money_text(amount: f64, decimals: usize) -> String {
+    let text = format!("{amount:.decimals$}");
+    match text.strip_prefix('-') {
+        Some(zero) if zero.chars().all(|digit| matches!(digit, '0' | '.')) => zero.to_owned(),
+        _ => text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,7 +603,7 @@ mod tests {
                     },
                     0.01,
                     "Qty: 0.18",
-                    "Balance: 23450, P&L: 450.00",
+                    "Balance: 23450.00, P&L: 450.00",
                 ),
                 (PositionSize::Quantity(1e20), 0.01, "Qty: 1e20", "P&L:"),
                 (PositionSize::Quantity(1e-25), 1e-27, "Qty: 1e-25", "P&L:"),
@@ -962,6 +997,157 @@ mod tests {
                     );
                     output.drop_without_applying_deltas();
                 }
+            }
+        }
+    }
+
+    /// Target and stop tags of a long position entered at 100; every amount is worked out
+    /// by hand beside its row.
+    #[test]
+    fn position_tags_keep_money_precision() {
+        use crate::drawings::{
+            ChartPoint, DrawingToolType, PositionReadout, PositionSize, PositionSizing,
+        };
+        // An account in BTC at 0.00002 BTC per USD, on 50 USD a point: 0.001 BTC a point.
+        let btc = Some(("BTC", 0.00002));
+        let percent = |account_size, percent| PositionSize::RiskPercent {
+            account_size,
+            percent,
+        };
+        for (size, point_value, account, quantity_decimals, target, stop, target_tag, stop_tag) in [
+            // 0.002 / 2.5 points / 0.001 = 0.8 lots: the target pays 5 * 0.8 * 0.001 = 0.004
+            // and the stop loses 2.5 * 0.8 * 0.001 = 0.002.
+            (
+                PositionSize::RiskAmount(0.002),
+                50.0,
+                btc,
+                None,
+                105.0,
+                97.5,
+                ", P&L: 0.004 BTC",
+                ", P&L: -0.002 BTC",
+            ),
+            // One percent of 0.2 is the same 0.002 at risk.
+            (
+                percent(0.2, 1.0),
+                50.0,
+                btc,
+                None,
+                105.0,
+                97.5,
+                "Balance: 0.204, P&L: 0.004 BTC",
+                "Balance: 0.198, P&L: -0.002 BTC",
+            ),
+            // 2e-10 / 2.5 / 0.001 = 8e-8 lots: the stop loses 2e-10, below the eighth
+            // decimal, which is not a negative zero.
+            (
+                PositionSize::RiskAmount(2e-10),
+                50.0,
+                btc,
+                None,
+                105.0,
+                97.5,
+                ", P&L: 0.00 BTC",
+                ", P&L: 0.00 BTC",
+            ),
+            // 10,000 over 3 points is 3333.33, or 3333 whole units: the target pays
+            // 4.25 * 3333 = 14165.25 and the stop loses 3 * 3333 = 9999.
+            (
+                percent(1_000_000.0, 1.0),
+                1.0,
+                None,
+                Some(0),
+                104.25,
+                97.0,
+                "Balance: 1014165.25, P&L: 14165.25",
+                "Balance: 990001.00, P&L: -9999.00",
+            ),
+            // 12.34 over 2.5 points is 4.936 units: the target pays 5 * 4.936 = 24.68.
+            (
+                percent(100_000.0, 0.01234),
+                1.0,
+                None,
+                None,
+                105.0,
+                97.5,
+                "Balance: 100024.68, P&L: 24.68",
+                "Balance: 99987.66, P&L: -12.34",
+            ),
+            // 0.005 over 2.5 points is 0.002 units: the target pays 5 * 0.002 = 0.01, and
+            // the balance at the stop takes the third decimal of its 0.005 loss.
+            (
+                percent(10_000.0, 0.00005),
+                1.0,
+                None,
+                None,
+                105.0,
+                97.5,
+                "Balance: 10000.01, P&L: 0.01",
+                "Balance: 9999.995, P&L: -0.005",
+            ),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::LongPos);
+            drawing.position_sizing = PositionSizing {
+                point_value,
+                ..Default::default()
+            };
+            drawing.position_readout = PositionReadout {
+                persistent: true,
+                account_currency: account.map(|(currency, _)| currency.into()),
+                conversion_rate: account.map(|(_, rate)| rate),
+                quantity_decimals,
+                ..Default::default()
+            };
+            drawing.position_size = Some(size);
+            drawing.chart_points = vec![
+                ChartPoint::new(30.0, 100.0),
+                ChartPoint::new(50.0, target),
+                ChartPoint::new(50.0, stop),
+            ];
+            drawing.completed = true;
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[99.0], &[106.0]);
+            chart.set_instrument(Some(
+                crate::model::Instrument::new("TEST").with_currency("USD"),
+            ));
+            chart.price_scale_mut().set_range(94.0, 106.0);
+            let render = |chart: &mut crate::Chart| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                    },
+                )
+            };
+            render(&mut chart).drop_without_applying_deltas();
+            chart.set_visible_logical_range(crate::model::LogicalRange {
+                left: 10.0,
+                right: 70.0,
+            });
+            chart.drawings_mut().drawings.push(drawing);
+            let output = render(&mut chart);
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            // Released before the assertions, so a failing row reports its tag.
+            output.drop_without_applying_deltas();
+            for (level, tag) in [("Target:", target_tag), ("Stop:", stop_tag)] {
+                let text = texts
+                    .iter()
+                    .find(|text| text.starts_with(level))
+                    .expect(level);
+                assert!(text.ends_with(tag), "{size:?}: {text}");
             }
         }
     }
