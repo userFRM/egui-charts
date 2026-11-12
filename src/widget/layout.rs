@@ -1569,12 +1569,13 @@ impl ChartLayout {
         {
             self.finish_resize();
         }
-        self.record_sizes(charts[self.active]);
-        self.record_links(charts[self.active]);
         let (mut rects, mut dividers) = self.geometry(rect, count);
         if self.move_divider(ui) {
             (rects, dividers) = self.geometry(rect, count);
         }
+        // After a released drag queues its step, so an undo in this frame reaches it.
+        self.record_sizes(charts[self.active]);
+        self.record_links(charts[self.active]);
         // Divider hit regions stay above the charts, but their input is known before painting.
         let starting_resize = self.sizing.drag.is_none()
             && dividers.iter().any(|divider| {
@@ -2687,12 +2688,24 @@ mod tests {
                 );
             }
         }
-        frame(&mut layout, &mut charts, vec![button(second, false)]);
-        assert_eq!(charts[0].edit_count(), edits + 1, "one step on release");
-        for expected in [[600.0, 360.0, 480.0], [480.0, 480.0, 480.0]] {
-            assert!(charts[0].undo());
-            assert_widths(&layout, expected);
-        }
+        // Ctrl+Z in the release frame undoes the drag it ends: 660 back to 600.
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                button(second, false),
+                Event::ModifiersChanged(command),
+                undo(),
+            ],
+        );
+        assert_eq!(
+            charts[0].edit_count(),
+            edits + 2,
+            "one step on release, undone"
+        );
+        assert_widths(&layout, [600.0, 360.0, 480.0]);
+        assert!(charts[0].undo());
+        assert_widths(&layout, [480.0, 480.0, 480.0]);
         assert!(!charts[0].undo());
         for expected in [[600.0, 360.0, 480.0], [660.0, 300.0, 480.0]] {
             assert!(charts[0].redo());
