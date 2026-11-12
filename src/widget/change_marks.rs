@@ -87,6 +87,15 @@ impl ChangeMarks {
         self.marks.get_mut().clear();
     }
 
+    /// Starts the fade of marks recorded since the last frame at `now` and drops the marks whose
+    /// duration has passed, whether or not the series is painted.
+    pub(super) fn expire(&self, now: f64) {
+        let duration = self.options.duration.as_secs_f64();
+        self.marks
+            .borrow_mut()
+            .retain_mut(|mark| now - *mark.at.get_or_insert(now) < duration);
+    }
+
     /// Paints fading marks placed by `position`, removes expired marks and requests another
     /// frame while a fade is visible.
     pub(super) fn paint(
@@ -95,12 +104,10 @@ impl ChangeMarks {
         position: impl Fn(DateTime<Utc>, f64) -> Option<Pos2>,
     ) {
         let now = painter.ctx().input(|input| input.time);
+        self.expire(now);
         let duration = self.options.duration.as_secs_f64();
-        self.marks.borrow_mut().retain_mut(|mark| {
-            let elapsed = now - *mark.at.get_or_insert(now);
-            if elapsed >= duration {
-                return false;
-            }
+        for mark in self.marks.borrow().iter() {
+            let elapsed = now - mark.at.unwrap_or(now);
             if let Some(pos) = position(mark.time, mark.close)
                 && painter.clip_rect().expand(12.0).contains(pos)
             {
@@ -118,8 +125,7 @@ impl ChangeMarks {
                 );
                 painter.ctx().request_repaint();
             }
-            true
-        });
+        }
     }
 }
 
@@ -147,9 +153,10 @@ impl Chart {
     /// or fell against the close of the bar the update replaced: a dot at the new close with a
     /// chevron above it for a rise and below it for a fall. Each mark fades linearly to
     /// transparent over that duration, and another changed close of the same bar restarts its
-    /// fade on egui's frame clock, starting with the first paint after the change. Updates that
-    /// leave the close unchanged, new bars, whitespace fills and history mark nothing. `None`
-    /// removes the markers.
+    /// fade. Fades run on egui's frame clock from the first frame after the change, whether or
+    /// not the series is drawn, so a series shown again draws only the marks still within their
+    /// duration. Updates that leave the close unchanged, new bars, whitespace fills and history
+    /// mark nothing. `None` removes the markers.
     ///
     /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
     pub fn set_change_markers(&mut self, series: SeriesId, options: Option<ChangeMarkers>) {
@@ -299,7 +306,13 @@ mod tests {
     #[test]
     fn change_marks_leave_with_their_bars() {
         for main in [true, false] {
-            for (replay, restore) in [(false, false), (true, false), (true, true)] {
+            for (replay, restore, evict, limit) in [
+                (false, false, false, false),
+                (true, false, false, false),
+                (true, true, false, false),
+                (false, false, true, false),
+                (false, false, true, true),
+            ] {
                 if main && restore {
                     continue;
                 }
@@ -333,6 +346,20 @@ mod tests {
                     if restore {
                         assert!(chart.undo());
                     }
+                } else if evict {
+                    // The oldest bars leave while the marks of the retained ones stay.
+                    if limit {
+                        // A bar past the limit keeps the newest 100 - 100 / 8 bars.
+                        chart.set_bar_limit(id, std::num::NonZeroUsize::new(100));
+                        let next = last + chrono::TimeDelta::days(1);
+                        chart.update(id, Bar::new(next, 100.0, 110.0, 100.0, 110.0, 1.0));
+                        assert_eq!(chart.bars(id).len(), 88);
+                    } else {
+                        assert_eq!(chart.remove_oldest_bars(id, 10).len(), 10);
+                    }
+                    assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
+                    let newer = 1 + usize::from(limit);
+                    assert_eq!(chart.pop_bars(id, newer).len(), newer);
                 } else {
                     assert!(chart.pop_bars(id, 0).is_empty());
                     assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
@@ -342,7 +369,7 @@ mod tests {
                 assert_eq!(
                     marks(&chart, main).marks.borrow().len(),
                     kept,
-                    "main {main}, replay {replay}, restored {restore}"
+                    "main {main}, replay {replay}, restored {restore}, evicted {evict}, limit {limit}"
                 );
                 assert!(
                     marks(&chart, main)
@@ -361,7 +388,12 @@ mod tests {
                     kept,
                     "returning bar starts without a mark"
                 );
-                assert_eq!(chart.pop_bars(id, usize::MAX).len(), 100);
+                let left = match (evict, limit) {
+                    (false, _) => 100,
+                    (true, false) => 90,
+                    (true, true) => 87,
+                };
+                assert_eq!(chart.pop_bars(id, usize::MAX).len(), left);
                 assert!(marks(&chart, main).marks.borrow().is_empty());
             }
         }
@@ -476,6 +508,35 @@ mod tests {
                 Duration::MAX,
                 "expired markers leave no repaint work"
             );
+            // A mark recorded while nothing is drawn for the series ages on the same clock.
+            // The series is hidden, or for the main series the chart type switches to Renko.
+            for renko in [false, true].into_iter().filter(|&renko| main || !renko) {
+                let ctx = egui::Context::default();
+                let frame = |chart: &mut Chart, time: f64| {
+                    crate::widget::test_frames::shapes(&ctx, chart, time, Vec::new());
+                };
+                frame(&mut chart, 0.0);
+                if renko {
+                    chart.set_chart_type(crate::model::ChartType::Renko);
+                } else {
+                    assert!(chart.set_series_visible(id, false));
+                }
+                let close = if renko { 106.0 } else { 105.0 };
+                chart.update(id, Bar::new(time, 100.0, 110.0, 100.0, close, 1.0));
+                assert_eq!(marks(&chart, main).marks.borrow().len(), 1);
+                frame(&mut chart, 1.0);
+                frame(&mut chart, 60.0);
+                if renko {
+                    chart.set_chart_type(crate::model::ChartType::Candles);
+                } else {
+                    assert!(chart.set_series_visible(id, true));
+                }
+                frame(&mut chart, 61.0);
+                assert!(
+                    marks(&chart, main).marks.borrow().is_empty(),
+                    "main {main}, renko {renko}"
+                );
+            }
         }
     }
 }

@@ -540,20 +540,41 @@ impl Chart {
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
-        let column_ids: Vec<_> = snapshot
+        let saved_columns: Vec<_> = snapshot
             .studies
             .iter()
-            .map(|saved| {
-                let id = self.restored_studies[&saved.id];
+            .zip(self.indicators())
+            .map(|(saved, (_, study))| {
                 // An unknown id from another chart must not claim a future local study's column.
-                let column = if saved.id < next_series { saved.id } else { id };
+                let column = if saved.id < next_series {
+                    saved.id
+                } else {
+                    self.restored_studies[&saved.id]
+                };
                 (
-                    id,
                     self.study_column_ids
                         .get(&saved.id)
                         .copied()
                         .unwrap_or(column),
+                    study.name(),
                 )
+            })
+            .collect();
+        // Saved ids of another chart can meet entries of this chart's earlier studies. The table
+        // keys a column by its id and title, so a column two studies of one title would share is
+        // ambiguous, and each of them takes its own new id instead.
+        let column_ids: Vec<_> = snapshot
+            .studies
+            .iter()
+            .zip(&saved_columns)
+            .map(|(saved, column)| {
+                let id = self.restored_studies[&saved.id];
+                let shared = saved_columns
+                    .iter()
+                    .filter(|other| *other == column)
+                    .count()
+                    > 1;
+                (id, if shared { id } else { column.0 })
             })
             .collect();
         self.study_column_ids.extend(column_ids);
@@ -667,6 +688,9 @@ impl Chart {
         // A layout without the original pane has just left it: the main bars are live again.
         self.follow_feed_pause();
         self.history.clear();
+        // Undone or redone before the restore, they belong to the state it replaced.
+        self.history.size_steps.clear();
+        self.history.link_steps.clear();
         Ok(skipped)
     }
 }
