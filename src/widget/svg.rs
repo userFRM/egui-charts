@@ -123,6 +123,13 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        // A raw carriage return would read back as a line feed.
+        .replace('\r', "&#13;")
+}
+
+/// Whether the XML 1.0 `Char` production allows `ch` in a document.
+fn is_xml_char(ch: char) -> bool {
+    !matches!(ch, '\0'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
 }
 
 fn attr_escape(text: &str) -> String {
@@ -360,6 +367,10 @@ impl Svg {
                     .or(ends.last())
                     .map(|(_, format)| *format);
                 index += 1;
+                // Skipping the glyph keeps the remaining x positions aligned with their characters.
+                if !is_xml_char(glyph.chr) {
+                    continue;
+                }
                 let Some(format) = format else { continue };
                 let vertex = row.visuals.mesh.vertices.get(glyph.first_vertex as usize);
                 let mut tint = vertex.map_or(Color32::PLACEHOLDER, |v| v.color);
