@@ -564,7 +564,11 @@ impl Chart {
             .zip(&saved_columns)
             .map(|(saved, column)| {
                 let id = self.restored_studies[&saved.id];
-                let shared = saved_columns.iter().filter(|other| *other == column).count() > 1;
+                let shared = saved_columns
+                    .iter()
+                    .filter(|other| *other == column)
+                    .count()
+                    > 1;
                 (id, if shared { id } else { *column })
             })
             .collect();
