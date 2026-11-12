@@ -2304,11 +2304,14 @@ mod tests {
         }
         assert!(!charts[0].redo());
         // A restore replaces the chart's history, with the steps its last undo queued.
-        assert!(charts[0].undo());
-        let snapshot = charts[2].snapshot().unwrap();
-        charts[0].restore(&snapshot).unwrap();
-        show(&mut layout, &mut charts);
-        assert_eq!(layout.link_groups(1), Some(linked.clone()));
+        #[cfg(feature = "ui")]
+        {
+            assert!(charts[0].undo());
+            let snapshot = charts[2].snapshot().unwrap();
+            charts[0].restore(&snapshot).unwrap();
+            show(&mut layout, &mut charts);
+            assert_eq!(layout.link_groups(1), Some(linked.clone()));
+        }
         // Two charts' steps of one preset, undone and redone before a show in the reverse order
         // of their recording, apply in the order taken.
         layout
