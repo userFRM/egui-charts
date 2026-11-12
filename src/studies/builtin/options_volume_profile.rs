@@ -212,7 +212,8 @@ impl OptionsVolumeProfile {
     /// an expiry no longer listed selects Nearest. Older saves keep position semantics: a
     /// measure position counts in the chain's own listing once the chain has answered and
     /// lists it, and otherwise in the order Volume, Open interest, Gamma exposure. A measure
-    /// that waits is listed in that order, and a choice made meanwhile names its measure in it.
+    /// that waits is listed and saved at its place in that order, and a choice made meanwhile
+    /// names its measure in it.
     /// New saves contain hidden `expiry_label` and `measure_label` inputs that older releases
     /// do not accept. Editors applying all inputs must update the matching label on an explicit
     /// choice edit or reset, and preserve it on unrelated edits while a measure is unavailable.
