@@ -745,10 +745,18 @@ mod tests {
     /// Pixel centres lie at integer + 0.5; the far edge of a quad is excluded by rasterization.
     #[cfg(feature = "drawings")]
     #[test]
-    fn dots_cover_a_pixel_centre_below_one_pixel_per_point() {
+    fn thin_dotted_guides_cover_a_pixel_centre() {
         let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 200.0));
         let ctx = Context::default();
-        for scale in [0.5, 0.4, 0.25] {
+        // (pixels per point, width): below one pixel per point, and half a device pixel or less.
+        for (scale, width) in [
+            (0.5, 1.0),
+            (0.4, 1.0),
+            (0.25, 1.0),
+            (1.0, 0.5),
+            (1.0, 0.25),
+            (2.0, 0.25),
+        ] {
             ctx.set_pixels_per_point(scale);
             for vertical in [false, true] {
                 for reverse in [false, true] {
@@ -768,7 +776,7 @@ mod tests {
                             |_| {
                                 let painter =
                                     Painter::new(ctx.clone(), LayerId::background(), screen);
-                                let stroke = Stroke::new(1.0, Color32::WHITE);
+                                let stroke = Stroke::new(width, Color32::WHITE);
                                 if guides {
                                     draw_dotted_segments(&painter, &[points], stroke, 4.0);
                                 } else {
@@ -794,7 +802,7 @@ mod tests {
                                 let centre = (min - 0.5).ceil() + 0.5;
                                 assert!(
                                     min <= centre && centre < max,
-                                    "scale={scale}, vertical={vertical}, reverse={reverse}, guides={guides}, rect={rect:?}"
+                                    "scale={scale}, width={width}, vertical={vertical}, reverse={reverse}, guides={guides}, rect={rect:?}"
                                 );
                             }
                         }
