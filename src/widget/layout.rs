@@ -2277,14 +2277,14 @@ mod tests {
         let mut others = [chart(60), chart(60), chart(60)];
         show(&mut original, &mut others);
         show(&mut layout, &mut charts);
-        let unlinked = ChartLinkGroups::default();
+        let default_groups = ChartLinkGroups::default();
         // Undo the link, the reset and the first size change, then redo them.
         for (redo, sizes, groups) in [
-            (false, &thirds, &unlinked),
-            (false, &wider, &unlinked),
-            (false, &thirds, &unlinked),
-            (true, &wider, &unlinked),
-            (true, &thirds, &unlinked),
+            (false, &thirds, &default_groups),
+            (false, &wider, &default_groups),
+            (false, &thirds, &default_groups),
+            (true, &wider, &default_groups),
+            (true, &thirds, &default_groups),
             (true, &thirds, &linked),
         ] {
             assert!(if redo {
