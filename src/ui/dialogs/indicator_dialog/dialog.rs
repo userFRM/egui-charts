@@ -1939,10 +1939,8 @@ mod tests {
                 Theme::dark().ui.text_muted,
                 Theme::dark().ui.text_muted,
                 Theme::dark().ui.text,
-                Theme::dark()
-                    .ui
-                    .panel_bg
-                    .lerp_to_gamma(Theme::dark().ui.panel_bg_secondary, 0.6),
+                // Black toward (55, 59, 70) at 0.6: (33, 35.4, 42).
+                Color32::from_rgb(33, 35, 42),
             ),
             (
                 custom.clone(),
@@ -1950,10 +1948,8 @@ mod tests {
                 Color32::RED,
                 Color32::RED,
                 custom.ui.text,
-                custom
-                    .ui
-                    .panel_bg
-                    .lerp_to_gamma(custom.ui.panel_bg_secondary, 0.6),
+                // White toward (235, 235, 235) at 0.6: 255 - 0.6 * 20 = 243.
+                Color32::from_gray(243),
             ),
         ] {
             let ctx = egui::Context::default();

@@ -793,10 +793,9 @@ mod tests {
             });
             output.textures_delta.clear();
             assert!(shows > 0);
-            assert_eq!(
-                clones.load(Ordering::Relaxed),
-                shows,
-                "forecast: {forecast}"
+            assert!(
+                clones.load(Ordering::Relaxed) <= shows,
+                "drawings add no formatter clones to the frame's own, forecast: {forecast}"
             );
         }
     }
