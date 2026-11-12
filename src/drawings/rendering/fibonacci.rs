@@ -188,12 +188,7 @@ impl Drawing {
             .collect();
         levels.sort_by(|a, b| a.0.value.total_cmp(&b.0.value));
         let range = self.fib_level_x_range(&config, chart_rect);
-        if !range.min.is_finite()
-            || !range.max.is_finite()
-            || range.min >= range.max
-            || range.max <= chart_rect.left()
-            || range.min >= chart_rect.right()
-        {
+        if !level_span_in_pane(range, chart_rect) {
             self.render_fib_trend(painter);
             return;
         }
@@ -350,12 +345,7 @@ impl Drawing {
             level_color(level),
         );
         let range = self.fib_level_x_range(&config, pane);
-        if !range.min.is_finite()
-            || !range.max.is_finite()
-            || range.min >= range.max
-            || range.max <= pane.left()
-            || range.min >= pane.right()
-        {
+        if !level_span_in_pane(range, pane) {
             return None;
         }
         Some(level_text_bounds(
@@ -914,6 +904,17 @@ impl Drawing {
         }
         Some(outline)
     }
+}
+
+/// Whether a level span has anything to paint in `pane`. A span of zero width
+/// (both anchors on one bar) counts: its labels and text still show. Reversed
+/// or non-finite ends, and spans wholly left or right of the pane, do not.
+fn level_span_in_pane(range: Rangef, pane: Rect) -> bool {
+    range.min.is_finite()
+        && range.max.is_finite()
+        && range.min <= range.max
+        && range.max > pane.left()
+        && range.min < pane.right()
 }
 
 impl Drawing {
@@ -2771,6 +2772,75 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
             }
+        }
+    }
+
+    /// Anchors on one bar give a level span of zero width, which still carries
+    /// the level labels (a reversed or off-pane span does not).
+    #[test]
+    fn same_bar_fibonacci_keeps_level_labels() {
+        use crate::drawings::ChartPoint;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1400.0, 700.0));
+        // Price p sits at y = 600 - p. Levels step 100 px from the last anchor:
+        // legacy retracement has 7 levels in the pane; the stored table has 11
+        // levels, and 3.618 (y 761.8) and 4.236 (y 823.6) fall below the pane,
+        // leaving 9; the extension from C=150 puts all 11 between y 26.4 and 450.
+        for (tool, stored, points, labels) in [
+            (
+                Tool::FibonacciRetracement,
+                false,
+                vec![(500.0, 100.0), (500.0, 200.0)],
+                7,
+            ),
+            (
+                Tool::FibonacciRetracement,
+                true,
+                vec![(500.0, 100.0), (500.0, 200.0)],
+                9,
+            ),
+            (
+                Tool::FibonacciExtension,
+                true,
+                vec![(300.0, 100.0), (500.0, 200.0), (500.0, 150.0)],
+                11,
+            ),
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            if !stored {
+                drawing.fib_config = None;
+            }
+            drawing.chart_points = points
+                .into_iter()
+                .map(|(bar, price)| ChartPoint::new(bar, price))
+                .collect();
+            let y = |p: f64| (600.0 - p) as f32;
+            drawing.update_screen_coords(|b| b, y);
+            let view = ChartView {
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
+                instrument: None,
+                bars: &[],
+                revision: 0,
+                bar_to_x: &|b| b,
+                price_to_y: &y,
+                y_to_price: &|y| 600.0 - f64::from(y),
+                time_axis: true,
+                executions: None,
+                timeframe: None,
+                finer: &[],
+            };
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                drawing.render_original(&ui.painter().with_clip_rect(rect), rect, &view)
+            });
+            output.textures_delta.clear();
+            let texts = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(s.shape, egui::Shape::Text(_)))
+                .count();
+            assert_eq!(texts, labels, "{tool:?}, stored={stored}");
+            output.drop_without_applying_deltas();
         }
     }
 

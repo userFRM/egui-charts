@@ -539,6 +539,9 @@ pub struct PriceMap {
     price_precision: Option<u8>,
     tick_marks: PriceMarkGeneratorConfig,
     thousands_sep: Option<char>,
+    /// Smallest tick step of a volume display format on a logarithmic axis's evenly
+    /// spaced fallback; the 1/2/5 marks of wide ranges keep their low decades.
+    volume_step: Option<f64>,
 }
 
 impl PriceMap {
@@ -560,6 +563,7 @@ impl PriceMap {
             price_precision: None,
             tick_marks: PriceMarkGeneratorConfig::default(),
             thousands_sep: None,
+            volume_step: None,
         }
     }
 
@@ -584,10 +588,17 @@ impl PriceMap {
             PriceScaleMode::Normal | PriceScaleMode::Logarithmic
         ) {
             self.price_precision = Some(format.precision);
-            let mut unit = 10f64.powi(-i32::from(format.precision));
-            if format.kind == crate::model::SeriesFormat::Volume
-                && self.transform.mode == PriceScaleMode::Normal
-            {
+            let unit = 10f64.powi(-i32::from(format.precision));
+            let step_for = |unit: f64| {
+                if format.min_move.is_finite() && format.min_move > 0.0 {
+                    let step = (unit / format.min_move).ceil().max(1.0) * format.min_move;
+                    if step.is_finite() { step } else { unit }
+                } else {
+                    unit
+                }
+            };
+            self.tick_marks.min_price_step = Some(step_for(unit));
+            if format.kind == crate::model::SeriesFormat::Volume {
                 let magnitude = self
                     .transform
                     .to_price(self.range.min)
@@ -595,23 +606,23 @@ impl PriceMap {
                     .max(self.transform.to_price(self.range.max).abs());
                 // Volume decimals belong to the abbreviated unit, so adjacent ticks must
                 // still have distinguishable labels after applying its suffix.
-                unit *= if magnitude >= 1e9 {
-                    1e9
-                } else if magnitude >= 1e6 {
-                    1e6
-                } else if magnitude >= 1e3 {
-                    1e3
+                let volume_step = step_for(
+                    unit * if magnitude >= 1e9 {
+                        1e9
+                    } else if magnitude >= 1e6 {
+                        1e6
+                    } else if magnitude >= 1e3 {
+                        1e3
+                    } else {
+                        1.0
+                    },
+                );
+                if self.transform.mode == PriceScaleMode::Normal {
+                    self.tick_marks.min_price_step = Some(volume_step);
                 } else {
-                    1.0
-                };
+                    self.volume_step = Some(volume_step);
+                }
             }
-            self.tick_marks.min_price_step =
-                Some(if format.min_move.is_finite() && format.min_move > 0.0 {
-                    let step = (unit / format.min_move).ceil().max(1.0) * format.min_move;
-                    if step.is_finite() { step } else { unit }
-                } else {
-                    unit
-                });
         }
         self
     }
@@ -635,6 +646,11 @@ impl PriceMap {
     /// The separator that groups the thousands of the built-in labels, if any.
     pub(crate) fn thousands_sep(&self) -> Option<char> {
         self.thousands_sep
+    }
+
+    /// The smallest tick step a volume format sets for a logarithmic axis's evenly spaced ticks.
+    pub(crate) fn volume_step(&self) -> Option<f64> {
+        self.volume_step
     }
 
     /// Formats a scale value as [`PriceTransform::label`] does and groups the thousands of a
