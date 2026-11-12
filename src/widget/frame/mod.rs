@@ -1039,9 +1039,9 @@ impl Chart {
         let drawn_as_cells = move |config: &FootprintConfig| {
             crate::chart::overlays::footprint_column_width(spacing, config).is_some()
         };
-        // Rows fit their edges when they are drawn with them: grouped by a tick minimum, or at
-        // the height of the input rows. A usable automatic height on single-tick rows sizes them
-        // by zoom, so those keep the candle fit.
+        // Rows fit the edges of their minimum group, which automatic grouping can only raise; a
+        // group zoom raises above it is not fitted. A usable automatic height on single-tick
+        // rows sizes them by zoom alone, so those keep the candle fit.
         let fixed_footprint = match footprint {
             Some((flow, config)) => (drawn_as_cells(config)
                 && (config.row_ticks > 1

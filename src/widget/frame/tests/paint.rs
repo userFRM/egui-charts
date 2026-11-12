@@ -1243,8 +1243,8 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             .parse::<chrono::DateTime<Utc>>()
             .unwrap(),
     ));
-    let draw = |chart: &mut Chart| {
-        chart.apply_synced_time_scale(160.0, 1.0);
+    let draw_at = |chart: &mut Chart, spacing: f32| {
+        chart.apply_synced_time_scale(spacing, 1.0);
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
@@ -1257,6 +1257,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         output.textures_delta.clear();
         output.shapes
     };
+    let draw = |chart: &mut Chart| draw_at(chart, 160.0);
     for _ in 0..5 {
         draw(&mut chart);
     }
@@ -1311,20 +1312,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
                 ..Default::default()
             });
             for _ in 0..2 {
-                chart.apply_synced_time_scale(3.0, 1.0);
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            Pos2::ZERO,
-                            egui::vec2(1440.0, 900.0),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        chart.show(ui);
-                    },
-                );
-                output.textures_delta.clear();
+                draw_at(&mut chart, 3.0);
             }
             chart.get_chart_mapping().price_to_y(100.0)
         })
