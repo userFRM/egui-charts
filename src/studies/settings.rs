@@ -212,6 +212,11 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut middle = levels[2];
         middle.visible = false;
         settings.levels.push(middle);
+    } else if study.name() == "KST" && settings.levels.is_empty() && levels.len() == 1 {
+        // Saved before it had a zero guide, a KST keeps drawing none until the guide is shown.
+        let mut zero = levels[0];
+        zero.visible = false;
+        settings.levels.push(zero);
     } else if settings.levels.len() != levels.len() {
         settings.levels = levels;
         settings.fill_between_levels = fill;
@@ -322,6 +327,8 @@ pub struct StudySettings {
     /// One style per level of the study's pane, in the order of
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
+    /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
+    /// Know Sure Thing saved with none.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
     /// Whether the band between the boundary levels is filled.
@@ -2332,6 +2339,41 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
+        // A KST opens with a dashed zero guide. Saved before it had one, it restores with the
+        // guide hidden, and a guide shown since keeps its style through a template.
+        let declared =
+            ConfiguredStudy::new(Box::new(crate::studies::KnowSureThing::new())).settings();
+        let zero = LevelStyle {
+            value: None,
+            color: palette::GRAY,
+            pattern: LineStyle::Dashed,
+            width: 1.0,
+            visible: true,
+            price_line: false,
+        };
+        assert_eq!(declared.levels, [zero]);
+        let saved = r#"{"name":"KST","inputs":[["roc_periods [0]",{"Length":10}],["roc_periods [1]",{"Length":15}],["roc_periods [2]",{"Length":20}],["roc_periods [3]",{"Length":30}],["sma_periods [0]",{"Length":10}],["sma_periods [1]",{"Length":10}],["sma_periods [2]",{"Length":10}],["sma_periods [3]",{"Length":15}],["signal_period",{"Length":9}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.KnowSureThing.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut older = serde_json::from_str::<crate::studies::StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            older.settings().levels,
+            [LevelStyle {
+                visible: false,
+                ..zero
+            }]
+        );
+        assert_eq!(older.pane().levels[0].1, Color32::TRANSPARENT);
+        let mut shown = older.settings();
+        shown.levels[0].visible = true;
+        shown.levels[0].width = 2.0;
+        older.apply_settings(&[], shown.clone()).unwrap();
+        let again = crate::studies::StudyTemplate::from_study(older.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings().levels, shown.levels);
+        assert_eq!(again.pane().levels[0].1, palette::GRAY);
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
