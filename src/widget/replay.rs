@@ -293,13 +293,17 @@ impl Chart {
         let trades = link.map(|link| &link.trades);
         let open = clock.bar_open(since);
         let from = (self.state.data().bars).partition_point(|bar| clock.bar_open(bar.time) < open);
+        // The window keeps the bars after the cutoff aside; the executions are grouped along all.
+        let history = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
+            .map_or(&[][..], Vec::as_slice);
         for (at, study) in self.studies.indicators().iter().enumerate() {
             let inputs = study.order_flow_inputs();
             if inputs.is_empty() {
                 continue;
             }
             for input in inputs {
-                input.set_replay(&clock, time, trades);
+                input.set_replay(&clock, time, trades, history);
             }
             self.pending_from[at] = Some(self.pending_from[at].map_or(from, |old| old.min(from)));
         }
