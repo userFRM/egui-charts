@@ -1172,6 +1172,7 @@ mod tests {
             let json = SavedLayout {
                 mode: ChartLayoutMode::Single,
                 charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
             }
             .to_json()
             .unwrap();
