@@ -130,7 +130,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Bollinger Bands select their basis average, and BandWidth has expansion and contraction lookbacks.
 - [x] VWAP band multipliers and event dates are editable in applied-study settings.
 - [x] Request finer profile data, from a feed's suggestion or a chosen interval, and adapt session profile rows to the zoom.
-- [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns.
+- [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns. Correlation Coefficient opens as an area with dashed guides at 1, -1 and zero, each with editable visibility, value, colour, style, width and latest value line; one saved as a line with the zero guide alone restores that way, with the guides at its bounds hidden.
 - [ ] Add a dedicated log-return correlation study.
 - [x] Trend Strength Index plots the rolling correlation of price with bar position.
 - [x] Automatic chart-pattern, wedge and key-level detection studies.

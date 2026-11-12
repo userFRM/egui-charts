@@ -320,6 +320,22 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // A Correlation Coefficient drew its zero guide alone before it opened with guides at
+            // its bounds; hidden, they leave the pane as it was saved. A host study under the
+            // name, which has no log returns, keeps its own guides.
+            "Correlation Coefficient"
+                if self.settings.levels.len() < 2 && declares("log_returns") =>
+            {
+                let (mut levels, ..) =
+                    super::settings::declared_levels(&crate::studies::Correlation::default());
+                for bound in &mut levels[..2] {
+                    bound.visible = false;
+                }
+                if let Some(zero) = self.settings.levels.first() {
+                    levels[2] = *zero;
+                }
+                template.settings.levels = levels;
+            }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
                 if self
@@ -763,8 +779,8 @@ mod tests {
         }
     }
 
-    /// An RSI and a VWAP saved before their defaults gained an average and a band restore with the
-    /// plots they had.
+    /// An RSI, a VWAP and a Correlation Coefficient saved before their defaults gained an average,
+    /// a band, and an area with guides at its bounds restore with the plots and guides they had.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -824,6 +840,46 @@ mod tests {
         // Saved since then, a filled band stays filled.
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
+
+        // A Correlation Coefficient opens as an area with guides at its bounds and at zero. Saved
+        // as a line with the zero guide alone, here dotted, 3 px wide and orange with its value
+        // line, it restores as that line with the bounds hidden, and a bound shown since stays
+        // shown through a template.
+        let fresh =
+            ConfiguredStudy::new(Box::new(crate::studies::Correlation::default())).settings();
+        assert_eq!(fresh.plots[0].plot_type, crate::studies::PlotType::Area);
+        assert!(fresh.levels.iter().all(|level| level.visible));
+        let saved = r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut restored = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        let settings = restored.settings();
+        assert_eq!(settings.plots[0].plot_type, crate::studies::PlotType::Line);
+        let values: Vec<_> = restored.pane().levels.iter().map(|l| l.0).collect();
+        assert_eq!(values, [1.0, -1.0, 0.0]);
+        let [upper, lower, zero] = settings.levels[..] else {
+            panic!("three guides");
+        };
+        assert!(!upper.visible && !lower.visible);
+        assert_eq!(
+            zero,
+            crate::studies::LevelStyle {
+                value: None,
+                color: Color32::from_rgb(255, 152, 0),
+                pattern: crate::model::LineStyle::Dotted,
+                width: 3.0,
+                visible: true,
+                price_line: true,
+            }
+        );
+        let mut shown = settings.clone();
+        shown.levels[0].visible = true;
+        restored.apply_settings(&[], shown.clone()).unwrap();
+        let again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings().levels, shown.levels);
     }
 
     /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
