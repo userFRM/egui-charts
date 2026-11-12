@@ -489,7 +489,8 @@ impl Terminal {
             Some(self.layouts.tabs[self.layouts.tab].name.clone());
     }
 
-    /// The layout on show: its arrangement and the charts it shows, in slot order.
+    /// The layout on show: its arrangement, the charts it shows, in slot order, and the chart
+    /// sizes of the arrangement when its borders were moved.
     fn capture_layout(&self) -> Result<SavedLayout, String> {
         let mode = self.layout.mode;
         let count = if mode == ChartLayoutMode::Tabs {
@@ -502,7 +503,16 @@ impl Terminal {
             .map(|chart| chart.snapshot_with(self.studies.indicators.factory()))
             .collect::<Result<_, _>>()
             .map_err(|error| format!("Could not save the layout: {error}"))?;
-        Ok(SavedLayout { mode, charts })
+        let sizing = self
+            .layout
+            .saved_sizes()
+            .into_iter()
+            .find(|sizes| sizes.mode == mode);
+        Ok(SavedLayout {
+            mode,
+            charts,
+            sizing,
+        })
     }
 
     /// Saves the layout on show under its tab's name.
@@ -563,6 +573,19 @@ impl Terminal {
         self.layout_stop_replay();
         self.layouts.tabs[self.layouts.tab].name = name;
         self.charts = charts;
+        // A copy owns its sizes, so size changes not yet in a chart's history cannot change the
+        // restored ones.
+        self.layout = self.layout.clone();
+        self.layout.reset_sizes(true);
+        let sized = match &layout.sizing {
+            Some(sizing) if sizing.mode != layout.mode => Err("sizes of another arrangement"),
+            Some(sizing) => self.layout.set_sizes(std::slice::from_ref(sizing), true),
+            None => Ok(()),
+        };
+        if let Err(error) = sized {
+            self.toasts
+                .error(format!("Could not open chart sizes: {error}"));
+        }
         self.layout.mode = layout.mode;
         if self.active >= self.charts.len() {
             self.active = 0;
@@ -585,7 +608,7 @@ mod tests {
     use egui_charts::model::ChartType;
     use egui_charts::services::StoreKind;
     use egui_charts::studies::{CustomIndicator, IndicatorFactory, InputValue, RSI, SMA};
-    use egui_charts::widget::PaneId;
+    use egui_charts::widget::{ChartLayoutSizing, PaneId};
     use std::sync::Arc;
 
     fn new_terminal(storage: &Arc<MemoryStorage>) -> Terminal {
@@ -1024,6 +1047,57 @@ mod tests {
                     "Open layout exceeds {size:?}: {bounds:?}"
                 );
             }
+        }
+    }
+
+    /// A saved layout opens at the chart sizes it was saved with, whatever borders were moved
+    /// in the tab since, in the same session and after a restart.
+    #[test]
+    fn opening_a_saved_layout_again_restores_its_chart_sizes() {
+        let mode = ChartLayoutMode::TwoHorizontal;
+        let resize = |terminal: &mut Terminal, columns: [f32; 2]| {
+            let sizes = ChartLayoutSizing {
+                mode,
+                weights: vec![vec![1.0], columns.to_vec()],
+            };
+            terminal.layout.set_sizes(&[sizes], false).unwrap();
+            settle(terminal);
+        };
+        // The column weights at the save, `None` for the preset's two equal charts, and the
+        // fractions of the width the layout opens at.
+        for (saved, opened) in [(None, [0.5, 0.5]), (Some([1.0, 3.0]), [0.25, 0.75])] {
+            let storage = Arc::new(MemoryStorage::default());
+            let mut terminal = new_terminal(&storage);
+            settle(&mut terminal);
+            layout(&mut terminal, LayoutAction::SelectGrid(mode));
+            if let Some(columns) = saved {
+                resize(&mut terminal, columns);
+            }
+            layout(&mut terminal, LayoutAction::Save);
+            let document: serde_json::Value =
+                serde_json::from_str(&storage.get(StoreKind::Layouts, "Unnamed").unwrap()).unwrap();
+            assert_eq!(
+                document.get("sizing").is_some(),
+                saved.is_some(),
+                "preset proportions are stored as they were before layouts kept sizes"
+            );
+            let opened = [vec![1.0], opened.to_vec()];
+            resize(&mut terminal, [3.0, 1.0]);
+            assert_eq!(terminal.layout.sizes(mode).weights[1], [0.75, 0.25]);
+            layout(&mut terminal, LayoutAction::Open("Unnamed".into()));
+            assert_eq!(terminal.layout.sizes(mode).weights, opened, "{saved:?}");
+            drop(terminal);
+            let mut terminal = new_terminal(&storage);
+            settle(&mut terminal);
+            resize(&mut terminal, [3.0, 1.0]);
+            layout(&mut terminal, LayoutAction::Open("Unnamed".into()));
+            assert_eq!(terminal.layout.mode, mode);
+            assert_eq!(terminal.charts.len(), 2);
+            assert_eq!(
+                terminal.layout.sizes(mode).weights,
+                opened,
+                "{saved:?}, after a restart"
+            );
         }
     }
 }
