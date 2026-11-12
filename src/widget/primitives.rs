@@ -2925,6 +2925,17 @@ mod tests {
             ChartEvent::CrosshairMoved(Some(pointer)) if pointer.target == Some(PointerTarget::Element(ChartElementId::Indicator(id)))
                 && pointer.primitive_hit.is_some()
         )));
+        // The renderer draws in place of the built-in columns. Every bar closes above its open,
+        // so each column would take the first colour at the foot of the plot, below the legend.
+        let up = chart
+            .indicators()
+            .find(|(study, _)| *study == id)
+            .map(|(_, study)| study.colors()[0])
+            .unwrap();
+        let middle = plot.center().y;
+        assert!(!painted.iter().any(
+            |shape| matches!(shape, Shape::Rect(rect) if rect.fill == up && rect.rect.bottom() > middle)
+        ));
     }
 
     /// In a study pane, as in the price pane, the crosshair lines stay above series-pass

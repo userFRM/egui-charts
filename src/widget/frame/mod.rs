@@ -1981,16 +1981,19 @@ impl Chart {
                 if let Some(color) = study.background() {
                     painter.rect_filled(rect, 0.0, color);
                 }
-                super::volume::paint(
-                    &painter,
-                    rect,
-                    study.as_ref(),
-                    &(start_idx..end_idx),
-                    &coords,
-                    min,
-                    max,
-                    Some(&self.merge_groups),
-                );
+                // A custom series draws in place of the columns.
+                if !self.has_renderer(*id) {
+                    super::volume::paint(
+                        &painter,
+                        rect,
+                        study.as_ref(),
+                        &(start_idx..end_idx),
+                        &coords,
+                        min,
+                        max,
+                        Some(&self.merge_groups),
+                    );
+                }
             }
             // TPO studies draw the chart type's profiles beside the bars.
             if let Some(config) = study
