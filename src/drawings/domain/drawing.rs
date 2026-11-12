@@ -554,6 +554,10 @@ impl Drawing {
                 | DrawingToolType::HorizontalLine
                 | DrawingToolType::HorizontalRay
                 | DrawingToolType::VerticalLine => Some(BLUE),
+                // As is the text of a shape, which starts in the shape's own colour.
+                DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse => {
+                    Some(style.color)
+                }
                 _ => None,
             },
             background: !plain_text,

@@ -359,6 +359,9 @@ impl TextTab {
                         | DrawingToolType::ExtendedLine
                         | DrawingToolType::InfoLine
                         | DrawingToolType::TrendAngle
+                        | DrawingToolType::Rect
+                        | DrawingToolType::Circle
+                        | DrawingToolType::Ellipse
                 ))
             {
                 return;
@@ -484,17 +487,21 @@ mod tests {
     use crate::drawings::Drawing;
 
     /// Line tools offer the text placement, colour and emphasis they draw, and a vertical line
-    /// also offers the orientation of its text.
+    /// also offers the orientation of its text. A rectangle, circle or ellipse writes its text at
+    /// its centre, so it offers the colour and emphasis alone.
     #[test]
-    fn line_tools_offer_the_text_settings_they_draw() {
+    fn tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
-        for (tool, offered) in [
+        for (tool, placed) in [
             (DrawingToolType::HorizontalLine, true),
             (DrawingToolType::TrendLine, true),
             (DrawingToolType::Ray, true),
             (DrawingToolType::ExtendedLine, true),
             (DrawingToolType::HorizontalRay, true),
             (DrawingToolType::VerticalLine, true),
+            (DrawingToolType::Rect, false),
+            (DrawingToolType::Circle, false),
+            (DrawingToolType::Ellipse, false),
         ] {
             let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
@@ -509,12 +516,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            for label in [
-                "Horizontal alignment",
-                "Vertical alignment",
-                "Text color",
-                "Bold",
-                "Italic",
+            for (label, offered) in [
+                ("Horizontal alignment", placed),
+                ("Vertical alignment", placed),
+                ("Text color", true),
+                ("Bold", true),
+                ("Italic", true),
             ] {
                 assert_eq!(labels.contains(&label), offered, "{tool:?} {label}");
             }
