@@ -2445,6 +2445,33 @@ mod tests {
         failures
     }
 
+    /// A rectangle, circle or ellipse saved before its text had a colour of its own stored `null`
+    /// there and drew its text in the line colour, which a new one no longer does.
+    #[test]
+    fn shape_saved_without_a_text_colour_keeps_following_its_line() {
+        let ctx = egui::Context::default();
+        for tool in [
+            DrawingToolType::Rect,
+            DrawingToolType::Circle,
+            DrawingToolType::Ellipse,
+        ] {
+            let mut drawing = Drawing::with_color(1, tool, [10, 20, 30, 255]);
+            drawing.text = Some("Zone".into());
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(5.0, 110.0)];
+            let mut saved = serde_json::to_value(drawing_to_stored(&drawing, bar_to_time)).unwrap();
+            assert!(saved["drawing"]["text_color"].is_array(), "{tool:?}");
+            saved["drawing"]["text_color"] = serde_json::Value::Null;
+            let stored: StoredDrawing = serde_json::from_value(saved).unwrap();
+            let restored = restore(&stored, 1);
+            assert_eq!(restored.text_color, None, "{tool:?}");
+            assert_eq!(
+                restored.text_box_colors(&ctx).text,
+                egui::Color32::from_rgb(10, 20, 30),
+                "{tool:?}"
+            );
+        }
+    }
+
     /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
     /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
     /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
