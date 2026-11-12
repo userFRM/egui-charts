@@ -950,7 +950,8 @@ impl Default for ChartSyncOptions {
 /// A clone follows pending cross-chart undo and redo steps when it shows the same charts.
 /// Clones showing other charts leave those steps for their owners. Each clone keeps its own
 /// split sizes and link memberships; undo and redo of a change to them apply to the layout that
-/// shows the chart holding the step next, at that [`Self::show`].
+/// shows the chart holding the step next, at that [`Self::show`], replacing what the host set
+/// meanwhile for the same preset or link field.
 ///
 /// ```
 /// # fn example(ui: &mut egui::Ui) {
