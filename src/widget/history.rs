@@ -20,9 +20,9 @@ pub(super) struct ChartHistory {
     /// Expires when the divider drag ends or its layout is dropped.
     pub(super) resizing: std::sync::Weak<()>,
     /// Split size and link membership steps undone or redone since a layout last showed the
-    /// chart, for that layout to apply.
-    pub(super) size_steps: Vec<Arc<Mutex<super::layout::SizeChange>>>,
-    pub(super) link_steps: Vec<Arc<Mutex<super::layout::LinkChange>>>,
+    /// chart, for that layout to apply in the order of their process-wide numbers.
+    pub(super) size_steps: Vec<(u64, Arc<Mutex<super::layout::SizeChange>>)>,
+    pub(super) link_steps: Vec<(u64, Arc<Mutex<super::layout::LinkChange>>)>,
     changed: bool,
     /// User edits recorded, undone or redone, kept when the history is cleared.
     pub(super) edits: u64,
@@ -944,11 +944,14 @@ impl Chart {
             return false;
         };
         let current_view = self.get_time_scale_state();
+        // Steps of one preset or slot on different charts only restore it in the order taken.
+        static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let order = ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(sizes) = &action.layout_sizes {
-            self.history.size_steps.push(Arc::clone(sizes));
+            self.history.size_steps.push((order, Arc::clone(sizes)));
         }
         if let Some(links) = &action.layout_links {
-            self.history.link_steps.push(Arc::clone(links));
+            self.history.link_steps.push((order, Arc::clone(links)));
         }
         let mut current: Vec<_> = action
             .studies

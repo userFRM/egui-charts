@@ -1147,19 +1147,26 @@ impl ChartLayout {
     }
 
     /// Applies the split size and link membership steps the charts undid or redid since they
-    /// were last shown, whichever layout recorded them. Returns whether sizes changed.
+    /// were last shown, whichever layout recorded them, in the order they were taken. Returns
+    /// whether any was applied.
     fn apply_history_steps(&mut self, charts: &mut [&mut Chart]) -> bool {
-        let mut resized = false;
-        for chart in charts.iter_mut() {
-            for change in chart.history.size_steps.drain(..) {
-                change.lock().unwrap().swap(&mut self.sizing.sizes);
-                resized = true;
-            }
-            for change in chart.history.link_steps.drain(..) {
-                change.lock().unwrap().swap(&mut self.links.groups);
-            }
+        let mut sizes: Vec<_> = charts
+            .iter_mut()
+            .flat_map(|chart| std::mem::take(&mut chart.history.size_steps))
+            .collect();
+        let mut links: Vec<_> = charts
+            .iter_mut()
+            .flat_map(|chart| std::mem::take(&mut chart.history.link_steps))
+            .collect();
+        sizes.sort_by_key(|(order, _)| *order);
+        links.sort_by_key(|(order, _)| *order);
+        for (_, change) in &sizes {
+            change.lock().unwrap().swap(&mut self.sizing.sizes);
         }
-        resized
+        for (_, change) in &links {
+            change.lock().unwrap().swap(&mut self.links.groups);
+        }
+        !sizes.is_empty() || !links.is_empty()
     }
 
     fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
@@ -2229,7 +2236,8 @@ mod tests {
 
     /// Split size and link membership steps follow the layout value that shows their chart: a host
     /// that replaces its layout with a clone undoes and redoes them on the clone, including the
-    /// changes still waiting for a show, and the replaced layout keeps its own.
+    /// changes still waiting for a show, and the replaced layout keeps its own. Steps undone or
+    /// redone before a show apply in the order taken, and a restored chart drops its own.
     #[test]
     fn size_undo_after_layout_clone() {
         let show = |layout: &mut ChartLayout, charts: &mut [Chart; 3]| {
@@ -2295,6 +2303,33 @@ mod tests {
             assert_eq!(original.link_groups(1), Some(linked.clone()));
         }
         assert!(!charts[0].redo());
+        // A restore replaces the chart's history, with the steps its last undo queued.
+        assert!(charts[0].undo());
+        let snapshot = charts[2].snapshot().unwrap();
+        charts[0].restore(&snapshot).unwrap();
+        show(&mut layout, &mut charts);
+        assert_eq!(layout.link_groups(1), Some(linked.clone()));
+        // Two charts' steps of one preset, undone and redone before a show in the reverse order
+        // of their recording, apply in the order taken.
+        layout
+            .set_sizes(std::slice::from_ref(&wider), false)
+            .unwrap();
+        show(&mut layout, &mut charts);
+        layout.set_active(1);
+        let middle = ChartLayoutSizing {
+            mode,
+            weights: vec![vec![1.0], vec![0.25, 0.5, 0.25]],
+        };
+        layout
+            .set_sizes(std::slice::from_ref(&middle), false)
+            .unwrap();
+        show(&mut layout, &mut charts);
+        assert!(charts[1].undo() && charts[0].undo());
+        show(&mut layout, &mut charts);
+        assert_eq!(layout.sizes(mode), thirds);
+        assert!(charts[0].redo() && charts[1].redo());
+        show(&mut layout, &mut charts);
+        assert_eq!(layout.sizes(mode), middle);
     }
 
     /// The renderer receives the original slot of every visible chart in each layout path.
