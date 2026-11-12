@@ -524,7 +524,7 @@ pub struct ChartLayoutSizing {
 
 #[derive(Default)]
 struct SizingState {
-    sizes: Arc<Mutex<Vec<ChartLayoutSizing>>>,
+    sizes: Vec<ChartLayoutSizing>,
     pending: Vec<SizeChange>,
     drag: Option<DividerDrag>,
     selected: Option<(usize, usize)>,
@@ -533,22 +533,25 @@ struct SizingState {
 impl Clone for SizingState {
     fn clone(&self) -> Self {
         Self {
-            sizes: Arc::new(Mutex::new(self.sizes.lock().unwrap().clone())),
+            sizes: self.sizes.clone(),
+            pending: self.pending.clone(),
             ..Self::default()
         }
     }
 }
 
+/// A split size step. Undo and redo queue it on the chart that holds it, and the layout that
+/// shows that chart next applies it to its own sizes.
+#[derive(Clone)]
 pub(super) struct SizeChange {
-    sizes: Arc<Mutex<Vec<ChartLayoutSizing>>>,
     other: Vec<(ChartLayoutMode, Option<ChartLayoutSizing>)>,
 }
 
 impl SizingState {
     fn record(&mut self, before: Vec<ChartLayoutSizing>) {
-        let after = self.sizes.lock().unwrap();
+        let after = &self.sizes;
         let mut other = Vec::new();
-        for mode in before.iter().chain(after.iter()).map(|size| size.mode) {
+        for mode in before.iter().chain(after).map(|size| size.mode) {
             let old = before.iter().find(|size| size.mode == mode);
             let new = after.iter().find(|size| size.mode == mode);
             if old != new && !other.iter().any(|(previous, _)| *previous == mode) {
@@ -556,17 +559,13 @@ impl SizingState {
             }
         }
         if !other.is_empty() {
-            self.pending.push(SizeChange {
-                sizes: Arc::clone(&self.sizes),
-                other,
-            });
+            self.pending.push(SizeChange { other });
         }
     }
 }
 
 impl SizeChange {
-    pub(super) fn swap(&mut self) {
-        let mut sizes = self.sizes.lock().unwrap();
+    fn swap(&mut self, sizes: &mut Vec<ChartLayoutSizing>) {
         for (mode, other) in &mut self.other {
             let current = sizes
                 .iter()
@@ -838,31 +837,22 @@ pub struct ChartLinkGroups {
     pub interval: ChartLink,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LinkState {
-    groups: Arc<Mutex<[ChartLinkGroups; 16]>>,
+    groups: [ChartLinkGroups; 16],
     pending: Vec<LinkChange>,
 }
 
-impl Clone for LinkState {
-    fn clone(&self) -> Self {
-        Self {
-            groups: Arc::new(Mutex::new(self.groups.lock().unwrap().clone())),
-            pending: Vec::new(),
-        }
-    }
-}
-
+/// A link membership step, applied like a [`SizeChange`] by the layout that shows the chart.
+#[derive(Clone)]
 pub(super) struct LinkChange {
-    groups: Arc<Mutex<[ChartLinkGroups; 16]>>,
     index: usize,
     symbol: Option<ChartLink>,
     interval: Option<ChartLink>,
 }
 
 impl LinkChange {
-    pub(super) fn swap(&mut self) {
-        let mut groups = self.groups.lock().unwrap();
+    fn swap(&mut self, groups: &mut [ChartLinkGroups; 16]) {
         if let Some(symbol) = &mut self.symbol {
             std::mem::swap(symbol, &mut groups[self.index].symbol);
         }
@@ -958,8 +948,9 @@ impl Default for ChartSyncOptions {
 /// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
 /// after another of them wrote them, in any group.
 /// A clone follows pending cross-chart undo and redo steps when it shows the same charts.
-/// Clones showing other charts leave those steps for their owners; split sizes and link
-/// memberships remain independent.
+/// Clones showing other charts leave those steps for their owners. Each clone keeps its own
+/// split sizes and link memberships; undo and redo of a change to them apply to the layout that
+/// shows the chart holding the step next, at that [`Self::show`].
 ///
 /// ```
 /// # fn example(ui: &mut egui::Ui) {
@@ -1051,7 +1042,7 @@ struct PendingRange {
 impl ChartLayout {
     /// Sizes retained for every edited preset, suitable for host serialization.
     pub fn saved_sizes(&self) -> Vec<ChartLayoutSizing> {
-        self.sizing.sizes.lock().unwrap().clone()
+        self.sizing.sizes.clone()
     }
 
     /// Current relative sizes of a preset's splits, including its default weights when unedited.
@@ -1059,8 +1050,6 @@ impl ChartLayout {
     pub fn sizes(&self, mode: ChartLayoutMode) -> ChartLayoutSizing {
         self.sizing
             .sizes
-            .lock()
-            .unwrap()
             .iter()
             .find(|sizes| sizes.mode == mode)
             .cloned()
@@ -1131,7 +1120,7 @@ impl ChartLayout {
             }
         }
         if updated != before {
-            *self.sizing.sizes.lock().unwrap() = updated;
+            self.sizing.sizes = updated;
             if !skip_history {
                 self.sizing.record(before);
             }
@@ -1144,7 +1133,7 @@ impl ChartLayout {
     pub fn reset_sizes(&mut self, skip_history: bool) {
         let before = self.saved_sizes();
         if !before.is_empty() {
-            self.sizing.sizes.lock().unwrap().clear();
+            self.sizing.sizes.clear();
             if !skip_history {
                 self.sizing.record(before);
             }
@@ -1155,6 +1144,22 @@ impl ChartLayout {
         for change in self.sizing.pending.drain(..) {
             chart.history.record_sizes(change);
         }
+    }
+
+    /// Applies the split size and link membership steps the charts undid or redid since they
+    /// were last shown, whichever layout recorded them. Returns whether sizes changed.
+    fn apply_history_steps(&mut self, charts: &mut [&mut Chart]) -> bool {
+        let mut resized = false;
+        for chart in charts.iter_mut() {
+            for change in chart.history.size_steps.drain(..) {
+                change.lock().unwrap().swap(&mut self.sizing.sizes);
+                resized = true;
+            }
+            for change in chart.history.link_steps.drain(..) {
+                change.lock().unwrap().swap(&mut self.links.groups);
+            }
+        }
+        resized
     }
 
     fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
@@ -1207,7 +1212,7 @@ impl ChartLayout {
             return;
         }
         self.groups.swap(a, b);
-        self.links.groups.lock().unwrap().swap(a, b);
+        self.links.groups.swap(a, b);
         self.detached.swap(a, b);
         #[cfg(feature = "drawings")]
         self.drawings.swap_slots(a, b);
@@ -1243,12 +1248,12 @@ impl ChartLayout {
 
     /// Memberships of all slots, including hidden charts, for host storage.
     pub fn saved_link_groups(&self) -> [ChartLinkGroups; 16] {
-        self.links.groups.lock().unwrap().clone()
+        self.links.groups.clone()
     }
 
     /// Memberships of a slot; invalid indices return `None`.
     pub fn link_groups(&self, index: usize) -> Option<ChartLinkGroups> {
-        self.links.groups.lock().unwrap().get(index).cloned()
+        self.links.groups.get(index).cloned()
     }
 
     /// Sets independent field memberships. Empty identifiers are treated as unlinked.
@@ -1265,13 +1270,11 @@ impl ChartLayout {
                 *field = ChartLink::Unlinked;
             }
         }
-        let mut current = self.links.groups.lock().unwrap();
-        let Some(slot) = current.get_mut(index) else {
+        let Some(slot) = self.links.groups.get_mut(index) else {
             return;
         };
         if !skip_history && *slot != groups {
             self.links.pending.push(LinkChange {
-                groups: Arc::clone(&self.links.groups),
                 index,
                 symbol: (slot.symbol != groups.symbol).then(|| slot.symbol.clone()),
                 interval: (slot.interval != groups.interval).then(|| slot.interval.clone()),
@@ -1437,7 +1440,7 @@ impl ChartLayout {
     }
 
     fn linked(&self, a: usize, b: usize, interval: bool) -> bool {
-        let groups = self.links.groups.lock().unwrap();
+        let groups = &self.links.groups;
         let field = |index: usize| {
             if interval {
                 &groups[index].interval
@@ -1594,7 +1597,9 @@ impl ChartLayout {
         for chart in charts.iter_mut() {
             chart.history.resizing = resizing.map(Arc::downgrade).unwrap_or_default();
         }
-        if self.step_layout_edits(charts) {
+        // After the layout edits, whose undo can take size steps with it.
+        let stepped = self.step_layout_edits(charts);
+        if self.apply_history_steps(charts) || stepped {
             (rects, dividers) = self.geometry(rect, count);
         }
         let over_divider = self.sizing.drag.is_some()
@@ -1814,6 +1819,9 @@ impl ChartLayout {
                 .as_ref()
                 .map(|drag| Arc::downgrade(&drag.history_guard))
                 .unwrap_or_default();
+        }
+        if self.apply_history_steps(charts) {
+            ui.ctx().request_repaint();
         }
         self.record_sizes(charts[self.active]);
         self.record_links(charts[self.active]);
@@ -2037,7 +2045,7 @@ impl ChartLayout {
         if let Some(drag) = self.sizing.drag.take() {
             let before = self.before_resize(&drag);
             if drag.weights == self.sizes(drag.mode).weights {
-                *self.sizing.sizes.lock().unwrap() = before;
+                self.sizing.sizes = before;
             } else {
                 self.sizing.record(before);
             }
@@ -2091,7 +2099,7 @@ impl ChartLayout {
         }
         if delta == 0.0 {
             let before = self.before_resize(drag);
-            *self.sizing.sizes.lock().unwrap() = before;
+            self.sizing.sizes = before;
         } else {
             let sizes = ChartLayoutSizing {
                 mode: drag.mode,
@@ -2217,6 +2225,76 @@ mod tests {
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Min1);
         chart
+    }
+
+    /// Split size and link membership steps follow the layout value that shows their chart: a host
+    /// that replaces its layout with a clone undoes and redoes them on the clone, including the
+    /// changes still waiting for a show, and the replaced layout keeps its own.
+    #[test]
+    fn size_undo_after_layout_clone() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 3]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let mode = ChartLayoutMode::ThreeHorizontal;
+        let mut charts = [chart(60), chart(60), chart(60)];
+        let mut layout = ChartLayout {
+            mode,
+            ..Default::default()
+        };
+        let thirds = layout.sizes(mode);
+        let mut wider = thirds.clone();
+        // One row of three columns; the first column doubled is 2/3 : 1/3 : 1/3 out of 4/3.
+        wider.weights[1][0] *= 2.0;
+        layout.set_sizes(&[wider], false).unwrap();
+        let wider = ChartLayoutSizing {
+            mode,
+            weights: vec![vec![1.0], vec![0.5, 0.25, 0.25]],
+        };
+        assert_eq!(layout.sizes(mode), wider);
+        show(&mut layout, &mut charts);
+        // Not shown yet when the host replaces the layout.
+        let linked = ChartLinkGroups {
+            symbol: ChartLink::Group("A".into()),
+            ..Default::default()
+        };
+        layout.set_link_groups(1, linked.clone(), false);
+        layout.reset_sizes(false);
+        let clone = layout.clone();
+        let mut original = std::mem::replace(&mut layout, clone);
+        let mut others = [chart(60), chart(60), chart(60)];
+        show(&mut original, &mut others);
+        show(&mut layout, &mut charts);
+        let unlinked = ChartLinkGroups::default();
+        // Undo the link, the reset and the first size change, then redo them.
+        for (redo, sizes, groups) in [
+            (false, &thirds, &unlinked),
+            (false, &wider, &unlinked),
+            (false, &thirds, &unlinked),
+            (true, &wider, &unlinked),
+            (true, &thirds, &unlinked),
+            (true, &thirds, &linked),
+        ] {
+            assert!(if redo {
+                charts[0].redo()
+            } else {
+                charts[0].undo()
+            });
+            show(&mut layout, &mut charts);
+            show(&mut original, &mut others);
+            assert_eq!(layout.sizes(mode), *sizes, "redo {redo}");
+            assert_eq!(layout.link_groups(1).as_ref(), Some(groups), "redo {redo}");
+            assert_eq!(
+                original.sizes(mode),
+                thirds,
+                "the replaced layout keeps its sizes"
+            );
+            assert_eq!(original.link_groups(1), Some(linked.clone()));
+        }
+        assert!(!charts[0].redo());
     }
 
     /// The renderer receives the original slot of every visible chart in each layout path.
@@ -2451,6 +2529,7 @@ mod tests {
                     "a host update during dragging survives undo"
                 );
                 assert!(charts[0].redo());
+                layout.apply_history_steps(&mut charts.each_mut());
                 assert_eq!(layout.rects(bounds, 4), resized);
                 // Wait out the drag's click before the two reset clicks.
                 for _ in 0..6 {
@@ -2463,6 +2542,7 @@ mod tests {
                 frame(&mut layout, &mut charts, vec![], modifiers);
                 assert_eq!(layout.rects(bounds, 4), before);
                 assert!(charts[0].undo(), "reset must be one undoable action");
+                layout.apply_history_steps(&mut charts.each_mut());
                 assert_eq!(layout.rects(bounds, 4), resized);
             }
         }
@@ -2550,6 +2630,7 @@ mod tests {
         assert!(charts[0].undo());
         assert_eq!(layout.visible_chart_rects(bounds, 4), resized);
         assert!(charts[0].undo());
+        layout.apply_history_steps(&mut charts.each_mut());
         assert_eq!(layout.visible_chart_rects(bounds, 4), default);
         assert_eq!(
             layout.sizes(ChartLayoutMode::TwoVertical),
@@ -2557,6 +2638,7 @@ mod tests {
             "undoing one preset must retain unrelated host size updates"
         );
         assert!(charts[0].redo());
+        layout.apply_history_steps(&mut charts.each_mut());
         assert_eq!(layout.visible_chart_rects(bounds, 4), resized);
         layout.reset_sizes(true);
         assert_eq!(layout.visible_chart_rects(bounds, 4), default);
@@ -2705,10 +2787,12 @@ mod tests {
         );
         assert_widths(&layout, [600.0, 360.0, 480.0]);
         assert!(charts[0].undo());
+        layout.apply_history_steps(&mut charts.each_mut());
         assert_widths(&layout, [480.0, 480.0, 480.0]);
         assert!(!charts[0].undo());
         for expected in [[600.0, 360.0, 480.0], [660.0, 300.0, 480.0]] {
             assert!(charts[0].redo());
+            layout.apply_history_steps(&mut charts.each_mut());
             assert_widths(&layout, expected);
         }
         assert!(!charts[0].redo());
@@ -3318,8 +3402,10 @@ mod tests {
             }
         );
         assert!(charts[0].undo());
+        layout.apply_history_steps(&mut charts.each_mut());
         assert_eq!(layout.link_groups(0).unwrap(), ChartLinkGroups::default());
         assert!(charts[0].redo());
+        layout.apply_history_steps(&mut charts.each_mut());
         assert_eq!(
             layout.link_groups(0).unwrap().symbol,
             ChartLink::Group("💧".into())
@@ -3666,9 +3752,11 @@ mod tests {
             groups.interval = Group("Host".into());
             linked.set_link_groups(0, groups.clone(), true);
             assert!(charts[0].undo());
+            linked.apply_history_steps(&mut [&mut charts[0]]);
             groups.symbol = Group("🔶".into());
             assert_eq!(linked.link_groups(0), Some(groups.clone()));
             assert!(charts[0].redo());
+            linked.apply_history_steps(&mut [&mut charts[0]]);
             groups.symbol = Unlinked;
             assert_eq!(linked.link_groups(0), Some(groups.clone()));
             let copy = linked.clone();
@@ -4206,16 +4294,22 @@ mod tests {
             frame(&mut layout, &mut charts, commit);
             frame(&mut layout, &mut charts, vec![]);
             frame(&mut layout, &mut charts, vec![]);
-            let symbol = || layout.link_groups(slot).unwrap().symbol;
+            let symbol = |layout: &ChartLayout| layout.link_groups(slot).unwrap().symbol;
             if committed {
-                assert_eq!(symbol(), ChartLink::Group("Desk".into()));
+                assert_eq!(symbol(&layout), ChartLink::Group("Desk".into()));
                 let active = layout.active();
                 assert!(charts[active].undo());
-                assert_eq!(symbol(), ChartLink::Layout, "one name, one undo step");
+                layout.apply_history_steps(&mut charts.each_mut());
+                assert_eq!(
+                    symbol(&layout),
+                    ChartLink::Layout,
+                    "one name, one undo step"
+                );
                 assert!(charts[active].redo());
-                assert_eq!(symbol(), ChartLink::Group("Desk".into()));
+                layout.apply_history_steps(&mut charts.each_mut());
+                assert_eq!(symbol(&layout), ChartLink::Group("Desk".into()));
             } else {
-                assert_eq!(symbol(), ChartLink::Layout);
+                assert_eq!(symbol(&layout), ChartLink::Layout);
                 assert!(!charts[slot].can_undo(), "a discarded name records nothing");
             }
         }
