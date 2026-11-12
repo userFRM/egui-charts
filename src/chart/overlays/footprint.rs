@@ -940,18 +940,21 @@ pub(crate) fn fixed_row_group(flow: &Footprint, row_ticks: u32) -> i64 {
     i64::from(row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000))
 }
 
+/// The automatic row height, when it is a usable one: the renderer ignores a height that is not
+/// finite and positive.
+pub(crate) fn automatic_row_height(config: &FootprintConfig) -> Option<f32> {
+    config.auto_row_height.filter(|h| h.is_finite() && *h > 0.0)
+}
+
 fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &FootprintConfig) -> i64 {
     let raw_height =
         (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
     let manual = fixed_row_group(flow, config.row_ticks);
-    config
-        .auto_row_height
-        .filter(|h| h.is_finite() && *h > 0.0)
-        .map_or(manual, |height| {
-            (height / raw_height.max(0.01))
-                .ceil()
-                .clamp(manual as f32, 1_000_000.0) as i64
-        })
+    automatic_row_height(config).map_or(manual, |height| {
+        (height / raw_height.max(0.01))
+            .ceil()
+            .clamp(manual as f32, 1_000_000.0) as i64
+    })
 }
 
 fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {

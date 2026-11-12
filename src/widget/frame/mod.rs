@@ -1034,17 +1034,32 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
-        // Automatic grouping sizes rows by zoom, so only fixed rows fit their edges.
+        // Cells are drawn only while a column is wide enough; narrower bars stay candles.
+        let spacing = self.state.time_scale().bar_spacing();
+        let drawn_as_cells = move |config: &FootprintConfig| {
+            crate::chart::overlays::footprint_column_width(spacing, config).is_some()
+        };
+        // Rows fit the edges of their minimum group, which automatic grouping can only raise; a
+        // group zoom raises above it is not fitted. A usable automatic height on single-tick
+        // rows sizes them by zoom alone, so those keep the candle fit.
         let fixed_footprint = match footprint {
-            Some((flow, config)) => config
-                .auto_row_height
-                .is_none()
-                .then_some((flow, config.row_ticks)),
+            Some((flow, config)) => (drawn_as_cells(config)
+                && (config.row_ticks > 1
+                    || crate::chart::overlays::automatic_row_height(config).is_none()))
+            .then_some((flow, config.row_ticks)),
             None => self
                 .feed_link
                 .as_ref()
                 .and_then(|link| link.footprint.as_ref())
                 .filter(|_| self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint)
+                .filter(|_| {
+                    // The cell width does not depend on the colours.
+                    let colors = [egui::Color32::TRANSPARENT; 4];
+                    drawn_as_cells(&FootprintConfig::from_chart_params(
+                        &self.chart_type_params,
+                        colors,
+                    ))
+                })
                 .map(|flow| (flow, self.chart_type_params.footprint_row_ticks)),
         }
         .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
@@ -1176,10 +1191,7 @@ impl Chart {
             // The summary below the lowest ladder bar is drawn whole or not at all; bars left to
             // candles keep the range candles fit.
             let room = |flow: &Footprint, config: &FootprintConfig| {
-                let spacing = self.state.time_scale().bar_spacing();
-                if flow.complete_from().is_some()
-                    && crate::chart::overlays::footprint_column_width(spacing, config).is_some()
-                {
+                if flow.complete_from().is_some() && drawn_as_cells(config) {
                     crate::chart::overlays::summary_room(config)
                 } else {
                     0.0
