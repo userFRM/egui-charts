@@ -383,37 +383,29 @@ impl Terminal {
                 // The colour becomes the active tool's saved default; other tools keep theirs.
                 let manager = chart.drawings_mut();
                 if let Some(tool) = manager.active_tool() {
-                    let mut drawing = manager.new_drawing(0, tool);
-                    // The saved default carries earlier picks, so a fill or level the tool does not
-                    // tint from its line (read from the tool's own style) could share the line's RGB
-                    // and be retinted; each pick leaves those as they were.
-                    let fresh = egui_charts::drawings::Drawing::new(0, tool);
-                    let fill = fresh
-                        .fill_color
-                        .filter(|fill| fill[..3] != fresh.color[..3])
-                        .and(drawing.fill_color);
-                    let levels: Vec<(f32, [u8; 4])> = match (&fresh.pitchfork, &drawing.pitchfork) {
-                        (Some(own), Some(saved)) => saved
-                            .levels
-                            .iter()
-                            .filter(|level| {
-                                own.levels.iter().any(|l| {
-                                    l.value == level.value && l.color[..3] != fresh.color[..3]
-                                })
-                            })
-                            .map(|level| (level.value, level.color))
-                            .collect(),
-                        _ => Vec::new(),
-                    };
+                    let saved = manager.new_drawing(0, tool);
+                    let mut drawing = saved.clone();
                     drawing.set_line_color(rgba);
-                    if fill.is_some() {
-                        drawing.fill_color = fill;
+                    // The saved default carries earlier picks, so a fill or level the tool does not
+                    // tint from its line (read from the tool's own style) may share the line's RGB
+                    // and be retinted; each pick leaves those as they were.
+                    let own = egui_charts::drawings::Drawing::new(0, tool);
+                    if own
+                        .fill_color
+                        .is_some_and(|fill| fill[..3] != own.color[..3])
+                    {
+                        drawing.fill_color = saved.fill_color;
                     }
-                    if let Some(config) = &mut drawing.pitchfork {
-                        for level in &mut config.levels {
-                            if let Some((_, color)) = levels.iter().find(|(v, _)| *v == level.value)
+                    if let (Some(own_levels), Some(before), Some(after)) =
+                        (&own.pitchfork, &saved.pitchfork, &mut drawing.pitchfork)
+                    {
+                        for (level, kept) in after.levels.iter_mut().zip(&before.levels) {
+                            if own_levels
+                                .levels
+                                .iter()
+                                .any(|l| l.value == level.value && l.color[..3] != own.color[..3])
                             {
-                                level.color = *color;
+                                level.color = kept.color;
                             }
                         }
                     }
@@ -863,9 +855,9 @@ mod tests {
                 continue;
             }
             let own = egui_charts::drawings::PitchforkConfig::default();
+            // The median is Red in the own style, so every level matches it after Indigo then Red.
             for (level, own) in drawing.pitchfork.unwrap().levels.iter().zip(&own.levels) {
-                let expected = if own.value == 0.0 { red } else { own.color };
-                assert_eq!(level.color, expected, "level {}", own.value);
+                assert_eq!(level.color, own.color, "level {}", own.value);
             }
         }
     }
