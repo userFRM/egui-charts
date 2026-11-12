@@ -291,10 +291,10 @@ fn added_only_appends_keep_a_scrolled_back_view() {
 }
 
 /// A fit of 1000 added bars into 800 points is below one point per bar, so the visible range groups
-/// the slots of the added series while the main series has no groups to read. The volume pane, on
-/// by default, draws nothing and the frame ends on the newest added bar.
+/// the slots of the added series while the main series has no groups to read. The frame completes
+/// with the volume pane on and ends on the newest added bar.
 #[test]
-fn added_only_fit_paints_the_volume_pane() {
+fn added_only_fit_below_one_point_per_bar_groups_the_added_slots() {
     let ctx = egui::Context::default();
     let mut chart = Chart::new(BarData::from_bars(vec![]));
     let id = chart.add_series(SeriesOptions::default());
