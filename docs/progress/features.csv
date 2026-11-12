@@ -683,7 +683,7 @@ Studies,Indicators,Crypto derivatives metrics,incomplete,host,src/data/metrics.r
 Studies,Indicators,Crypto on-chain and ETF metrics,unverified,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Cumulative Volume Delta,unverified,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs,
 Studies,Indicators,Cumulative Volume Index,unverified,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Detrended Price Oscillator,incomplete,library,src/studies/builtin/dpo.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Detrended Price Oscillator,unverified,library,src/studies/builtin/dpo.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2649
 Studies,Indicators,Directional Movement,incomplete,library,src/studies/builtin/directional_movement.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Dividend Yield,unverified,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Donchian Channels,unverified,library,src/studies/builtin/donchian.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;examples/demo/controller.rs,2645
@@ -704,7 +704,7 @@ Studies,Indicators,Ichimoku Cloud,unverified,library,src/studies/builtin/ichimok
 Studies,Indicators,Kaufman's Adaptive Moving Average,incomplete,library,src/studies/builtin/kama.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Keltner Channels,unverified,library,src/studies/builtin/keltner.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/price_oscillator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/studies/template.rs;src/chart/indicators/plots.rs,2643
 Studies,Indicators,Klinger Oscillator,unverified,library,src/studies/builtin/klinger.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Know Sure Thing,incomplete,library,src/studies/builtin/know_sure_thing.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
+Studies,Indicators,Know Sure Thing,unverified,library,src/studies/builtin/know_sure_thing.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2649
 Studies,Indicators,Least Squares Moving Average,unverified,library,src/studies/builtin/lsma.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Linear Regression,incomplete,library,src/studies/builtin/linear_regression_channel.rs;src/model/math.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/template.rs,
 Studies,Indicators,Linear Regression Curve,unverified,library,src/studies/builtin/linear_regression.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
@@ -749,7 +749,7 @@ Studies,Indicators,Pring's Special K,unverified,library,src/studies/builtin/spec
 Studies,Indicators,RCI Ribbon,unverified,library,src/studies/builtin/rci_ribbon.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,RSI Divergence Indicator,incomplete,library,src/studies/builtin/rsi_divergence.rs;src/studies/builtin/rsi.rs;src/chart/rendering/indicator.rs,176
 Studies,Indicators,Rank Correlation Index,incomplete,library,src/studies/builtin/rank_correlation.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Rate of Change,incomplete,library,src/studies/builtin/roc.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Rate of Change,unverified,library,src/studies/builtin/roc.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2649
 Studies,Indicators,Ratio,incomplete,library,src/services/search/expression.rs,1081
 Studies,Indicators,Relative Strength Index,incomplete,library,src/studies/builtin/rsi.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs,1089;2335
 Studies,Indicators,Relative Vigor Index,unverified,library,src/studies/builtin/relative_vigor.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
@@ -787,7 +787,7 @@ Studies,Indicators,Triple EMA,incomplete,library,src/studies/builtin/tema.rs;src
 Studies,Indicators,True Strength Index,unverified,library,src/studies/builtin/true_strength.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Typical Price,incomplete,library,src/studies/builtin/typical_price.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Ulcer Index,unverified,library,src/studies/builtin/ulcer_index.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Ultimate Oscillator,incomplete,library,src/studies/builtin/ultimate_oscillator.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
+Studies,Indicators,Ultimate Oscillator,unverified,library,src/studies/builtin/ultimate_oscillator.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2649
 Studies,Indicators,Up/Down Volume,incomplete,library,src/studies/builtin/up_down_volume.rs;src/widget/studies_data.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/builtin/lower_interval.rs,
 Studies,Indicators,VWAP Auto Anchored,incomplete,library,src/studies/builtin/vwap_auto_anchored.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Visible Average Price,incomplete,library,src/studies/builtin/visible_average_price.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
