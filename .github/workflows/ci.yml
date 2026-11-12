@@ -451,6 +451,10 @@ jobs:
           tool: wasm-pack
       - name: Run browser widget tests
         if: needs.changes.outputs.rust == 'true'
+        env:
+          # The default of 5 seconds for the browser driver to open its port is too short on a busy runner,
+          # and the job then fails before any test runs. A longer budget also lets the runner restart a stuck driver.
+          WASM_BINDGEN_TEST_DRIVER_TIMEOUT: "60"
         run: >-
           wasm-pack test --headless --chrome --lib
           ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
