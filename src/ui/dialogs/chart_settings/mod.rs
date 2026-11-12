@@ -319,6 +319,11 @@ impl SettingsDialog {
                 basic.background_gradient_bottom,
                 theme.chart.bg_axis,
             ),
+            (
+                &mut self.color_picker_states.crosshair,
+                self.settings.crosshair.color,
+                theme.chart.crosshair_line,
+            ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
                 themed
@@ -806,7 +811,8 @@ impl SettingsDialog {
             self.settings.scales_appearance.text_color = theme.chart.axis_text;
             self.settings.grid_lines.horizontal_color = theme.chart.grid_line;
             self.settings.grid_lines.vertical_color = theme.chart.grid_line;
-            self.settings.crosshair.color = theme.chart.crosshair_line;
+            // What a new chart holds: the colour follows the theme until one is chosen.
+            self.settings.crosshair.color = Color32::PLACEHOLDER;
             self.settings.watermark.color = crate::config::ChartConfig::default()
                 .with_theme(theme)
                 .watermark_color;
@@ -869,7 +875,6 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
-                let crosshair = theme.chart.crosshair_line;
                 let mut settings = expected.clone();
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -929,6 +934,10 @@ mod tests {
                     panic!("Ok must apply the reset settings");
                 };
                 assert!(!dialog.is_open);
+                // Saved settings and templates keep a theme-following crosshair as it is.
+                let saved: ChartSettingsState =
+                    serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+                assert_eq!(saved.crosshair.color, Color32::PLACEHOLDER);
                 settings.apply_to_chart(&mut chart).unwrap();
                 let actual = ChartSettingsState::from_chart(&chart);
                 let mismatches: Vec<_> = [
@@ -950,12 +959,17 @@ mod tests {
                     (
                         "horizontal crosshair",
                         chart.chart_options().crosshair.horz_line_color,
-                        crosshair,
+                        Color32::PLACEHOLDER,
                     ),
                     (
                         "vertical crosshair",
                         chart.chart_options().crosshair.vert_line_color,
-                        crosshair,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "crosshair swatch",
+                        dialog.color_picker_states.crosshair.sel_color,
+                        theme.chart.crosshair_line,
                     ),
                     (
                         "candle up",
