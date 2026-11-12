@@ -31,6 +31,8 @@ use layouts::{DemoChart, LayoutTab};
 mod comparison;
 #[path = "marks.rs"]
 mod marks;
+#[path = "owndata/mod.rs"]
+mod owndata;
 #[path = "replay.rs"]
 mod replay;
 #[path = "storage.rs"]
