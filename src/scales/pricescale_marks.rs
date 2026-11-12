@@ -148,12 +148,8 @@ impl PriceMarkGenerator {
         let min_step = self
             .min_step()
             .filter(|_| prices || map.transform().mode == PriceScaleMode::Normal);
-        // A multiple of the format's minimum move, so it also keeps that grid.
-        let min_step = if prices {
-            map.volume_step().or(min_step)
-        } else {
-            min_step
-        };
+        // A volume step is a multiple of the format's minimum move, so it also keeps that grid.
+        let min_step = map.volume_step().filter(|_| prices).or(min_step);
         if let Some(min_step) = min_step {
             nice_step = Self::round_up_to_multiple(nice_step, min_step);
         }
