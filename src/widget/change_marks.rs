@@ -306,11 +306,12 @@ mod tests {
     #[test]
     fn change_marks_leave_with_their_bars() {
         for main in [true, false] {
-            for (replay, restore, evict) in [
-                (false, false, false),
-                (true, false, false),
-                (true, true, false),
-                (false, false, true),
+            for (replay, restore, evict, limit) in [
+                (false, false, false, false),
+                (true, false, false, false),
+                (true, true, false, false),
+                (false, false, true, false),
+                (false, false, true, true),
             ] {
                 if main && restore {
                     continue;
@@ -347,9 +348,18 @@ mod tests {
                     }
                 } else if evict {
                     // The oldest bars leave while the marks of the retained ones stay.
-                    assert_eq!(chart.remove_oldest_bars(id, 10).len(), 10);
+                    if limit {
+                        // A bar past the limit keeps the newest 100 - 100 / 8 bars.
+                        chart.set_bar_limit(id, std::num::NonZeroUsize::new(100));
+                        let next = last + chrono::TimeDelta::days(1);
+                        chart.update(id, Bar::new(next, 100.0, 110.0, 100.0, 110.0, 1.0));
+                        assert_eq!(chart.bars(id).len(), 88);
+                    } else {
+                        assert_eq!(chart.remove_oldest_bars(id, 10).len(), 10);
+                    }
                     assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
-                    assert_eq!(chart.pop_bars(id, 1).len(), 1);
+                    let newer = 1 + usize::from(limit);
+                    assert_eq!(chart.pop_bars(id, newer).len(), newer);
                 } else {
                     assert!(chart.pop_bars(id, 0).is_empty());
                     assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
@@ -359,7 +369,7 @@ mod tests {
                 assert_eq!(
                     marks(&chart, main).marks.borrow().len(),
                     kept,
-                    "main {main}, replay {replay}, restored {restore}, evicted {evict}"
+                    "main {main}, replay {replay}, restored {restore}, evicted {evict}, limit {limit}"
                 );
                 assert!(
                     marks(&chart, main)
@@ -378,10 +388,12 @@ mod tests {
                     kept,
                     "returning bar starts without a mark"
                 );
-                assert_eq!(
-                    chart.pop_bars(id, usize::MAX).len(),
-                    if evict { 90 } else { 100 }
-                );
+                let left = match (evict, limit) {
+                    (false, _) => 100,
+                    (true, false) => 90,
+                    (true, true) => 87,
+                };
+                assert_eq!(chart.pop_bars(id, usize::MAX).len(), left);
                 assert!(marks(&chart, main).marks.borrow().is_empty());
             }
         }
@@ -497,8 +509,8 @@ mod tests {
                 "expired markers leave no repaint work"
             );
             // A mark recorded while nothing is drawn for the series ages on the same clock.
-            let hidden = [false, true].into_iter().filter(|renko| main || !renko);
-            for renko in hidden {
+            // The series is hidden, or for the main series the chart type switches to Renko.
+            for renko in [false, true].into_iter().filter(|&renko| main || !renko) {
                 let ctx = egui::Context::default();
                 let frame = |chart: &mut Chart, time: f64| {
                     crate::widget::test_frames::shapes(&ctx, chart, time, Vec::new());
