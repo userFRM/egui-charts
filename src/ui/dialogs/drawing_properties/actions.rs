@@ -125,15 +125,9 @@ impl DrawingProps {
             )
     }
 
-    /// Whether the paint colour shows the given colour's RGB at its own opacity. The custom
-    /// colour editor scales a hue by a fractional opacity, which can round a translucent channel
-    /// one step away; at full opacity every step is a picked hue.
+    /// Whether the paint colour shows the given colour's RGB at its own opacity.
     fn paints(&self, [r, g, b, _]: [u8; 4]) -> bool {
-        // shortcut: a hue opened translucent reaches the editor premultiplied and can drift
-        // further; carry the unmultiplied colour through `ColorPicker` when that drift matters.
-        let exact = Color32::from_rgba_unmultiplied(r, g, b, self.color.a());
-        let step = u8::from(self.color.a() < 255);
-        (0..3).all(|i| exact[i].abs_diff(self.color[i]) <= step)
+        Color32::from_rgba_unmultiplied(r, g, b, self.color.a()) == self.color
     }
 
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
@@ -909,12 +903,10 @@ mod tests {
             ("nothing edited", |_| {}, |_| {}),
             (
                 "opacity only",
-                // The custom editor scales the hue by its opacity, 0.3287, which rounds blue's red
-                // to 13 where 41 at an opacity of 84 is 14.
+                // The custom editor returns the saved hue at the new opacity.
                 |props| {
-                    let mut colour = egui::ecolor::Hsva::from(props.color);
-                    colour.a = 0.3287;
-                    props.color = colour.into();
+                    let [r, g, b, _] = props.color_rgba();
+                    props.color = Color32::from_rgba_unmultiplied(r, g, b, 84);
                 },
                 |d| d.color[3] = 84,
             ),

@@ -5,6 +5,8 @@
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use egui::ecolor::Hsva;
+use egui::widgets::color_picker::{Alpha, color_edit_button_hsva};
 use egui::{Color32, Id, Pos2, Role, Sense, Stroke, Ui, Vec2, WidgetInfo, epaint::StrokeKind};
 
 // ============================================================================
@@ -242,7 +244,28 @@ impl<'a> ColorPicker<'a> {
 
     /// Show a color swatch button that opens the picker when clicked
     /// Returns the picked colour, if changed, and the colour well's response.
-    pub fn show(mut self, ui: &mut Ui) -> egui::InnerResponse<Option<Color32>> {
+    pub fn show(self, ui: &mut Ui) -> egui::InnerResponse<Option<Color32>> {
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        // A translucent `sel_color` holds a rounded hue: the editor's own colour is the exact
+        // one for as long as it paints the same.
+        let rgba = ui
+            .data(|d| d.get_temp::<Hsva>(self.id.with("custom")))
+            .map(|custom| custom.to_srgba_unmultiplied())
+            .filter(|&rgba| color(rgba) == self.state.sel_color)
+            .unwrap_or_else(|| self.state.sel_color.to_srgba_unmultiplied());
+        let shown = self.show_unmultiplied(ui, rgba);
+        egui::InnerResponse::new(shown.inner.map(color), shown.response)
+    }
+
+    /// [`Self::show`] for a colour kept as unmultiplied sRGBA bytes: `rgba` is the exact colour
+    /// that `sel_color` paints. The custom editor edits those bytes, and a palette pick or an
+    /// edit comes back as such bytes, so a translucent hue is never rounded through its
+    /// premultiplied form.
+    pub(crate) fn show_unmultiplied(
+        mut self,
+        ui: &mut Ui,
+        rgba: [u8; 4],
+    ) -> egui::InnerResponse<Option<[u8; 4]>> {
         let theme = ui.active_theme();
         let defaults = ColorPickerConfig::default();
         for (value, default, themed) in [
@@ -281,7 +304,7 @@ impl<'a> ColorPicker<'a> {
                 .max(DESIGN_TOKENS.sizing.button_md),
         );
         let (btn_rect, mut btn_res) = ui.allocate_exact_size(btn_size, Sense::click());
-        let translated_label = l10n::text(ui.ctx(), hex(self.state.sel_color));
+        let translated_label = l10n::text(ui.ctx(), hex(rgba));
         btn_res.widget_info(|| {
             WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), &translated_label)
         });
@@ -325,7 +348,7 @@ impl<'a> ColorPicker<'a> {
             self.state.is_open = false;
         }
         if self.state.is_open {
-            color_changed = self.show_popup(ui);
+            color_changed = self.show_popup(ui, rgba);
         }
         if !self.state.is_open {
             self.state.custom_mode = false;
@@ -337,7 +360,7 @@ impl<'a> ColorPicker<'a> {
         egui::InnerResponse::new(color_changed, btn_res)
     }
 
-    fn show_popup(&mut self, ui: &mut Ui) -> Option<Color32> {
+    fn show_popup(&mut self, ui: &mut Ui, rgba: [u8; 4]) -> Option<[u8; 4]> {
         let mut color_changed = None;
         let popup_pos = self.state.popup_pos.unwrap_or(ui.cursor().min);
 
@@ -413,19 +436,31 @@ impl<'a> ColorPicker<'a> {
                         ui.add_space(ui.active_theme().spacing.lg);
 
                         // Custom color button
-                        self.draw_custom_color_btn(ui);
+                        self.draw_custom_color_btn(ui, rgba);
 
                         // If custom mode is active, show color editor
                         if self.state.custom_mode {
                             ui.add_space(ui.active_theme().spacing.lg);
-                            let mut custom = self.state.custom_color;
-                            if ui.color_edit_button_srgba(&mut custom).changed() {
-                                self.state.custom_color = custom;
-                                color_changed = Some(custom);
+                            // The editor's own colour, for as long as it is still the caller's:
+                            // it keeps the hue of a grey and of a fully transparent colour.
+                            let id = self.id.with("custom");
+                            let mut custom = ui
+                                .data(|d| d.get_temp::<Hsva>(id))
+                                .filter(|custom| custom.to_srgba_unmultiplied() == rgba)
+                                .unwrap_or_else(|| Hsva {
+                                    a: f32::from(rgba[3]) / 255.0,
+                                    ..Hsva::from_srgb([rgba[0], rgba[1], rgba[2]])
+                                });
+                            if color_edit_button_hsva(ui, &mut custom, Alpha::OnlyBlend).changed() {
+                                ui.data_mut(|d| d.insert_temp(id, custom));
+                                let [r, g, b, a] = custom.to_srgba_unmultiplied();
+                                self.state.custom_color =
+                                    Color32::from_rgba_unmultiplied(r, g, b, a);
+                                color_changed = Some([r, g, b, a]);
                             }
                             ui.add_space(ui.active_theme().spacing.sm);
                             if ui.small_button(l10n::text(ui.ctx(), "Apply")).clicked() {
-                                color_changed = Some(self.state.custom_color);
+                                color_changed = Some(color_changed.unwrap_or(rgba));
                                 self.state.is_open = false;
                             }
                         }
@@ -445,8 +480,8 @@ impl<'a> ColorPicker<'a> {
         }
 
         // If color changed, update state and close popup
-        if let Some(color) = color_changed {
-            self.state.sel_color = color;
+        if let Some([r, g, b, a]) = color_changed {
+            self.state.sel_color = Color32::from_rgba_unmultiplied(r, g, b, a);
             if !self.state.custom_mode {
                 self.state.is_open = false;
             }
@@ -455,7 +490,7 @@ impl<'a> ColorPicker<'a> {
         color_changed
     }
 
-    fn draw_color_row(&self, ui: &mut Ui, colors: &[Color32]) -> Option<Color32> {
+    fn draw_color_row(&self, ui: &mut Ui, colors: &[Color32]) -> Option<[u8; 4]> {
         let mut selected = None;
 
         // Get colors from theme
@@ -507,7 +542,7 @@ impl<'a> ColorPicker<'a> {
                     );
                 }
                 crate::styles::focus::draw_focus_ring(ui, &response, rounding);
-                let translated_label = l10n::text(ui.ctx(), hex(*color));
+                let translated_label = l10n::text(ui.ctx(), hex(color.to_srgba_unmultiplied()));
                 response.widget_info(|| {
                     WidgetInfo::selected(
                         Role::ColorWell,
@@ -518,7 +553,7 @@ impl<'a> ColorPicker<'a> {
                 });
 
                 if response.clicked() {
-                    selected = Some(*color);
+                    selected = Some(color.to_srgba_unmultiplied());
                 }
             }
         });
@@ -529,7 +564,7 @@ impl<'a> ColorPicker<'a> {
     }
 
     /// The hex and opacity row; clicking it toggles the custom colour editor.
-    fn draw_custom_color_btn(&mut self, ui: &mut Ui) {
+    fn draw_custom_color_btn(&mut self, ui: &mut Ui, rgba: [u8; 4]) {
         let visuals = ui.style().visuals.clone();
         let (rect, response) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_md),
@@ -558,7 +593,7 @@ impl<'a> ColorPicker<'a> {
         let value_color = visuals.widgets.hovered.fg_stroke.color;
         let gap = ui.active_theme().spacing.sm;
         let y = rect.center().y;
-        let opacity = format!("{}%", (f32::from(self.state.sel_color.a()) / 2.55).round());
+        let opacity = format!("{}%", (f32::from(rgba[3]) / 2.55).round());
 
         let label = painter.text(
             egui::pos2(rect.left() + ui.active_theme().spacing.lg, y),
@@ -570,7 +605,7 @@ impl<'a> ColorPicker<'a> {
         painter.text(
             egui::pos2(label.right() + gap, y),
             egui::Align2::LEFT_CENTER,
-            l10n::text(ui.ctx(), hex(self.state.sel_color)),
+            l10n::text(ui.ctx(), hex(rgba)),
             font.clone(),
             value_color,
         );
@@ -599,15 +634,131 @@ impl<'a> ColorPicker<'a> {
 }
 
 /// `#RRGGBB` for the colour without its alpha.
-fn hex(color: Color32) -> String {
-    let [r, g, b, _] = color.to_srgba_unmultiplied();
+fn hex([r, g, b, _]: [u8; 4]) -> String {
     format!("#{r:02X}{g:02X}{b:02X}")
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use egui::{Context, Event, Key, Modifiers, PointerButton, RawInput, Rect};
+    use egui::{Context, Event, Key, Modifiers, PointerButton, RawInput, Rect, Shape};
+
+    fn button(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    /// A click at `pos`, within one frame.
+    pub(crate) fn click(pos: Pos2) -> Vec<Event> {
+        vec![
+            Event::PointerMoved(pos),
+            button(pos, true),
+            button(pos, false),
+        ]
+    }
+
+    /// The centre of the first text that starts with `prefix`.
+    pub(crate) fn text_pos(shapes: &[Shape], prefix: &str) -> Pos2 {
+        shapes
+            .iter()
+            .find_map(|s| match s {
+                Shape::Text(t) if t.galley.job.text.starts_with(prefix) => {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no text starts with {prefix:?}"))
+    }
+
+    /// Opens the custom editor of an open popup whose colour paints as `paint`: clicks the Hex
+    /// row, then the editor's button below it. `frame` runs one frame with the given events and
+    /// returns its shapes, as this does with the editor open.
+    pub(crate) fn open_custom_editor(
+        frame: &mut impl FnMut(Vec<Event>) -> Vec<Shape>,
+        paint: Color32,
+    ) -> Vec<Shape> {
+        frame(vec![]);
+        let shapes = frame(vec![]);
+        frame(click(text_pos(&shapes, "Hex")));
+        let shapes = frame(vec![]);
+        let hex = text_pos(&shapes, "Hex");
+        let editor = shapes
+            .iter()
+            .find_map(|s| match s {
+                Shape::Rect(r) if r.fill == paint && r.rect.top() > hex.y => Some(r.rect.center()),
+                _ => None,
+            })
+            .expect("the custom editor shows the colour");
+        frame(click(editor));
+        frame(vec![])
+    }
+
+    /// Drags the alpha slider of the open custom editor through `path`, one frame for each
+    /// opacity, from a press on the first to a release on the last.
+    pub(crate) fn drag_alpha(
+        frame: &mut impl FnMut(Vec<Event>) -> Vec<Shape>,
+        shapes: &[Shape],
+        path: &[u8],
+    ) {
+        // The alpha slider is the last gradient the editor paints.
+        let slider = shapes
+            .iter()
+            .rev()
+            .find_map(|s| match s {
+                Shape::Rect(r) if r.brush.is_some() && r.rect.width() > 200.0 => Some(r.rect),
+                _ => None,
+            })
+            .expect("the editor shows an alpha slider");
+        let at = |alpha: u8| {
+            Pos2::new(
+                slider.left() + slider.width() * f32::from(alpha) / 255.0,
+                slider.center().y,
+            )
+        };
+        let (first, last) = (at(path[0]), at(path[path.len() - 1]));
+        frame(vec![Event::PointerMoved(first), button(first, true)]);
+        for &alpha in &path[1..] {
+            frame(vec![Event::PointerMoved(at(alpha))]);
+        }
+        frame(vec![button(last, false)]);
+    }
+
+    /// A host that keeps the premultiplied colour gets its hue back after the opacity was
+    /// dragged close to zero, where the colour itself holds almost none of it.
+    #[test]
+    fn opacity_dragged_near_zero_and_back_restores_a_premultiplied_colour() {
+        let ctx = Context::default();
+        // A popup that fades in tints what it paints.
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let colour = Color32::from_rgba_unmultiplied(242, 54, 69, 51);
+        let mut state = ColorPickerState {
+            sel_color: colour,
+            is_open: true,
+            ..Default::default()
+        };
+        let mut frame = |events| {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ColorPicker::new(&mut state, "picker-test").show(ui);
+                },
+            );
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let shapes = open_custom_editor(&mut frame, colour);
+        drag_alpha(&mut frame, &shapes, &[51, 20, 2, 20, 51]);
+        assert_eq!(state.sel_color, colour);
+    }
 
     #[test]
     fn hex_row_opens_from_the_current_colour_and_escape_resets_the_popup() {
@@ -653,23 +804,6 @@ mod tests {
                     state.clone(),
                     ctx.input(|i| i.key_pressed(Key::Escape)),
                 )
-            };
-            let click = |pos| {
-                vec![
-                    Event::PointerMoved(pos),
-                    Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Modifiers::NONE,
-                    },
-                    Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed: false,
-                        modifiers: Modifiers::NONE,
-                    },
-                ]
             };
             let (well, _, _, _) = frame(vec![]);
             frame(click(well.center()));

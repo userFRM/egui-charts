@@ -41,11 +41,14 @@ struct CachedProfile {
     rebuilt: bool,
 }
 
+/// Every measure, in the order a chain that reports them all lists them.
+const MEASURES: [&str; 3] = ["Volume", "Open interest", "Gamma exposure"];
+
 /// How an input the chain decides on is listed while it waits for the chain, or `None` for any
-/// other id. Its saved choice of measure is kept as saved, whatever the chain then offers.
+/// other id. A measure that waits is listed among [`MEASURES`], whatever the chain then offers.
 fn waiting_input(id: &str, value: InputValue) -> Option<StudyInput> {
     let (label, kind, default) = match id {
-        "measure_label" if matches!(&value, InputValue::Text(label) if ["Volume", "Open interest", "Gamma exposure"].contains(&label.as_str())) =>
+        "measure_label" if matches!(&value, InputValue::Text(label) if MEASURES.contains(&label.as_str())) =>
         {
             return Some(
                 StudyInput::new(id, "Measure label", value, InputKind::Text)
@@ -55,11 +58,7 @@ fn waiting_input(id: &str, value: InputValue) -> Option<StudyInput> {
         }
         "measure" => (
             "Measure",
-            InputKind::Choice(vec![
-                "Volume".into(),
-                "Open interest".into(),
-                "Gamma exposure".into(),
-            ]),
+            InputKind::Choice(MEASURES.map(Into::into).to_vec()),
             InputValue::Choice(0),
         ),
         "call_wall" => ("Call wall", InputKind::Toggle, InputValue::Toggle(false)),
@@ -210,7 +209,11 @@ impl OptionsVolumeProfile {
     /// Inputs saved with data that has not arrived, such as a layout restored before its quotes,
     /// are listed and saved as they were and apply as their required data becomes available.
     /// Saved expiry and measure labels take precedence over their choice positions;
-    /// an expiry no longer listed selects Nearest. Older saves keep position semantics.
+    /// an expiry no longer listed selects Nearest. Older saves keep position semantics: a
+    /// measure position counts in the chain's own listing once the chain has answered and
+    /// lists it, and otherwise in the order Volume, Open interest, Gamma exposure. A measure
+    /// that waits is listed and saved at its place in that order, and a choice made meanwhile
+    /// names its measure in it.
     /// New saves contain hidden `expiry_label` and `measure_label` inputs that older releases
     /// do not accept. Editors applying all inputs must update the matching label on an explicit
     /// choice edit or reset, and preserve it on unrelated edits while a measure is unavailable.
@@ -299,23 +302,13 @@ impl OptionsVolumeProfile {
             }
             // In saved order, since the measure decides which levels are offered.
             let pending = self.waiting_inputs.take();
-            let labelled = pending.iter().any(|(id, _)| id == "measure_label");
             let mut waiting = Vec::new();
             for (id, value) in pending {
-                // A label names the measure. Without chain rows only Gamma exposure is listed,
-                // which a saved position does not index.
-                if id == "measure" && (labelled || awaiting_chain) {
-                    waiting.push((id, value));
-                    continue;
-                }
                 let input = self
                     .inputs()
                     .into_iter()
                     .find(|input| input.id == id && input.accepts(&value));
                 if input.is_some_and(|input| self.set_chain_input(&id, &value, &input)) {
-                    if id == "measure_label" {
-                        waiting.retain(|(id, _)| id != "measure");
-                    }
                     *self.cache.borrow_mut() = CachedProfile::default();
                 } else {
                     waiting.push((id, value));
@@ -1065,12 +1058,22 @@ impl Indicator for OptionsVolumeProfile {
             );
         }
         let waiting = self.waiting_inputs.borrow();
-        // A held position keeps its saved meaning, which a label of the shown measure would undo.
+        // A measure that waits is listed in the fixed order, in which a choice then names it.
+        let held_measure = waiting.iter().find_map(|(id, value)| match value {
+            InputValue::Text(label) if id == "measure_label" => {
+                MEASURES.iter().position(|measure| measure == label)
+            }
+            _ => None,
+        });
         inputs.retain(|input| {
             !waiting
                 .iter()
-                .any(|(id, _)| *id == input.id || (id == "measure" && input.id == "measure_label"))
+                .any(|(id, _)| *id == input.id || (id == "measure_label" && input.id == "measure"))
         });
+        inputs.extend(
+            held_measure
+                .and_then(|position| waiting_input("measure", InputValue::Choice(position))),
+        );
         inputs.extend(
             waiting
                 .iter()
@@ -1117,6 +1120,22 @@ impl Indicator for OptionsVolumeProfile {
             (_, value, _) => value,
         };
         let input = self.inputs().into_iter().find(|input| input.id == id);
+        // A measure position names its measure in the fixed order while a measure waits, which
+        // lists that order, while the chain is awaited, and when the chain lists no such
+        // position. Only a position the answered chain lists counts in the chain's own listing.
+        if let (InputValue::Choice(position), ProfileSource::Chain(..)) = (&value, &self.source)
+            && id == "measure"
+            && let Some(measure) = MEASURES.get(*position)
+            && (self.cache.borrow().awaiting_chain
+                || self
+                    .waiting_inputs
+                    .borrow()
+                    .iter()
+                    .any(|(held, _)| held == "measure_label")
+                || !input.as_ref().is_some_and(|input| input.accepts(&value)))
+        {
+            return self.set_input("measure_label", InputValue::Text((*measure).into()));
+        }
         let chain_input = matches!(self.source, ProfileSource::Chain(..))
             && waiting_input(id, value.clone()).is_some_and(|input| input.accepts(&value));
         let unavailable_label = chain_input
@@ -1125,16 +1144,6 @@ impl Indicator for OptionsVolumeProfile {
                 .as_ref()
                 .is_some_and(|input| self.set_chain_input(id, &value, input));
         let waiting = self.waiting_inputs.get_mut();
-        if chain_input {
-            let superseded = if id == "measure_label" && !unavailable_label {
-                "measure"
-            } else if id == "measure" {
-                "measure_label"
-            } else {
-                ""
-            };
-            waiting.retain(|(saved, _)| saved != superseded);
-        }
         let held = waiting.iter().position(|(saved, _)| saved == id);
         if chain_input
             && (held.is_some()
@@ -1142,7 +1151,7 @@ impl Indicator for OptionsVolumeProfile {
                 || !input.as_ref().is_some_and(|input| input.accepts(&value)))
         {
             // A held measure shows the default until it applies, as before quotes arrive.
-            if matches!(id, "measure" | "measure_label") {
+            if id == "measure_label" {
                 self.open_interest.set(false);
                 self.gamma.set(false);
             }
@@ -2407,9 +2416,9 @@ mod tests {
             }
         }
     }
-    /// A profile saved by an earlier release has no labels. Its measure position counts among
-    /// the measures the chain's rows list, whichever feed answers first, and a position that
-    /// the restored chain does not list is saved again as it was.
+    /// A profile saved by an earlier release has no labels. Restored before its chain answers,
+    /// its measure position counts among all three measures, whichever feed answers first, and
+    /// a measure that the restored chain does not list is saved again as it was.
     #[test]
     fn earlier_saved_measure_keeps_its_position() {
         let expiry = Utc::now().date_naive().succ_opt().unwrap();
@@ -2467,8 +2476,13 @@ mod tests {
             (factory, feed)
         };
         // Saved over Volume, Open interest and Gamma exposure: Volume with the provider answering
-        // first, and Open interest restored over a chain that lists Volume alone.
-        for (exposure, position, interest, up) in [(true, 0, true, 10.0), (false, 1, false, 4.0)] {
+        // first, after or before (`early`) the restore, and Open interest restored over a chain
+        // that lists Volume alone.
+        for (exposure, early, position, interest, up) in [
+            (true, false, 0, true, 10.0),
+            (true, true, 0, true, 10.0),
+            (false, false, 1, false, 4.0),
+        ] {
             let (original, feed) = factory(exposure);
             answer(&feed, Some(true), exposure);
             let mut study = original.create("Options Volume Profile").unwrap();
@@ -2479,8 +2493,9 @@ mod tests {
             saved.inputs.retain(|(id, _)| !id.ends_with("_label"));
             // Restored, read after any provider answer and before the chain's, and saved again.
             let (restoring, feed) = factory(exposure);
+            answer(&feed, None, exposure && early);
             let restored = saved.create_with(&restoring).unwrap();
-            answer(&feed, None, exposure);
+            answer(&feed, None, exposure && !early);
             restored.inputs();
             answer(&feed, Some(interest), false);
             let saved = crate::studies::StudyTemplate::from_study(restored.as_ref());
@@ -2490,45 +2505,71 @@ mod tests {
             assert_eq!(
                 restored.volume_profiles(0..1)[0].profile.up(),
                 [up],
-                "position {position}"
+                "position {position}, early {early}"
             );
         }
     }
-    /// A saved measure position the chain does not list waits and shows the default measure,
-    /// also when an undo brings it back after another measure was shown.
+    /// A measure position the chain does not list names its measure in the order of all three,
+    /// so the editor lists the measure that is applied or waits, and a pick applies the measure
+    /// it names, also once the chain offers the one that waited.
     #[test]
-    fn held_measure_shows_the_default_after_an_undo() {
-        let feed = ChainFeed::default();
+    fn earlier_saved_measure_applies_as_the_editor_lists_it() {
         let expiry = Utc::now().date_naive().succ_opt().unwrap();
         let time = Utc::now();
-        let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
-        let chain = OptionChain::new(&feed, query, || {}).unwrap();
-        // Without the put's volume the chain lists Open interest (calls 4, puts 2) and Gamma
-        // exposure, so position 2 is held.
-        let rows = [OptionKind::Call, OptionKind::Put].map(|kind| {
-            let call = kind == OptionKind::Call;
-            let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
-            row.volume = call.then_some(10.0);
-            row.open_interest = Some(if call { 4.0 } else { 2.0 });
-            row.gamma = Some(0.05);
-            row.multiplier = Some(100.0);
-            row.underlying_price = Some(100.0);
-            row
-        });
-        let sink = feed.0.lock().unwrap().clone().unwrap();
-        sink.push(rows.to_vec()).unwrap();
-        let profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
-        let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile));
-        let calls = |study: &dyn Indicator| study.volume_profiles(0..1)[0].profile.up().to_vec();
-        study.set_input("measure", InputValue::Choice(2)).unwrap();
-        assert_eq!(calls(&study), [4.0]);
-        let before = study.snapshot_settings();
-        study
-            .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
-            .unwrap();
-        assert_ne!(calls(&study), [4.0]);
-        study.restore_settings(&before).unwrap();
-        assert_eq!(calls(&study), [4.0]);
+        // A call and a put at 100 with volume 10 and 5, open interest 4 and 2 and gamma 0.05;
+        // gamma exposure, scaled to its largest value, draws the call at 1.
+        let rows = |put_volume: bool, gamma: bool| {
+            [OptionKind::Call, OptionKind::Put].map(|kind| {
+                let call = kind == OptionKind::Call;
+                let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+                row.volume = (call || put_volume).then_some(if call { 10.0 } else { 5.0 });
+                row.open_interest = Some(if call { 4.0 } else { 2.0 });
+                row.gamma = gamma.then_some(0.05);
+                row.multiplier = Some(100.0);
+                row.underlying_price = Some(100.0);
+                row
+            })
+        };
+        // Neither chain lists position 2, saved as Gamma exposure among all three. Without the
+        // put's volume it lists Open interest and Gamma exposure, which applies at once; without
+        // gamma it lists Volume and Open interest, and Gamma exposure waits while Volume shows.
+        for (put_volume, gamma, shown) in [(false, true, 1.0), (true, false, 10.0)] {
+            let feed = ChainFeed::default();
+            let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+            let chain = OptionChain::new(&feed, query, || {}).unwrap();
+            let sink = feed.0.lock().unwrap().clone().unwrap();
+            sink.push(rows(put_volume, gamma).to_vec()).unwrap();
+            let mut study =
+                OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+            study.set_input("measure", InputValue::Choice(2)).unwrap();
+            let inputs = study.inputs();
+            let input = inputs.iter().find(|input| input.id == "measure").unwrap();
+            let InputKind::Choice(choices) = &input.kind else {
+                panic!("measure choices")
+            };
+            let listed = |name: &str| choices.iter().position(|choice| choice == name).unwrap();
+            assert_eq!(input.value, InputValue::Choice(listed("Gamma exposure")));
+            assert_eq!(
+                study.volume_profiles(0..1)[0].profile.up(),
+                [shown],
+                "gamma {gamma}"
+            );
+            study
+                .set_input("measure", InputValue::Choice(listed("Open interest")))
+                .unwrap();
+            assert_eq!(
+                study.volume_profiles(0..1)[0].profile.up(),
+                [4.0],
+                "gamma {gamma}"
+            );
+            // The pick replaces the measure that waited, which does not apply once offered.
+            sink.push(rows(true, true).to_vec()).unwrap();
+            assert_eq!(
+                study.volume_profiles(0..1)[0].profile.up(),
+                [4.0],
+                "gamma {gamma}, every measure"
+            );
+        }
     }
     #[test]
     fn historical_fallback_close_known_at_as_of() {

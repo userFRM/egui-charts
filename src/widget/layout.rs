@@ -3024,6 +3024,7 @@ mod tests {
                             .iter()
                             .map(|chart| chart.snapshot().unwrap())
                             .collect(),
+                        sizing: None,
                     };
                     let restored =
                         super::super::SavedLayout::from_json(&saved.to_json().unwrap()).unwrap();

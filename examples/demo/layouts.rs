@@ -604,7 +604,12 @@ impl DemoApp {
             .filter_map(|slot| self.chart_in_slot(slot).map(|chart| chart.snapshot()))
             .collect::<Result<_, _>>()
             .map_err(|error| format!("Could not save the layout: {error}"))?;
-        Ok(SavedLayout { mode, charts })
+        // The demo keeps the chart sizes in the layout's groups document.
+        Ok(SavedLayout {
+            mode,
+            charts,
+            sizing: None,
+        })
     }
 
     pub(super) fn capture_comparisons(
