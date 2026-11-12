@@ -793,7 +793,8 @@ impl OrderFlowInput {
     /// interval it rebuilds only a source the sink has not allocated an execution to yet, from the
     /// executions that arrived live, grouped along `history`, the chart's bars, from the oldest
     /// bar whose executions are all held. A page's copy of a live execution the store dropped as
-    /// a repeat counts in its place. A footprint source that lost some live executions waits for
+    /// a repeat counts in its place, except at the first instant where it dropped one, where the
+    /// dropped ones count themselves. A footprint source that lost some live executions waits for
     /// the sink's allocations, leaving out the executions still queued: they open no bar of their
     /// own. Without a loss, a source whose executions do not match the chart's bars groups them
     /// from the oldest live one.
@@ -905,8 +906,11 @@ impl OrderFlowInput {
     /// the open of an older bar known to hold the sink's allocations. A bar the sink opened a
     /// nanosecond after the one before starts with an execution no later than that one's open,
     /// so a run of such bars counts from the open of its first. Older paged ones belong to
-    /// history bars, which the chart did not fold from them. Returns the parts and the grouping
-    /// after them, or `None` unless they rebuild every bar through the newest.
+    /// history bars, which the chart did not fold from them. At the first instant where the
+    /// store left a live execution to a page, the page may hold executions the stream never
+    /// sent, so the live ones the store kept apart count there and none of the page's. Returns
+    /// the parts and the grouping after them, or `None` unless they rebuild every bar through
+    /// the newest.
     #[cfg(feature = "widget")]
     fn chart_run<'a>(
         clock: &BarClock,
@@ -929,7 +933,11 @@ impl OrderFlowInput {
         let live = trades
             .live()
             .filter(|trade| lost.is_none_or(|lost| trade.ts > lost));
+        let unheld = trades.unheld_live();
+        let unheld_at = unheld.first().map(|trade| trade.ts);
         let mut held: Vec<_> = (trades.iter().take(paged))
+            .filter(|trade| Some(trade.ts) != unheld_at)
+            .chain(unheld)
             .filter(|trade| from.is_some_and(|from| trade.ts >= from))
             .chain(live)
             .collect();

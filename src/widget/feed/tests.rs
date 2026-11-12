@@ -1457,11 +1457,17 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
 /// of the sell of 4 (-1); its last unit, the buy of 2 and 2 of the sell of 6 (-1); its other 4 and
 /// 1 of the buy of 5 (-3); its other 4 (4). One study is away for the last two executions and
 /// another joins at the undo. Holding the last executions before the newest, they lack the first
-/// two bars and match the study that stayed on the others. In the last two rows nothing is lost,
-/// but a trade page answered in the drain that streams them without an id stands in for the first
-/// executions: the buy of 1, or the buys of 1, 2 and 4 at one instant, so that the bar of 4 and 8
-/// opens a nanosecond after the first. 2t bars of 1 and 2 (3), 4 and 8 (12), 16 and 32 (48), which
-/// the rebuilt studies and an added footprint source, buying 3, 12 and 48, match on every bar.
+/// two bars and match the study that stayed on the others. In the other rows nothing is lost, but
+/// a trade page is answered in the drain that streams the first executions. In two rows it stands
+/// in for them without an id: the buy of 1, or the buys of 1, 2 and 4 at one instant, so that the
+/// bar of 4 and 8 opens a nanosecond after the first. 2t bars of 1 and 2 (3), 4 and 8 (12), 16
+/// and 32 (48), which the rebuilt studies and an added footprint source, buying 3, 12 and 48,
+/// match on every bar. In the last three rows the page holds only a sell of 1 at the first
+/// instant, which the stream never sends, and the stream buys 1 each time: once at that instant
+/// and three times a second apart, for 2t bars of two buys each (2, 2); or three times at that
+/// instant and then three more, for bars of two buys (2), the third buy with the fourth a
+/// nanosecond later (2) and the last two (2); or as the first with an id on each buy. The sell
+/// counts in no bar: the rebuilt studies show 2 on every bar and the footprint source buys 2.
 #[cfg(feature = "studies")]
 #[test]
 fn restored_order_flow_study_keeps_the_chart_bars() {
@@ -1482,6 +1488,8 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![3.0, 12.0, 48.0, 64.0],
             0,
+            vec![],
+            false,
         ),
         (
             "5v",
@@ -1495,6 +1503,8 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![5.0, -1.0, -1.0, -3.0, 4.0],
             0,
+            vec![],
+            false,
         ),
         (
             "2t",
@@ -1508,6 +1518,8 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![3.0, 12.0, 48.0],
             1,
+            vec![(1.0, Buy)],
+            false,
         ),
         (
             "2t",
@@ -1521,6 +1533,32 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![3.0, 12.0, 48.0],
             3,
+            vec![(1.0, Buy), (2.0, Buy), (4.0, Buy)],
+            false,
+        ),
+        (
+            "2t",
+            vec![(1.0, Buy); 4],
+            vec![2.0; 2],
+            1,
+            vec![(1.0, Sell)],
+            false,
+        ),
+        (
+            "2t",
+            vec![(1.0, Buy); 6],
+            vec![2.0; 3],
+            3,
+            vec![(1.0, Sell)],
+            false,
+        ),
+        (
+            "2t",
+            vec![(1.0, Buy); 4],
+            vec![2.0; 2],
+            1,
+            vec![(1.0, Sell)],
+            true,
         ),
     ];
     let start = bars(1)[0].time;
@@ -1530,7 +1568,12 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             .map(|value| (!value.is_nan()).then_some(*value))
             .collect::<Vec<_>>()
     };
-    for (interval, fills, stayed_values, paged) in rows {
+    // The interval, the stream's executions, the deltas of the study that stayed, how many
+    // executions share the first instant, the page's executions at that instant, and whether the
+    // stream's carry ids.
+    for (row, (interval, fills, stayed_values, paged, paged_fills, ids)) in
+        rows.into_iter().enumerate()
+    {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe(interval.parse().unwrap());
@@ -1569,10 +1612,11 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             let at = start + TimeDelta::seconds(i.saturating_sub(paged.max(1) - 1) as i64);
             let tick = |&(size, side)| Tick::new(at, 100.0, size, Some(side));
             if i + 1 == paged {
-                let trades = fills[..paged].iter().map(tick).collect();
+                let trades = paged_fills.iter().map(tick).collect();
                 (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(trades, false)));
             }
-            sink.push_tick(tick(&(size, side)));
+            let sent = tick(&(size, side));
+            sink.push_tick(if ids { sent.with_id(i as u64) } else { sent });
             if i + 1 >= paged {
                 frames.run(&mut chart);
             }
@@ -1581,12 +1625,20 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             frames.run(&mut chart);
         }
         let all: Vec<_> = stayed_values.iter().copied().map(Some).collect();
-        assert_eq!(values(&chart, stayed), all, "{interval}");
+        assert_eq!(values(&chart, stayed), all, "row {row}, {interval}");
         let held: Vec<_> = (all.iter().enumerate())
             .map(|(bar, value)| value.filter(|_| paged > 0 || bar >= 2))
             .collect();
-        assert_eq!(values(&chart, restored), held, "{interval}, restored");
-        assert_eq!(values(&chart, added.unwrap()), held, "{interval}, added");
+        assert_eq!(
+            values(&chart, restored),
+            held,
+            "row {row}, {interval}, restored"
+        );
+        assert_eq!(
+            values(&chart, added.unwrap()),
+            held,
+            "row {row}, {interval}, added"
+        );
         if paged > 0 {
             let bought: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
                 .iter()
@@ -1594,7 +1646,7 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
                 .collect();
             let opens = chart.bars(SeriesId::MAIN).iter().map(|bar| bar.time);
             let expected: Vec<_> = opens.zip(stayed_values.iter().copied()).collect();
-            assert_eq!(bought, expected, "{interval}, footprint");
+            assert_eq!(bought, expected, "row {row}, {interval}, footprint");
         }
     }
 }
