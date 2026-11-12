@@ -148,6 +148,12 @@ impl PriceMarkGenerator {
         let min_step = self
             .min_step()
             .filter(|_| prices || map.transform().mode == PriceScaleMode::Normal);
+        // A multiple of the format's minimum move, so it also keeps that grid.
+        let min_step = if prices {
+            map.volume_step().or(min_step)
+        } else {
+            min_step
+        };
         if let Some(min_step) = min_step {
             nice_step = Self::round_up_to_multiple(nice_step, min_step);
         }
@@ -745,6 +751,29 @@ mod tests {
             .marks();
         assert!(!marks.is_empty());
         assert!(marks.iter().all(|mark| mark.price % 10_000.0 == 0.0));
+    }
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn volume_format_on_a_narrow_log_axis_repeats_no_label() {
+        use crate::scales::PriceFormatter;
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Volume,
+            precision: 2,
+            min_move: 1.0,
+        };
+        let marks = map(
+            PriceScaleMode::Logarithmic,
+            1_010_000f64.ln(),
+            1_060_000f64.ln(),
+        )
+        .with_display_format(format)
+        .marks();
+        let labels: Vec<String> = marks.iter().map(|mark| format.format(mark.price)).collect();
+        assert!(labels.len() >= 3, "{labels:?}");
+        let mut distinct = labels.clone();
+        distinct.dedup();
+        assert_eq!(distinct, labels);
     }
 
     #[test]
