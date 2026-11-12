@@ -232,7 +232,7 @@ impl DrawingProps {
             if [r, g, b] != [tr, tg, tb]
                 && (self.tool_settings.is_some() || !self.paints(target.color))
             {
-                drawing.color[..3].copy_from_slice(&[r, g, b]);
+                drawing.recolor([r, g, b, drawing.color[3]]);
             }
             if a != target.color[3] {
                 drawing.color[3] = a;
@@ -895,10 +895,14 @@ mod tests {
 
     /// Confirming the dialog of one drawing in a selection changes the others only where it was
     /// edited: each keeps its own text, width, extension, visibility and tool settings, and an
-    /// edited text reaches only the drawings that show text.
+    /// edited text reaches only the drawings that show text. A recoloured price label keeps its
+    /// badge one colour.
     #[test]
     fn selection_edits_change_only_the_edited_values() {
-        use crate::drawings::FontWeight;
+        use crate::drawings::{
+            DrawingToolType::{PriceLabel, Sticker},
+            FontWeight,
+        };
         let mut alpha = Drawing::new(1, DrawingToolType::TextLabel);
         alpha.text = Some("Alpha".into());
         let mut beta = Drawing::new(2, DrawingToolType::TextLabel);
@@ -913,10 +917,12 @@ mod tests {
         line.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
         // A sticker keeps its kind in its text, which it does not show.
         let sticker = Drawing::new(4, DrawingToolType::Sticker);
-        let drawings = vec![alpha, beta, line, sticker];
+        // A price label shows no text, and its border shares the colour of its badge.
+        let label = Drawing::new(5, DrawingToolType::PriceLabel);
+        let drawings = vec![alpha, beta, line, sticker, label];
         let mut chart = Chart::new(crate::model::BarData::new());
         chart.drawings_mut().drawings = drawings.clone();
-        chart.drawings_mut().select_drawings([1, 2, 3, 4]);
+        chart.drawings_mut().select_drawings([1, 2, 3, 4, 5]);
         let opened = DrawingProps::from_drawing(&drawings[0], &chart);
         // Each case: the edit made in the dialog, then what it changes on each drawing.
         type Case = (&'static str, fn(&mut DrawingProps), fn(&mut Drawing));
@@ -934,13 +940,18 @@ mod tests {
             (
                 "colour",
                 |props| props.color = Color32::BLUE,
-                |d| d.color = [0, 0, 255, 255],
+                |d| {
+                    d.color = [0, 0, 255, 255];
+                    if d.tool_type == PriceLabel {
+                        d.border_color = Some([0, 0, 255, 255]);
+                    }
+                },
             ),
             (
                 "text",
                 |props| props.label = "Gamma".into(),
                 |d| {
-                    if d.tool_type != DrawingToolType::Sticker {
+                    if !matches!(d.tool_type, Sticker | PriceLabel) {
                         d.text = Some("Gamma".into());
                     }
                 },
@@ -949,7 +960,7 @@ mod tests {
                 "text cleared",
                 |props| props.label.clear(),
                 |d| {
-                    if d.tool_type != DrawingToolType::Sticker {
+                    if !matches!(d.tool_type, Sticker | PriceLabel) {
                         d.text = None;
                     }
                 },

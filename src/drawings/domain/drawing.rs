@@ -651,8 +651,8 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; fills and pitchfork levels sharing the
-    /// tool's line colour take the new RGB at their own opacity.
+    /// Create a new drawing with a specific line colour; fills, borders and pitchfork levels
+    /// sharing the tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
         drawing.set_line_color(color);
@@ -678,6 +678,17 @@ impl Drawing {
             }
         }
         self.color = color;
+    }
+
+    /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
+    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    #[cfg(feature = "ui")]
+    pub(crate) fn recolor(&mut self, color: [u8; 4]) {
+        if self.tool_type == DrawingToolType::PriceLabel {
+            self.set_line_color(color);
+        } else {
+            self.color = color;
+        }
     }
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
