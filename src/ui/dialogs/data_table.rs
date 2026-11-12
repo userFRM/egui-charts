@@ -942,4 +942,44 @@ mod tests {
             assert_eq!(shown(&mut dialog, &chart), expected, "{case}");
         }
     }
+
+    /// After a chart restores its own layout and then the layout of another chart, turning off
+    /// the column of one study hides that study only, also when the studies share a title.
+    #[test]
+    fn restored_studies_of_one_title_keep_separate_column_choices() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..300)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        let mut other = Chart::new(BarData::from_bars(bars.clone()));
+        other.add_indicator(Box::new(crate::studies::SMA::new(5)));
+        other.add_indicator(Box::new(crate::studies::SMA::new(20)));
+        let layout = other.snapshot().unwrap();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(crate::studies::SMA::new(10)));
+        chart.restore(&chart.snapshot().unwrap()).unwrap();
+        chart.restore(&layout).unwrap();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        shown_rows(&ctx, &mut dialog, &chart);
+        let headers = dialog.cached.as_ref().unwrap().1.headers.clone();
+        let at = headers.iter().position(|h| h == "SMA: SMA(5)").unwrap();
+        let column = dialog.column_ids[at].clone();
+        dialog
+            .hidden
+            .get_mut(&chart.data_table_identity())
+            .unwrap()
+            .insert(column);
+        shown_rows(&ctx, &mut dialog, &chart);
+        let hidden = &dialog.hidden[&chart.data_table_identity()];
+        let shown: Vec<_> = headers
+            .iter()
+            .zip(&dialog.column_ids)
+            .skip(6)
+            .filter(|(_, column)| !hidden.contains(*column))
+            .map(|(header, _)| header.as_str())
+            .collect();
+        assert_eq!(shown, ["SMA: SMA(20)"]);
+    }
 }
