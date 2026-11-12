@@ -327,6 +327,8 @@ pub struct StudySettings {
     /// One style per level of the study's pane, in the order of
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
+    /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
+    /// Know Sure Thing saved with none.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
     /// Whether the band between the boundary levels is filled.
