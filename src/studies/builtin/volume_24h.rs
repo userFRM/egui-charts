@@ -245,14 +245,17 @@ impl Volume24h {
         lower_interval::lower_timeframe(&self.clock, None)
     }
 
-    /// Whether converting the window that opens at `start` lacks a rate, with `rates` from
-    /// [`Self::rates`].
-    fn lacks_rate(rates: Option<Option<&StudyData<'_>>>, start: Option<DateTime<Utc>>) -> bool {
+    /// Whether converting the latest window, whose bars open at `times`, lacks a rate, with
+    /// `rates` from [`Self::rates`].
+    fn lacks_rate(
+        rates: Option<Option<&StudyData<'_>>>,
+        mut times: impl Iterator<Item = DateTime<Utc>>,
+    ) -> bool {
         match rates {
             None => false,
             Some(None) => true,
-            // A rate holds until the next one, so the window's first bar is the earliest to lack one.
-            Some(Some(rates)) => start.is_some_and(|start| Self::rate_at(rates, start).is_none()),
+            // A rate lapses from its point on, so any bar of the window can be the one lacking it.
+            Some(Some(rates)) => times.any(|time| Self::rate_at(rates, time).is_none()),
         }
     }
 
@@ -278,7 +281,7 @@ impl Volume24h {
         let price = self.quote_units.then_some(self.price_source);
         let available =
             !self.quote_units || (self.currency.is_some() && !matches!(rates, Some(None)));
-        let mut latest_start = None;
+        let mut latest = 0..0;
         for (i, range) in (from..).zip(ranges) {
             if range.is_empty() || (!self.quote_units && !data[i].close.is_finite()) {
                 continue;
@@ -293,7 +296,7 @@ impl Volume24h {
                 .unwrap_or(DateTime::<Utc>::MIN_UTC);
             let first = candles[..last].partition_point(|candle| candle.time < start);
             if i + 1 == data.len() {
-                latest_start = Some(candles[first].time);
+                latest = first..range.end;
             }
             // shortcut: sums each window afresh, up to 86,400 candles a bar on one-second
             // candles (intervals of a few seconds that do not divide the day); slide the window
@@ -317,7 +320,8 @@ impl Volume24h {
                 self.values.set_value(0, i, sum);
             }
         }
-        self.unconverted = Self::lacks_rate(rates, latest_start);
+        self.unconverted =
+            Self::lacks_rate(rates, candles[latest].iter().map(|candle| candle.time));
         self.update_table();
     }
 
@@ -379,8 +383,8 @@ impl Volume24h {
                     IndicatorValue::None
                 }
             });
-        let start = self.stepper.state().window.front().map(|&(time, _)| time);
-        self.unconverted = Self::lacks_rate(rates, start);
+        let times = self.stepper.state().window.iter().map(|&(time, _)| time);
+        self.unconverted = Self::lacks_rate(rates, times);
         self.update_table();
     }
 }
@@ -810,7 +814,7 @@ mod tests {
         // 1 from hour 1: 2×11×2 = 44, 44 + 3×22×1 = 110 and 66 + 30 = 96. Open in EUR with no
         // rates supplied has no value.
         type Row = (usize, usize, Option<Vec<Bar>>, [Option<f64>; 3]);
-        let rows: [Row; 5] = [
+        let rows: [Row; 6] = [
             (3, 0, None, [Some(24.0), Some(90.0), Some(190.0)]),
             (3, 1, None, [Some(24.0), Some(90.0), Some(190.0)]),
             (
@@ -824,6 +828,13 @@ mod tests {
                 2,
                 Some(rates(&[(0, 2.0), (1, 1.0), (24, 0.25)])),
                 [Some(44.0), Some(110.0), Some(96.0)],
+            ),
+            // A zero rate at hour 24 sits inside the latest window, whose first bar has 0.5.
+            (
+                4,
+                2,
+                Some(rates(&[(0, 0.5), (24, 0.0)])),
+                [Some(11.0), Some(44.0), None],
             ),
             (0, 2, None, [None, None, None]),
         ];
@@ -898,17 +909,6 @@ mod tests {
         }
     }
 
-    /// Saved settings retain the unit, price and currency choices, the chart requests the rates a
-    /// conversion reads, and all public readouts describe the same amount.
-    #[cfg(feature = "ui")]
-    #[test]
-    fn units_survive_templates_and_layouts_with_labelled_readouts() {
-        use crate::model::{BarData, Instrument};
-        use crate::studies::{InputValue, StudyTemplate};
-        use crate::widget::{Chart, ChartLayoutMode, SavedLayout};
-        let eur = StudyDataRequest::exchange_rate("USD", "EUR");
-        let rates = vec![Bar::from_value(Utc.timestamp_opt(0, 0).unwrap(), 0.5)];
-        let data = [0_i64, 1].map(|h| {
     /// A price quoted in minor units (`GBp`, pence) is converted into the major unit: only
     /// codes that differ in case without mixing cases name the same currency.
     #[test]
@@ -958,6 +958,17 @@ mod tests {
         }
     }
 
+    /// Saved settings retain the unit, price and currency choices, the chart requests the rates a
+    /// conversion reads, and all public readouts describe the same amount.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn units_survive_templates_and_layouts_with_labelled_readouts() {
+        use crate::model::{BarData, Instrument};
+        use crate::studies::{InputValue, StudyTemplate};
+        use crate::widget::{Chart, ChartLayoutMode, SavedLayout};
+        let eur = StudyDataRequest::exchange_rate("USD", "EUR");
+        let rates = vec![Bar::from_value(Utc.timestamp_opt(0, 0).unwrap(), 0.5)];
+        let data = [0_i64, 1].map(|h| {
             let (volume, close) = if h == 0 { (2.0, 10.0) } else { (3.0, 20.0) };
             Bar::new(
                 Utc.timestamp_opt(h * 3_600, 0).unwrap(),
