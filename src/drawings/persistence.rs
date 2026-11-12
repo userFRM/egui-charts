@@ -192,6 +192,11 @@ impl StoredDrawing {
         if !(1.0..=MAX_TEXT_WRAP_WIDTH).contains(&d.text_wrap_width) {
             return Some("text_wrap_width".into());
         }
+        if d.text_zoom_spacing
+            .is_some_and(|spacing| !(spacing.is_finite() && spacing > 0.0))
+        {
+            return Some("text_zoom_spacing".into());
+        }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
@@ -1347,6 +1352,8 @@ mod tests {
         d.border_color = Some([17, 18, 19, 20]);
         d.text_wrap = true;
         d.text_wrap_width = 120.0;
+        d.text_follows_zoom = true;
+        d.text_zoom_spacing = Some(6.5);
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1633,6 +1640,8 @@ mod tests {
             want.border_color = None;
             want.text_wrap = false;
             want.text_wrap_width = 200.0;
+            want.text_follows_zoom = false;
+            want.text_zoom_spacing = None;
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2566,7 +2575,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 36] = [
+        let cases: [(Spoil, &str); 37] = [
             (
                 |s| {
                     first(s)
@@ -2653,6 +2662,10 @@ mod tests {
             (
                 |s| first(s).drawing.text_wrap_width = f32::NAN,
                 "invalid text_wrap_width",
+            ),
+            (
+                |s| first(s).drawing.text_zoom_spacing = Some(0.0),
+                "invalid text_zoom_spacing",
             ),
             (
                 |s| first(s).points[1].price = f64::NAN,

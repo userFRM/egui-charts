@@ -291,6 +291,7 @@ impl DrawingProps {
                     border_color,
                     text_wrap,
                     text_wrap_width,
+                    text_follows_zoom,
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
@@ -723,6 +724,7 @@ mod tests {
             settings.border_color = Some([4, 5, 6, 255]);
             settings.text_wrap = true;
             settings.text_wrap_width = 120.0;
+            settings.text_follows_zoom = true;
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
@@ -764,6 +766,7 @@ mod tests {
             assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
             assert_eq!((saved.text_wrap, saved.text_wrap_width), (true, 120.0));
+            assert!(saved.text_follows_zoom);
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
@@ -772,6 +775,7 @@ mod tests {
             assert!(peer.price_axis_label && peer.time_axis_label);
             assert_eq!((peer.text_color, peer.border_color), (None, None));
             assert_eq!((peer.text_wrap, peer.text_wrap_width), (false, 200.0));
+            assert!(!peer.text_follows_zoom);
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(

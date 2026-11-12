@@ -407,7 +407,21 @@ impl TextTab {
             });
             ui.end_row();
 
-            if settings.tool_type == DrawingToolType::Callout {
+            let plain = matches!(
+                settings.tool_type,
+                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+            );
+            if plain {
+                let label = ui.label(l10n::text(ui.ctx(), "Text size"));
+                ui.checkbox(
+                    &mut settings.text_follows_zoom,
+                    l10n::text(ui.ctx(), "Scale with zoom"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
+
+            if plain || settings.tool_type == DrawingToolType::Callout {
                 let label = ui.label(l10n::text(ui.ctx(), "Text wrap"));
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut settings.text_wrap, l10n::text(ui.ctx(), "Wrap text"))

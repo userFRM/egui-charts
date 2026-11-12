@@ -23,6 +23,7 @@ impl DrawingTemplate {
         settings.chart_points.clear();
         settings.level_ys.clear();
         settings.screen_anchor = None;
+        settings.text_zoom_spacing = None;
         settings.pane = None;
         settings.group = None;
         settings.folder.clear();
@@ -61,6 +62,7 @@ impl DrawingTemplate {
             level_ys: drawing.level_ys.clone(),
             completed: drawing.completed,
             screen_anchor: drawing.screen_anchor,
+            text_zoom_spacing: drawing.text_zoom_spacing,
             pane: drawing.pane,
             group: drawing.group.clone(),
             folder: drawing.folder.clone(),
