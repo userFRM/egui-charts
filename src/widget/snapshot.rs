@@ -688,6 +688,9 @@ impl Chart {
         // A layout without the original pane has just left it: the main bars are live again.
         self.follow_feed_pause();
         self.history.clear();
+        // Undone or redone before the restore, they belong to the state it replaced.
+        self.history.size_steps.clear();
+        self.history.link_steps.clear();
         Ok(skipped)
     }
 }
