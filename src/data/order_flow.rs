@@ -984,8 +984,10 @@ impl OrderFlowInput {
                         sorted.sort_by_key(|trade| trade.ts);
                         let mut parts = Vec::new();
                         for trade in sorted {
-                            let allocated = bars.push(timeframe, trade, tick_size);
-                            for (bar, size) in allocated.into_iter().flatten() {
+                            let Ok(allocated) = bars.push(timeframe, trade, tick_size) else {
+                                continue;
+                            };
+                            for (bar, size) in allocated {
                                 parts.push((trade, bar.time, size));
                             }
                             if trade.ts >= cutoff {
