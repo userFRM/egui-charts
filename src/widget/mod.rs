@@ -406,9 +406,6 @@ pub struct Chart {
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,
     event_click: Option<String>,
-    /// Host marker rectangles from this frame and the previous one, for early selection gating.
-    mark_hits: std::cell::RefCell<Vec<Rect>>,
-    clickable_marks: Vec<Rect>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
