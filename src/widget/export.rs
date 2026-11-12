@@ -1198,6 +1198,48 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ui")]
+    fn svg_writes_a_restored_watermark_with_control_characters_as_xml() {
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames};
+
+        let ctx = egui::Context::default();
+        let options = ImageExportOptions {
+            size: [480, 320],
+            include_title: false,
+            include_timestamp: false,
+            include_watermark: true,
+            ..Default::default()
+        };
+        for bad in ['\u{1}', '\u{b}', '\u{fffe}', '\r'] {
+            let mut chart = test_frames::chart(&[10.0, 12.0], &[14.0, 13.0]);
+            chart.config_mut().show_watermark = true;
+            chart.config_mut().watermark_text = Some(format!("WATER{bad}MARK"));
+            let json = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
+            }
+            .to_json()
+            .unwrap();
+            let saved = SavedLayout::from_json(&json).unwrap();
+            let mut chart = test_frames::chart(&[10.0, 12.0], &[14.0, 13.0]);
+            chart.restore(&saved.charts[0]).unwrap();
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            resvg::usvg::Tree::from_str(&svg, &Default::default())
+                .unwrap_or_else(|e| panic!("U+{:04X}: {e}", bad as u32));
+            assert!(!svg.contains(bad), "U+{:04X} was written raw", bad as u32);
+            let kept = if bad == '\r' {
+                "WATER&#13;MARK"
+            } else {
+                "WATERMARK"
+            };
+            assert!(svg.contains(kept), "U+{:04X}", bad as u32);
+        }
+    }
+
+    #[test]
     #[cfg(feature = "png-export")]
     fn svg_images_apply_the_options_and_report_what_they_cannot_hold() {
         use crate::widget::test_frames::{chart, frame};

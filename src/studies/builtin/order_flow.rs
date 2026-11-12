@@ -1778,6 +1778,7 @@ mod tests {
                 &chart.bar_clock(),
                 Some(start + TimeDelta::seconds(61)),
                 Some(&trades),
+                &[],
             );
             chart
                 .indicator_mut(id)
