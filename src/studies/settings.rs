@@ -778,11 +778,20 @@ impl Indicator for ConfiguredStudy {
     }
     fn data_requests(&self) -> Vec<super::StudyDataRequest> {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
-            vec![super::StudyDataRequest {
+            // The bars come first: `update_data` reads them from the head. The study's own
+            // metric requests (exchange rates) follow, as they are not bars of that interval.
+            let mut requests = vec![super::StudyDataRequest {
                 metric: None,
                 symbol: self.calculation_symbol.clone(),
                 timeframe: self.calculation_timeframe,
-            }]
+            }];
+            requests.extend(
+                self.study
+                    .data_requests()
+                    .into_iter()
+                    .filter(|request| request.metric.is_some()),
+            );
+            requests
         } else {
             self.study.data_requests()
         }
@@ -822,7 +831,12 @@ impl Indicator for ConfiguredStudy {
         self.study.set_instrument(source.instrument);
         self.study.set_timeframe(source.timeframe);
         self.study.set_bar_clock(&source.clock);
-        self.update_price(source.bars, 0);
+        if self.data_requests().len() > 1 {
+            self.aligned = None;
+            self.study.update_data(source.bars, 0, sources);
+        } else {
+            self.update_price(source.bars, 0);
+        }
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
         for (at, bar) in data.iter().enumerate() {
@@ -1828,6 +1842,62 @@ mod tests {
             )
             .unwrap();
         assert_eq!(average.data_requests()[0].timeframe, Some(Timeframe::Hour1));
+    }
+
+    /// 24-hour Volume on another interval asks for its exchange rates next to that interval's
+    /// bars and converts with them, and clearing the Interval or the target restores the
+    /// requests of the chart's own interval.
+    #[test]
+    fn volume_24h_on_another_interval_converts_its_currency() {
+        use crate::model::BarClock;
+        let hour = |h: i64| chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(h);
+        let flat = |h| Bar::new(hour(h), 10.0, 10.0, 10.0, 10.0, 2.0);
+        let usd = Instrument::new("TEST").with_currency("USD");
+        let eur = super::super::StudyDataRequest::exchange_rate("USD", "EUR");
+        let mut study = ConfiguredStudy::new(Box::new(super::super::Volume24h::new()));
+        study.set_timeframe(Timeframe::Hour1);
+        study.set_bar_clock(&BarClock::new(Timeframe::Hour1));
+        study.set_instrument(Some(&usd));
+        // The dialog applies the Interval first, while it is still offered, then the units.
+        let chosen = InputValue::Timeframe(Some(Timeframe::Hour4));
+        study.set_input("calculation_timeframe", chosen).unwrap();
+        study.set_input("units", InputValue::Choice(1)).unwrap();
+        study.set_input("currency", InputValue::Choice(2)).unwrap();
+        let requests = study.data_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].timeframe, Some(Timeframe::Hour4));
+        assert_eq!(requests[1], eur);
+        let (chart, bars4, rates) = (
+            (0..=4).map(flat).collect::<Vec<_>>(),
+            [flat(0), flat(4)],
+            [Bar::from_value(hour(0), 0.5)],
+        );
+        let source = |request, bars, timeframe| super::super::StudyData {
+            request,
+            bars,
+            clock: BarClock::new(timeframe),
+            instrument: Some(&usd),
+            timeframe,
+        };
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(requests[0].clone(), &bars4, Timeframe::Hour4),
+                source(eur.clone(), &rates, Timeframe::default()),
+            ],
+        );
+        // The first 4h bar is 2 x 10 x 0.5 = 10 EUR, shown where it closes.
+        assert_eq!(study.values().value(0, 4), Some(10.0));
+        assert!(study.table().is_none());
+
+        study.set_input("currency", InputValue::Choice(0)).unwrap();
+        assert_eq!(study.data_requests().len(), 1);
+        study.set_input("currency", InputValue::Choice(2)).unwrap();
+        study
+            .set_input("calculation_timeframe", InputValue::Timeframe(None))
+            .unwrap();
+        assert_eq!(study.data_requests(), [eur]);
     }
 
     #[test]
