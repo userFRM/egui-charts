@@ -9,10 +9,9 @@ use std::ops::Range;
 /// Candles spanning the loaded bars of a higher interval, which follows the chart's by default.
 ///
 /// The automatic interval is two hours on charts below one minute whose interval divides two
-/// hours, one day on the other charts below one day (their bars would straddle a two-hour
-/// boundary), one week below one week, one month below one month, three months below three months
-/// and twelve months from there on. Turning it off aggregates into the chosen interval, which must
-/// be longer than the chart's.
+/// hours, one day on the other charts below one day, one week below one week, one month below one
+/// month, three months below three months and twelve months from there on. Turning it off
+/// aggregates into the chosen interval, which must be longer than the chart's.
 ///
 /// The chart supplies its input interval and instrument metadata. Direct callers set them through
 /// [`Indicator::set_timeframe`] and [`Indicator::set_instrument`] before calculating, and
@@ -135,8 +134,8 @@ impl HigherIntervalCandles {
 fn automatic_interval(source: Timeframe) -> Timeframe {
     let months = |count| Timeframe::Months(NonZeroU32::new(count).unwrap());
     match source.duration_ms() {
-        // Other bars below a day straddle a two-hour boundary, but still nest in the day. Ticks
-        // have no duration and no output.
+        // Below a minute, an interval that does not divide two hours has a bar across a two-hour
+        // boundary, but its bars still nest in the day. Ticks have no duration and no output.
         ms if ms < Timeframe::Min1.duration_ms() && 7_200_000_i64.checked_rem(ms) == Some(0) => {
             Timeframe::Custom(NonZeroU64::new(7200).unwrap())
         }
@@ -327,8 +326,8 @@ mod tests {
                 ],
                 &["2024-03-08T00:00:00Z", "2024-03-08T02:00:00Z"],
             ),
-            // Seven-second bars do not divide two hours: the bar from 01:59:56 runs past 02:00, so
-            // each day is a period.
+            // Seven seconds do not divide two hours: the bar from 01:59:56 runs past 02:00, so each
+            // day is a period.
             (
                 Timeframe::Custom(NonZeroU64::new(7).unwrap()),
                 [
