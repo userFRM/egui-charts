@@ -1,6 +1,7 @@
 //! Shape and curve tool rendering implementations
 //!
-//! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line.
+//! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line, and the
+//! hint a selected rectangle, circle or ellipse shows in place of its text.
 
 use super::style::{Acceleration, ellipse_arc, smooth_path};
 use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
@@ -8,6 +9,32 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Shape, Stroke};
 
 impl Drawing {
+    /// Paints "Add text" where a selected rectangle, circle or ellipse without text would write
+    /// it, in the muted colour the on-chart editor gives an empty draft, so that its text field
+    /// can be found and clicked. A locked or unselectable drawing has no field to offer.
+    pub(super) fn render_text_hint(&self, painter: &egui::Painter) {
+        let center = match (self.tool_type, self.points.as_slice()) {
+            (DrawingToolType::Rect, &[a, b, ..]) => Rect::from_two_pos(a, b).center(),
+            (DrawingToolType::Circle, &[center, _, ..]) => center,
+            (DrawingToolType::Ellipse, &[a, b, ..]) => a.lerp(b, 0.5),
+            _ => return,
+        };
+        if self.locked
+            || !self.selectable
+            || !center.is_finite()
+            || self.text.as_deref().is_some_and(|t| !t.trim().is_empty())
+        {
+            return;
+        }
+        let color = painter.ctx().global_style().visuals.weak_text_color();
+        let hint = crate::localization::text(painter.ctx(), "Add text");
+        let galley = self.annotation_galley(painter, hint, color);
+        let min = egui::Align2::CENTER_CENTER
+            .anchor_size(center, galley.size())
+            .min;
+        painter.galley(min, galley, color);
+    }
+
     /// The first anchor is the center, the second fixes the radius, and the third fixes
     /// the end ray. The sweep takes the short arc in (-180°, 180°], clockwise at 180°.
     pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {

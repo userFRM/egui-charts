@@ -823,6 +823,7 @@ mod tests {
         let layout = SavedLayout {
             mode: crate::widget::ChartLayoutMode::TwoHorizontal,
             charts: Vec::new(),
+            sizing: None,
         };
         let host = Arc::new(Host::default());
         host.0
