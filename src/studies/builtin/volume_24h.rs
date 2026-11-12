@@ -171,11 +171,25 @@ impl Volume24h {
         Self::CURRENCIES.get(self.target.checked_sub(1)?).copied()
     }
 
+    /// Whether two currency codes name the same currency: exact for a code that mixes cases
+    /// (`GBp`, pence), else regardless of case.
+    fn same_currency(a: &str, b: &str) -> bool {
+        let mixed = |code: &str| {
+            code.bytes().any(|c| c.is_ascii_lowercase())
+                && code.bytes().any(|c| c.is_ascii_uppercase())
+        };
+        if mixed(a) || mixed(b) {
+            a == b
+        } else {
+            a.eq_ignore_ascii_case(b)
+        }
+    }
+
     /// The exchange rates converting quote amounts into a target currency other than the quote
     /// currency.
     fn rate_request(&self) -> Option<StudyDataRequest> {
         let (from, to) = (self.currency.as_deref()?, self.target()?);
-        (self.quote_units && !from.eq_ignore_ascii_case(to))
+        (self.quote_units && !Self::same_currency(from, to))
             .then(|| StudyDataRequest::exchange_rate(from, to))
     }
 
@@ -895,6 +909,55 @@ mod tests {
         let eur = StudyDataRequest::exchange_rate("USD", "EUR");
         let rates = vec![Bar::from_value(Utc.timestamp_opt(0, 0).unwrap(), 0.5)];
         let data = [0_i64, 1].map(|h| {
+    /// A price quoted in minor units (`GBp`, pence) is converted into the major unit: only
+    /// codes that differ in case without mixing cases name the same currency.
+    #[test]
+    fn pence_amounts_convert_into_pounds() {
+        use crate::model::Instrument;
+        use crate::studies::InputValue;
+        let bar = Bar::new(
+            Utc.timestamp_opt(0, 0).unwrap(),
+            250.0,
+            250.0,
+            250.0,
+            250.0,
+            2.0,
+        );
+        // Target 5 is GBP and 1 is USD.
+        for (quoted, target, rate) in [("GBp", 5, Some(0.01)), ("USD", 1, None), ("usd", 1, None)] {
+            let mut study = Volume24h::new();
+            study.set_instrument(Some(&Instrument::new("TEST").with_currency(quoted)));
+            study.set_input("units", InputValue::Choice(1)).unwrap();
+            study
+                .set_input("currency", InputValue::Choice(target))
+                .unwrap();
+            let request = rate.map(|_| StudyDataRequest::exchange_rate("GBp", "GBP"));
+            assert_eq!(
+                study.data_requests(),
+                request.iter().cloned().collect::<Vec<_>>()
+            );
+            let rates = [Bar::from_value(bar.time, 0.01)];
+            let sources: Vec<_> = request
+                .into_iter()
+                .map(|request| StudyData {
+                    request,
+                    bars: &rates,
+                    clock: BarClock::new(Timeframe::Ticks(std::num::NonZeroU64::MIN)),
+                    instrument: None,
+                    timeframe: Timeframe::default(),
+                })
+                .collect();
+            study.update_data(std::slice::from_ref(&bar), 0, &sources);
+            // 2 x 250 x 0.01 = 5 pounds; with no conversion the 500 stays in the quote currency.
+            let (value, shown) = match rate {
+                Some(_) => (5.0, "5.00 GBP"),
+                None => (500.0, "500.00 USD"),
+            };
+            assert_eq!(study.values().value(0, 0), Some(value), "{quoted}");
+            assert_eq!(study.format_value(value), shown, "{quoted}");
+        }
+    }
+
             let (volume, close) = if h == 0 { (2.0, 10.0) } else { (3.0, 20.0) };
             Bar::new(
                 Utc.timestamp_opt(h * 3_600, 0).unwrap(),
