@@ -2509,42 +2509,66 @@ mod tests {
         }
     }
     /// A measure position the chain does not list names its measure in the order of all three,
-    /// so the editor lists the measure that is applied and a pick applies the measure it names.
+    /// so the editor lists the measure that is applied or waits, and a pick applies the measure
+    /// it names, also once the chain offers the one that waited.
     #[test]
     fn earlier_saved_measure_applies_as_the_editor_lists_it() {
-        let feed = ChainFeed::default();
         let expiry = Utc::now().date_naive().succ_opt().unwrap();
         let time = Utc::now();
-        let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
-        let chain = OptionChain::new(&feed, query, || {}).unwrap();
-        // Without the put's volume the chain lists Open interest (calls 4, puts 2) and Gamma
-        // exposure, so it does not list position 2, saved as Gamma exposure among all three.
-        let rows = [OptionKind::Call, OptionKind::Put].map(|kind| {
-            let call = kind == OptionKind::Call;
-            let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
-            row.volume = call.then_some(10.0);
-            row.open_interest = Some(if call { 4.0 } else { 2.0 });
-            row.gamma = Some(0.05);
-            row.multiplier = Some(100.0);
-            row.underlying_price = Some(100.0);
-            row
-        });
-        let sink = feed.0.lock().unwrap().clone().unwrap();
-        sink.push(rows.to_vec()).unwrap();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
-        study.set_input("measure", InputValue::Choice(2)).unwrap();
-        let inputs = study.inputs();
-        let input = inputs.iter().find(|input| input.id == "measure").unwrap();
-        let InputKind::Choice(choices) = &input.kind else {
-            panic!("measure choices")
+        // A call and a put at 100 with volume 10 and 5, open interest 4 and 2 and gamma 0.05;
+        // gamma exposure, scaled to its largest value, draws the call at 1.
+        let rows = |put_volume: bool, gamma: bool| {
+            [OptionKind::Call, OptionKind::Put].map(|kind| {
+                let call = kind == OptionKind::Call;
+                let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
+                row.volume = (call || put_volume).then_some(if call { 10.0 } else { 5.0 });
+                row.open_interest = Some(if call { 4.0 } else { 2.0 });
+                row.gamma = gamma.then_some(0.05);
+                row.multiplier = Some(100.0);
+                row.underlying_price = Some(100.0);
+                row
+            })
         };
-        let listed = |name: &str| choices.iter().position(|choice| choice == name).unwrap();
-        assert_eq!(input.value, InputValue::Choice(listed("Gamma exposure")));
-        assert_ne!(study.volume_profiles(0..1)[0].profile.up(), [4.0]);
-        study
-            .set_input("measure", InputValue::Choice(listed("Open interest")))
-            .unwrap();
-        assert_eq!(study.volume_profiles(0..1)[0].profile.up(), [4.0]);
+        // Neither chain lists position 2, saved as Gamma exposure among all three. Without the
+        // put's volume it lists Open interest and Gamma exposure, which applies at once; without
+        // gamma it lists Volume and Open interest, and Gamma exposure waits while Volume shows.
+        for (put_volume, gamma, shown) in [(false, true, 1.0), (true, false, 10.0)] {
+            let feed = ChainFeed::default();
+            let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+            let chain = OptionChain::new(&feed, query, || {}).unwrap();
+            let sink = feed.0.lock().unwrap().clone().unwrap();
+            sink.push(rows(put_volume, gamma).to_vec()).unwrap();
+            let mut study =
+                OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+            study.set_input("measure", InputValue::Choice(2)).unwrap();
+            let inputs = study.inputs();
+            let input = inputs.iter().find(|input| input.id == "measure").unwrap();
+            let InputKind::Choice(choices) = &input.kind else {
+                panic!("measure choices")
+            };
+            let listed = |name: &str| choices.iter().position(|choice| choice == name).unwrap();
+            assert_eq!(input.value, InputValue::Choice(listed("Gamma exposure")));
+            assert_eq!(
+                study.volume_profiles(0..1)[0].profile.up(),
+                [shown],
+                "gamma {gamma}"
+            );
+            study
+                .set_input("measure", InputValue::Choice(listed("Open interest")))
+                .unwrap();
+            assert_eq!(
+                study.volume_profiles(0..1)[0].profile.up(),
+                [4.0],
+                "gamma {gamma}"
+            );
+            // The pick replaces the measure that waited, which does not apply once offered.
+            sink.push(rows(true, true).to_vec()).unwrap();
+            assert_eq!(
+                study.volume_profiles(0..1)[0].profile.up(),
+                [4.0],
+                "gamma {gamma}, every measure"
+            );
+        }
     }
     #[test]
     fn historical_fallback_close_known_at_as_of() {
