@@ -6,7 +6,8 @@
 //! held trade only if it and every held trade at that instant carry ids, and a live trade is
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice. The first page after a
-//! new subscription on a retained tape also fills the time between the tape and the live stream.
+//! new subscription on a retained tape also fills the time between the tape and the live stream,
+//! through the instant of the oldest live trade under the same rule.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -373,16 +374,34 @@ impl Trades {
     }
 
     /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. The oldest go beyond capacity.
+    /// them: nothing streamed while the subscription changed. A trade at the instant of the oldest
+    /// live trade follows them when it and every held trade at that instant carry ids and its id
+    /// is not held; one that ids do not tell from the held ones is left out and the instant
+    /// recorded. The oldest go beyond capacity.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
         let Some(until) = self.retained_until.take() else {
             return;
         };
         let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
-        let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page)
-            .into_iter()
-            .partition(|t| t.ts > until && live_from.is_none_or(|from| t.ts < from));
+        let ids_at_live = (self.trades.iter())
+            .filter(|held| Some(held.ts) == live_from)
+            .all(|held| held.id.is_some());
+        let mut left_out = false;
+        let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page).into_iter().partition(|t| {
+            // A live trade stamped inside the retained tape marks no boundary.
+            if Some(t.ts) != live_from || t.ts < until {
+                return t.ts > until && live_from.is_none_or(|from| t.ts < from);
+            }
+            let Some(id) = t.id.filter(|_| ids_at_live) else {
+                left_out = true;
+                return false;
+            };
+            !self.ids.contains_key(&id)
+        });
         *page = older;
+        if left_out {
+            self.left_out_at = live_from;
+        }
         if gap.is_empty() {
             return;
         }
