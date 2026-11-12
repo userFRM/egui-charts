@@ -801,6 +801,8 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
+            self.settings.candle_colors =
+                crate::widget::settings::CandleColorConfig::from_theme(theme);
             self.settings.scales_appearance.text_color = theme.chart.axis_text;
             self.settings.grid_lines.horizontal_color = theme.chart.grid_line;
             self.settings.grid_lines.vertical_color = theme.chart.grid_line;
@@ -954,6 +956,16 @@ mod tests {
                         "vertical crosshair",
                         chart.chart_options().crosshair.vert_line_color,
                         crosshair,
+                    ),
+                    (
+                        "candle up",
+                        actual.candle_colors.body_up,
+                        expected.candle_colors.body_up,
+                    ),
+                    (
+                        "candle down",
+                        actual.candle_colors.body_down,
+                        expected.candle_colors.body_down,
                     ),
                     (
                         "watermark",
