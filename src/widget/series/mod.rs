@@ -371,6 +371,7 @@ impl Chart {
         if !self.bar_series_present(series, "remove_oldest_bars") || count == 0 {
             return Vec::new();
         }
+        let merge_clock = self.clock();
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
@@ -387,7 +388,7 @@ impl Chart {
                 item.revision = crate::model::next_revision();
                 shrink_bars(&mut item.bars);
                 if let Some(marks) = &mut item.change_marks {
-                    marks.clear();
+                    marks.retain_bars(&item.bars, &merge_clock);
                 }
             }
             removed
@@ -409,7 +410,7 @@ impl Chart {
                     self.from_ticks.clear();
                 }
                 if let Some(marks) = &mut self.change_marks {
-                    marks.clear();
+                    marks.retain_bars(&self.state.data().bars, &merge_clock);
                 }
                 // A study that keeps the values of the remaining bars draws them until its turn.
                 for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
