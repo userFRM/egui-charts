@@ -2927,6 +2927,70 @@ mod tests {
         )));
     }
 
+    /// In a study pane, as in the price pane, the crosshair lines stay above series-pass
+    /// primitives.
+    #[test]
+    fn series_pass_stays_under_the_crosshair_in_a_study_pane() {
+        struct Fill;
+        impl Primitive for Fill {
+            fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                if pass == PrimitivePass::Series {
+                    painter.rect_filled(view.mapping.rect, 0.0, SERIES);
+                }
+            }
+        }
+        const LINE: Color32 = Color32::from_rgb(201, 13, 202);
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        chart.config.show_volume = false;
+        let crosshair = &mut chart.chart_options.crosshair;
+        crosshair.style = crate::config::CrosshairStyle::Full;
+        crosshair.vert_line_style = crate::model::LineStyle::Solid;
+        crosshair.horz_line_style = crate::model::LineStyle::Solid;
+        crosshair.vert_line_color = LINE;
+        crosshair.horz_line_color = LINE;
+        crosshair.horz_line_width = crosshair.vert_line_width;
+        let study = chart.add_indicator(Box::new(
+            CustomIndicator::new("Line", |bars| {
+                vec![IndicatorValue::Single(15.0); bars.len()]
+            })
+            .with_overlay(false),
+        ));
+        chart.attach_primitive(study, Fill).unwrap();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let pos = Pos2::new(
+            chart.get_chart_mapping().idx_to_x(70),
+            chart.series_price_map(study).unwrap().price_to_y(15.0),
+        );
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+        let painted = shapes(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+        let pane = chart.series_pane(study).unwrap();
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .unwrap()
+            .rect;
+        let fill = painted
+            .iter()
+            .rposition(|shape| matches!(shape, Shape::Rect(fill) if fill.fill == SERIES))
+            .expect("series pass painted");
+        let line = painted
+            .iter()
+            .rposition(|shape| {
+                matches!(shape, Shape::LineSegment { points, stroke }
+                    if stroke.color == LINE
+                        && points[0].y == points[1].y
+                        && rect.y_range().contains(points[0].y))
+            })
+            .expect("horizontal crosshair line painted in the study pane");
+        assert!(
+            line > fill,
+            "crosshair line at shape {line}, series pass at shape {fill}"
+        );
+    }
+
     #[test]
     fn member_primitives_layer_around_every_study_of_a_shared_pane() {
         struct Fill(PrimitivePass, Color32, bool);

@@ -532,7 +532,8 @@ impl Chart {
             if entries.is_empty() {
                 entries.push(None);
             }
-            // The crosshair lines of a pane with host series are drawn above their bars.
+            // The crosshair lines are drawn above the series pass: the host series' bars and
+            // the primitives drawn with them.
             let mut series_crosshair = None;
             let first = entries
                 .iter()
@@ -798,11 +799,12 @@ impl Chart {
                     }
                     crosshair_options.mode = crate::config::CrosshairMode::Normal;
                 }
-                if !series.is_empty()
+                if (!series.is_empty() || !panel.overlay)
                     && !collapsed
                     && let Some(pos) = hover
                 {
-                    // The pane draws the price tag; the lines go above the series' bars.
+                    // The panel draws the price tag; the pane draws the lines after the series
+                    // pass, from the first row in a pane without host series.
                     series_crosshair = Some((pos, crosshair_options));
                     crosshair_options.vert_line_color = egui::Color32::TRANSPARENT;
                     crosshair_options.horz_line_color = egui::Color32::TRANSPARENT;
