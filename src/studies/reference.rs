@@ -1173,7 +1173,10 @@ fn staple_studies_match_published_definitions() {
     for (name, study, data) in &mut studies {
         // The incremental paths of these studies must land on the same published values:
         // append the live bar, then correct it back to its real prices.
-        if ["Aroon(", "DMI(", "PSAR("].iter().any(|p| name.starts_with(p)) {
+        if ["Aroon(", "DMI(", "PSAR("]
+            .iter()
+            .any(|p| name.starts_with(p))
+        {
             let (last, history) = data.split_last().unwrap();
             let mut live = last.clone();
             live.high += 7.0;
