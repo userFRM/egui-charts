@@ -292,6 +292,7 @@ impl DrawingProps {
                     text_wrap,
                     text_wrap_width,
                     text_follows_zoom,
+                    note_text_style,
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
@@ -460,6 +461,12 @@ impl DrawingProps {
             if !settings.position_readout.is_valid() {
                 return Err("Invalid position readout settings");
             }
+            if settings
+                .note_text_style
+                .is_some_and(|style| !style.is_valid())
+            {
+                return Err("Price note text size must be 1 to 256");
+            }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
@@ -604,7 +611,12 @@ mod tests {
                     crate::ui_kit::ColorPickerState::new(props.color),
                     crate::ui_kit::ColorPickerState::new(props.color),
                 ];
-                super::super::tabs::StyleTab::show(ui, &mut props, &mut pickers);
+                super::super::tabs::StyleTab::show(
+                    ui,
+                    &mut props,
+                    &mut pickers,
+                    &mut Default::default(),
+                );
             });
             let labels: Vec<_> = output
                 .shapes
@@ -725,6 +737,13 @@ mod tests {
             settings.text_wrap = true;
             settings.text_wrap_width = 120.0;
             settings.text_follows_zoom = true;
+            let note_text = crate::drawings::NoteTextStyle {
+                color: [7, 8, 9, 255],
+                font_size: 18.0,
+                bold: true,
+                italic: false,
+            };
+            settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
@@ -767,6 +786,7 @@ mod tests {
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
             assert_eq!((saved.text_wrap, saved.text_wrap_width), (true, 120.0));
             assert!(saved.text_follows_zoom);
+            assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
@@ -776,6 +796,7 @@ mod tests {
             assert_eq!((peer.text_color, peer.border_color), (None, None));
             assert_eq!((peer.text_wrap, peer.text_wrap_width), (false, 200.0));
             assert!(!peer.text_follows_zoom);
+            assert_eq!(peer.note_text_style, None);
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(

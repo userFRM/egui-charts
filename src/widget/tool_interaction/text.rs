@@ -340,7 +340,13 @@ pub(super) fn show_editor(
     // A table editor shows about six rows of cells above its buttons.
     let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
-    let font_size = crate::styles::typography::font_size(drawing.font_size);
+    // A price note's typed text has a size of its own once set.
+    let font_size = crate::styles::typography::font_size(
+        drawing
+            .note_text_style
+            .filter(|_| drawing.tool_type == DrawingToolType::PriceNote)
+            .map_or(drawing.font_size, |style| style.font_size),
+    );
     let hint = match drawing.tool_type {
         DrawingToolType::Image => "Image address (https://… or file://…)",
         DrawingToolType::Tweet if links => {

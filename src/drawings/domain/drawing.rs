@@ -11,7 +11,7 @@
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
     FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
     RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
@@ -180,7 +180,8 @@ pub struct Drawing {
     /// Whether an annotation's box has a 1 px border. Older drawings have it on.
     #[serde(default = "enabled")]
     pub border: bool,
-    /// Border colour of annotation boxes; `None` uses the drawing colour.
+    /// Border colour of annotation boxes; `None` uses the drawing colour, except on a price label,
+    /// which then has no border, as price labels saved before they had one.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
     /// Whether a Text, Anchored text or Callout breaks its text into lines no wider than
@@ -200,6 +201,11 @@ pub struct Drawing {
     /// saved drawings.
     #[serde(default)]
     pub text_zoom_spacing: Option<f32>,
+    /// Colour, size and emphasis of the text typed on a price note. `None` draws it as the price
+    /// beside it, in the label's text settings, as price notes saved before this setting do. Other
+    /// tools ignore it.
+    #[serde(default)]
+    pub note_text_style: Option<NoteTextStyle>,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
     /// extends past its first anchor, whichever way it was drawn
     pub extend_left: bool,
@@ -562,11 +568,17 @@ impl Drawing {
             },
             background: !plain_text,
             border: !plain_text,
-            border_color: plain_text.then_some([112, 112, 112, 255]),
+            border_color: match tool_type {
+                _ if plain_text => Some([112, 112, 112, 255]),
+                // Its own colour, which the badge keeps when its background changes.
+                DrawingToolType::PriceLabel => Some(style.color),
+                _ => None,
+            },
             text_wrap: false,
             text_wrap_width: default_text_wrap_width(),
             text_follows_zoom: false,
             text_zoom_spacing: None,
+            note_text_style: None,
             extend_left: tool_type == DrawingToolType::ExtendedLine,
             extend_right: matches!(
                 tool_type,
@@ -647,13 +659,16 @@ impl Drawing {
         drawing
     }
 
-    /// Set the line colour and retint fills and pitchfork levels sharing its current RGB,
-    /// keeping each one's opacity. Independently coloured fills and levels keep their colours.
+    /// Set the line colour and retint fills, borders and pitchfork levels sharing its current
+    /// RGB, keeping each one's opacity. Independently coloured fills, borders and levels keep
+    /// their colours.
     pub fn set_line_color(&mut self, color: [u8; 4]) {
-        if let Some(fill) = &mut self.fill_color
-            && fill[..3] == self.color[..3]
-        {
-            fill[..3].copy_from_slice(&color[..3]);
+        for shared in [&mut self.fill_color, &mut self.border_color] {
+            if let Some(shared) = shared
+                && shared[..3] == self.color[..3]
+            {
+                shared[..3].copy_from_slice(&color[..3]);
+            }
         }
         if let Some(config) = &mut self.pitchfork {
             for level in &mut config.levels {
