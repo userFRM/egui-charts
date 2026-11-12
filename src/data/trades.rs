@@ -6,7 +6,8 @@
 //! held trade only if it and every held trade at that instant carry ids, and a live trade is
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice. The first page after a
-//! new subscription on a retained tape also fills the time between the tape and the live stream.
+//! new subscription on a retained tape also fills the time between the tape and the live stream,
+//! through the instant of the oldest live trade under the same rule.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -145,6 +146,9 @@ pub(crate) struct Trades {
     retained_until: Option<DateTime<Utc>>,
     /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
     lost_until: Option<DateTime<Utc>>,
+    /// Time of the oldest live trades when a page left out its trades at that time, as ids did not
+    /// tell them from the live ones: the page may lack trades of that instant.
+    left_out_at: Option<DateTime<Utc>>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
 }
@@ -161,6 +165,7 @@ impl Trades {
             paged_without_id_until: None,
             retained_until: None,
             lost_until: None,
+            left_out_at: None,
             revision: next_revision(),
         }
     }
@@ -181,6 +186,16 @@ impl Trades {
     )]
     pub(crate) fn lost_until(&self) -> Option<DateTime<Utc>> {
         self.lost_until
+    }
+
+    /// Time of the oldest live trades, while a page left out its trades at that time because ids
+    /// did not tell them from the live ones.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn left_out_at(&self) -> Option<DateTime<Utc>> {
+        self.left_out_at
     }
 
     /// Held executions that arrived live, including those sharing a page's boundary time.
@@ -204,6 +219,8 @@ impl Trades {
             .map(|trade| trade.ts)
             .max();
         self.retained_until = self.paged_until;
+        // The trades it compared are no longer the live ones.
+        self.left_out_at = None;
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -262,6 +279,9 @@ impl Trades {
                 self.ids.remove(&id);
             }
             self.lost_until = self.lost_until.max(Some(evicted.ts));
+            if self.left_out_at == Some(evicted.ts) {
+                self.left_out_at = None;
+            }
             changed(&evicted, false);
         }
     }
@@ -315,9 +335,11 @@ impl Trades {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
                 .all(|held| held.id.is_some());
-            page.retain(|trade| {
-                trade.ts < oldest || (trade.ts == oldest && trade.id.is_some() && ids_at_oldest)
-            });
+            let kept = |trade: &Tick| trade.id.is_some() && ids_at_oldest;
+            if self.paged == 0 && page.iter().any(|trade| trade.ts == oldest && !kept(trade)) {
+                self.left_out_at = Some(oldest);
+            }
+            page.retain(|trade| trade.ts < oldest || (trade.ts == oldest && kept(trade)));
         }
         let mut room = self.capacity.saturating_sub(self.trades.len());
         let mut added = Vec::new();
@@ -352,16 +374,34 @@ impl Trades {
     }
 
     /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. The oldest go beyond capacity.
+    /// them: nothing streamed while the subscription changed. A trade at the instant of the oldest
+    /// live trade follows them when it and every held trade at that instant carry ids and its id
+    /// is not held; one that ids do not tell from the held ones is left out and the instant
+    /// recorded. The oldest go beyond capacity.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
         let Some(until) = self.retained_until.take() else {
             return;
         };
         let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
-        let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page)
-            .into_iter()
-            .partition(|t| t.ts > until && live_from.is_none_or(|from| t.ts < from));
+        let ids_at_live = (self.trades.iter())
+            .filter(|held| Some(held.ts) == live_from)
+            .all(|held| held.id.is_some());
+        let mut left_out = false;
+        let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page).into_iter().partition(|t| {
+            // A live trade stamped inside the retained tape marks no boundary.
+            if Some(t.ts) != live_from || t.ts < until {
+                return t.ts > until && live_from.is_none_or(|from| t.ts < from);
+            }
+            let Some(id) = t.id.filter(|_| ids_at_live) else {
+                left_out = true;
+                return false;
+            };
+            !self.ids.contains_key(&id)
+        });
         *page = older;
+        if left_out {
+            self.left_out_at = live_from;
+        }
         if gap.is_empty() {
             return;
         }

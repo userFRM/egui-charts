@@ -616,9 +616,10 @@ impl Indicator for ConfiguredStudy {
     fn inputs(&self) -> Vec<super::StudyInput> {
         let mut inputs = self.study.inputs();
         if let Some(default) = self.study.source() {
-            let initial = inputs
-                .iter()
-                .find(|input| input.id == "source")
+            let own = inputs.iter().find(|input| input.id == "source");
+            // A study that names its source, where only part of it reads the source, keeps that name.
+            let label = own.map_or_else(|| "Source".into(), |input| input.label.clone());
+            let initial = own
                 .and_then(|input| match input.default {
                     InputValue::Choice(index) => crate::model::PriceSource::all()
                         .get(index)
@@ -632,7 +633,7 @@ impl Indicator for ConfiguredStudy {
             inputs.push(
                 super::StudyInput::new(
                     "source",
-                    "Source",
+                    label,
                     InputValue::Source(self.source.unwrap_or(default)),
                     super::InputKind::Source,
                 )

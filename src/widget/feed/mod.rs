@@ -59,6 +59,10 @@ pub(crate) struct FeedLink {
     /// Open of the last bar a resume dropped; the bars before it are kept. The new subscription
     /// drops older executions, and a latest page that starts after it replaces the kept bars.
     resumed_from: Option<chrono::DateTime<chrono::Utc>>,
+    /// On a trade-based interval, the open of the oldest bar this subscription pushed that the
+    /// history lacks or holds with other values, which stands for the first live execution while
+    /// none is held.
+    pushed_from: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
     /// bars take no data or a replay runs.
@@ -163,6 +167,7 @@ impl FeedLink {
             reload_pending: false,
             resumed: false,
             resumed_from: None,
+            pushed_from: None,
             paused: true,
             host_paused: true,
             next_key: 0,
@@ -203,7 +208,8 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// open before the live executions and that they rebuild ([`Footprint::push_history`]). With
+    /// open before the live executions, or without them before the oldest pushed bar the history
+    /// lacks or holds with other values, and that they rebuild ([`Footprint::push_history`]). With
     /// `before`, includes only executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
@@ -229,10 +235,16 @@ impl FeedLink {
             let paged: Vec<_> = held()
                 .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
                 .collect();
-            // Bars from the first live execution on hold executions the page lacks, so it cannot
-            // end with them.
-            let live = self.trades.live().next().map(|trade| trade.ts);
-            let paged_bars = history.partition_point(|bar| live.is_none_or(|live| bar.time < live));
+            // Bars from the first live execution, or pushed bar, on hold executions the page
+            // lacks, so it cannot end with them.
+            let live = (self.trades.live().next().map(|trade| trade.ts)).or(self.pushed_from);
+            let mut paged_bars =
+                history.partition_point(|bar| live.is_none_or(|live| bar.time < live));
+            // The page's executions at the first live one's time were left out, so the bar before
+            // may lack some of its own: it proves nothing.
+            if live.is_some_and(|live| self.trades.left_out_at() == Some(live)) {
+                paged_bars = paged_bars.saturating_sub(1);
+            }
             flow.push_history(&paged, &history[..paged_bars], before);
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
             for trade in trades() {
@@ -328,6 +340,7 @@ impl Chart {
             reload_pending: true,
             resumed: false,
             resumed_from: None,
+            pushed_from: None,
             paused: false,
             host_paused: false,
             next_key: 0,
