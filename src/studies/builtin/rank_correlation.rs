@@ -9,8 +9,10 @@ use std::collections::VecDeque;
 /// Rank Correlation Index (Spearman) - rank correlation of prices vs time index
 /// over a rolling window, scaled to [-100, 100].
 ///
-/// The pane draws dashed levels at 80, 0 and -80. The smoothing inputs add an average of the
-/// index, with bands for the band type, as they do for RSI.
+/// The pane draws dashed levels at 80, 0 and -80 and fills the band between the outer two. The
+/// smoothing inputs add an average of the index, with bands for the band type, as they do for
+/// RSI. [`Default`] is a lookback of 10 with a 14-bar SMA of the index; [`new`](Self::new) stays
+/// without the average, so its values remain single numbers.
 #[derive(Clone)]
 pub struct RankCorrelationIndex {
     period: usize,
@@ -70,7 +72,10 @@ impl RankCorrelationIndex {
 
 impl Default for RankCorrelationIndex {
     fn default() -> Self {
-        Self::new(14)
+        Self {
+            smoothing: SmoothingType::Sma,
+            ..Self::new(10)
+        }
     }
 }
 
@@ -167,6 +172,10 @@ impl Indicator for RankCorrelationIndex {
         self.smoothing.fills()
     }
 
+    fn level_fill_color(&self) -> Color32 {
+        self.colors[0].gamma_multiply_u8(26)
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
@@ -177,7 +186,7 @@ impl Indicator for RankCorrelationIndex {
                 (0.0, palette::MUTED, "Middle Band"),
                 (-80.0, palette::MUTED, "Lower Band"),
             ],
-            fill_between_levels: false,
+            fill_between_levels: true,
         }
     }
 

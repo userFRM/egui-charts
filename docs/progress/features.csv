@@ -748,7 +748,7 @@ Studies,Indicators,Price Volume Trend,incomplete,library,src/studies/builtin/vol
 Studies,Indicators,Pring's Special K,unverified,library,src/studies/builtin/special_k.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,RCI Ribbon,unverified,library,src/studies/builtin/rci_ribbon.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,RSI Divergence Indicator,incomplete,library,src/studies/builtin/rsi_divergence.rs;src/studies/builtin/rsi.rs;src/chart/rendering/indicator.rs,176
-Studies,Indicators,Rank Correlation Index,unverified,library,src/studies/builtin/rank_correlation.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Rank Correlation Index,incomplete,library,src/studies/builtin/rank_correlation.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Rate of Change,incomplete,library,src/studies/builtin/roc.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Ratio,incomplete,library,src/services/search/expression.rs,1081
 Studies,Indicators,Relative Strength Index,incomplete,library,src/studies/builtin/rsi.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs,1089;2335
