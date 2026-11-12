@@ -832,7 +832,6 @@ impl Indicator for ConfiguredStudy {
         self.study.set_timeframe(source.timeframe);
         self.study.set_bar_clock(&source.clock);
         if self.data_requests().len() > 1 {
-            self.aligned = None;
             self.study.update_data(source.bars, 0, sources);
         } else {
             self.update_price(source.bars, 0);

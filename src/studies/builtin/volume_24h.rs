@@ -829,7 +829,8 @@ mod tests {
                 Some(rates(&[(0, 2.0), (1, 1.0), (24, 0.25)])),
                 [Some(44.0), Some(110.0), Some(96.0)],
             ),
-            // A zero rate at hour 24 sits inside the latest window, whose first bar has 0.5.
+            // HL/2 at 0.5 from hour 0: 2×11×0.5 = 11 and 11 + 3×22×0.5 = 44. The zero rate at hour
+            // 24 leaves the third bar without an amount, inside a window whose first bar has 0.5.
             (
                 4,
                 2,
@@ -948,7 +949,7 @@ mod tests {
                 })
                 .collect();
             study.update_data(std::slice::from_ref(&bar), 0, &sources);
-            // 2 x 250 x 0.01 = 5 pounds; with no conversion the 500 stays in the quote currency.
+            // 2×250×0.01 = 5 pounds; with no conversion the 500 stays in the quote currency.
             let (value, shown) = match rate {
                 Some(_) => (5.0, "5.00 GBP"),
                 None => (500.0, "500.00 USD"),
