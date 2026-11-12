@@ -38,7 +38,8 @@ impl Chart {
         let bars = self.state.shown();
         let open = bars[index].time;
         // Without an interval, the first bar takes the spacing after the second.
-        let at = match self.timeframe() {
+        let timeframe = self.calendar_timeframe();
+        let at = match timeframe {
             Some(_) => index,
             None => index.max(1).min(bars.len() - 1),
         };
@@ -46,7 +47,7 @@ impl Chart {
         let step = crate::model::time_at_with_timeframe(
             &bars[..=at],
             at as f64 + 1.0,
-            self.timeframe(),
+            timeframe,
             self.calendar_timezone().as_ref(),
         )
         .map_or(chrono::TimeDelta::zero(), |end| end - bars[at].time);
@@ -376,6 +377,33 @@ mod tests {
 
     fn time(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(seconds, 0).unwrap()
+    }
+
+    /// On a custom axis a key's period ends at the next key whatever the displayed interval:
+    /// key 4 lies past the period of key 3, the last of keys 0 to 3, and the period of key 4,
+    /// the last of keys 0 to 4, ends at key 5.
+    #[test]
+    fn custom_key_crosshair_period_ignores_the_timeframe() {
+        let scale =
+            std::sync::Arc::new(crate::scales::CustomHorizontalScale::new(0..6_u8, |key| {
+                key.to_string()
+            }));
+        let keyed = |keys: &[u8]| {
+            let mut chart = Chart::new(BarData::from_bars(
+                keys.iter()
+                    .map(|key| scale.value(key, 10.0).unwrap())
+                    .collect(),
+            ));
+            chart.set_horizontal_scale(Some(scale.clone()));
+            chart.set_timeframe(crate::model::Timeframe::Day1);
+            chart
+        };
+        let mut receiver = keyed(&[0, 1, 2, 3]);
+        receiver.set_synced_crosshair_time(scale.time(&4));
+        assert_eq!(receiver.synced_crosshair_bar_idx, None);
+        let mut source = keyed(&[0, 1, 2, 3, 4]);
+        source.last_hover_bar_idx = Some(4.0);
+        assert_eq!(source.hover_period(), scale.time(&4).zip(scale.time(&5)));
     }
 
     #[test]
