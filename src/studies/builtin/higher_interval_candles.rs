@@ -81,7 +81,7 @@ impl HigherIntervalCandles {
         } else {
             self.interval
         };
-        // Only a twelve-month chart is its own automatic interval.
+        // A chart of twelve months or more is its own automatic interval.
         if source.duration_ms() == 0
             || interval.duration_ms() <= source.duration_ms()
                 && !(self.automatic && interval == source)
@@ -129,7 +129,8 @@ impl HigherIntervalCandles {
     }
 }
 
-/// The interval that follows the chart's `source` interval when none is chosen.
+/// The interval that follows the chart's `source` interval when none is chosen. A chart of
+/// twelve months or more has no longer one and draws a candle per bar.
 fn automatic_interval(source: Timeframe) -> Timeframe {
     let months = |count| Timeframe::Months(NonZeroU32::new(count).unwrap());
     match source.duration_ms() {
@@ -140,7 +141,8 @@ fn automatic_interval(source: Timeframe) -> Timeframe {
         ms if ms < Timeframe::Week1.duration_ms() => Timeframe::Week1,
         ms if ms < Timeframe::Month1.duration_ms() => Timeframe::Month1,
         ms if ms < months(3).duration_ms() => months(3),
-        _ => months(12),
+        ms if ms < months(12).duration_ms() => months(12),
+        _ => source,
     }
 }
 
@@ -311,7 +313,7 @@ mod tests {
     fn automatic_intervals_follow_the_chart_interval() {
         let months = |count| Timeframe::Months(NonZeroU32::new(count).unwrap());
         // Chart interval, bar opens with one missing, and period opens.
-        let rows: [(Timeframe, [&str; 4], &[&str]); 8] = [
+        let rows: [(Timeframe, [&str; 4], &[&str]); 9] = [
             (
                 Timeframe::Sec30,
                 [
@@ -400,6 +402,22 @@ mod tests {
                     "2022-01-01T00:00:00Z",
                     "2023-01-01T00:00:00Z",
                     "2025-01-01T00:00:00Z",
+                ],
+            ),
+            // No automatic interval is longer than a chart of more than twelve months.
+            (
+                months(18),
+                [
+                    "2021-01-01T00:00:00Z",
+                    "2022-07-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2027-01-01T00:00:00Z",
+                ],
+                &[
+                    "2021-01-01T00:00:00Z",
+                    "2022-07-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2027-01-01T00:00:00Z",
                 ],
             ),
         ];
