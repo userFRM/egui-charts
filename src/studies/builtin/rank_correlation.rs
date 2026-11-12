@@ -8,6 +8,11 @@ use std::collections::VecDeque;
 
 /// Rank Correlation Index (Spearman) - rank correlation of prices vs time index
 /// over a rolling window, scaled to [-100, 100].
+///
+/// The pane draws dashed levels at 80, 0 and -80 and fills the band between the outer two. The
+/// smoothing inputs add an average of the index, with bands for the band type, as they do for
+/// RSI. [`Default`] is a lookback of 10 with a 14-bar SMA of the index; [`new`](Self::new) stays
+/// without the average, so its values remain single numbers.
 #[derive(Clone)]
 pub struct RankCorrelationIndex {
     period: usize,
@@ -67,7 +72,10 @@ impl RankCorrelationIndex {
 
 impl Default for RankCorrelationIndex {
     fn default() -> Self {
-        Self::new(14)
+        Self {
+            smoothing: SmoothingType::Sma,
+            ..Self::new(10)
+        }
     }
 }
 
@@ -164,6 +172,24 @@ impl Indicator for RankCorrelationIndex {
         self.smoothing.fills()
     }
 
+    fn level_fill_color(&self) -> Color32 {
+        self.colors[0].gamma_multiply_u8(26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            // Fitted to the values: the bands of the average can pass either end of the index.
+            range: None,
+            levels: vec![
+                (80.0, palette::MUTED, "Upper Band"),
+                (0.0, palette::MUTED, "Middle Band"),
+                (-80.0, palette::MUTED, "Lower Band"),
+            ],
+            fill_between_levels: true,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false
     }
@@ -184,5 +210,83 @@ impl Indicator for RankCorrelationIndex {
         let mut names = vec![format!("RankCorr({})", self.period)];
         names.extend(self.smoothing.line_names("RankCorr MA"));
         names
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::InputValue;
+
+    /// Bars whose open, high and low lie away from the close the index reads.
+    fn bars(closes: &[f64]) -> Vec<Bar> {
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, &close)| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, close - 0.5, close + 2.0, close - 1.0, close, 1.0)
+            })
+            .collect()
+    }
+
+    /// The index over three closes, then its two-value average with bands 1.5 deviations away, by
+    /// hand. Tied closes share their average rank, so 1, 2, 2 ranks 1, 2.5, 2.5 against the times
+    /// 1, 2, 3: the covariance is 1.5 and the variances are 1.5 and 2, giving 1.5 / sqrt(3), or
+    /// `r` = 50 * sqrt(3) once scaled. The bar without a close has no value and leaves both
+    /// windows as they were, so the next windows are 2, 2, 1 (`-r`), 2, 1, 3 (50) and 1, 3, 5
+    /// (100). The average of two values is their midpoint and their population deviation half
+    /// their distance. Correcting the close of bar 4 from 1 to 4 makes the windows 2, 2, 4 (`r`),
+    /// 2, 4, 3 (50) and 4, 3, 5 (50), and the average and bands follow from that bar on.
+    #[test]
+    fn the_average_and_bands_follow_the_index_through_ties_a_gap_and_a_correction() {
+        let r = 50.0 * 3.0f64.sqrt();
+        let band = |a: f64, b: f64| {
+            let (average, reach) = ((a + b) / 2.0, 1.5 * (a - b).abs() / 2.0);
+            [
+                Some(b),
+                Some(average),
+                Some(average + reach),
+                Some(average - reach),
+            ]
+        };
+        let mut study = RankCorrelationIndex::new(3);
+        for (id, value) in [
+            ("smoothing", InputValue::Choice(2)),
+            ("smoothing_length", InputValue::Length(2)),
+            ("smoothing_deviation", InputValue::Number(1.5)),
+        ] {
+            study.set_input(id, value).unwrap();
+        }
+        let mut closes = [1.0, 2.0, 2.0, f64::NAN, 1.0, 3.0, 5.0];
+        study.calculate(&bars(&closes));
+        let saved = [
+            (1, [None; 4]),
+            (2, [Some(r), None, None, None]),
+            (3, [None; 4]),
+            (4, band(r, -r)),
+            (5, band(-r, 50.0)),
+            (6, band(50.0, 100.0)),
+        ];
+        closes[4] = 4.0;
+        let mut corrected = study.clone();
+        corrected.update(&bars(&closes), 4);
+        let rows = [(4, band(r, r)), (5, band(r, 50.0)), (6, band(50.0, 50.0))];
+        for (study, rows) in [
+            (&study, &saved[..]),
+            (&corrected, &saved[..3]),
+            (&corrected, &rows[..]),
+        ] {
+            for &(bar, want) in rows {
+                for (line, want) in want.into_iter().enumerate() {
+                    let got = study.values().value(line, bar);
+                    let equal = match (got, want) {
+                        (Some(got), Some(want)) => (got - want).abs() < 1e-9,
+                        (got, want) => got == want,
+                    };
+                    assert!(equal, "bar {bar}, line {line}: {got:?}, not {want:?}");
+                }
+            }
+        }
     }
 }
