@@ -11,6 +11,8 @@
 //! # Calculation
 //! VWAP = Sum(Source * Volume) / Sum(Volume) from the anchor bar, Source = (High + Low + Close) / 3
 //! by default; the source itself while the volume sum is zero.
+//! Band = VWAP +/- k * multiplier * unit for k = 1, 2 and 3, where the unit is sigma,
+//! sigma^2 = Sum(Volume * Source^2) / Sum(Volume) - VWAP^2, or one percent of the absolute VWAP.
 //!
 //! # Example
 //! ```
@@ -26,6 +28,7 @@
 //! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
+use super::vwap::BAND_COLORS;
 use crate::model::{Bar, Instrument, PriceSource, Timeframe};
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -61,7 +64,10 @@ pub enum AutoAnchor {
     Century,
 }
 
-/// VWAP from an automatically found anchor bar to the latest bar.
+/// VWAP from an automatically found anchor bar to the latest bar, with three pairs of bands
+/// at one, two and three times a multiple of the volume-weighted standard deviation of the
+/// source, or of one percent of the absolute VWAP. The first pair is drawn and filled between
+/// its lines at 5% opacity; the second and third start hidden.
 ///
 /// Periods are counted in exchange trading days, as
 /// [`VolumeWeightedAvgPrice`](super::VolumeWeightedAvgPrice) counts them. The chart supplies
@@ -73,6 +79,8 @@ pub struct VwapAutoAnchored {
     anchor: AutoAnchor,
     length: usize,
     source: PriceSource,
+    percentage_bands: bool,
+    band_multiplier: f64,
     interval: Timeframe,
     days: ExchangeDays,
     values: IndicatorValues,
@@ -100,18 +108,66 @@ struct State {
     intraday: bool,
     period: Option<(i32, u32)>,
     start: usize,
-    volume: f64,
-    weighted: f64,
+    sums: Sums,
     candidates: std::collections::VecDeque<Point>,
 }
 
+/// The volume-weighted sums of the bars from the anchor bar.
+#[derive(Clone, Copy, Default)]
+struct Sums {
+    volume: f64,
+    weighted: f64,
+    squared: f64,
+}
+
+impl Sums {
+    /// Adds a bar and returns the VWAP, then the upper and lower band at one, two and three
+    /// band widths: `multiplier` deviations of the price, or percent of the absolute VWAP.
+    fn add(
+        &mut self,
+        price: f64,
+        volume: f64,
+        percentage: bool,
+        multiplier: f64,
+    ) -> IndicatorValue {
+        self.volume += volume;
+        self.weighted += price * volume;
+        self.squared += price * price * volume;
+        let (vwap, sigma) = if self.volume == 0.0 {
+            (price, 0.0)
+        } else {
+            let vwap = self.weighted / self.volume;
+            // Clamped: cancellation can leave a tiny negative variance.
+            let variance = self.squared / self.volume - vwap * vwap;
+            (vwap, variance.max(0.0).sqrt())
+        };
+        let width = multiplier
+            * if percentage {
+                vwap.abs() / 100.0
+            } else {
+                sigma
+            };
+        IndicatorValue::Multiple(
+            std::iter::once(vwap)
+                .chain(
+                    [1.0, 2.0, 3.0]
+                        .into_iter()
+                        .flat_map(|k| [vwap + k * width, vwap - k * width]),
+                )
+                .collect(),
+        )
+    }
+}
+
 impl VwapAutoAnchored {
-    /// Anchor Auto, length 20, source hlc3.
+    /// Anchor Auto, length 20, source hlc3, standard deviation bands at a multiplier of 1.
     pub fn new() -> Self {
         Self {
             anchor: AutoAnchor::Auto,
             length: 20,
             source: PriceSource::HLC3,
+            percentage_bands: false,
+            band_multiplier: 1.0,
             interval: Timeframe::Min1,
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
@@ -119,7 +175,9 @@ impl VwapAutoAnchored {
             intraday: false,
             shown_start: 0,
             shown_indices: Vec::new(),
-            colors: vec![Color32::from_rgb(30, 136, 229)],
+            colors: std::iter::once(Color32::from_rgb(30, 136, 229))
+                .chain(BAND_COLORS.into_iter().flat_map(|color| [color, color]))
+                .collect(),
             visible: true,
         }
     }
@@ -175,7 +233,9 @@ impl Indicator for VwapAutoAnchored {
     crate::studies::inputs::study_inputs!(self;
         anchor: choice("Anchor Period", [AutoAnchor::Auto, AutoAnchor::HighestHigh, AutoAnchor::LowestLow, AutoAnchor::HighestVolume, AutoAnchor::Session, AutoAnchor::Week, AutoAnchor::Month, AutoAnchor::Quarter, AutoAnchor::Year, AutoAnchor::Decade, AutoAnchor::Century]),
         length: length("Length", 1, usize::MAX),
-        source: choice("Source", PriceSource::all())
+        source: choice("Source", PriceSource::all()),
+        percentage_bands: toggle("Percentage bands"),
+        band_multiplier: number("Bands multiplier", 0.0, f64::MAX)
     ; {});
 
     fn name(&self) -> &str {
@@ -193,6 +253,7 @@ impl Indicator for VwapAutoAnchored {
     fn update(&mut self, data: &[Bar], mut from: usize) {
         let period = self.period();
         let price_source = self.source;
+        let (percentage, multiplier) = (self.percentage_bands, self.band_multiplier);
         let usable = |bar: &Bar| {
             price_source
                 .compute(bar.open, bar.high, bar.low, bar.close)
@@ -234,16 +295,9 @@ impl Indicator for VwapAutoAnchored {
                     if key != state.period {
                         state.period = key;
                         state.start = source;
-                        state.volume = 0.0;
-                        state.weighted = 0.0;
+                        state.sums = Sums::default();
                     }
-                    state.volume += bar.volume;
-                    state.weighted += price * bar.volume;
-                    IndicatorValue::Single(if state.volume == 0.0 {
-                        price
-                    } else {
-                        state.weighted / state.volume
-                    })
+                    state.sums.add(price, bar.volume, percentage, multiplier)
                 });
             if period.is_none() || self.intraday == self.stepper.state().intraday {
                 break;
@@ -260,23 +314,14 @@ impl Indicator for VwapAutoAnchored {
                 }
             } else if start < self.shown_start {
                 // Withdrawing a new anchor period restores the previously visible line.
-                let (mut volume, mut weighted) = (0.0, 0.0);
+                let mut sums = Sums::default();
                 for (i, bar) in data.iter().enumerate().take(self.shown_start).skip(start) {
                     if !usable(bar) {
                         continue;
                     }
                     let price = price_source.compute(bar.open, bar.high, bar.low, bar.close);
-                    volume += bar.volume;
-                    weighted += price * bar.volume;
-                    self.values.set_value(
-                        0,
-                        i,
-                        if volume == 0.0 {
-                            price
-                        } else {
-                            weighted / volume
-                        },
-                    );
+                    self.values
+                        .set(i, sums.add(price, bar.volume, percentage, multiplier));
                 }
             }
             self.shown_start = start;
@@ -296,18 +341,11 @@ impl Indicator for VwapAutoAnchored {
             let start = (0..candidates.len())
                 .max_by(|&a, &b| key(&candidates[a]).total_cmp(&key(&candidates[b])))
                 .unwrap_or(candidates.len());
-            let (mut volume, mut weighted) = (0.0, 0.0);
+            let mut sums = Sums::default();
             for point in candidates.iter().skip(start) {
-                volume += point.volume;
-                weighted += point.price * point.volume;
-                self.values.set_value(
-                    0,
+                self.values.set(
                     point.source,
-                    if volume == 0.0 {
-                        point.price
-                    } else {
-                        weighted / volume
-                    },
+                    sums.add(point.price, point.volume, percentage, multiplier),
                 );
                 self.shown_indices.push(point.source);
             }
@@ -334,10 +372,37 @@ impl Indicator for VwapAutoAnchored {
         self.colors.clone()
     }
 
+    /// Sets the colors line by line; lines without a color keep theirs.
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if let Some(color) = colors.first() {
-            self.colors = vec![*color];
+        for (line, color) in self.colors.iter_mut().zip(colors) {
+            *line = color;
         }
+    }
+
+    /// The second and third band pairs start hidden.
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: crate::studies::PlotType::Line,
+            visible: line < 3,
+        }
+    }
+
+    /// Only the VWAP has a tag on the price scale, which six band tags would crowd.
+    fn plot_tagged(&self, line: usize) -> bool {
+        line == 0
+    }
+
+    /// One band between the first upper and lower line.
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(1),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: self.colors[1].gamma_multiply_u8(13),
+            inverted_color: None,
+        }]
     }
 
     fn is_overlay(&self) -> bool {
@@ -356,7 +421,18 @@ impl Indicator for VwapAutoAnchored {
         Box::new(self.clone())
     }
 
+    fn line_count(&self) -> usize {
+        7
+    }
+
     fn line_names(&self) -> Vec<String> {
-        vec!["VWAP".to_string()]
+        let unit = if self.percentage_bands { "%" } else { "σ" };
+        std::iter::once("VWAP".to_string())
+            .chain([1.0, 2.0, 3.0].into_iter().flat_map(|k| {
+                // Single precision reads short: three times 0.1 as 0.3.
+                let k = (k * self.band_multiplier) as f32;
+                [format!("Upper {k}{unit}"), format!("Lower {k}{unit}")]
+            }))
+            .collect()
     }
 }
