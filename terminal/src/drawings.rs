@@ -384,7 +384,39 @@ impl Terminal {
                 let manager = chart.drawings_mut();
                 if let Some(tool) = manager.active_tool() {
                     let mut drawing = manager.new_drawing(0, tool);
+                    // The saved default carries earlier picks, so a fill or level the tool does not
+                    // tint from its line (read from the tool's own style) could share the line's RGB
+                    // and be retinted; each pick leaves those as they were.
+                    let fresh = egui_charts::drawings::Drawing::new(0, tool);
+                    let fill = fresh
+                        .fill_color
+                        .filter(|fill| fill[..3] != fresh.color[..3])
+                        .and(drawing.fill_color);
+                    let levels: Vec<(f32, [u8; 4])> = match (&fresh.pitchfork, &drawing.pitchfork) {
+                        (Some(own), Some(saved)) => saved
+                            .levels
+                            .iter()
+                            .filter(|level| {
+                                own.levels.iter().any(|l| {
+                                    l.value == level.value && l.color[..3] != fresh.color[..3]
+                                })
+                            })
+                            .map(|level| (level.value, level.color))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     drawing.set_line_color(rgba);
+                    if fill.is_some() {
+                        drawing.fill_color = fill;
+                    }
+                    if let Some(config) = &mut drawing.pitchfork {
+                        for level in &mut config.levels {
+                            if let Some((_, color)) = levels.iter().find(|(v, _)| *v == level.value)
+                            {
+                                level.color = *color;
+                            }
+                        }
+                    }
                     manager
                         .tool_defaults
                         .insert(tool, DrawingTemplate::from_drawing(&drawing));
@@ -808,6 +840,32 @@ mod tests {
                     }
                 );
                 assert_eq!(terminal.chart().drawings().tool_defaults.len(), 1);
+            }
+        }
+    }
+
+    /// A toolbar pick recolours what a first pick recolours, however many came before it.
+    #[test]
+    fn repeated_toolbar_colours_keep_independent_fills_and_levels() {
+        let mut terminal = ready();
+        let indigo = [41, 98, 255, 255];
+        let red = [242, 54, 69, 255];
+        for tool in [DrawingToolType::Sector, DrawingToolType::Pitchfork] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(indigo));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            if tool == DrawingToolType::Sector {
+                assert_eq!(drawing.fill_color, Some([41, 98, 255, 51]));
+                continue;
+            }
+            let own = egui_charts::drawings::PitchforkConfig::default();
+            for (level, own) in drawing.pitchfork.unwrap().levels.iter().zip(&own.levels) {
+                let expected = if own.value == 0.0 { red } else { own.color };
+                assert_eq!(level.color, expected, "level {}", own.value);
             }
         }
     }
