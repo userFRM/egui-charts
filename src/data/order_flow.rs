@@ -965,12 +965,14 @@ impl OrderFlowInput {
                 let mut part = State::new(state.source);
                 part.tick_size = tick_size;
                 // The sink allocated the oldest bar this source holds and every bar after it, so
-                // a page's copies count from there, or from the oldest live execution's bar when
-                // the page lacks one of them.
+                // a page's copies count from there, or from the chart's oldest bar once the chart
+                // no longer holds that one, or from the oldest live execution's bar when the page
+                // lacks one of them.
                 let anchor = (state.footprint.as_ref())
                     .and_then(|flow| flow.bars().keys().next())
                     .or(state.bars.keys().next())
-                    .copied();
+                    .zip(history.first())
+                    .map(|(anchor, first)| first.time.max(*anchor));
                 let run = Self::chart_run(clock, tick_size, trades, history, anchor)
                     .or_else(|| Self::chart_run(clock, tick_size, trades, history, None));
                 let parts = run.map_or_else(

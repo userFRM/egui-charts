@@ -1602,13 +1602,16 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
 /// Hand counts on 2t at price 100: live buys of 1, 2, 4, 8 and 16 one a second from 0 s, so the
 /// chart's bars are 1 and 2 (delta 3) at 0 s, 4 and 8 (12) at 2 s and 16 at 4 s. A trade page
 /// answered in the drain that streams them without an id stands in for the buy of 1, or for the
-/// buys of 1 to 8, which leaves no live execution in the first two bars. The replay cutoff at
-/// 3 s is exclusive and falls in the 2 s bar, before which only the buy of 4 came.
+/// buys of 1 to 8, which leaves no live execution in the first two bars, or for the buys of 1 to
+/// 4 on a chart limited to two bars, which keeps the 2 s and 4 s bars while the study's source
+/// keeps the 0 s one. The replay cutoff at 3 s is exclusive and falls in the 2 s bar, before
+/// which only the buy of 4 came.
 #[cfg(feature = "studies")]
 #[test]
 fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
     use crate::model::OrderSide::Buy;
     use crate::studies::OrderFlowStudy;
+    use std::num::NonZeroUsize;
     let start = bars(1)[0].time;
     let tape: Vec<_> = [1.0, 2.0, 4.0, 8.0, 16.0]
         .iter()
@@ -1618,10 +1621,18 @@ fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
             Tick::new(at, 100.0, *size, Some(Buy))
         })
         .collect();
-    for paged in [1, 4] {
+    // The executions the page holds, the bar limit (none for 0), and the deltas before and during
+    // the replay.
+    let rows: [(usize, usize, &[f64], &[f64]); 3] = [
+        (1, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
+        (4, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
+        (3, 2, &[12.0, 16.0], &[4.0]),
+    ];
+    for (paged, limit, live, replayed) in rows {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe("2t".parse().unwrap());
+        chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(limit));
         chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
         let mut frames = Frames::new();
         frames.run(&mut chart);
@@ -1640,12 +1651,12 @@ fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
             let study = chart.indicators().next().unwrap().1;
             study.values().line(0).to_vec()
         };
-        assert_eq!(deltas(&mut chart), [3.0, 12.0, 16.0], "{paged} paged");
+        assert_eq!(deltas(&mut chart), live, "{paged} paged");
         chart.set_feed_paused(true);
         chart.set_replay_time(Some(start + TimeDelta::seconds(3)));
-        assert_eq!(deltas(&mut chart), [3.0, 4.0], "{paged} paged, replay");
+        assert_eq!(deltas(&mut chart), replayed, "{paged} paged, replay");
         chart.set_replay_time(None);
-        assert_eq!(deltas(&mut chart), [3.0, 12.0, 16.0], "{paged} paged, left");
+        assert_eq!(deltas(&mut chart), live, "{paged} paged, left");
     }
 }
 
