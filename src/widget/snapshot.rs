@@ -543,21 +543,26 @@ impl Chart {
         let saved_columns: Vec<_> = snapshot
             .studies
             .iter()
-            .map(|saved| {
+            .zip(self.indicators())
+            .map(|(saved, (_, study))| {
                 // An unknown id from another chart must not claim a future local study's column.
                 let column = if saved.id < next_series {
                     saved.id
                 } else {
                     self.restored_studies[&saved.id]
                 };
-                self.study_column_ids
-                    .get(&saved.id)
-                    .copied()
-                    .unwrap_or(column)
+                (
+                    self.study_column_ids
+                        .get(&saved.id)
+                        .copied()
+                        .unwrap_or(column),
+                    study.name(),
+                )
             })
             .collect();
-        // Saved ids of another chart can meet entries of this chart's earlier studies. A column
-        // two studies would share is ambiguous, so each of them takes its own new id instead.
+        // Saved ids of another chart can meet entries of this chart's earlier studies. The table
+        // keys a column by its id and title, so a column two studies of one title would share is
+        // ambiguous, and each of them takes its own new id instead.
         let column_ids: Vec<_> = snapshot
             .studies
             .iter()
@@ -569,7 +574,7 @@ impl Chart {
                     .filter(|other| *other == column)
                     .count()
                     > 1;
-                (id, if shared { id } else { *column })
+                (id, if shared { id } else { column.0 })
             })
             .collect();
         self.study_column_ids.extend(column_ids);

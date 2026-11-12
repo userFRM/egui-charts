@@ -944,7 +944,9 @@ mod tests {
     }
 
     /// After a chart restores its own layout and then the layout of another chart, turning off
-    /// the column of one study hides that study only, also when the studies share a title.
+    /// the column of one study hides that study only, also when the studies share a title. A
+    /// study restored under the same id as a study of another title keeps its choice when its
+    /// layout is restored again.
     #[test]
     fn restored_studies_of_one_title_keep_separate_column_choices() {
         let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
@@ -955,31 +957,39 @@ mod tests {
         other.add_indicator(Box::new(crate::studies::SMA::new(5)));
         other.add_indicator(Box::new(crate::studies::SMA::new(20)));
         let layout = other.snapshot().unwrap();
+        // The layout of a third chart, with an EMA under the saved id of the SMA(5).
+        let mut third = Chart::new(BarData::from_bars(bars.clone()));
+        third.add_indicator(Box::new(crate::studies::EMA::new(9)));
+        third.add_indicator(Box::new(crate::studies::SMA::new(20)));
+        let mixed = third.snapshot().unwrap();
         let mut chart = Chart::new(BarData::from_bars(bars));
         chart.add_indicator(Box::new(crate::studies::SMA::new(10)));
         chart.restore(&chart.snapshot().unwrap()).unwrap();
-        chart.restore(&layout).unwrap();
         let ctx = Context::default();
         let mut dialog = DataTableDialog::new();
         dialog.open();
-        shown_rows(&ctx, &mut dialog, &chart);
-        let headers = dialog.cached.as_ref().unwrap().1.headers.clone();
-        let at = headers.iter().position(|h| h == "SMA: SMA(5)").unwrap();
-        let column = dialog.column_ids[at].clone();
-        dialog
-            .hidden
-            .get_mut(&chart.data_table_identity())
-            .unwrap()
-            .insert(column);
-        shown_rows(&ctx, &mut dialog, &chart);
-        let hidden = &dialog.hidden[&chart.data_table_identity()];
-        let shown: Vec<_> = headers
-            .iter()
-            .zip(&dialog.column_ids)
-            .skip(6)
-            .filter(|(_, column)| !hidden.contains(*column))
-            .map(|(header, _)| header.as_str())
-            .collect();
-        assert_eq!(shown, ["SMA: SMA(20)"]);
+        // The study columns shown after turning off the column of `off`, if any, as its box in
+        // the Columns menu does.
+        let mut shown = |chart: &Chart, off: Option<&str>| {
+            shown_rows(&ctx, &mut dialog, chart);
+            let headers = &dialog.cached.as_ref().unwrap().1.headers;
+            let hidden = dialog.hidden.get_mut(&chart.data_table_identity()).unwrap();
+            if let Some(at) = headers.iter().position(|h| Some(h.as_str()) == off) {
+                hidden.insert(dialog.column_ids[at].clone());
+            }
+            headers
+                .iter()
+                .zip(&dialog.column_ids)
+                .skip(6)
+                .filter(|(_, column)| !hidden.contains(*column))
+                .map(|(header, _)| header.clone())
+                .collect::<Vec<_>>()
+        };
+        chart.restore(&layout).unwrap();
+        assert_eq!(shown(&chart, Some("SMA: SMA(5)")), ["SMA: SMA(20)"]);
+        chart.restore(&mixed).unwrap();
+        assert_eq!(shown(&chart, Some("EMA: EMA(9)")), ["SMA: SMA(20)"]);
+        chart.restore(&mixed).unwrap();
+        assert_eq!(shown(&chart, None), ["SMA: SMA(20)"]);
     }
 }
