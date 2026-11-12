@@ -806,6 +806,13 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
+            let palette = crate::config::ChartConfig::default().with_theme(theme);
+            // The default styles of the chart types hold the dark preset's candle colours.
+            crate::widget::palette::follow_candle_colors(
+                &mut self.settings.chart_type_params.get_or_insert_default().styles,
+                &[crate::config::ChartConfig::default()],
+                &palette,
+            );
             self.settings.candle_colors =
                 crate::widget::settings::CandleColorConfig::from_theme(theme);
             self.settings.scales_appearance.text_color = theme.chart.axis_text;
@@ -813,9 +820,7 @@ impl SettingsDialog {
             self.settings.grid_lines.vertical_color = theme.chart.grid_line;
             // What a new chart holds: the colour follows the theme until one is chosen.
             self.settings.crosshair.color = Color32::PLACEHOLDER;
-            self.settings.watermark.color = crate::config::ChartConfig::default()
-                .with_theme(theme)
-                .watermark_color;
+            self.settings.watermark.color = palette.watermark_color;
             if matches!(
                 self.settings.chart_type,
                 crate::model::ChartType::Heikin
@@ -980,6 +985,36 @@ mod tests {
                         "candle down",
                         actual.candle_colors.body_down,
                         expected.candle_colors.body_down,
+                    ),
+                    (
+                        "candle border up",
+                        actual.candle_colors.border_up,
+                        expected.candle_colors.border_up,
+                    ),
+                    (
+                        "candle border down",
+                        actual.candle_colors.border_down,
+                        expected.candle_colors.border_down,
+                    ),
+                    (
+                        "candle wick up",
+                        actual.candle_colors.wick_up,
+                        expected.candle_colors.wick_up,
+                    ),
+                    (
+                        "candle wick down",
+                        actual.candle_colors.wick_down,
+                        expected.candle_colors.wick_down,
+                    ),
+                    (
+                        "HLC area high line",
+                        chart.chart_type_params().styles.hlc_area.high_line.color,
+                        theme.chart.candle_up,
+                    ),
+                    (
+                        "HLC area low line",
+                        chart.chart_type_params().styles.hlc_area.low_line.color,
+                        theme.chart.candle_down,
                     ),
                     (
                         "watermark",
