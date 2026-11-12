@@ -456,7 +456,7 @@ impl SettingsDialog {
                         error,
                     );
                 } else if self.hidden.contains(&Control::Templates) {
-                    self.draw_reset_button(ui);
+                    self.draw_reset_button(ui, theme);
                 } else {
                     let button = self.draw_template_button(ui, theme);
                     if button.clicked() {
@@ -594,7 +594,7 @@ impl SettingsDialog {
         ui.separator();
         action = self.draw_template_list(ui, theme, action);
         ui.separator();
-        self.draw_reset_button(ui);
+        self.draw_reset_button(ui, theme);
         action
     }
 
@@ -787,7 +787,7 @@ impl SettingsDialog {
         action
     }
 
-    fn draw_reset_button(&mut self, ui: &mut Ui) {
+    fn draw_reset_button(&mut self, ui: &mut Ui, theme: &Theme) {
         if ui
             .button(
                 RichText::new(l10n::text(ui.ctx(), "Reset to defaults"))
@@ -801,13 +801,12 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
-            let theme = ui.active_theme();
             self.settings.scales_appearance.text_color = theme.chart.axis_text;
             self.settings.grid_lines.horizontal_color = theme.chart.grid_line;
             self.settings.grid_lines.vertical_color = theme.chart.grid_line;
             self.settings.crosshair.color = theme.chart.crosshair_line;
             self.settings.watermark.color = crate::config::ChartConfig::default()
-                .with_theme(&theme)
+                .with_theme(theme)
                 .watermark_color;
             if matches!(
                 self.settings.chart_type,
@@ -841,10 +840,22 @@ mod tests {
 
     #[test]
     fn reset_colours_match_a_new_chart_under_each_theme() {
-        for (preset, theme) in [
-            ("light", Theme::light()),
-            ("dark", Theme::dark()),
-            ("high contrast", Theme::high_contrast()),
+        // The dialog is shown with `theme` while the application theme is `app`.
+        for (preset, theme, app) in [
+            ("light", Theme::light(), Theme::light()),
+            ("dark", Theme::dark(), Theme::dark()),
+            (
+                "high contrast",
+                Theme::high_contrast(),
+                Theme::high_contrast(),
+            ),
+            ("light dialog in a dark app", Theme::light(), Theme::dark()),
+            ("dark dialog in a light app", Theme::dark(), Theme::light()),
+            (
+                "high contrast dialog in a light app",
+                Theme::high_contrast(),
+                Theme::light(),
+            ),
         ] {
             for (templates_visible, size) in [
                 (true, Vec2::new(1440.0, 900.0)),
@@ -853,10 +864,10 @@ mod tests {
                 (false, Vec2::new(320.0, 450.0)),
             ] {
                 let ctx = Context::default();
-                crate::theme::apply_to_egui(&ctx, &theme);
+                crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
-                let crosshair = chart.chart_options().crosshair.resolved(&ctx);
+                let crosshair = theme.chart.crosshair_line;
                 let mut settings = expected.clone();
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -937,12 +948,12 @@ mod tests {
                     (
                         "horizontal crosshair",
                         chart.chart_options().crosshair.horz_line_color,
-                        crosshair.horz_line_color,
+                        crosshair,
                     ),
                     (
                         "vertical crosshair",
                         chart.chart_options().crosshair.vert_line_color,
-                        crosshair.vert_line_color,
+                        crosshair,
                     ),
                     (
                         "watermark",
