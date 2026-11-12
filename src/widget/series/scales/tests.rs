@@ -4801,6 +4801,43 @@ fn study_without_values_in_view_adds_nothing_to_its_scale() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A volume study in a pane of its own fits 0 to its highest visible volume, 1000 here, as
+/// the pane scale has no fractional margins. Scrolled past the last bar, no volume is in view
+/// and the pane has nothing else to fit, so it keeps that range.
+#[cfg(feature = "studies")]
+#[test]
+fn volume_pane_keeps_its_range_without_volume_in_view() {
+    let start = "2024-01-01T00:00:00Z"
+        .parse::<chrono::DateTime<Utc>>()
+        .unwrap();
+    let bars = (0..100)
+        .map(|day| Bar::new(start + TimeDelta::days(day), 10.0, 20.0, 10.0, 20.0, 1000.0))
+        .collect();
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars));
+    chart.config.show_volume = false;
+    let study = chart.add_indicator(Box::new(
+        crate::studies::Volume::default().with_overlay(false),
+    ));
+    let pane = chart.series_pane(study).unwrap();
+    assert_ne!(pane, PaneId::MAIN);
+    for step in 0..3 {
+        frame(&ctx, &mut chart, step as f64 * 0.1, vec![]);
+    }
+    let fitted = chart.pane_price_scale(pane, SeriesScale::Right).range();
+    chart.scroll_to_position(300.0, false);
+    for step in 1..=3 {
+        frame(&ctx, &mut chart, step as f64, vec![]);
+    }
+    let (first, end) = chart.state().visible_range();
+    assert_eq!(first, end, "no bar in view");
+    let kept = chart.pane_price_scale(pane, SeriesScale::Right).range();
+    assert_eq!(
+        [(fitted.min, fitted.max), (kept.min, kept.max)],
+        [(0.0, 1000.0); 2]
+    );
+}
+
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the
 /// main scale has nothing to fit, so it keeps the range it had, as `PriceScale::autoscale`
 /// documents for bounds that are not finite. With the default 10% margins and 40 points at each
