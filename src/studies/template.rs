@@ -248,6 +248,12 @@ impl StudyTemplate {
                     .inputs
                     .push(("midpoint".to_owned(), InputValue::Toggle(true)));
             }
+            // Higher-interval candles drew their saved interval before one could follow the chart's.
+            "Higher Interval Candles" if !has("auto_interval") => {
+                template
+                    .inputs
+                    .push(("auto_interval".to_owned(), InputValue::Toggle(false)));
+            }
             // An RSI drew no average and no middle line before it opened with both; the hidden
             // level keeps the styles saved for the other two and stays within their band. Its
             // average then chose from None, SMA and EMA, under ids of its own, before it took the
@@ -675,6 +681,17 @@ mod tests {
                 "Time Price Opportunity",
                 vec![("midpoint", Toggle(false))],
                 vec![("midpoint", Toggle(false))],
+            ),
+            // Saved before the interval could follow the chart's, as new studies do.
+            (
+                "Higher Interval Candles",
+                vec![("interval", Choice(15))],
+                vec![("interval", Choice(15)), ("auto_interval", Toggle(false))],
+            ),
+            (
+                "Higher Interval Candles",
+                vec![("auto_interval", Toggle(true))],
+                vec![("auto_interval", Toggle(true))],
             ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (
