@@ -319,6 +319,11 @@ impl SettingsDialog {
                 basic.background_gradient_bottom,
                 theme.chart.bg_axis,
             ),
+            (
+                &mut self.color_picker_states.crosshair,
+                self.settings.crosshair.color,
+                theme.chart.crosshair_line,
+            ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
                 themed
@@ -456,7 +461,7 @@ impl SettingsDialog {
                         error,
                     );
                 } else if self.hidden.contains(&Control::Templates) {
-                    self.draw_reset_button(ui);
+                    self.draw_reset_button(ui, theme);
                 } else {
                     let button = self.draw_template_button(ui, theme);
                     if button.clicked() {
@@ -594,7 +599,7 @@ impl SettingsDialog {
         ui.separator();
         action = self.draw_template_list(ui, theme, action);
         ui.separator();
-        self.draw_reset_button(ui);
+        self.draw_reset_button(ui, theme);
         action
     }
 
@@ -787,7 +792,7 @@ impl SettingsDialog {
         action
     }
 
-    fn draw_reset_button(&mut self, ui: &mut Ui) {
+    fn draw_reset_button(&mut self, ui: &mut Ui, theme: &Theme) {
         if ui
             .button(
                 RichText::new(l10n::text(ui.ctx(), "Reset to defaults"))
@@ -801,14 +806,22 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
-            let theme = ui.active_theme();
+            let palette = crate::config::ChartConfig::default().with_theme(theme);
+            // The default styles of the chart types hold the dark preset's candle colours.
+            let params = self.settings.chart_type_params.get_or_insert_default();
+            crate::widget::palette::follow_candle_colors(
+                &mut params.styles,
+                &[crate::config::ChartConfig::default()],
+                &palette,
+            );
+            self.settings.candle_colors =
+                crate::widget::settings::CandleColorConfig::from_theme(theme);
             self.settings.scales_appearance.text_color = theme.chart.axis_text;
             self.settings.grid_lines.horizontal_color = theme.chart.grid_line;
             self.settings.grid_lines.vertical_color = theme.chart.grid_line;
-            self.settings.crosshair.color = theme.chart.crosshair_line;
-            self.settings.watermark.color = crate::config::ChartConfig::default()
-                .with_theme(&theme)
-                .watermark_color;
+            // What a new chart holds: the colour follows the theme until one is chosen.
+            self.settings.crosshair.color = Color32::PLACEHOLDER;
+            self.settings.watermark.color = palette.watermark_color;
             if matches!(
                 self.settings.chart_type,
                 crate::model::ChartType::Heikin
@@ -841,10 +854,22 @@ mod tests {
 
     #[test]
     fn reset_colours_match_a_new_chart_under_each_theme() {
-        for (preset, theme) in [
-            ("light", Theme::light()),
-            ("dark", Theme::dark()),
-            ("high contrast", Theme::high_contrast()),
+        // The dialog is shown with `theme` while the application theme is `app`.
+        for (preset, theme, app) in [
+            ("light", Theme::light(), Theme::light()),
+            ("dark", Theme::dark(), Theme::dark()),
+            (
+                "high contrast",
+                Theme::high_contrast(),
+                Theme::high_contrast(),
+            ),
+            ("light dialog in a dark app", Theme::light(), Theme::dark()),
+            ("dark dialog in a light app", Theme::dark(), Theme::light()),
+            (
+                "high contrast dialog in a light app",
+                Theme::high_contrast(),
+                Theme::light(),
+            ),
         ] {
             for (templates_visible, size) in [
                 (true, Vec2::new(1440.0, 900.0)),
@@ -853,10 +878,9 @@ mod tests {
                 (false, Vec2::new(320.0, 450.0)),
             ] {
                 let ctx = Context::default();
-                crate::theme::apply_to_egui(&ctx, &theme);
+                crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
-                let crosshair = chart.chart_options().crosshair.resolved(&ctx);
                 let mut settings = expected.clone();
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -916,6 +940,10 @@ mod tests {
                     panic!("Ok must apply the reset settings");
                 };
                 assert!(!dialog.is_open);
+                // Saved settings and templates keep a theme-following crosshair as it is.
+                let saved: ChartSettingsState =
+                    serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+                assert_eq!(saved.crosshair.color, Color32::PLACEHOLDER);
                 settings.apply_to_chart(&mut chart).unwrap();
                 let actual = ChartSettingsState::from_chart(&chart);
                 let mismatches: Vec<_> = [
@@ -937,12 +965,57 @@ mod tests {
                     (
                         "horizontal crosshair",
                         chart.chart_options().crosshair.horz_line_color,
-                        crosshair.horz_line_color,
+                        Color32::PLACEHOLDER,
                     ),
                     (
                         "vertical crosshair",
                         chart.chart_options().crosshair.vert_line_color,
-                        crosshair.vert_line_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "crosshair swatch",
+                        dialog.color_picker_states.crosshair.sel_color,
+                        theme.chart.crosshair_line,
+                    ),
+                    (
+                        "candle up",
+                        actual.candle_colors.body_up,
+                        expected.candle_colors.body_up,
+                    ),
+                    (
+                        "candle down",
+                        actual.candle_colors.body_down,
+                        expected.candle_colors.body_down,
+                    ),
+                    (
+                        "candle border up",
+                        actual.candle_colors.border_up,
+                        expected.candle_colors.border_up,
+                    ),
+                    (
+                        "candle border down",
+                        actual.candle_colors.border_down,
+                        expected.candle_colors.border_down,
+                    ),
+                    (
+                        "candle wick up",
+                        actual.candle_colors.wick_up,
+                        expected.candle_colors.wick_up,
+                    ),
+                    (
+                        "candle wick down",
+                        actual.candle_colors.wick_down,
+                        expected.candle_colors.wick_down,
+                    ),
+                    (
+                        "HLC area high line",
+                        chart.chart_type_params().styles.hlc_area.high_line.color,
+                        theme.chart.candle_up,
+                    ),
+                    (
+                        "HLC area low line",
+                        chart.chart_type_params().styles.hlc_area.low_line.color,
+                        theme.chart.candle_down,
                     ),
                     (
                         "watermark",
