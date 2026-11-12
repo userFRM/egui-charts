@@ -2783,8 +2783,8 @@ mod tests {
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1400.0, 700.0));
         // Price p sits at y = 600 - p. Levels step 100 px from the last anchor:
         // legacy retracement has 7 levels in the pane; the stored table has 11
-        // and 4.236 (y 823.6) and 3.618 (y 761.8) fall below it; the extension
-        // from C=150 puts all 11 between y 26.4 and 450.
+        // levels, and 3.618 (y 761.8) and 4.236 (y 823.6) fall below the pane,
+        // leaving 9; the extension from C=150 puts all 11 between y 26.4 and 450.
         for (tool, stored, points, labels) in [
             (
                 Tool::FibonacciRetracement,
