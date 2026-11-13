@@ -801,13 +801,23 @@ impl Chart {
         );
 
         // Handle double-click to reset axes
-        self.handle_double_click(&time_response, price_axis_rect, time_axis_rect);
+        self.handle_double_click(&time_response, time_axis_rect);
+
+        // The price axis: a drawing or a touch readout that owns the drag keeps it, as on the plot.
+        let mut axis_response = time_response.clone();
+        if is_drawing_interaction || touch_readout_interaction {
+            axis_response.flags.remove(egui::response::Flags::DRAGGED);
+        }
+        let price_axis_gestures = self.price_axis_gestures(ui, &axis_response, price_axis_rect);
+        if price_axis_gestures.reset {
+            self.state.price_scale_mut().reset();
+        }
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
-        let pending_price_zoom = self.handle_mouse_wheel(
+        self.handle_mouse_wheel(
             ui,
             &time_response,
             chart_width,
@@ -1347,7 +1357,12 @@ impl Chart {
                 self.fit_main_marker_scale(&painter, price_rect, main_margins);
             }
         }
-        self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
+        // After the fit, so that a scale on automatic is zoomed from this frame's range.
+        price_axis_gestures.zoom(
+            self.state.price_scale_mut(),
+            price_rect.top(),
+            price_rect.bottom(),
+        );
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
             self.state.price_scale_mut().set_bar_ratio_locked(

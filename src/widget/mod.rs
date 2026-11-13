@@ -259,8 +259,6 @@ pub struct Chart {
     pub(crate) scroll_start_offset: Option<f64>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
-    /// Price-axis drag this frame: anchor y where the drag began, and the y movement (UI state only)
-    pub(crate) price_axis_drag: Option<(f32, f32)>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.

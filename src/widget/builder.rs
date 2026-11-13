@@ -98,7 +98,6 @@ impl Chart {
             desired_visible_bars: None,
             last_visible_bars: 0,
             apply_visible_bars_once: false,
-            price_axis_drag: None,
             pending_start_idx: None,
             pending_scroll_time: None,
             scroll_animation: None,
