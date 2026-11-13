@@ -13,6 +13,84 @@ use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
 use crate::widget::ShortcutMap;
 
+/// One key combination of a listed entry.
+enum Keys {
+    /// A combination of the chart's shortcut map or of a fixed key.
+    Shortcut(KeyboardShortcut),
+    /// Keys typed as text, which no shortcut describes.
+    Typed(&'static str),
+}
+
+/// One listed entry: a label and its key combinations.
+struct Entry {
+    label: String,
+    keys: Vec<Keys>,
+}
+
+/// The keys the chart and the library's controls read outside the shortcut map, by category.
+///
+/// They are not rebindable, so the list is fixed; it follows the build (the drawing keys need
+/// the `drawings` feature). The state an entry needs is in its label or its category.
+fn fixed_categories() -> Vec<(&'static str, Vec<Entry>)> {
+    let entry = |label: &str, keys: Vec<Keys>| Entry {
+        label: label.to_owned(),
+        keys,
+    };
+    let key = |key, modifiers| Keys::Shortcut(KeyboardShortcut::new(modifiers, key));
+    let none = Modifiers::NONE;
+    let mut categories = vec![(
+        "Typing",
+        vec![
+            entry("Change the symbol", vec![Keys::Typed("Type a ticker")]),
+            entry(
+                "Change the interval",
+                vec![Keys::Typed("0-9"), Keys::Typed(",")],
+            ),
+        ],
+    )];
+    #[cfg(feature = "drawings")]
+    categories.push((
+        "Drawings",
+        vec![
+            entry(
+                "Move the selected drawing one bar earlier",
+                vec![key(Key::ArrowLeft, none)],
+            ),
+            entry(
+                "Move the selected drawing one bar later",
+                vec![key(Key::ArrowRight, none)],
+            ),
+            entry(
+                "Move the selected drawing up one tick",
+                vec![key(Key::ArrowUp, none)],
+            ),
+            entry(
+                "Move the selected drawing down one tick",
+                vec![key(Key::ArrowDown, none)],
+            ),
+        ],
+    ));
+    categories.push((
+        "Replay",
+        vec![
+            entry("Play or pause the replay", vec![key(Key::Space, none)]),
+            entry("Go to the replay start", vec![key(Key::Home, none)]),
+            entry("Go to the replay end", vec![key(Key::End, none)]),
+            entry("Replay one bar back", vec![key(Key::ArrowLeft, none)]),
+            entry("Replay one bar forward", vec![key(Key::ArrowRight, none)]),
+            entry(
+                "Step the replay back",
+                vec![key(Key::ArrowLeft, Modifiers::SHIFT)],
+            ),
+            entry(
+                "Step the replay forward",
+                vec![key(Key::ArrowRight, Modifiers::SHIFT)],
+            ),
+        ],
+    ));
+    categories
+}
+
 /// Action returned by the keyboard shortcuts dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -121,12 +199,26 @@ impl KeyboardShortcutsDialog {
         );
         ui.add_space(theme.spacing.lg);
 
-        let categories = shortcuts.by_category();
+        let categories: Vec<(&str, Vec<Entry>)> = shortcuts
+            .by_category()
+            .into_iter()
+            .map(|(name, actions)| {
+                let entries = actions
+                    .into_iter()
+                    .map(|action| Entry {
+                        label: action.label().to_owned(),
+                        keys: shortcuts.keys_for(action).map(Keys::Shortcut).collect(),
+                    })
+                    .collect();
+                (name, entries)
+            })
+            .chain(fixed_categories())
+            .collect();
         let font = FontId::proportional(theme.text.body);
         let labels: Vec<_> = categories
             .iter()
-            .flat_map(|(_, actions)| actions)
-            .map(|action| l10n::text(ui.ctx(), action.label()))
+            .flat_map(|(_, entries)| entries)
+            .map(|entry| l10n::text(ui.ctx(), &entry.label))
             .collect();
         let widest = ui.fonts_mut(|f| {
             labels
@@ -147,7 +239,7 @@ impl KeyboardShortcutsDialog {
                 .auto_shrink([false, true])
                 .max_height(ui.available_height())
                 .show(ui, |ui| {
-                    for (idx, (name, actions)) in categories.iter().enumerate() {
+                    for (idx, (name, entries)) in categories.iter().enumerate() {
                         if idx > 0 {
                             ui.add_space(theme.spacing.xxl - ui.spacing().item_spacing.y);
                         }
@@ -165,13 +257,12 @@ impl KeyboardShortcutsDialog {
                             .min_col_width(label_w)
                             .max_col_width(label_w)
                             .show(ui, |ui| {
-                                for action in actions {
+                                for entry in entries {
                                     ui.label(
-                                        RichText::new(l10n::text(ui.ctx(), action.label()))
+                                        RichText::new(l10n::text(ui.ctx(), &entry.label))
                                             .size(theme.text.body),
                                     );
-                                    let keys: Vec<_> = shortcuts.keys_for(*action).collect();
-                                    ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &keys));
+                                    ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &entry.keys));
                                     ui.end_row();
                                 }
                             });
@@ -206,8 +297,8 @@ pub(crate) fn shortcut_key_labels(
 }
 
 /// One badge per key combination, joined by a muted "or".
-fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
-    for (idx, shortcut) in shortcuts.iter().enumerate() {
+fn key_badges(ui: &mut Ui, theme: &Theme, keys: &[Keys]) {
+    for (idx, keys) in keys.iter().enumerate() {
         if idx > 0 {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "or"))
@@ -216,9 +307,16 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
             );
         }
         // Screen readers get the name.
-        let font = FontId::proportional(theme.text.small);
-        let text = shortcut_key_labels(ui.ctx(), &font, shortcut).join("+");
-        let name = ui.ctx().format_shortcut(shortcut);
+        let (text, name) = match keys {
+            Keys::Shortcut(shortcut) => {
+                let font = FontId::proportional(theme.text.small);
+                (
+                    shortcut_key_labels(ui.ctx(), &font, shortcut).join("+"),
+                    ui.ctx().format_shortcut(shortcut),
+                )
+            }
+            Keys::Typed(text) => ((*text).to_owned(), (*text).to_owned()),
+        };
         Frame::new()
             .fill(theme.ui.panel_bg_secondary)
             .stroke(Stroke::new(1.0, theme.ui.border_control))
@@ -245,6 +343,7 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable as _;
 
     #[test]
     fn a_popup_opened_this_frame_gets_escape_before_the_dialog() {
@@ -270,5 +369,31 @@ mod tests {
             },
         )
         .drop_without_applying_deltas();
+    }
+
+    /// Guards #2811: the list also shows the keys read outside the shortcut map, so it is a
+    /// complete guide to the keyboard.
+    #[test]
+    fn the_list_shows_typed_entry_drawing_arrows_and_replay_keys() {
+        let mut dialog = KeyboardShortcutsDialog::new();
+        dialog.open();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 2400.0))
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &Theme::dark());
+            })
+            .build_ui_state(|ui, d: &mut KeyboardShortcutsDialog| _ = d.show(ui.ctx()), dialog);
+        h.run_steps(3);
+        for label in [
+            "Change the symbol",
+            "Change the interval",
+            "Move the selected drawing one bar earlier",
+            "Move the selected drawing down one tick",
+            "Play or pause the replay",
+            "Step the replay forward",
+        ] {
+            assert!(h.query_by_label(label).is_some(), "missing {label}");
+        }
     }
 }
