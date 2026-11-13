@@ -34,9 +34,10 @@ pub struct PriceMarkGeneratorConfig {
     /// Max number of marks, capped at 1,000 during generation.
     pub max_marks: usize,
 
-    /// Target density (marks per 100 pixels): linear marks take the nice step nearest
-    /// `100 / target_density` pixels, logarithmic marks stay at least that far apart, and no
-    /// marks are closer than `min_spacing`
+    /// Target density (marks per 100 pixels): marks take the nice step nearest
+    /// `100 / target_density` pixels. On a logarithmic axis the 1, 2 and 5 times powers of ten
+    /// stay at least that far apart, and each wider gap between them takes round prices at the
+    /// step that spacing gives at the gap's lower end. No marks are closer than `min_spacing`.
     pub target_density: f32,
 
     /// Minimum price tick size. Normal and logarithmic marks lie on its multiples;
@@ -81,7 +82,8 @@ impl PriceMarkGenerator {
 
     /// Generates marks for the visible range of `map`, positioned through it.
     ///
-    /// Logarithmic scales get marks at 1, 2 and 5 times powers of ten; the other
+    /// Logarithmic scales get marks at 1, 2 and 5 times powers of ten and round prices in the
+    /// gaps between them that are wider than the target density allows; the other
     /// modes get evenly stepped marks in scale units, labelled as prices, signed
     /// percentages or index values. Labels group their thousands with the map's separator.
     pub fn generate_marks(&self, map: &PriceMap) -> Vec<PriceMark> {
@@ -99,7 +101,7 @@ impl PriceMarkGenerator {
         let (min_price, max_price) = (transform.to_price(range.min), transform.to_price(range.max));
         let marks = self.generate_log_marks(min_price, max_price, height_pixels, map);
         if marks.len() >= 3 {
-            return marks;
+            return self.fill_log_gaps(marks, min_price, max_price, height_pixels, map);
         }
         // A narrow log range holds few multiples of powers of ten: step it in prices instead.
         self.generate_linear_marks(min_price, max_price, height_pixels, map, true)
@@ -182,27 +184,7 @@ impl PriceMarkGenerator {
                     map.scale_to_y(curr_price)
                 };
 
-                // Determine precision based on price value and step
-                let precision = map.price_precision().unwrap_or_else(|| {
-                    let mut decimals = self.calculate_precision(nice_step);
-                    if min_step.is_some() {
-                        while decimals < 8 {
-                            let scaled = nice_step * 10f64.powi(decimals as i32);
-                            if (scaled - scaled.round()).abs() <= scaled * f64::EPSILON * 4.0 {
-                                break;
-                            }
-                            decimals += 1;
-                        }
-                    }
-                    if matches!(
-                        map.transform().mode,
-                        PriceScaleMode::Normal | PriceScaleMode::Logarithmic
-                    ) {
-                        decimals.max(2)
-                    } else {
-                        decimals
-                    }
-                });
+                let precision = self.step_precision(map, nice_step, min_step.is_some());
                 let label = if map.price_precision().is_none() && precision > 8 {
                     let mut label = self.format_price(curr_price, precision, true);
                     if map.transform().mode == PriceScaleMode::Percentage {
@@ -331,6 +313,90 @@ impl PriceMarkGenerator {
                 .min_spacing
                 .max(100.0 / self.config.target_density),
         )
+    }
+
+    /// Adds round prices to the logarithmic `marks` wherever the gap between two of them, or
+    /// between one and an end of the axis, is wider than the target spacing. Each gap takes the
+    /// regular axis's step for that spacing at its lower end, where a price step is tallest, on
+    /// the minimum price grid. The added marks weigh less than the 1, 2 and 5 marks, which all stay.
+    fn fill_log_gaps(
+        &self,
+        marks: Vec<PriceMark>,
+        min_price: f64,
+        max_price: f64,
+        height_pixels: f32,
+        map: &PriceMap,
+    ) -> Vec<PriceMark> {
+        let spacing = f64::from(
+            self.config
+                .min_spacing
+                .max(100.0 / self.config.target_density),
+        );
+        // Pixels per unit of the natural logarithm of the price.
+        let pixels = f64::from(height_pixels) / (max_price.ln() - min_price.ln());
+        let min_step = map.volume_step().or(self.min_step());
+        let mut ends: Vec<f64> = marks.iter().map(|mark| mark.price).collect();
+        ends.insert(0, min_price);
+        ends.push(max_price);
+        let mut filled = marks;
+        let mut budget = self.config.max_marks * 10;
+        for pair in ends.windows(2) {
+            let (low, high) = (pair[0], pair[1]);
+            // A price step of `low * spacing / pixels` is `spacing` pixels tall at `low`.
+            let mut step = self.calculate_nice_step(low * spacing / pixels);
+            if let Some(decimals) = map.price_precision() {
+                step = Self::round_up_to_multiple(step, 10f64.powi(-(decimals as i32)));
+            }
+            if let Some(min_step) = min_step {
+                step = Self::round_up_to_multiple(step, min_step);
+            }
+            if !step.is_finite() || step <= 0.0 {
+                continue;
+            }
+            let precision = self.step_precision(map, step, min_step.is_some());
+            let mut index = (low / step).floor() + 1.0;
+            while index * step < high && budget > 0 {
+                let price = index * step;
+                index += 1.0;
+                budget -= 1;
+                filled.push(PriceMark {
+                    price,
+                    label: super::price_formatter::group_thousands(
+                        self.format_price(price, precision, map.price_precision().is_none()),
+                        map.thousands_sep(),
+                    ),
+                    y_coord: map.price_to_y(price),
+                    // Below the 60 of a 2 times power of ten.
+                    weight: self.calculate_weight(price, step) / 2,
+                });
+            }
+        }
+        self.apply_spacing_constraints(filled, self.config.min_spacing)
+    }
+
+    /// Decimals of marks `step` apart: the map's precision, or enough for the step, and for a
+    /// step on the minimum price grid (`on_grid`) enough to write it exactly. Prices keep two.
+    fn step_precision(&self, map: &PriceMap, step: f64, on_grid: bool) -> usize {
+        map.price_precision().unwrap_or_else(|| {
+            let mut decimals = self.calculate_precision(step);
+            if on_grid {
+                while decimals < 8 {
+                    let scaled = step * 10f64.powi(decimals as i32);
+                    if (scaled - scaled.round()).abs() <= scaled * f64::EPSILON * 4.0 {
+                        break;
+                    }
+                    decimals += 1;
+                }
+            }
+            if matches!(
+                map.transform().mode,
+                PriceScaleMode::Normal | PriceScaleMode::Logarithmic
+            ) {
+                decimals.max(2)
+            } else {
+                decimals
+            }
+        })
     }
 
     fn round_up_to_multiple(step: f64, unit: f64) -> f64 {
@@ -775,12 +841,44 @@ mod tests {
     #[test]
     fn test_log_marks_generation() {
         let generator = PriceMarkGenerator::new();
-        let (lo, hi) = (10f64.ln(), 1000f64.ln());
-        let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
-
-        // Axis endpoints are unlabelled; the interior 1/2/5 decade marks remain.
-        let prices: Vec<_> = marks.iter().map(|mark| mark.price).collect();
-        assert_eq!(prices, [20.0, 50.0, 100.0, 200.0, 500.0]);
+        // On 849 pixels at 2.5 marks per 100 pixels, neighbouring labels lie between the
+        // 20-pixel minimum and twice the 40 pixels the density asks for, below a decade, over
+        // about one and over several, and the 1, 2 and 5 times powers of ten in view stay.
+        for (low, high, decade) in [
+            (90.0, 520.0, &[100.0, 200.0, 500.0][..]),
+            (0.9, 5.5, &[1.0, 2.0, 5.0]),
+            (9.0, 110.0, &[10.0, 20.0, 50.0, 100.0]),
+            (10.0, 1_000.0, &[20.0, 50.0, 100.0, 200.0, 500.0]),
+            (1.0, 100_000.0, &[10.0, 100.0, 1_000.0, 10_000.0]),
+        ] {
+            let map = PriceMap::new(
+                crate::scales::PriceTransform {
+                    mode: PriceScaleMode::Logarithmic,
+                    base: 0.0,
+                },
+                crate::scales::PriceRange::new(f64::ln(low), f64::ln(high)),
+                0.0,
+                849.0,
+                false,
+            );
+            let marks = generator.generate_marks(&map);
+            let labels: Vec<&str> = marks.iter().map(|mark| mark.label.as_str()).collect();
+            for price in decade {
+                assert!(
+                    marks.iter().any(|mark| mark.price == *price),
+                    "{low}..{high}: {price} missing from {labels:?}"
+                );
+            }
+            for pair in marks.windows(2) {
+                let gap = pair[0].y_coord - pair[1].y_coord;
+                assert!(
+                    (20.0..=80.0).contains(&gap),
+                    "{low}..{high}: {} and {} lie {gap} apart in {labels:?}",
+                    pair[0].label,
+                    pair[1].label
+                );
+            }
+        }
 
         // 18,200..22,800 holds one multiple of a power of ten (20,000), so the marks
         // fall back to 400-unit price steps.
