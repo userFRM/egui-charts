@@ -8,6 +8,7 @@
 use super::PriceBuilder;
 use super::Tick;
 use super::bar::Bar;
+use super::rounding_tolerance;
 use chrono::{DateTime, Utc};
 
 /// Configuration for range-bar construction.
@@ -137,8 +138,10 @@ pub fn to_range_bars_from_ticks(ticks: &[Tick], config: &RangeBarConfig) -> Vec<
     builder.elements()
 }
 
-/// Convert OHLC bars to range bars (approximation). A bar's volume that would make its range bar's
-/// volume overflow is left out.
+/// Convert OHLC bars to range bars (approximation). Each bar is taken to have traded from its
+/// open to the extreme nearer the open, on to the other extreme and then to its close; a range
+/// bar closes at its high when a rise completes its range and at its low when a fall does. A
+/// bar's volume that would make its range bar's volume overflow is left out.
 ///
 /// Returns no bars when the range size is not a positive finite number.
 ///
@@ -175,6 +178,9 @@ pub(crate) struct RangeBarBuilder {
     range_size: f64,
     /// The range bar in progress; `None` until the first bar.
     curr_bar: Option<RangeBar>,
+    /// The first OHLC bar while it is the only one: `curr_bar` shows it whole, and its path is
+    /// walked when the next bar arrives, so a first bar far wider than the range costs nothing.
+    seed: Option<Bar>,
     bars: Vec<RangeBar>,
 }
 
@@ -183,6 +189,7 @@ impl RangeBarBuilder {
         Self {
             range_size,
             curr_bar: None,
+            seed: None,
             bars: Vec::new(),
         }
     }
@@ -245,6 +252,62 @@ impl RangeBarBuilder {
         }
         self.curr_bar = Some(curr_bar);
     }
+
+    /// Takes the bar in progress along the price path of `bar`, closing a range bar wherever the
+    /// path completes one.
+    fn walk(&mut self, curr_bar: &mut RangeBar, bar: &Bar) {
+        let range_size = self.range_size;
+        for price in price_path(bar) {
+            // The bar in progress is narrower than the range, so the price that completes it is
+            // its new high or its new low.
+            let up = price > curr_bar.high;
+            curr_bar.high = curr_bar.high.max(price);
+            curr_bar.low = curr_bar.low.min(price);
+
+            while curr_bar.range() >= range_size {
+                if up {
+                    // A size below the precision of the price moves nothing
+                    if curr_bar.low + range_size == curr_bar.low {
+                        break;
+                    }
+                    curr_bar.close = curr_bar.low + range_size;
+                    curr_bar.high = curr_bar.close;
+                } else {
+                    if curr_bar.high - range_size == curr_bar.high {
+                        break;
+                    }
+                    curr_bar.close = curr_bar.high - range_size;
+                    curr_bar.low = curr_bar.close;
+                }
+
+                curr_bar.end_time = bar.time;
+                self.bars.push(curr_bar.clone());
+
+                // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
+                if self.bars.len() == 2 * MAX_BARS {
+                    self.bars.drain(..MAX_BARS);
+                }
+
+                // Start new bar
+                *curr_bar = RangeBar {
+                    open: curr_bar.close,
+                    high: price.max(curr_bar.close),
+                    low: price.min(curr_bar.close),
+                    close: price,
+                    volume: 0.0,
+                    start_time: bar.time,
+                    end_time: bar.time,
+                    range_size,
+                    tick_cnt: 0,
+                };
+            }
+        }
+
+        curr_bar.close = bar.close;
+        curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
+        curr_bar.end_time = bar.time;
+        curr_bar.tick_cnt += 1;
+    }
 }
 
 impl PriceBuilder for RangeBarBuilder {
@@ -264,62 +327,21 @@ impl PriceBuilder for RangeBarBuilder {
                 range_size,
                 tick_cnt: 1,
             });
+            self.seed = Some(bar.clone());
             return;
         };
-
-        // Simulate processing this bar's range
-        let prices = [bar.open, bar.high, bar.low, bar.close];
-
-        for &price in &prices {
-            curr_bar.high = curr_bar.high.max(price);
-            curr_bar.low = curr_bar.low.min(price);
-
-            while curr_bar.range() >= range_size {
-                // Complete the bar
-                if curr_bar.high - curr_bar.open >= range_size {
-                    // A size below the precision of the price moves nothing
-                    if curr_bar.low + range_size == curr_bar.low {
-                        break;
-                    }
-                    // Closed up
-                    curr_bar.close = curr_bar.low + range_size;
-                    curr_bar.high = curr_bar.close;
-                } else {
-                    if curr_bar.high - range_size == curr_bar.high {
-                        break;
-                    }
-                    // Closed down
-                    curr_bar.close = curr_bar.high - range_size;
-                    curr_bar.low = curr_bar.close;
-                }
-
-                curr_bar.end_time = bar.time;
-                self.bars.push(curr_bar.clone());
-
-                // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
-                if self.bars.len() == 2 * MAX_BARS {
-                    self.bars.drain(..MAX_BARS);
-                }
-
-                // Start new bar
-                curr_bar = RangeBar {
-                    open: curr_bar.close,
-                    high: price.max(curr_bar.close),
-                    low: price.min(curr_bar.close),
-                    close: price,
-                    volume: 0.0,
-                    start_time: bar.time,
-                    end_time: bar.time,
-                    range_size,
-                    tick_cnt: 0,
-                };
-            }
+        if let Some(seed) = self.seed.take() {
+            curr_bar = RangeBar {
+                high: seed.open,
+                low: seed.open,
+                close: seed.open,
+                volume: 0.0,
+                tick_cnt: 0,
+                ..curr_bar
+            };
+            self.walk(&mut curr_bar, &seed);
         }
-
-        curr_bar.close = bar.close;
-        curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
-        curr_bar.end_time = bar.time;
-        curr_bar.tick_cnt += 1;
+        self.walk(&mut curr_bar, bar);
         self.curr_bar = Some(curr_bar);
     }
 
@@ -339,9 +361,27 @@ fn add_volume(volume: f64, added: f64) -> f64 {
     if sum.is_finite() { sum } else { volume }
 }
 
+/// The order a bar's prices are taken to have traded in: open, the extreme nearer the open, the
+/// other extreme, close. The rule is that of `price_path` in `strategies/backtest.rs`: the high
+/// first when both extremes are as near within a few ulps.
+fn price_path(bar: &Bar) -> [f64; 4] {
+    let tie = rounding_tolerance(bar.high.abs().max(bar.low.abs()), 4.0 * f64::EPSILON);
+    if (bar.high - bar.open) - (bar.open - bar.low) <= tie {
+        [bar.open, bar.high, bar.low, bar.close]
+    } else {
+        [bar.open, bar.low, bar.high, bar.close]
+    }
+}
+
+/// The distance a bar's price path covers.
+fn travel(bar: &Bar) -> f64 {
+    let path = price_path(bar);
+    path.windows(2).map(|leg| (leg[1] - leg[0]).abs()).sum()
+}
+
 /// Index of the bar to build from so that the range bars move at most `MAX_WORK` range sizes.
-/// Bar `i` costs its path through open, high, low and close in sizes plus 4; the returned bar
-/// only seeds the state, and its own range is split at the next bar's first price.
+/// Bar `i` costs the move from the close before it and its price path in sizes plus 4; the
+/// returned bar only seeds the state, and its own path is walked when the next bar arrives.
 pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
     let mut total = 0.0;
     let mut priced = bars
@@ -353,14 +393,8 @@ pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
         return 0;
     };
     for (previous_i, prev) in priced {
-        total += (((b.open - prev.close).abs()
-            + (b.high - b.open).abs()
-            + (b.high - b.low)
-            + (b.close - b.low).abs())
-            / size)
-            .max(0.0)
-            + 4.0;
-        if total + (prev.high - prev.low) / size > super::MAX_WORK {
+        total += (((b.open - prev.close).abs() + travel(b)) / size).max(0.0) + 4.0;
+        if total + travel(prev) / size > super::MAX_WORK {
             return i;
         }
         (i, b) = (previous_i, prev);
@@ -478,6 +512,66 @@ mod tests {
                 (110.0, 112.0, 110.0, 112.0, 20.0, next, next),
             ]
         );
+    }
+
+    #[test]
+    fn ohlc_range_bars_follow_the_bar_path() {
+        // (bars as (open, high, low, close), (open, high, low, close) of each range bar); the
+        // range is 2 and the last range bar is the one in progress.
+        type Ohlc = (f64, f64, f64, f64);
+        let cases: [(&[Ohlc], &[Ohlc]); 4] = [
+            // A bar that only rises gives rising range bars, from the first bar on.
+            (
+                &[(100.0, 100.0, 100.0, 100.0), (100.0, 104.0, 100.0, 104.0)],
+                &[
+                    (100.0, 102.0, 100.0, 102.0),
+                    (102.0, 104.0, 102.0, 104.0),
+                    (104.0, 104.0, 104.0, 104.0),
+                ],
+            ),
+            (
+                &[(100.0, 104.0, 100.0, 104.0), (104.0, 104.0, 104.0, 104.0)],
+                &[
+                    (100.0, 102.0, 100.0, 102.0),
+                    (102.0, 104.0, 102.0, 104.0),
+                    (104.0, 104.0, 104.0, 104.0),
+                ],
+            ),
+            // The mirror: a bar that only falls gives falling range bars.
+            (
+                &[(104.0, 104.0, 104.0, 104.0), (104.0, 104.0, 100.0, 100.0)],
+                &[
+                    (104.0, 104.0, 102.0, 102.0),
+                    (102.0, 102.0, 100.0, 100.0),
+                    (100.0, 100.0, 100.0, 100.0),
+                ],
+            ),
+            // 100 down to 99 and up to 101, as the trades 100, 99, 101: the rise completes the
+            // range, so the bar closes at its high.
+            (
+                &[
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 99.0, 99.0),
+                    (99.0, 101.0, 99.0, 101.0),
+                ],
+                &[(100.0, 101.0, 99.0, 101.0), (101.0, 101.0, 101.0, 101.0)],
+            ),
+        ];
+        for (source, expected) in cases {
+            let data: Vec<Bar> = source
+                .iter()
+                .enumerate()
+                .map(|(i, &(open, high, low, close))| {
+                    let time = DateTime::from_timestamp(60 * i as i64, 0).unwrap();
+                    Bar::new(time, open, high, low, close, 1.0)
+                })
+                .collect();
+            let bars: Vec<_> = to_range_bars_from_ohlc(&data, &RangeBarConfig::new(2.0))
+                .iter()
+                .map(|b| (b.open, b.high, b.low, b.close))
+                .collect();
+            assert_eq!(bars, expected, "{source:?}");
+        }
     }
 
     /// Guards the volume scale: an infinite first volume, or two valid volumes near `f64::MAX`,
