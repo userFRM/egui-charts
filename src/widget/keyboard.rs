@@ -468,6 +468,7 @@ impl super::Chart {
             A::PanLeft | A::PanRight | A::PanLeftFast | A::PanRightFast => {
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
                 let amount = if matches!(action, A::PanLeftFast | A::PanRightFast) {
                     self.state
                         .time_scale()
@@ -488,6 +489,7 @@ impl super::Chart {
             A::ZoomIn | A::ZoomOut | A::PageUp | A::PageDown => {
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
                 let step = self.chart_options.keyboard.zoom_step;
                 let delta = match action {
                     A::ZoomIn => step,
