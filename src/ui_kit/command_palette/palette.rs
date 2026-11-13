@@ -142,12 +142,15 @@ impl CommandPalette {
             return None;
         }
 
+        let before = self.selected_index;
         if move_up && self.selected_index > 0 {
             self.selected_index -= 1;
         }
         if move_down && self.selected_index + 1 < self.filtered.len() {
             self.selected_index += 1;
         }
+        // Only a key scrolls to the highlight, so the wheel still scrolls freely.
+        let reveal_selected = self.selected_index != before;
 
         if execute && !self.filtered.is_empty() {
             ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Enter));
@@ -219,9 +222,15 @@ impl CommandPalette {
                         .show(ui, |ui| {
                             for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate() {
                                 let cmd = &self.commands[*cmd_idx];
-                                if command_row(ui, cmd, list_idx == self.selected_index).clicked() {
+                                let selected = list_idx == self.selected_index;
+                                let row = command_row(ui, cmd, selected);
+                                if selected && reveal_selected {
+                                    row.scroll_to_me(None);
+                                }
+                                if row.clicked() {
                                     executed_command = Some(cmd.id.clone());
                                 }
+
                             }
                         });
                 }
@@ -658,5 +667,66 @@ mod tests {
         frame(&ctx, &mut p, Some(Key::ArrowDown));
         p.remove_command("c");
         assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn arrow_keys_keep_the_highlighted_row_in_view() {
+        let (ctx, mut p) = (
+            Context::default(),
+            CommandPalette::new(
+                (0..60)
+                    .map(|i| Command::new(format!("a{i}"), format!("Action {i}")))
+                    .collect(),
+            ),
+        );
+        p.search_query = "action".into();
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, None);
+        let selected = ctx.global_style().visuals.selection.bg_fill;
+        let mut visible_highlights = 0;
+        // Down and Up past the rows that fit, then settle.
+        for key in std::iter::repeat_n(Some(Key::ArrowDown), 35)
+            .chain(std::iter::repeat_n(Some(Key::ArrowUp), 3))
+            .chain([None, None])
+        {
+            let events = key
+                .map(|key| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                })
+                .into_iter()
+                .collect();
+            let mut open = true;
+            let output = ctx.run_ui(
+                RawInput {
+                    events,
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    p.show(ui.ctx(), &mut open);
+                },
+            );
+            visible_highlights = output
+                .shapes
+                .iter()
+                .filter(|clipped| {
+                    matches!(&clipped.shape, egui::Shape::Rect(r)
+                        if r.fill == selected && clipped.clip_rect.contains_rect(r.rect))
+                })
+                .count();
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(p.selected_index, 32);
+        assert_eq!(
+            visible_highlights, 1,
+            "the highlighted row is painted in view"
+        );
     }
 }
