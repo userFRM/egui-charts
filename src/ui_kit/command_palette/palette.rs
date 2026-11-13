@@ -19,6 +19,8 @@ pub struct CommandPalette {
     selected_index: usize,
     /// Cached filtered results (command index, match)
     filtered: Vec<(usize, FuzzyMatch)>,
+    /// The query `filtered` was built for; a different query puts the highlight back on row 0.
+    filtered_query: String,
     focus_search: bool,
     context: Option<Context>,
 }
@@ -31,6 +33,7 @@ impl CommandPalette {
             search_query: String::new(),
             selected_index: 0,
             filtered: Vec::new(),
+            filtered_query: String::new(),
             focus_search: true,
             context: None,
         }
@@ -56,6 +59,7 @@ impl CommandPalette {
         self.search_query.clear();
         self.selected_index = 0;
         self.filtered.clear();
+        self.filtered_query.clear();
         self.focus_search = true;
     }
 
@@ -85,9 +89,10 @@ impl CommandPalette {
             self.filtered.sort_by_key(|m| std::cmp::Reverse(m.1.score));
         }
 
-        // Reset selection if out of bounds
-        if self.selected_index >= self.filtered.len() {
+        // Arrow keys move within the list they were pressed in; a new query starts at the best match.
+        if self.filtered_query != self.search_query || self.selected_index >= self.filtered.len() {
             self.selected_index = 0;
+            self.filtered_query.clone_from(&self.search_query);
         }
     }
 
@@ -667,6 +672,29 @@ mod tests {
         frame(&ctx, &mut p, Some(Key::ArrowDown));
         p.remove_command("c");
         assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn typing_returns_the_highlight_to_the_first_result() {
+        let (ctx, mut p) = (
+            Context::default(),
+            CommandPalette::new(vec![
+                Command::new("sto", "Add Stochastic RSI"),
+                Command::new("con", "Add Connors RSI"),
+                Command::new("rsi", "Add RSI"),
+                Command::new("ao", "Add AO"),
+            ]),
+        );
+        p.search_query = "a".into();
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        p.search_query = "add rsi".into();
+        assert_eq!(
+            frame(&ctx, &mut p, Some(Key::Enter)).as_deref(),
+            Some("rsi")
+        );
     }
 
     #[test]

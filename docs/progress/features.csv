@@ -194,7 +194,7 @@ Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,i
 Chart,Keyboard shortcuts,Maximize chart,incomplete,library,src/config/keyboard.rs;src/widget/layout.rs,
 Chart,Keyboard shortcuts,Next and previous chart,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs;terminal/src/layouts.rs,
 Chart,Keyboard shortcuts,Open indicators,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2798;2800
-Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs,2807;2808;2809
+Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs,2808;2809
 Chart,Keyboard shortcuts,Reset chart,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Save layout,verified,library,src/config/keyboard.rs;terminal/src/layouts.rs,
 Chart,Keyboard shortcuts,Scale toggles,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2798;2799;2810
