@@ -168,6 +168,8 @@ mod tests {
         study.set_visible_range(5..10);
         update(&mut study, &chart, &five, 0);
         assert_eq!(study.values().value(0, 9), Some(109.0));
+        // A pan within the second five-minute bar asks for no recalculation.
+        assert!(!study.set_visible_range(6..10));
         // Panning to the third five-minute bar recalculates the mean.
         assert!(study.set_visible_range(10..15));
         update(&mut study, &chart, &five, 0);
@@ -177,6 +179,9 @@ mod tests {
         five.push(bar(15, 119.0));
         update(&mut study, &chart, &five, 15);
         assert_eq!(study.values().value(0, 9), Some(114.0));
+        // The chart empties a study that waits for a full recompute; the same view asks for none.
+        study.update(&[], 0);
+        assert!(!study.set_visible_range(10..15));
 
         // Another symbol at the chart's interval whose history starts at 00:05 averages its
         // closes from 00:05 to 00:09: 200 to 204.
@@ -197,6 +202,13 @@ mod tests {
         };
         study.update_data(&chart, 0, &[source]);
         assert_eq!(study.values().value(0, 9), Some(202.0));
+
+        // Back on the chart's bars it averages chart bars 5 to 9 again: 105 to 109.
+        study
+            .set_input("calculation_symbol", InputValue::Symbol(String::new()))
+            .unwrap();
+        study.calculate(&chart);
+        assert_eq!(study.values().value(0, 9), Some(107.0));
     }
 
     /// The visible mean uses exactly the supplied bars and changes with the viewport. A corrected

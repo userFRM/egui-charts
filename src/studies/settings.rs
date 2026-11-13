@@ -731,14 +731,19 @@ impl Indicator for ConfiguredStudy {
                 InputValue::Toggle(value) => self.wait_for_close = value,
                 _ => unreachable!(),
             }
-            // The study missed the chart's interval and clock while it ran on other bars.
+            // The study missed the chart's interval, clock and bars in view while it ran on
+            // other bars.
             if id != "wait_for_close"
                 && self.calculation_symbol.is_empty()
                 && self.calculation_timeframe.is_none()
-                && let Some(timeframe) = self.timeframe
             {
-                self.study.set_timeframe(timeframe);
-                self.study.set_bar_clock(&self.clock);
+                if let Some(timeframe) = self.timeframe {
+                    self.study.set_timeframe(timeframe);
+                    self.study.set_bar_clock(&self.clock);
+                }
+                if let Some(visible) = &self.visible {
+                    self.study.set_visible_range(visible.clone());
+                }
             }
             self.aligned = None;
             self.kept = None;
@@ -977,8 +982,10 @@ impl Indicator for ConfiguredStudy {
             return self.study.set_visible_range(range);
         }
         // Mapped by the spans of the last calculation; `update_data` maps it again on its bars.
+        // Without spans there is nothing to recalculate until it does.
         self.study
             .set_visible_range(source_bars(&self.spans, &range))
+            && !self.spans.is_empty()
     }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.clock = clock.clone();
