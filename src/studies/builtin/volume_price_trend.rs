@@ -566,15 +566,23 @@ mod tests {
             Some((7200.0 / 7.0, 194200.0 / 189.0)),
             Some((96000.0 / 77.0, 7320200.0 / 6237.0)),
         ];
+        // Bar 6 corrected to a close of 90: the NVI keeps 945 and its signal, the PVI index is
+        // 7200 / 7 * 90 / 99 = 72000 / 77 and its signal 194200 / 189 + (72000 / 77 - 194200 / 189)
+        // * 2 / 3 = 860600 / 891.
         let cases = [
             (
                 Box::new(NegativeVolumeIndex::new()) as Box<dyn Indicator>,
                 nvi,
+                [945.0, 232420.0 / 243.0],
             ),
-            (Box::new(PositiveVolumeIndex::new()), pvi),
+            (
+                Box::new(PositiveVolumeIndex::new()),
+                pvi,
+                [72000.0 / 77.0, 860600.0 / 891.0],
+            ),
         ];
         let rows = |study: &dyn Indicator| study.values().to_rows();
-        for (mut study, expected) in cases {
+        for (mut study, expected, corrected_last) in cases {
             study
                 .set_input("signal_length", InputValue::Length(2))
                 .unwrap();
@@ -591,18 +599,17 @@ mod tests {
                 }
             }
 
-            // Correcting bar 3 and later resumes from the kept state like a fresh calculation.
+            // Correcting the last bar resumes from the state kept before it.
             let mut corrected = closes;
-            corrected[3] = Some(104.0);
-            corrected[5] = Some(120.0);
-            let corrected = bars(&corrected);
-            let mut fresh = study.clone_box();
-            fresh.calculate(&corrected);
-            study.update(&corrected, 3);
-            assert_eq!(
-                format!("{:?}", rows(&*study)),
-                format!("{:?}", rows(&*fresh)),
-                "{} correction",
+            corrected[6] = Some(90.0);
+            study.update(&bars(&corrected), 6);
+            let IndicatorValue::Multiple(lines) = &rows(&*study)[6] else {
+                panic!("{} correction: got {:?}", study.name(), rows(&*study)[6]);
+            };
+            assert!(
+                (lines[0] - corrected_last[0]).abs() < 1e-9
+                    && (lines[1] - corrected_last[1]).abs() < 1e-9,
+                "{} correction: got {lines:?}, expected {corrected_last:?}",
                 study.name()
             );
         }
