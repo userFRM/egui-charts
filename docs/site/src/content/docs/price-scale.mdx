@@ -58,7 +58,9 @@ For example, a move from 100 to 110 reads +10% or 110 indexed. Prices 100, 200
 and 400 have equal vertical spacing on a logarithmic scale because each step
 doubles the price. **Logarithmic rendering requires strictly positive prices**;
 zero and negative prices have no finite log coordinate. Choose Normal for data
-that can cross zero. A missing, non-finite or zero relative reference falls back
+that can cross zero. A logarithmic scale fits the positive values in view, and
+while none is in view it shows ordinary prices, as Normal does, until positive
+values come back into view. A missing, non-finite or zero relative reference falls back
 to ordinary prices. Each series keeps its own first-visible-close reference,
 even when several share a relative scale.
 

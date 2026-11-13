@@ -1850,6 +1850,98 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
             }
         }
     }
+    // Without a positive price in view the scale shows the regular axis, a spread from -20 to
+    // -10 or bars at zero, until positive prices come into view.
+    for secondary in [false, true] {
+        for (low, high) in [(-20.0, -10.0), (0.0, 0.0)] {
+            let mut input = bars(&[high, low]);
+            for bar in &mut input {
+                bar.low = low;
+                bar.high = high;
+            }
+            let fit = |mode| {
+                let mut chart = Chart::new(BarData::from_bars(input.clone()));
+                let id = if secondary {
+                    let id = chart.add_series(SeriesOptions {
+                        chart_type: ChartType::Candles,
+                        scale: SeriesScale::Left,
+                        ..Default::default()
+                    });
+                    chart.set_data(id, input.clone());
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+                frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+                (chart, id)
+            };
+            let axis = |chart: &Chart, id| {
+                let map = chart.series_price_map(id).unwrap();
+                let labels: Vec<_> = map.marks().into_iter().map(|mark| mark.label).collect();
+                (map.range(), labels)
+            };
+            let (mut chart, id) = fit(PriceScaleMode::Logarithmic);
+            let regular = axis(&fit(PriceScaleMode::Normal).0, id);
+            assert_eq!(
+                axis(&chart, id),
+                regular,
+                "secondary={secondary}, {low}..{high}"
+            );
+            chart.set_data(id, bars(&[10.0, 15.0]));
+            frame(&egui::Context::default(), &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.transform().mode, PriceScaleMode::Logarithmic);
+            let span = (15.0_f64.ln() - 10.0_f64.ln()) / 0.8;
+            assert!((map.range().max - (15.0_f64.ln() + span * 0.1)).abs() < 1e-10);
+        }
+    }
+}
+
+/// A scale other than the main one keeps a tenth of its data's range free above and below
+/// the data, a twelfth of the pane, in logarithmic units as in prices: a series from 50 to
+/// 150 in a pane of its own and a study pane from 10 to 990.1.
+#[test]
+fn secondary_scales_keep_their_margin_in_logarithmic_mode() {
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    use crate::widget::PaneScale;
+    for study in [false, true] {
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 100.0])));
+            let (low, high) = if study { (10.0, 990.1) } else { (50.0, 150.0) };
+            let id = if study {
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("Study", move |_| {
+                        vec![IndicatorValue::Single(low), IndicatorValue::Single(high)]
+                    })
+                    .with_overlay(false),
+                ))
+            } else {
+                let id = chart.add_series(SeriesOptions::default());
+                chart.set_data(id, bars(&[low, high]));
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            };
+            let pane = chart.series_pane(id).unwrap();
+            let axis = PaneScale::Named(SeriesScale::Right);
+            chart.pane_scale_mut(pane, axis).unwrap().options_mut().mode = mode;
+            frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+            let scale = chart.pane_scale(pane, axis).unwrap();
+            let (transform, range) = (scale.transform(), scale.range());
+            assert_eq!(transform.mode, mode);
+            let span = range.max - range.min;
+            for free in [
+                range.max - transform.to_scale(high),
+                transform.to_scale(low) - range.min,
+            ] {
+                assert!(
+                    (free / span - 1.0 / 12.0).abs() < 1e-9,
+                    "study={study}, {mode:?}: {range:?}"
+                );
+            }
+        }
+    }
 }
 
 /// The first transformed open after the gap is (100 + 100) / 2 = 100,
