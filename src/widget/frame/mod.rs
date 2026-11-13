@@ -922,9 +922,6 @@ impl Chart {
                 self.config.text_color,
             );
             self.paint_empty_pane_primitives(ui, &painter);
-            // This frame paints no marks, and those of the last frame went with its bars.
-            self.mark_hits.get_mut().clear();
-            self.clickable_marks.clear();
             self.record_host_click(ui, &response);
             return response;
         }
@@ -1345,7 +1342,6 @@ impl Chart {
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
-        self.begin_mark_hits();
         self.pump_marks(ui.ctx());
 
         // Get visible data
@@ -1985,16 +1981,19 @@ impl Chart {
                 if let Some(color) = study.background() {
                     painter.rect_filled(rect, 0.0, color);
                 }
-                super::volume::paint(
-                    &painter,
-                    rect,
-                    study.as_ref(),
-                    &(start_idx..end_idx),
-                    &coords,
-                    min,
-                    max,
-                    Some(&self.merge_groups),
-                );
+                // A custom series draws in place of the columns.
+                if !self.has_renderer(*id) {
+                    super::volume::paint(
+                        &painter,
+                        rect,
+                        study.as_ref(),
+                        &(start_idx..end_idx),
+                        &coords,
+                        min,
+                        max,
+                        Some(&self.merge_groups),
+                    );
+                }
             }
             // TPO studies draw the chart type's profiles beside the bars.
             if let Some(config) = study
@@ -2303,7 +2302,6 @@ impl Chart {
         // where the panes are rendered, outside this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
-            && self.mark_at(click_pos).is_none()
         {
             match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
