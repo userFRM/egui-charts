@@ -689,8 +689,9 @@ impl Chart {
             && let Some(prev_width) = self.prev_width
             && (chart_width - prev_width).abs() > 1.0
         {
-            let spacing = self.state.time_scale().bar_spacing() * chart_width / prev_width;
-            self.state.time_scale_mut().set_bar_spacing(spacing);
+            self.state
+                .time_scale_mut()
+                .keep_slots_on_resize(prev_width, chart_width);
         }
         self.prev_width = Some(chart_width);
 
@@ -1195,8 +1196,9 @@ mod tests {
                 assert!((chart.state.time_scale().bar_spacing() - spacing).abs() < 1e-5);
                 assert_eq!(chart.state.time_scale().right_offset(), -20.0);
                 show(&mut chart, 1564.0);
+                // A locked resize keeps the `width - 1` pixels of slots the plot spans.
                 let expected = if lock {
-                    chart.last_rendered_price_rect.width() / 100.0
+                    spacing * (chart.last_rendered_price_rect.width() - 1.0) / (width - 1.0)
                 } else {
                     spacing
                 };

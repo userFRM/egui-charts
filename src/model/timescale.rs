@@ -334,6 +334,15 @@ impl TimeScale {
         self.apply_constraints();
     }
 
+    /// Scales the bar spacing so a plot resized from `old_width` to `new_width` shows the same
+    /// slots. The plot spans `width - 1` pixels of slots, as in [`Self::coord_to_idx`].
+    #[cfg(feature = "widget")]
+    pub(crate) fn keep_slots_on_resize(&mut self, old_width: f32, new_width: f32) {
+        let ratio = (f64::from(new_width) - 1.0) / (f64::from(old_width) - 1.0);
+        self.bar_spacing = self.clamp_spacing(self.bar_spacing * ratio);
+        self.apply_constraints();
+    }
+
     /// Update min bar spacing, floored at 0.000001 pixels. Non-finite values are ignored.
     pub fn set_min_bar_spacing(&mut self, min: f32) {
         if !min.is_finite() {

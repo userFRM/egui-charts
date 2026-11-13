@@ -1096,7 +1096,12 @@ fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
     .drop_without_applying_deltas();
     let new_width = chart.get_rendered_price_rect().width();
     assert!(new_width < width, "later labels must widen the axis");
-    assert!((new_width / chart.state.time_scale().bar_spacing() - width / spacing).abs() < 1e-4);
+    // The plot spans `width - 1` pixels of slots, so both edges stay on the same times.
+    let slots = |width: f32, spacing: f32| f64::from(width - 1.0) / f64::from(spacing);
+    assert!(
+        (slots(new_width, chart.state.time_scale().bar_spacing()) - slots(width, spacing)).abs()
+            < 1e-4
+    );
 }
 
 /// Extra columns share at most half of a narrow widget on either edge. Four 70-point columns
