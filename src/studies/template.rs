@@ -868,7 +868,8 @@ mod tests {
         assert_eq!(filled.fills().len(), 2);
 
         // An auto anchored VWAP as a chart saved it before the study had bands, its line edited
-        // to orange at two pixels and its length to 30: it draws and tags that line alone.
+        // to orange at two pixels and its length to 30: it draws that line alone, and the hidden
+        // bands are tagged as on a study added now.
         let saved = r#"{"name":"VWAP Auto Anchored","inputs":[["anchor",{"Choice":0}],["length",{"Length":30}],["source",{"Choice":5}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VwapAutoAnchored.html","plots":[{"color":[230,81,0,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,9,14,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
         let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
         let restored = saved.create().unwrap();
@@ -879,7 +880,7 @@ mod tests {
             .filter(|&line| restored.plot_style(line).visible)
             .collect();
         let tagged: Vec<_> = lines.filter(|&line| restored.plot_tagged(line)).collect();
-        assert_eq!((drawn, tagged), (vec![0], vec![0]));
+        assert_eq!((drawn, tagged), (vec![0], vec![0, 1, 2]));
         assert!(restored.fills().is_empty());
         let length = restored.inputs().into_iter().find(|i| i.id == "length");
         assert_eq!(length.unwrap().value, InputValue::Length(30));

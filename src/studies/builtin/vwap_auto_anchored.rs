@@ -390,9 +390,11 @@ impl Indicator for VwapAutoAnchored {
         }
     }
 
-    /// Only the VWAP has a tag on the price scale, which six band tags would crowd.
+    /// The lines drawn by default, the VWAP and the first band pair, have tags on the price
+    /// scale, as a VWAP with one band has. The second and third pairs start without, since seven
+    /// tags would crowd the scale.
     fn plot_tagged(&self, line: usize) -> bool {
-        line == 0
+        line < 3
     }
 
     /// One band between the first upper and lower line.
