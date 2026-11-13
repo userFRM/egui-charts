@@ -437,6 +437,7 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                     ("Invert scale", 1),
                     ("Lock price to bar ratio", 1),
                     ("Hide unused axes", 1),
+                    ("Indicator values", 1),
                     ("Scale price chart only", 0),
                     ("Last price label", 0),
                 ] {
