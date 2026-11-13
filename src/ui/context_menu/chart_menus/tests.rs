@@ -345,13 +345,14 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
         ]
     };
     for theme in [Theme::light(), Theme::dark()] {
-        for (time, left, ratio, short, pane) in [
-            (false, false, false, false, false),
-            (false, true, false, false, false),
-            (true, false, false, false, false),
-            (false, false, true, false, false),
-            (false, false, false, true, false),
-            (false, false, false, false, true),
+        for (time, left, ratio, short, pane, hours) in [
+            (false, false, false, false, false, false),
+            (false, true, false, false, false, false),
+            (true, false, false, false, false, false),
+            (false, false, true, false, false, false),
+            (false, false, false, true, false, false),
+            (false, false, false, false, true, false),
+            (true, false, false, false, false, true),
         ] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -448,6 +449,8 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
             }
             let label = if short {
                 "High and low"
+            } else if hours {
+                "Extended hours"
             } else if time {
                 "Local time"
             } else if ratio {
@@ -492,6 +495,12 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                 assert!(
                     (chart.state().price_scale().range().length() - before / 2.0).abs() < 0.00001
                 );
+            } else if hours {
+                assert!(chart.extended_hours(), "redo applies the choice again");
+                assert!(chart.undo());
+                assert!(!chart.extended_hours(), "undo restores the earlier session");
+                chart.set_extended_hours(true);
+                assert!(!chart.can_undo(), "a host call is no user action");
             } else if time {
                 assert_eq!(
                     chart.chart_options().time_scale.timezone,
