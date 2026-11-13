@@ -374,6 +374,12 @@ mod tests {
                 .iter()
                 .any(|(text, _)| text == "close - close[2]")
         );
+        // The restarted application has storage: its first-visit choice is already answered.
+        let answered = super::super::owndata::store::Saved {
+            asked: true,
+            ..Default::default()
+        };
+        answered.save(&app.storage);
         let mut saved = Memory::default();
         app.save(&mut saved);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
