@@ -1322,5 +1322,20 @@ mod tests {
             built.apply_timescale_config(width - 166.0);
             assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
         }
+        // The time scale reads the count back, also at less than a point per bar.
+        for (width, count) in [
+            (600.0, 1000),
+            (801.0, 800),
+            (1300.0, 2000),
+            (714.0, 1000),
+            (740.0, 50),
+        ] {
+            let mut chart = Chart::new(data.clone());
+            chart.state.time_scale_mut().set_min_bar_spacing(0.01);
+            chart.set_visible_bars(count);
+            chart.apply_timescale_config(width);
+            let candles = chart.state.time_scale().visible_candles();
+            assert_eq!(candles, count, "width {width}");
+        }
     }
 }

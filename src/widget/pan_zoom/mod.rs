@@ -604,13 +604,13 @@ impl Chart {
         let center = time_scale.position(center_idx);
         let old = time_scale.bar_spacing();
         time_scale.set_bar_spacing(
-            (old * (chart_width - 1.0) / (max_x - min_x)).min(chart_width.max(old)),
+            (old * (chart_width - 1.0) / (max_x - min_x)).min((chart_width - 1.0).max(old)),
         );
-        // The inverse of `coord_to_idx` at the middle of the width.
+        // The inverse of `coord_to_idx` at the middle of the plot's pixel span.
         let spacing = time_scale.bar_spacing();
         let base_idx = time_scale.base_idx() as f64;
         time_scale.set_right_offset(
-            center - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing) - 0.5,
+            center - base_idx + (f64::from(chart_width) - 1.0) / 2.0 / f64::from(spacing) - 0.5,
         );
 
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
@@ -668,7 +668,7 @@ impl Chart {
     /// lock-on-resize behavior, and pending start-index jumps.
     pub(crate) fn apply_timescale_config(&mut self, chart_width: f32) {
         // Hidden or collapsed layouts cannot establish a zoom or a resize baseline.
-        if !chart_width.is_finite() || chart_width <= 1.0 {
+        if !chart_width.is_finite() || chart_width < 2.0 {
             return;
         }
         self.state.time_scale_mut().set_width(chart_width);
@@ -1200,7 +1200,7 @@ mod tests {
                 show(&mut chart, 1564.0);
                 // A locked resize keeps the `width - 1` pixels of slots the plot spans.
                 let expected = if lock {
-                    spacing * (chart.last_rendered_price_rect.width() - 1.0) / (width - 1.0)
+                    (chart.last_rendered_price_rect.width() - 1.0) / 100.0
                 } else {
                     spacing
                 };
@@ -2183,7 +2183,8 @@ mod tests {
             let x = |idx| ts.idx_to_coord_precise(idx, rect.left(), rect.width());
             let (x_left, x_right) = (x(left), x(right));
             assert!(
-                (x_left - rect.left()).abs() < 0.5 && (x_right - rect.right()).abs() < 0.5,
+                (x_left - rect.left()).abs() < 0.01
+                    && (x_right - (rect.right() - 1.0)).abs() < 0.01,
                 "{mode:?}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
             );
             let after = chart.get_chart_mapping().price;
@@ -2204,7 +2205,7 @@ mod tests {
         let (x, y) = (rect.center().x, rect.top() + 100.0);
         let (start, end) = (Pos2::new(x, y), Pos2::new(x + 25.0, y + 100.0));
         assert!(one_bar.execute_box_zoom(start, end, rect, rect.width()));
-        assert_eq!(one_bar.state.time_scale().bar_spacing(), rect.width());
+        assert_eq!(one_bar.state.time_scale().bar_spacing(), rect.width() - 1.0);
 
         // Invalid corners or width must leave both scales and zoom history unchanged.
         let view = one_bar.get_time_scale_state();

@@ -695,7 +695,8 @@ mod tests {
             plot,
             plot.width(),
         ));
-        assert!((chart.index_to_x(center).unwrap() - plot.center().x).abs() < 1e-3);
+        // The box centre lands mid-way between the first pixel and the last, at width - 1.
+        assert!((chart.index_to_x(center).unwrap() - (plot.center().x - 0.5)).abs() < 1e-3);
         chart.state.time_scale_mut().set_bar_spacing(200.0);
         chart.state.time_scale_mut().set_right_offset(-500_000.005);
         let x = chart.index_to_x(499_999.0).unwrap();
