@@ -214,7 +214,7 @@ Chart,Multi-chart and sync,Multi-chart layout container,incomplete,library,src/w
 Chart,Multi-chart and sync,Symbol and interval sync groups,incomplete,library,src/widget/layout.rs;src/widget/history.rs;src/widget/frame/mod.rs;src/widget/snapshot.rs;examples/demo/replay.rs;examples/demo/storage.rs;examples/demo/layouts.rs,1941;2102;2437;2688;2826;2827;2828;2829
 Chart,Multi-chart and sync,Sync crosshair,incomplete,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame/mod.rs,2474;2512;2814;2852;2853
 Chart,Multi-chart and sync,Sync date range,incomplete,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,2854
-Chart,Multi-chart and sync,Sync drawings,incomplete,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/stored_drawings.rs;src/widget/history.rs;src/drawings/services/history.rs,2855;2856;2857;2858
+Chart,Multi-chart and sync,Sync drawings,unverified,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/stored_drawings.rs;src/widget/history.rs;src/drawings/services/history.rs,
 Chart,Multi-chart and sync,Sync interval,verified,host,src/widget/layout.rs;src/widget/feed/mod.rs;src/widget/sync.rs;src/model/timescale.rs,
 Chart,Multi-chart and sync,Sync symbol,incomplete,host,src/widget/layout.rs;src/widget/feed/mod.rs,2826;2829;2864
 Chart,Multi-chart and sync,Sync time,incomplete,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,

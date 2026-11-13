@@ -1871,23 +1871,27 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         #[cfg(feature = "drawings")]
-        if (self.sync.sync_drawings
-            || charts.iter().take(total).any(|chart| {
-                chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .any(|d| d.folder_sync_mode().is_some())
-            }))
-            && self.drawings.sync(
+        {
+            let tracking = self.sync.sync_drawings
+                || charts.iter().take(total).any(|chart| {
+                    chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .any(|d| d.folder_sync_mode().is_some())
+                });
+            if !tracking {
+                // Turning the switch on is the first time drawings are synchronized.
+                self.drawings.reset();
+            } else if self.drawings.sync(
                 charts,
                 total,
                 &self.groups,
                 pointer_down,
                 self.sync.sync_drawings,
-            )
-        {
-            ui.ctx().request_repaint();
+            ) {
+                ui.ctx().request_repaint();
+            }
         }
         #[cfg(feature = "drawings")]
         if Chart::share_stored_drawings(charts) {
