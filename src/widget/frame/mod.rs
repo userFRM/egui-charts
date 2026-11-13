@@ -359,11 +359,14 @@ impl Chart {
                     .time_scale
                     .lock_visible_time_range_on_resize)
                 && previous_axis_width > 0.0
-                && old_width > 0.0
-                && new_width > 0.0
+                && old_width >= 2.0
+                && new_width >= 2.0
             {
-                let scale = self.state.time_scale_mut();
-                scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
+                self.state
+                    .time_scale_mut()
+                    .keep_slots_on_resize(old_width, new_width);
+                // The rerun pass must not resize the scale again from the old width.
+                self.prev_width = Some(new_width);
             }
             ui.ctx().request_discard("Chart measured its axis labels");
         }
