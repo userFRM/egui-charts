@@ -240,6 +240,13 @@ impl FeedLink {
             let live = (self.trades.live().next().map(|trade| trade.ts)).or(self.pushed_from);
             let mut paged_bars =
                 history.partition_point(|bar| live.is_none_or(|live| bar.time < live));
+            // Until a trade page fills the time after the retained executions, those from their
+            // last instant on may be missing, and their end proves nothing: only a bar whose next
+            // one opens before that instant holds all of its own.
+            if let Some(until) = self.trades.retained_until() {
+                let whole = history.partition_point(|bar| bar.time < until);
+                paged_bars = paged_bars.min(whole.saturating_sub(1));
+            }
             // The page's executions at the first live one's time were left out, so the bar before
             // may lack some of its own: it proves nothing.
             if live.is_some_and(|live| self.trades.left_out_at() == Some(live)) {

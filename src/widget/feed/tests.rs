@@ -2117,59 +2117,141 @@ fn an_interval_change_page_fills_the_retained_tape() {
 /// Counting the buy of 2 whole instead matches every bar's prices and volume and gives the bars
 /// at 00:00:01, 00:00:03 and 00:00:05 part of their neighbours' fills, as (level, bid, ask):
 /// (101, 0, 2), (102, 5, 0), (103, 3, 0); (103, 3, 0), (104, 0, 5), (105, 0, 2); and
-/// (105, 0, 4), (106, 6, 0).
+/// (105, 0, 4), (106, 6, 0). That grouping ends with the retained executions at 00:00:06, which
+/// lack the sell of 4, so their end proves nothing either while the trade page is outstanding or
+/// after a feed without trade history fails it.
+///
+/// Nor does it on a tick interval, where a bar in the history page opens between the two streams.
+/// Executions of 1 at 100: two buys at 00:00:00, a sell and then a buy at 00:00:01, and a buy each
+/// second through 00:00:06. The 3 tick bars open at 00:00:00, at 00:00:01 with the buy, and at
+/// 00:00:04. The 2 tick stream delivers the two executions at 00:00:01 and the buy at 00:00:02,
+/// and the 3 tick stream opens at 00:00:09. Grouped from the sell, the three retained executions
+/// match the prices and volume of the bar at 00:00:01 and end there, as (100, 1, 2). The bar's own
+/// are (100, 0, 3), its buy at 00:00:03 is not held, and it draws a candle.
 #[test]
 fn an_interval_change_page_draws_only_a_bars_own_executions() {
-    use crate::model::OrderSide::{Buy, Sell};
+    use crate::model::OrderSide::{self, Buy, Sell};
     let start = bars(1)[0].time;
-    let fills = [
-        (100.0, 9.0, Buy),
-        (101.0, 2.0, Buy),
-        (102.0, 5.0, Sell),
-        (103.0, 6.0, Sell),
-        (104.0, 5.0, Buy),
-        (105.0, 6.0, Buy),
-        (106.0, 6.0, Sell),
-        (106.0, 4.0, Sell),
-    ];
-    let rows: [(&str, bool, bool, &[f64]); 3] = [
+    type Fill = (i64, f64, f64, OrderSide);
+    // The intervals before and after the change, the executions by second, those the first
+    // stream delivers, the first of the second stream, and the bars of the history page.
+    type Tape<'a> = (
+        [&'a str; 2],
+        &'a [Fill],
+        std::ops::Range<usize>,
+        Fill,
+        usize,
+    );
+    let volume: Tape = (
+        ["20v", "10v"],
+        &[
+            (0, 100.0, 9.0, Buy),
+            (1, 101.0, 2.0, Buy),
+            (2, 102.0, 5.0, Sell),
+            (3, 103.0, 6.0, Sell),
+            (4, 104.0, 5.0, Buy),
+            (5, 105.0, 6.0, Buy),
+            (6, 106.0, 6.0, Sell),
+            (7, 106.0, 4.0, Sell),
+        ],
+        1..7,
+        (7, 106.0, 1.0, Sell),
+        4,
+    );
+    let ticks: Tape = (
+        ["2t", "3t"],
+        &[
+            (0, 100.0, 1.0, Buy),
+            (0, 100.0, 1.0, Buy),
+            (1, 100.0, 1.0, Sell),
+            (1, 100.0, 1.0, Buy),
+            (2, 100.0, 1.0, Buy),
+            (3, 100.0, 1.0, Buy),
+            (4, 100.0, 1.0, Buy),
+            (5, 100.0, 1.0, Buy),
+            (6, 100.0, 1.0, Buy),
+        ],
+        2..5,
+        (9, 100.0, 1.0, Buy),
+        3,
+    );
+    enum Answer {
+        Bars,
+        Executions,
+        NoExecutions,
+    }
+    use Answer::{Bars, Executions, NoExecutions};
+    // The answers in order; the held executions and the bars are checked after each one from the
+    // history page on.
+    type Row<'a> = (&'a str, bool, &'a Tape<'a>, [Answer; 2], &'a [f64]);
+    let rows: [Row; 6] = [
         (
             "ids",
             true,
-            false,
+            &volume,
+            [Executions, Bars],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 4.0, 1.0],
         ),
-        ("no ids", false, false, &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0]),
+        (
+            "no ids",
+            false,
+            &volume,
+            [Executions, Bars],
+            &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+        ),
         (
             "no ids, history page first",
             false,
-            true,
+            &volume,
+            [Bars, Executions],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+        ),
+        (
+            "ids, no trade history",
+            true,
+            &volume,
+            [Bars, NoExecutions],
+            &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+        ),
+        (
+            "no ids, no trade history",
+            false,
+            &volume,
+            [Bars, NoExecutions],
+            &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+        ),
+        (
+            "ticks, a bar opens between the streams, no trade history",
+            false,
+            &ticks,
+            [Bars, NoExecutions],
+            &[1.0, 1.0, 1.0, 1.0],
         ),
     ];
     let mut failures = Vec::new();
-    for (label, ids, history_first, held) in rows {
-        let identified = |trade: Tick, id| if ids { trade.with_id(id) } else { trade };
-        let tape: Vec<Tick> = (fills.iter().enumerate())
-            .map(|(second, &(price, size, side))| {
-                let at = start + TimeDelta::seconds(second as i64);
-                identified(Tick::new(at, price, size, Some(side)), second as u64 + 1)
-            })
+    for (label, ids, (intervals, fills, streamed, live, paged), answers, held) in rows {
+        let execution = |&(second, price, size, side): &Fill, id| {
+            let trade = Tick::new(start + TimeDelta::seconds(second), price, size, Some(side));
+            if ids { trade.with_id(id) } else { trade }
+        };
+        let tape: Vec<Tick> = (fills.iter().zip(1..))
+            .map(|(fill, id)| execution(fill, id))
             .collect();
-        let live = identified(Tick::new(tape[7].ts, 106.0, 1.0, Some(Sell)), 100);
-        let timeframe: Timeframe = "10v".parse().unwrap();
+        let live = execution(live, 100);
+        let paged = *paged;
+        let timeframe: Timeframe = intervals[1].parse().unwrap();
         let candles =
             crate::data::aggregate_trades_with_tick_size(&tape, timeframe, Some(1.0)).unwrap();
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        chart.set_timeframe("20v".parse().unwrap());
+        chart.set_timeframe(intervals[0].parse().unwrap());
         chart.set_chart_type(ChartType::VolumeFootprint);
         let mut frames = Frames::new();
         frames.run(&mut chart);
         feed.resolve()
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
         frames.run(&mut chart);
-        (tape[1..7].iter()).for_each(|trade| feed.sink().push_tick(trade.clone()));
+        (tape[streamed.clone()].iter()).for_each(|trade| feed.sink().push_tick(trade.clone()));
         frames.run(&mut chart);
         chart.set_timeframe(timeframe);
         frames.run(&mut chart);
@@ -2179,39 +2261,45 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
         feed.sink().push_tick(live);
         frames.run(&mut chart);
         // Each subscription asked for its own pages; the newest are the new interval's.
-        let trades = feed.trades.lock().unwrap().pop().unwrap();
-        let history = feed.pages.lock().unwrap().pop().unwrap();
-        let trade_page = Ok(TradePage::new(tape[1..].to_vec(), false));
-        let history_page = page(candles[..4].to_vec(), true);
-        if history_first {
-            history.send(history_page);
+        let mut trades = feed.trades.lock().unwrap().pop();
+        let mut history = feed.pages.lock().unwrap().pop();
+        for (at, answer) in answers.into_iter().enumerate() {
+            match answer {
+                Bars => (history.take().unwrap()).send(page(candles[..paged].to_vec(), true)),
+                Executions => {
+                    (trades.take().unwrap()).send(Ok(TradePage::new(tape[1..].to_vec(), false)))
+                }
+                NoExecutions => trades.take().unwrap().send(Err(FeedError::NotSupported)),
+            }
             frames.run(&mut chart);
-            trades.send(trade_page);
-        } else {
-            trades.send(trade_page);
-            frames.run(&mut chart);
-            history.send(history_page);
-        }
-        frames.run(&mut chart);
-        assert_eq!(chart.bars(SeriesId::MAIN)[..4], candles[..4], "{label}");
-        let sizes: Vec<_> = (chart.trades(SeriesId::MAIN).map(|trade| trade.size)).collect();
-        if sizes != held {
-            failures.push(format!("{label}: held {sizes:?}"));
-        }
-        let link = chart.feed_link.as_ref().unwrap();
-        let flow = link.footprint.as_ref().unwrap();
-        let complete = flow.complete_from();
-        let drawn: Vec<Vec<_>> = (candles[..4].iter())
-            .filter(|bar| complete.is_some_and(|from| bar.time >= from))
-            .filter_map(|bar| flow.bar_at(bar.time))
-            .map(|cells| {
-                (cells.levels.values())
-                    .map(|level| (level.level, level.bid, level.ask))
-                    .collect()
-            })
-            .collect();
-        if !drawn.is_empty() {
-            failures.push(format!("{label}: drawn {drawn:?}"));
+            if history.is_some() {
+                continue;
+            }
+            let label = format!("{label}, after answer {at}");
+            assert_eq!(
+                chart.bars(SeriesId::MAIN)[..paged],
+                candles[..paged],
+                "{label}"
+            );
+            let sizes: Vec<_> = (chart.trades(SeriesId::MAIN).map(|trade| trade.size)).collect();
+            if sizes != held {
+                failures.push(format!("{label}: held {sizes:?}"));
+            }
+            let link = chart.feed_link.as_ref().unwrap();
+            let flow = link.footprint.as_ref().unwrap();
+            let complete = flow.complete_from();
+            let drawn: Vec<Vec<_>> = (candles[..paged].iter())
+                .filter(|bar| complete.is_some_and(|from| bar.time >= from))
+                .filter_map(|bar| flow.bar_at(bar.time))
+                .map(|cells| {
+                    (cells.levels.values())
+                        .map(|level| (level.level, level.bid, level.ask))
+                        .collect()
+                })
+                .collect();
+            if !drawn.is_empty() {
+                failures.push(format!("{label}: drawn {drawn:?}"));
+            }
         }
     }
     assert!(failures.is_empty(), "{failures:?}");

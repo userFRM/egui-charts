@@ -189,6 +189,16 @@ impl Trades {
         self.lost_until
     }
 
+    /// Time of the newest retained trade, until a page fills the time after it: trades from that
+    /// instant on, before the live ones, may be missing.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn retained_until(&self) -> Option<DateTime<Utc>> {
+        self.retained_until
+    }
+
     /// Time of the oldest live trades, while a page left out its trades at that time because ids
     /// did not tell them from the live ones.
     #[cfg_attr(
