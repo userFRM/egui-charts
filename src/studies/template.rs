@@ -254,6 +254,12 @@ impl StudyTemplate {
                     .inputs
                     .push(("auto_interval".to_owned(), InputValue::Toggle(false)));
             }
+            // A majority rule drew the signed direction before it could report the percentage.
+            "MajRule" if !has("mode") => {
+                template
+                    .inputs
+                    .push(("mode".to_owned(), InputValue::Choice(1)));
+            }
             // An RSI drew no average and no middle line before it opened with both; the hidden
             // level keeps the styles saved for the other two and stays within their band. Its
             // average then chose from None, SMA and EMA, under ids of its own, before it took the
@@ -733,6 +739,12 @@ mod tests {
                 "Higher Interval Candles",
                 vec![("auto_interval", Toggle(true))],
                 vec![("auto_interval", Toggle(true))],
+            ),
+            // Saved before the output could be chosen, when it was the signed direction.
+            (
+                "MajRule",
+                vec![("period", Length(10))],
+                vec![("period", Length(10)), ("mode", Choice(1))],
             ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (

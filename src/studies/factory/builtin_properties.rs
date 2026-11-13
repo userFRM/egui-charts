@@ -255,6 +255,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Correlation::new(l(0)).with_log_returns(true)),
         Box::new(RciRibbon::new(l(0), l(1), l(2))),
         Box::new(MajorityRule::new(l(0))),
+        Box::new(MajorityRule::new(l(0)).with_mode(MajorityMode::Direction)),
         Box::new(AccumulationSwingIndex::new(x(0.5))),
         Box::new(Seasonality::new()),
         Box::new(Performance::new()),

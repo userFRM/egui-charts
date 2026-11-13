@@ -495,7 +495,7 @@ pub use ma_presets::{MARibbon, MixedMACross, TripleMA};
 pub use smoothed_ma::SmoothedMA;
 
 // Re-exports - Tenth batch (Statistics)
-pub use majority_rule::MajorityRule;
+pub use majority_rule::{MajorityMode, MajorityRule};
 pub use rank_correlation::RankCorrelationIndex;
 pub use standard_error::StandardError;
 pub use standard_error_bands::StandardErrorBands;
