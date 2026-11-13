@@ -3,6 +3,7 @@
 mod background;
 mod sessions;
 
+pub(super) use background::{background_at, paint_background};
 #[cfg(feature = "studies")]
 pub(super) use sessions::session_ranges;
 
@@ -2787,6 +2788,8 @@ impl Chart {
                     axis,
                     &study_axis,
                     None,
+                    colors.text,
+                    &|pos| self.background_at(rect, pos),
                 ));
         }
         if show_price_axis && study_axis.show_study_values {
@@ -3283,6 +3286,8 @@ impl Chart {
                     session_closes.filter(|_| values && self.config.show_last_day_change);
                 legend.study_backdrop = self.config.indicator_backdrop_opacity;
                 legend.extended_hours = (&extended_hours.0, extended_hours.1);
+                let background = |pos: Pos2| self.background_at(rect, pos);
+                legend.background = Some(&background);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close =
@@ -3527,8 +3532,7 @@ impl Chart {
                                 point,
                                 &self.chart_type_params.styles,
                                 color,
-                                self.plot_background(rect, point)
-                                    .unwrap_or(self.config.background_color),
+                                self.background_at(rect, point),
                             );
                         }
                     }
@@ -3539,10 +3543,7 @@ impl Chart {
                             item,
                             self.series_map(item, price_rect),
                             index,
-                            |point| {
-                                self.plot_background(rect, point)
-                                    .unwrap_or(self.config.background_color)
-                            },
+                            |point| self.background_at(rect, point),
                         );
                     }
                 }
