@@ -198,6 +198,10 @@ impl DemoApp {
     }
 
     pub(super) fn execute_search_command(&mut self, ctx: &egui::Context, id: &str) {
+        // The appearance is the interface's, on every chart: choosing it is no chart's edit.
+        if id.starts_with("appearance:") {
+            return self.execute_search_edit(ctx, id);
+        }
         self.user_action(|app| app.execute_search_edit(ctx, id));
     }
 

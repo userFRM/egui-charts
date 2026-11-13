@@ -38,6 +38,8 @@ struct Pending {
     study_order: Vec<SeriesId>,
     /// Added series removed during the action, with their bars, price formatters and bar limits.
     removed_series: Vec<HeldSeries>,
+    /// The palette the chart's unedited colours followed when the action began.
+    palette: ChartConfig,
 }
 
 #[derive(Default)]
@@ -49,6 +51,8 @@ struct Action {
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
+    /// The palette that the unedited colours of `config` and `chart_type` follow.
+    palette: Option<ChartConfig>,
     /// The main series of the other state, when the action removed it.
     main_series: Option<MainSeries>,
     main_series_visible: Option<bool>,
@@ -450,6 +454,7 @@ impl Chart {
             standalone_drawings,
             study_order: self.study_ids.clone(),
             removed_series: Vec::new(),
+            palette: self.followed_palette(),
         });
     }
 
@@ -499,6 +504,18 @@ impl Chart {
         if action.symbol.is_none() && action.view == Some(self.get_time_scale_state()) {
             action.view = None;
         }
+        // A theme change during the action is not an edit: the colours recorded before it
+        // follow it, as the chart's did.
+        let palette = self.followed_palette();
+        if pending.palette != palette {
+            let old = std::slice::from_ref(&pending.palette);
+            if let Some(config) = &mut action.config {
+                super::palette::follow_palette(config, old, &palette);
+            }
+            if let Some((_, params)) = &mut action.chart_type {
+                super::palette::follow_candle_colors(&mut params.styles, old, &palette);
+            }
+        }
         if action.config.as_ref() == Some(&self.config) {
             action.config = None;
         }
@@ -522,6 +539,9 @@ impl Chart {
         }
         if action.interval == Some(self.timeframe) {
             action.interval = None;
+        }
+        if action.config.is_some() || action.chart_type.is_some() {
+            action.palette = Some(palette);
         }
         if let Some(scale) = &action.scale
             && same_scale(scale, self.state.price_scale())
@@ -994,6 +1014,11 @@ impl Chart {
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
+        }
+        // The theme is not part of an action: the colours brought back follow the chart's.
+        if let Some(palette) = &mut action.palette {
+            let recorded = std::mem::replace(palette, self.followed_palette());
+            self.follow_recorded_palette(recorded);
         }
         if let Some(visible) = &mut action.price_targets_visible {
             std::mem::swap(&mut self.show_price_targets, visible);
@@ -1580,6 +1605,50 @@ mod tests {
         assert_eq!(chart.get_time_scale_state(), (15.0, -11.0));
         assert!(chart.redo());
         assert_eq!(chart.get_time_scale_state(), (15.0, -11.0));
+    }
+
+    /// Undo and redo restore what the user edited and leave the colours that follow the theme on
+    /// the active one: the grid hidden under the dark theme comes back under the light theme on
+    /// its white background with its light lines, and axis text set to blue before the switch
+    /// comes back blue.
+    #[test]
+    fn undo_after_a_theme_change_keeps_the_active_theme_colours() {
+        use crate::theme::{Theme, apply_to_egui};
+        use crate::widget::test_frames::frame;
+        const LIGHT_GRID: Color32 = Color32::from_rgb(229, 229, 229);
+        for edited in [false, true] {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &Theme::dark());
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(chart.config().background_color, Color32::BLACK);
+            if edited {
+                chart.user_action(|chart| chart.config_mut().text_color = Color32::BLUE);
+            }
+            chart.user_action(|chart| chart.config_mut().show_grid = false);
+            apply_to_egui(&ctx, &Theme::light());
+            frame(&ctx, &mut chart, 1.0, vec![]);
+            let text = if edited {
+                Color32::BLUE
+            } else {
+                Color32::BLACK
+            };
+            for (redo, grid) in [(false, true), (true, false)] {
+                assert!(if redo { chart.redo() } else { chart.undo() });
+                let config = chart.config();
+                assert_eq!(config.show_grid, grid, "edited {edited}, redo {redo}");
+                assert_eq!(config.background_color, Color32::WHITE);
+                assert_eq!(config.grid_color, LIGHT_GRID);
+                assert_eq!(config.text_color, text);
+            }
+            if edited {
+                // The colour edit is undone to the colour the text has under the active theme.
+                assert!(chart.undo());
+                assert!(chart.undo());
+                assert_eq!(chart.config().text_color, Color32::BLACK);
+                assert_eq!(chart.config().background_color, Color32::WHITE);
+            }
+        }
     }
 
     #[test]
