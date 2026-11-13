@@ -743,8 +743,8 @@ mod tests {
         };
         let red = Color32::from_rgb(200, 0, 0).gamma_multiply(0.5);
         assert!(mesh.vertices.iter().all(|v| v.color == red));
-        // Background: the line colour at 10% from the anchor bar to the last bar, full height,
-        // under the fill.
+        // Background: green at 5% from the anchor bar to the last bar, full height, under the
+        // fill.
         let shapes = edited(|c| c.background.visible = true);
         let Shape::Rect(wash) = &shapes[0] else {
             panic!("background")
@@ -753,7 +753,7 @@ mod tests {
             (wash.rect, wash.fill),
             (
                 Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(130.0, 600.0)),
-                blue.gamma_multiply(0.1)
+                green.gamma_multiply(0.05)
             )
         );
         assert!(matches!(shapes[1], Shape::Mesh(_)));

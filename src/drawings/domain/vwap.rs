@@ -156,6 +156,16 @@ impl VwapFill {
         })
     }
 
+    /// The band fill of a drawing saved before the fill had its own colour: on, in the first
+    /// band's colour at 5%.
+    fn following_band() -> Self {
+        Self {
+            visible: true,
+            color: None,
+            opacity: 0.05,
+        }
+    }
+
     /// Opacity from 0 (clear) through 1 (opaque), which scales the colour's own alpha.
     pub fn opacity(&self) -> f32 {
         self.opacity
@@ -184,7 +194,9 @@ pub struct VwapConfig {
     /// the price scale.
     #[serde(deserialize_with = "precision")]
     pub precision: Option<u8>,
-    /// Fill between the first band's lines, drawn while that band is enabled.
+    /// Fill between the first band's lines, drawn while that band is enabled. A drawing saved
+    /// without one fills in the first band's colour, as it was drawn.
+    #[serde(default = "VwapFill::following_band")]
     pub band_fill: VwapFill,
     /// Wash over the pane's height from the anchor bar to the last bar, under the bands.
     pub background: VwapFill,
@@ -209,8 +221,8 @@ impl VwapConfig {
 
 impl Default for VwapConfig {
     /// The VWAP of the typical price as a line, with the green band one standard deviation away
-    /// filled at 5%; the olive and teal bands two and three away, the background and the
-    /// latest-value line are off.
+    /// filled green at 5%; the olive and teal bands two and three away, the green background at
+    /// 5% and the latest-value line are off.
     fn default() -> Self {
         let band = |index: usize, enabled| VwapBand {
             enabled,
@@ -226,14 +238,13 @@ impl Default for VwapConfig {
             track_price: false,
             precision: None,
             band_fill: VwapFill {
-                visible: true,
-                color: None,
-                opacity: 0.05,
+                color: Some(BAND_COLORS[0]),
+                ..VwapFill::following_band()
             },
             background: VwapFill {
                 visible: false,
-                color: None,
-                opacity: 0.1,
+                color: Some(BAND_COLORS[0]),
+                opacity: 0.05,
             },
         }
     }
@@ -243,13 +254,16 @@ impl Default for VwapConfig {
 mod tests {
     use super::*;
 
-    /// A drawing saved with bands only restores every later setting at its default, so it paints
-    /// as before; out-of-range settings are refused.
+    /// A drawing saved with bands only restores every later setting at its default, except its
+    /// band fill, which keeps following the first band's colour, so it paints as before;
+    /// out-of-range settings are refused.
     #[test]
     fn saved_settings_restore_and_are_checked() {
         let saved = r#"{"bands":[{"enabled":true,"multiplier":1.0,"color":[76,175,80,255]},{"enabled":false,"multiplier":2.0,"color":[128,128,0,255]},{"enabled":false,"multiplier":3.0,"color":[0,137,123,255]}]}"#;
         let config: VwapConfig = serde_json::from_str(saved).unwrap();
-        assert_eq!(config, VwapConfig::default());
+        let mut legacy = VwapConfig::default();
+        legacy.band_fill.color = None;
+        assert_eq!(config, legacy);
         for bad in [
             r#"{"precision":9}"#,
             r#"{"band_fill":{"visible":true,"color":null,"opacity":1.5}}"#,
