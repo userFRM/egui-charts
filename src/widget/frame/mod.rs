@@ -3,6 +3,7 @@
 mod background;
 mod sessions;
 
+pub(super) use background::{background_at, paint_background};
 #[cfg(feature = "studies")]
 pub(super) use sessions::session_ranges;
 
@@ -218,6 +219,7 @@ impl Chart {
         self.sync_volume_study(ui.ctx());
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
+        self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -2343,8 +2345,11 @@ impl Chart {
         // study's pane. Otherwise overlay indicators take priority over the
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
-        // this rect.
+        // this rect. As there, a click with the eraser or a drawing tool keeps
+        // the selection.
         if response.clicked()
+            && !drawing_tool_active
+            && !eraser_mode
             && let Some(click_pos) = response.interact_pointer_pos()
         {
             #[cfg(feature = "drawings")]
@@ -2790,6 +2795,8 @@ impl Chart {
                     axis,
                     &study_axis,
                     None,
+                    colors.text,
+                    &|pos| self.background_at(rect, pos),
                 ));
         }
         if show_price_axis && study_axis.show_study_values {
@@ -3284,6 +3291,8 @@ impl Chart {
                     session_closes.filter(|_| values && self.config.show_last_day_change);
                 legend.study_backdrop = self.config.indicator_backdrop_opacity;
                 legend.extended_hours = (&extended_hours.0, extended_hours.1);
+                let background = |pos: Pos2| self.background_at(rect, pos);
+                legend.background = Some(&background);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close =
@@ -3528,8 +3537,7 @@ impl Chart {
                                 point,
                                 &self.chart_type_params.styles,
                                 color,
-                                self.plot_background(rect, point)
-                                    .unwrap_or(self.config.background_color),
+                                self.background_at(rect, point),
                             );
                         }
                     }
@@ -3540,10 +3548,7 @@ impl Chart {
                             item,
                             self.series_map(item, price_rect),
                             index,
-                            |point| {
-                                self.plot_background(rect, point)
-                                    .unwrap_or(self.config.background_color)
-                            },
+                            |point| self.background_at(rect, point),
                         );
                     }
                 }

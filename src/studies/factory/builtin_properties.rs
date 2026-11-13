@@ -19,7 +19,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SWMA::new()),
         Box::new(KAMA::new(l(0)).with_periods(l(1), l(2))),
         Box::new(SmoothedMA::new(l(0))),
-        Box::new(GuppyMA::new()),
+        Box::new(GuppyMA::new().with_periods(std::array::from_fn(&l))),
         Box::new(McGinleyDynamic::new(l(0))),
         Box::new(VIDYA::new(l(0))),
         Box::new(ZLEMA::new(l(0))),
@@ -127,10 +127,10 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(AccelerationBands::new(l(0), x(4.0))),
         Box::new(Envelopes::new(l(0), x(10.0), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),
-        Box::new(CloseToCloseVol::new(l(0))),
-        Box::new(OhlcVolatility::new(l(0))),
+        Box::new(CloseToCloseVol::new(l(0)).with_trading_days(x(252.0))),
+        Box::new(OhlcVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ParkinsonVol::new(l(0))),
-        Box::new(ZeroTrendVol::new(l(0))),
+        Box::new(ZeroTrendVol::new(l(0)).with_trading_days(x(252.0))),
         Box::new(RelativeVolatilityIndex::new(l(0))),
         Box::new(
             CommoditySelectionIndex::new(l(0))
@@ -256,6 +256,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Correlation::new(l(0)).with_log_returns(true)),
         Box::new(RciRibbon::new(l(0), l(1), l(2))),
         Box::new(MajorityRule::new(l(0))),
+        Box::new(MajorityRule::new(l(0)).with_mode(MajorityMode::Direction)),
         Box::new(AccumulationSwingIndex::new(x(0.5))),
         Box::new(Seasonality::new()),
         Box::new(Performance::new()),
@@ -593,11 +594,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
 
     // Every length equal, then each length alone huge, then each alone longer than the rest
     // (a swapped fast/slow pair, for example).
-    let mut lengths: Vec<[usize; 9]> = vec![[0; 9], [1; 9], [usize::MAX; 9]];
-    for k in 0..9 {
-        let mut huge = [1; 9];
+    let mut lengths: Vec<[usize; 12]> = vec![[0; 12], [1; 12], [usize::MAX; 12]];
+    for k in 0..12 {
+        let mut huge = [1; 12];
         huge[k] = usize::MAX;
-        let mut longer = [20; 9];
+        let mut longer = [20; 12];
         longer[k] = 50;
         lengths.extend([huge, longer]);
     }

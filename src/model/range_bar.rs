@@ -8,6 +8,8 @@
 use super::PriceBuilder;
 use super::Tick;
 use super::bar::Bar;
+use super::renko::reaches;
+use super::rounding_tolerance;
 use chrono::{DateTime, Utc};
 
 /// Configuration for range-bar construction.
@@ -127,6 +129,12 @@ pub enum RangeBarSource {
 /// Build range bars from trades (exact construction). A trade's size that would make its bar's
 /// volume overflow is left out.
 ///
+/// A bar closes one range from its low when a rise completes it and one range from its high when
+/// a fall does, and a trade that reaches that price within the rounding of decimal prices and
+/// sizes is on it: with a range of 0.1, trades at 1.1, 1.15 and 1.2 close a bar at 1.2. Bars that
+/// follow one another in one direction are counted from where the run began, so their prices
+/// carry no rounding from bar to bar.
+///
 /// # Safety Limits
 /// - At most the newest 5,000 range bars
 pub fn to_range_bars_from_ticks(ticks: &[Tick], config: &RangeBarConfig) -> Vec<RangeBar> {
@@ -137,8 +145,10 @@ pub fn to_range_bars_from_ticks(ticks: &[Tick], config: &RangeBarConfig) -> Vec<
     builder.elements()
 }
 
-/// Convert OHLC bars to range bars (approximation). A bar's volume that would make its range bar's
-/// volume overflow is left out.
+/// Convert OHLC bars to range bars (approximation). Each bar is taken to have traded from its
+/// open to the extreme nearer the open, on to the other extreme and then to its close; a range
+/// bar closes at its high when a rise completes its range and at its low when a fall does. A
+/// bar's volume that would make its range bar's volume overflow is left out.
 ///
 /// Returns no bars when the range size is not a positive finite number.
 ///
@@ -175,6 +185,13 @@ pub(crate) struct RangeBarBuilder {
     range_size: f64,
     /// The range bar in progress; `None` until the first bar.
     curr_bar: Option<RangeBar>,
+    /// The first OHLC bar while it is the only one: `curr_bar` shows it whole, and its path is
+    /// walked when the next bar arrives, so a first bar far wider than the range costs nothing.
+    seed: Option<Bar>,
+    /// The bar in progress opened `steps` ranges from `anchor`, a price as it was supplied.
+    /// Boundaries are counted from it instead of added up from bar to bar.
+    anchor: f64,
+    steps: f64,
     bars: Vec<RangeBar>,
 }
 
@@ -183,14 +200,18 @@ impl RangeBarBuilder {
         Self {
             range_size,
             curr_bar: None,
+            seed: None,
+            anchor: 0.0,
+            steps: 0.0,
             bars: Vec::new(),
         }
     }
 
     /// Adds one trade, after the bars or trades already added. A trade that crosses several
     /// ranges closes one bar per range; a range of 0 or less closes none. A trade closes at most
-    /// 100 bars, which bounds the work for one bad print; raise it if gaps that large must chart
-    /// in full. The bar that follows a close holds the trade only when it lies beyond the close.
+    /// 100 bars, which bounds the work for one bad print, and the rest of its move is dropped;
+    /// raise it if gaps that large must chart in full. The bar that follows a close holds the
+    /// trade only when it lies beyond the close.
     pub(crate) fn push_tick(&mut self, tick: &Tick) {
         let range_size = self.range_size;
         let Some(mut curr_bar) = self.curr_bar.take() else {
@@ -205,45 +226,107 @@ impl RangeBarBuilder {
                 range_size,
                 tick_cnt: 1,
             });
+            (self.anchor, self.steps) = (tick.price, 0.0);
             return;
         };
-        curr_bar.high = curr_bar.high.max(tick.price);
-        curr_bar.low = curr_bar.low.min(tick.price);
-        curr_bar.close = tick.price;
         curr_bar.volume = add_volume(curr_bar.volume, tick.size);
         curr_bar.end_time = tick.ts;
         curr_bar.tick_cnt += 1;
 
         const MAX_CLOSES: usize = 100;
+        if self.advance(&mut curr_bar, tick.price, tick.ts, MAX_CLOSES) {
+            curr_bar.tick_cnt = usize::from(curr_bar.close != curr_bar.open);
+        }
+        self.curr_bar = Some(curr_bar);
+    }
+
+    /// Moves the bar in progress to `price`, closing at most `max_closes` bars, one at every
+    /// boundary the move reaches; a move that would close more stops at the last close. Returns
+    /// whether a bar closed.
+    fn advance(
+        &mut self,
+        curr_bar: &mut RangeBar,
+        mut price: f64,
+        time: DateTime<Utc>,
+        max_closes: usize,
+    ) -> bool {
+        let range_size = self.range_size;
         let mut closes = 0;
-        while curr_bar.range() >= range_size && range_size > 0.0 && closes < MAX_CLOSES {
-            closes += 1;
-            if tick.price >= curr_bar.open {
-                curr_bar.close = curr_bar.low + range_size;
-                curr_bar.high = curr_bar.close;
-            } else {
-                curr_bar.close = curr_bar.high - range_size;
-                curr_bar.low = curr_bar.close;
+        loop {
+            // A price within rounding of the open is on it, as the price that closed the bar
+            // before is.
+            if reaches((price - curr_bar.open).abs(), range_size, price) {
+                price = curr_bar.open;
             }
+            // A rise completes the range one size above the low and a fall one size below the
+            // high. An extreme the bar opened at is counted from the anchor; any other is a
+            // price as it was supplied and becomes the anchor.
+            let from = |extreme: f64| {
+                if extreme == curr_bar.open {
+                    (self.anchor, self.steps)
+                } else {
+                    (extreme, 0.0)
+                }
+            };
+            let ((low, low_steps), (high, high_steps)) = (from(curr_bar.low), from(curr_bar.high));
+            let up = low + (low_steps + 1.0) * range_size;
+            let down = high + (high_steps - 1.0) * range_size;
+            let (anchor, steps, close, far) = if reaches(up - price, range_size, price) {
+                (low, low_steps + 1.0, up, curr_bar.low)
+            } else if reaches(price - down, range_size, price) {
+                (high, high_steps - 1.0, down, curr_bar.high)
+            } else {
+                break;
+            };
+            // A size below the precision of the price moves nothing, nor does one of 0 or less
+            if close == far || range_size <= 0.0 {
+                break;
+            }
+            if closes == max_closes {
+                price = curr_bar.open;
+                break;
+            }
+            closes += 1;
+            curr_bar.close = close;
+            curr_bar.high = far.max(close);
+            curr_bar.low = far.min(close);
+            curr_bar.end_time = time;
             self.bars.push(curr_bar.clone());
+
+            // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
             if self.bars.len() == 2 * MAX_BARS {
                 self.bars.drain(..MAX_BARS);
             }
 
             // Start the next bar where the last one ended
-            curr_bar = RangeBar {
-                open: curr_bar.close,
-                high: tick.price.max(curr_bar.close),
-                low: tick.price.min(curr_bar.close),
-                close: tick.price,
+            (self.anchor, self.steps) = (anchor, steps);
+            *curr_bar = RangeBar {
+                open: close,
+                high: close,
+                low: close,
+                close,
                 volume: 0.0,
-                start_time: tick.ts,
-                end_time: tick.ts,
+                start_time: time,
+                end_time: time,
                 range_size,
-                tick_cnt: usize::from(tick.price != curr_bar.close),
+                tick_cnt: 0,
             };
         }
-        self.curr_bar = Some(curr_bar);
+        curr_bar.high = curr_bar.high.max(price);
+        curr_bar.low = curr_bar.low.min(price);
+        curr_bar.close = price;
+        closes > 0
+    }
+
+    /// Takes the bar in progress along the price path of `bar`, closing a range bar wherever the
+    /// path completes one.
+    fn walk(&mut self, curr_bar: &mut RangeBar, bar: &Bar) {
+        for price in price_path(bar) {
+            self.advance(curr_bar, price, bar.time, usize::MAX);
+        }
+        curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
+        curr_bar.end_time = bar.time;
+        curr_bar.tick_cnt += 1;
     }
 }
 
@@ -264,62 +347,22 @@ impl PriceBuilder for RangeBarBuilder {
                 range_size,
                 tick_cnt: 1,
             });
+            self.seed = Some(bar.clone());
             return;
         };
-
-        // Simulate processing this bar's range
-        let prices = [bar.open, bar.high, bar.low, bar.close];
-
-        for &price in &prices {
-            curr_bar.high = curr_bar.high.max(price);
-            curr_bar.low = curr_bar.low.min(price);
-
-            while curr_bar.range() >= range_size {
-                // Complete the bar
-                if curr_bar.high - curr_bar.open >= range_size {
-                    // A size below the precision of the price moves nothing
-                    if curr_bar.low + range_size == curr_bar.low {
-                        break;
-                    }
-                    // Closed up
-                    curr_bar.close = curr_bar.low + range_size;
-                    curr_bar.high = curr_bar.close;
-                } else {
-                    if curr_bar.high - range_size == curr_bar.high {
-                        break;
-                    }
-                    // Closed down
-                    curr_bar.close = curr_bar.high - range_size;
-                    curr_bar.low = curr_bar.close;
-                }
-
-                curr_bar.end_time = bar.time;
-                self.bars.push(curr_bar.clone());
-
-                // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
-                if self.bars.len() == 2 * MAX_BARS {
-                    self.bars.drain(..MAX_BARS);
-                }
-
-                // Start new bar
-                curr_bar = RangeBar {
-                    open: curr_bar.close,
-                    high: price.max(curr_bar.close),
-                    low: price.min(curr_bar.close),
-                    close: price,
-                    volume: 0.0,
-                    start_time: bar.time,
-                    end_time: bar.time,
-                    range_size,
-                    tick_cnt: 0,
-                };
-            }
+        if let Some(seed) = self.seed.take() {
+            curr_bar = RangeBar {
+                high: seed.open,
+                low: seed.open,
+                close: seed.open,
+                volume: 0.0,
+                tick_cnt: 0,
+                ..curr_bar
+            };
+            (self.anchor, self.steps) = (seed.open, 0.0);
+            self.walk(&mut curr_bar, &seed);
         }
-
-        curr_bar.close = bar.close;
-        curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
-        curr_bar.end_time = bar.time;
-        curr_bar.tick_cnt += 1;
+        self.walk(&mut curr_bar, bar);
         self.curr_bar = Some(curr_bar);
     }
 
@@ -339,9 +382,27 @@ fn add_volume(volume: f64, added: f64) -> f64 {
     if sum.is_finite() { sum } else { volume }
 }
 
+/// The order a bar's prices are taken to have traded in: open, the extreme nearer the open, the
+/// other extreme, close; the high first when both extremes are as near within a few ulps. The
+/// strategy tester fills orders along the same path.
+pub(crate) fn price_path(bar: &Bar) -> [f64; 4] {
+    let tie = rounding_tolerance(bar.high.abs().max(bar.low.abs()), 4.0 * f64::EPSILON);
+    if (bar.high - bar.open) - (bar.open - bar.low) <= tie {
+        [bar.open, bar.high, bar.low, bar.close]
+    } else {
+        [bar.open, bar.low, bar.high, bar.close]
+    }
+}
+
+/// The distance a bar's price path covers.
+fn travel(bar: &Bar) -> f64 {
+    let path = price_path(bar);
+    path.windows(2).map(|leg| (leg[1] - leg[0]).abs()).sum()
+}
+
 /// Index of the bar to build from so that the range bars move at most `MAX_WORK` range sizes.
-/// Bar `i` costs its path through open, high, low and close in sizes plus 4; the returned bar
-/// only seeds the state, and its own range is split at the next bar's first price.
+/// Bar `i` costs the move from the close before it and its price path in sizes plus 4; the
+/// returned bar only seeds the state, and its own path is walked when the next bar arrives.
 pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
     let mut total = 0.0;
     let mut priced = bars
@@ -353,14 +414,8 @@ pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
         return 0;
     };
     for (previous_i, prev) in priced {
-        total += (((b.open - prev.close).abs()
-            + (b.high - b.open).abs()
-            + (b.high - b.low)
-            + (b.close - b.low).abs())
-            / size)
-            .max(0.0)
-            + 4.0;
-        if total + (prev.high - prev.low) / size > super::MAX_WORK {
+        total += (((b.open - prev.close).abs() + travel(b)) / size).max(0.0) + 4.0;
+        if total + travel(prev) / size > super::MAX_WORK {
             return i;
         }
         (i, b) = (previous_i, prev);
@@ -478,6 +533,128 @@ mod tests {
                 (110.0, 112.0, 110.0, 112.0, 20.0, next, next),
             ]
         );
+    }
+
+    #[test]
+    fn ohlc_range_bars_follow_the_bar_path() {
+        // (bars as (open, high, low, close), (open, high, low, close) of each range bar); the
+        // range is 2 and the last range bar is the one in progress.
+        type Ohlc = (f64, f64, f64, f64);
+        let cases: [(&[Ohlc], &[Ohlc]); 4] = [
+            // A bar that only rises gives rising range bars, from the first bar on.
+            (
+                &[(100.0, 100.0, 100.0, 100.0), (100.0, 104.0, 100.0, 104.0)],
+                &[
+                    (100.0, 102.0, 100.0, 102.0),
+                    (102.0, 104.0, 102.0, 104.0),
+                    (104.0, 104.0, 104.0, 104.0),
+                ],
+            ),
+            // The first bar is walked too: 100 down to 99, up to 104 and back to 103, so the
+            // bar in progress keeps the high of 104.
+            (
+                &[(100.0, 104.0, 99.0, 103.0), (103.0, 103.0, 103.0, 103.0)],
+                &[
+                    (100.0, 101.0, 99.0, 101.0),
+                    (101.0, 103.0, 101.0, 103.0),
+                    (103.0, 104.0, 103.0, 103.0),
+                ],
+            ),
+            // The mirror: a bar that only falls gives falling range bars.
+            (
+                &[(104.0, 104.0, 104.0, 104.0), (104.0, 104.0, 100.0, 100.0)],
+                &[
+                    (104.0, 104.0, 102.0, 102.0),
+                    (102.0, 102.0, 100.0, 100.0),
+                    (100.0, 100.0, 100.0, 100.0),
+                ],
+            ),
+            // 100 down to 99 and up to 101, as the trades 100, 99, 101: the rise completes the
+            // range, so the bar closes at its high.
+            (
+                &[
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 99.0, 99.0),
+                    (99.0, 101.0, 99.0, 101.0),
+                ],
+                &[(100.0, 101.0, 99.0, 101.0), (101.0, 101.0, 101.0, 101.0)],
+            ),
+        ];
+        for (source, expected) in cases {
+            let data: Vec<Bar> = source
+                .iter()
+                .enumerate()
+                .map(|(i, &(open, high, low, close))| {
+                    let time = DateTime::from_timestamp(60 * i as i64, 0).unwrap();
+                    Bar::new(time, open, high, low, close, 1.0)
+                })
+                .collect();
+            let bars: Vec<_> = to_range_bars_from_ohlc(&data, &RangeBarConfig::new(2.0))
+                .iter()
+                .map(|b| (b.open, b.high, b.low, b.close))
+                .collect();
+            assert_eq!(bars, expected, "{source:?}");
+        }
+    }
+
+    /// Closes and trades one size apart complete one element each, on the bar or trade that
+    /// reaches the boundary, and element prices are counted in sizes instead of added up.
+    #[test]
+    fn decimal_sizes_complete_on_exact_boundaries() {
+        use crate::model::{RenkoConfig, to_renko_bricks};
+        const STEPS: usize = 3000;
+        let time = |i: usize| DateTime::from_timestamp(60 * i as i64, 0).unwrap();
+        // (size, sizes per unit of price, first price in sizes): price `i` is the decimal
+        // (first + i) / per_unit as a feed quotes it. The last row needs the rounding of the
+        // price itself: near 100,000 a price is exact to about 1e-11, more than a billionth of
+        // a size of 0.01.
+        for (size, per_unit, first) in [
+            (0.1, 10.0, 10.0),
+            (0.05, 20.0, 20.0),
+            (0.01, 100.0, 100.0),
+            (0.01, 100.0, 10_000_000.0),
+        ] {
+            let prices: Vec<f64> = (0..=STEPS).map(|i| (first + i as f64) / per_unit).collect();
+            let bars: Vec<Bar> = (prices.iter().enumerate())
+                .map(|(i, &p)| Bar::new(time(i), p, p, p, p, 1.0))
+                .collect();
+            let ticks: Vec<Tick> = (prices.iter().enumerate())
+                .map(|(i, &p)| Tick::new(time(i), p, 1.0, None))
+                .collect();
+            // Element `k` completes on price `k`: brick `k` closes `first + k` sizes from zero,
+            // range bar `k` closes `k` sizes from the first price.
+            let bricks: Vec<_> = (1..=STEPS)
+                .map(|k| (time(k), (first + k as f64) * size))
+                .collect();
+            let ranges: Vec<_> = (1..=STEPS)
+                .map(|k| (time(k), prices[0] + k as f64 * size))
+                .collect();
+            let config = RangeBarConfig::new(size);
+            let renko = to_renko_bricks(&bars, &RenkoConfig::new(size));
+            let from_ticks = to_range_bars_from_ticks(&ticks, &config);
+            // The bar in progress after the last close is left out.
+            let mut from_ohlc = to_range_bars_from_ohlc(&bars, &config);
+            from_ohlc.truncate(STEPS);
+            let closes =
+                |bars: &[RangeBar]| Vec::from_iter(bars.iter().map(|b| (b.end_time, b.close)));
+            for (name, got, want) in [
+                (
+                    "renko",
+                    renko.iter().map(|b| (b.ts, b.close)).collect(),
+                    &bricks,
+                ),
+                ("ticks", closes(&from_ticks), &ranges),
+                ("ohlc", closes(&from_ohlc), &ranges),
+            ] {
+                let differs = got.iter().zip(want).position(|(got, want)| got != want);
+                assert!(
+                    differs.is_none() && got.len() == STEPS,
+                    "{name}, size {size} from {}: {} elements, first difference at {differs:?}",
+                    prices[0],
+                    got.len()
+                );
+            }
+        }
     }
 
     /// Guards the volume scale: an infinite first volume, or two valid volumes near `f64::MAX`,
