@@ -1005,26 +1005,31 @@ mod tests {
         assert_eq!(shown(&chart, None), ["EMA: EMA(9)", "SMA: SMA(20)"]);
     }
 
-    /// A column turned off for an added series stays off when the chart restores its own layout,
-    /// which adds the series again under a new id.
+    /// The open table shows a new last bar of an added series, which leaves the chart's revisions
+    /// as they are. A column turned off for an added series stays off when the chart restores its
+    /// own layout, which adds the series again under a new id.
     #[test]
-    fn added_series_column_choice_survives_a_restore() {
+    fn added_series_column_follows_its_last_bar_and_keeps_its_choice_through_a_restore() {
         let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         let bars: Vec<_> = (0..5)
             .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
             .collect();
         let mut chart = Chart::new(BarData::from_bars(bars));
-        for name in ["Peer", "Other"] {
+        let [_, other] = ["Peer", "Other"].map(|name| {
             chart.add_series(crate::widget::SeriesOptions {
                 name: name.into(),
                 ..Default::default()
-            });
-        }
+            })
+        });
         let layout = chart.snapshot().unwrap();
         let ctx = Context::default();
         let mut dialog = DataTableDialog::new();
         dialog.open();
         shown_rows(&ctx, &mut dialog, &chart);
+        chart.update(other, Bar::from_value(start + chrono::Duration::days(4), 42.0));
+        shown_rows(&ctx, &mut dialog, &chart);
+        // Newest row first: time, the five main columns, Peer, Other.
+        assert_eq!(dialog.cached.as_ref().unwrap().1.rows[0][7], "42.00");
         let headers = &dialog.cached.as_ref().unwrap().1.headers;
         let at = headers.iter().position(|h| h == "Peer").unwrap();
         let column = dialog.column_ids[at].clone();
