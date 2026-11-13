@@ -124,22 +124,40 @@ mod tests {
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
 
-    /// The visible mean uses exactly the supplied bars and changes with the viewport.
+    /// The visible mean uses exactly the supplied bars and changes with the viewport. A corrected
+    /// visible bar moves it on every bar, and a bar streamed in past the range carries it.
     #[test]
     fn visible_average_follows_the_visible_range() {
-        let bars: Vec<_> = [2.0, 4.0, 12.0, 20.0]
+        let bar = |i: usize, c| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0);
+        let mut bars: Vec<_> = [2.0, 4.0, 12.0, 20.0]
             .into_iter()
             .enumerate()
-            .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+            .map(|(i, c)| bar(i, c))
             .collect();
         let mut study = ConfiguredStudy::new(
             IndicatorFactory::new()
                 .create("Visible Average Price")
                 .expect("Visible Average Price study"),
         );
-        for (range, expected) in [(0..2, Some(3.0)), (1..4, Some(12.0)), (4..99, None)] {
+        // A change is the close of the bar that replaces or follows the last one, passed on as
+        // an update from that bar. The last visible close corrected to 14 gives
+        // (4 + 12 + 14) / 3 = 10, which the bar appended after the range leaves unchanged.
+        for (range, change, expected) in [
+            (0..2, None, Some(3.0)),
+            (4..99, None, None),
+            (1..4, None, Some(12.0)),
+            (1..4, Some((3, 14.0)), Some(10.0)),
+            (1..4, Some((4, 50.0)), Some(10.0)),
+        ] {
             study.set_visible_range(range.clone());
-            study.calculate(&bars);
+            match change {
+                Some((at, close)) => {
+                    bars.truncate(at);
+                    bars.push(bar(at, close));
+                    study.update(&bars, at);
+                }
+                None => study.calculate(&bars),
+            }
             for i in 0..bars.len() {
                 assert_eq!(study.values().value(0, i), expected);
             }
