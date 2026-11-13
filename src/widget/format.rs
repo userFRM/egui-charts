@@ -189,7 +189,11 @@ impl Chart {
                 .timeframe
                 .is_some_and(crate::model::Timeframe::is_trade_based)
             && self.time_label_seconds() >= 86_400
-            && !bars.first().into_iter().chain(bars.last()).all(local_midnight);
+            && !bars
+                .first()
+                .into_iter()
+                .chain(bars.last())
+                .all(local_midnight);
         if utc_dates {
             crate::scales::TimezoneMode::Utc
         } else {
