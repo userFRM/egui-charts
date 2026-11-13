@@ -1,11 +1,10 @@
 //! Commands: keyboard requests, quick search, export and the clipboard.
 
-use super::core::{Direction, SidePanel};
+use super::core::Direction;
 use super::layout::Region;
 use super::{Action, ExportContents, ExportFile, Terminal};
 use egui_charts::config::KeyboardAction;
 use egui_charts::drawings::DrawingToolType;
-use egui_charts::model::{LogicalRange, Timeframe};
 use egui_charts::scales::PriceScaleMode;
 use egui_charts::services::UserSettings;
 use egui_charts::studies::IndicatorFactory;
@@ -63,7 +62,6 @@ fn quick_search_commands(factory: &IndicatorFactory) -> Vec<Command> {
         ("log", "Toggle logarithmic scale", "Settings"),
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
-        ("targets", "Show analyst price targets", "Actions"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
@@ -241,6 +239,7 @@ impl Terminal {
                     let result = self
                         .chart()
                         .export_svg(&self.ctx(), &config.image)
+                        .map_err(|error| error.to_string())
                         .and_then(|svg| {
                             self.hand_over(
                                 format!("{}_export.svg", self.chart().symbol()),
@@ -313,18 +312,9 @@ impl Terminal {
             A::ShowKeyboardHelp => Action::WidgetBar(WidgetBarAction::Clicked(RightBarIcon::Help)),
             A::OpenIndicatorSearch => Action::TopToolbar(TopToolbarAction::OpenIndicators),
             A::OpenSymbolSearch => Action::TopToolbar(TopToolbarAction::OpenSymbolSearch),
-            A::OpenIntervalSearch => {
-                Action::Shortcut(ShortcutRequest::IntervalEntry(String::new()))
-            }
-            A::GoToDate => Action::BottomBar(TimeframeToolbarAction::OpenDatePicker),
             A::Snapshot => Action::TopToolbar(TopToolbarAction::TakeScreenshot),
-            A::SaveLayout => Action::TopToolbar(TopToolbarAction::Save),
             A::OpenLayout => Action::TopToolbar(TopToolbarAction::Layout(LayoutAction::OpenLayout)),
             A::MaximizeChart => Action::TopToolbar(TopToolbarAction::ToggleFullscreen),
-            A::OpenDataWindow => {
-                self.open_panel(SidePanel::DataWindow);
-                return None;
-            }
             A::CopyDrawing => {
                 self.copy_selection();
                 return None;
@@ -433,26 +423,6 @@ impl Terminal {
                 });
                 return;
             }
-            "targets" => {
-                self.user_action(|terminal| {
-                    // The interval changes first, as the view that follows depends on it.
-                    terminal.perform(Action::TopToolbar(TopToolbarAction::IntervalSelected(
-                        Timeframe::Day1,
-                    )));
-                    let chart = terminal.chart_mut();
-                    chart.set_price_targets_visible(true);
-                    if let Some(last) = chart.state().shown().last() {
-                        let horizon = last.time + chrono::TimeDelta::days(365);
-                        if let Some(index) = chart.time_to_index(horizon) {
-                            chart.set_visible_logical_range(LogicalRange::new(
-                                -10.0,
-                                index as f32 + 120.0,
-                            ));
-                        }
-                    }
-                });
-                return;
-            }
             _ => return,
         };
         self.emit(action);
@@ -470,6 +440,7 @@ impl Terminal {
         let result = self
             .chart()
             .export_png(&ctx, options)
+            .map_err(|error| error.to_string())
             .and_then(|png| match target {
                 ImageTarget::File { open } => self.hand_over(
                     format!("{}_chart.png", self.chart().symbol()),
@@ -684,16 +655,14 @@ mod tests {
         // Each search edit is one undo step.
         let flags = |terminal: &mut Terminal| {
             let grid = terminal.chart().config().show_grid;
-            let targets = terminal.chart().price_targets_visible();
             let scale = terminal.chart_mut().price_scale_mut().options();
             (
                 grid,
                 scale.mode == PriceScaleMode::Logarithmic,
                 scale.invert_scale,
-                targets,
             )
         };
-        for command in ["grid", "log", "invert", "targets"] {
+        for command in ["grid", "log", "invert"] {
             let mut terminal = terminal();
             for _ in 0..3 {
                 frame(&mut terminal, SIZE, vec![]);
@@ -730,7 +699,9 @@ mod tests {
                     )));
                 }
                 "indicators" => {
-                    frame(&mut terminal, SIZE, vec![key(Key::Slash, Modifiers::NONE)]);
+                    let slash = frame(&mut terminal, SIZE, vec![key(Key::Slash, Modifiers::NONE)]);
+                    assert!(slash.actions.is_empty(), "{:?}", slash.actions);
+                    assert!(terminal.keyboard_dialog_open());
                 }
                 "help" => {
                     terminal.run(Action::Shortcut(ShortcutRequest::Action(
@@ -767,7 +738,8 @@ mod tests {
         drawings.drawings.push(trend_line(7, 100.0));
         drawings.drawings.push(trend_line(8, 110.0));
         drawings.select_drawings([7, 8]);
-        let (commands, _) = frame_output(&mut terminal, vec![Event::Copy]);
+        let (commands, actions) = frame_output(&mut terminal, vec![Event::Copy]);
+        assert!(actions.is_empty(), "{actions:?}");
         let copied = commands.iter().find_map(|command| match command {
             egui::OutputCommand::CopyText(text) => Some(text.clone()),
             _ => None,
