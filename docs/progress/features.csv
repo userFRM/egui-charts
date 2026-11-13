@@ -193,14 +193,14 @@ Chart,Keyboard shortcuts,Keyboard zoom,unverified,library,src/config/keyboard.rs
 Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/interaction.rs,
 Chart,Keyboard shortcuts,Maximize chart,incomplete,library,src/config/keyboard.rs;src/widget/layout.rs,
 Chart,Keyboard shortcuts,Next and previous chart,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs;terminal/src/layouts.rs,
-Chart,Keyboard shortcuts,Open indicators,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2800
+Chart,Keyboard shortcuts,Open indicators,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs,
 Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs;src/ui_kit/command_palette/fuzzy.rs,2809
 Chart,Keyboard shortcuts,Reset chart,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Save layout,verified,library,src/config/keyboard.rs;terminal/src/layouts.rs,
 Chart,Keyboard shortcuts,Scale toggles,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2810
 Chart,Keyboard shortcuts,Shortcut list dialog,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/dialogs/keyboard_shortcuts/mod.rs,
 Chart,Keyboard shortcuts,Snapshot,incomplete,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs,
-Chart,Keyboard shortcuts,Type to change symbol,incomplete,host,src/widget/keyboard.rs,2800;2810
+Chart,Keyboard shortcuts,Type to change symbol,incomplete,host,src/widget/keyboard.rs,2810
 Chart,Keyboard shortcuts,Undo and redo,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs;src/widget/layout.rs;src/widget/studies.rs;src/studies/settings.rs,2505;2522;2688;2689;2810;2812;2813;2844
 Chart,Legend and data window,Data window panel,incomplete,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;terminal/src/drawings.rs;src/widget/format.rs,1939;2483;2814;2815;2817;2818;2819
 Chart,Legend and data window,Indicator entries in the legend,incomplete,library,src/chart/rendering/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,

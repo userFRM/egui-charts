@@ -7,6 +7,9 @@ use egui::{Context, Event, KeyboardShortcut};
 ///
 /// Remove a binding to disable it, or replace its key or action to rebind it.
 /// The first binding wins if several actions use the same key combination.
+/// A binding on a punctuation key also runs when the press differs from it only by Shift,
+/// which some layouts need to type that character, unless another binding names that exact
+/// combination.
 #[derive(Clone, Debug)]
 pub struct ShortcutMap {
     /// Key combinations and their actions, in precedence order.
@@ -47,6 +50,31 @@ impl ShortcutMap {
             })
     }
 
+    /// The binding a key press runs. Layouts differ in which punctuation needs Shift, so a key
+    /// named by a punctuation character matches with Shift ignored when no binding names the
+    /// exact modifiers.
+    fn binding(
+        &self,
+        key: egui::Key,
+        modifiers: egui::Modifiers,
+    ) -> Option<(KeyboardShortcut, KeyboardAction)> {
+        let find = |ignore_shift: bool| {
+            let held = |modifiers: egui::Modifiers| egui::Modifiers {
+                shift: modifiers.shift && !ignore_shift,
+                ..modifiers
+            };
+            self.bindings.iter().copied().find(|(shortcut, _)| {
+                key == shortcut.logical_key
+                    && held(modifiers).matches_exact(held(shortcut.modifiers))
+            })
+        };
+        find(false).or_else(|| {
+            typed_char(key)
+                .filter(|c| !c.is_alphanumeric())
+                .and_then(|_| find(true))
+        })
+    }
+
     /// Consume the first bound key press with the text it typed, leaving other input for its
     /// owner.
     pub(crate) fn consume(
@@ -69,14 +97,8 @@ impl ShortcutMap {
                     Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
                     _ => return None,
                 };
-                let (shortcut, action) = self.bindings.iter().find(|(shortcut, _)| {
-                    let matches = modifiers.matches_exact(shortcut.modifiers)
-                        || (matches!(key, egui::Key::Plus | egui::Key::Questionmark)
-                            && modifiers.matches_logically(shortcut.modifiers)
-                            && modifiers.alt == shortcut.modifiers.alt);
-                    key == shortcut.logical_key && matches
-                })?;
-                accepts(*action, *shortcut).then_some(*action)
+                let (shortcut, action) = self.binding(key, modifiers)?;
+                accepts(action, shortcut).then_some(action)
             };
             let (index, action) = input
                 .events
@@ -418,10 +440,7 @@ impl super::Chart {
                             input.events.remove(index);
                             return Some(key);
                         }
-                        if self.keyboard.map.bindings.iter().any(|(shortcut, _)| {
-                            shortcut.logical_key == *key
-                                && modifiers.matches_exact(shortcut.modifiers)
-                        }) {
+                        if self.keyboard.map.binding(*key, *modifiers).is_some() {
                             return None;
                         }
                     }
@@ -883,6 +902,18 @@ mod tests {
             (Key::ArrowRight, alt_shift, None, Some(A::ScrollToRealTime)),
             (Key::End, Modifiers::NONE, None, Some(A::ScrollToRealTime)),
             (Key::Period, Modifiers::NONE, None, Some(A::OpenLayout)),
+            (
+                Key::Period,
+                Modifiers::SHIFT,
+                Some((".", false)),
+                Some(A::OpenLayout),
+            ),
+            (
+                Key::Slash,
+                Modifiers::SHIFT,
+                Some(("/", false)),
+                Some(A::OpenIndicatorSearch),
+            ),
             (Key::D, Modifiers::ALT, None, Some(A::OpenDataWindow)),
             (
                 Key::D,
