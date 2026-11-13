@@ -7,9 +7,10 @@
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice. The first page after a
 //! new subscription on a retained tape also fills the time between the tape and the live stream,
-//! through the instant of the oldest live trade under the same rule. A page's trades at the
-//! stream's first instant may have traded before the subscription, so the live trades left to a
-//! page there are kept apart: they, not the page's, are what the stream sent at that instant.
+//! from the instant of the newest retained trade through that of the oldest live trade, each under
+//! the same rule. A page's trades at the stream's first instant may have traded before the
+//! subscription, so the live trades left to a page there are kept apart: they, not the page's, are
+//! what the stream sent at that instant.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -197,6 +198,16 @@ impl Trades {
         self.lost_until
     }
 
+    /// Time of the newest retained trade, until a page fills the time after it: trades from that
+    /// instant on, before the live ones, may be missing.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn retained_until(&self) -> Option<DateTime<Utc>> {
+        self.retained_until
+    }
+
     /// Time of the oldest live trades, while a page left out its trades at that time because ids
     /// did not tell them from the live ones.
     #[cfg_attr(
@@ -229,7 +240,10 @@ impl Trades {
     }
 
     /// Starts a new subscription anchor while retaining executions, ids and loss evidence.
-    #[cfg(feature = "widget")]
+    #[cfg_attr(
+        not(any(feature = "widget", test)),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
     pub(crate) fn reanchor(&mut self) {
         self.paged = self.trades.len();
         self.paged_until = self.trades.iter().map(|trade| trade.ts).max();
@@ -420,29 +434,35 @@ impl Trades {
     }
 
     /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. A trade at the instant of the oldest
-    /// live trade follows them when it and every held trade at that instant carry ids and its id
-    /// is not held; one that ids do not tell from the held ones is left out and the instant
-    /// recorded. The oldest go beyond capacity.
+    /// them: nothing streamed while the subscription changed. One whose id is held stays out. A
+    /// trade at the instant of the newest retained trade or of the oldest live trade follows them
+    /// when it and every held trade at that instant carry ids; one that ids do not tell from the
+    /// held ones is left out, and the instant of the oldest live trade recorded. The oldest go
+    /// beyond capacity.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
         let Some(until) = self.retained_until.take() else {
             return;
         };
         let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
-        let ids_at_live = (self.trades.iter())
-            .filter(|held| Some(held.ts) == live_from)
-            .all(|held| held.id.is_some());
+        let ids_at = |at: Option<DateTime<Utc>>| {
+            (self.trades.iter())
+                .filter(|held| Some(held.ts) == at)
+                .all(|held| held.id.is_some())
+        };
+        let (ids_at_tape, ids_at_live) = (ids_at(Some(until)), ids_at(live_from));
+        // The tape's last instant is a boundary of its own while the stream starts after it.
+        let after_tape = live_from.is_none_or(|from| until < from);
         let mut left_out = false;
         let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page).into_iter().partition(|t| {
+            let unheld = t.id.is_none_or(|id| !self.ids.contains_key(&id));
             // A live trade stamped inside the retained tape marks no boundary.
-            if Some(t.ts) != live_from || t.ts < until {
-                return t.ts > until && live_from.is_none_or(|from| t.ts < from);
+            let at_live = Some(t.ts) == live_from && t.ts >= until;
+            if !at_live && (t.ts != until || !after_tape) {
+                return unheld && t.ts > until && live_from.is_none_or(|from| t.ts < from);
             }
-            let Some(id) = t.id.filter(|_| ids_at_live) else {
-                left_out = true;
-                return false;
-            };
-            !self.ids.contains_key(&id)
+            let told_apart = t.id.is_some() && if at_live { ids_at_live } else { ids_at_tape };
+            left_out |= at_live && !told_apart;
+            told_apart && unheld
         });
         *page = older;
         if left_out {
@@ -493,8 +513,10 @@ mod tests {
         /// Trades pushed between two drains.
         Live(Vec<Tick>),
         Page(Vec<Tick>),
+        /// An interval change that retains the held trades.
+        Reanchor,
     }
-    use Step::{Live, Page};
+    use Step::{Live, Page, Reanchor};
 
     /// Group only explicit aggressor ids, across pages and drains, without moving price volume.
     #[test]
@@ -550,6 +572,7 @@ mod tests {
                     Page(page) => {
                         store.prepend(page, &mut |_, _| ());
                     }
+                    Reanchor => store.reanchor(),
                 }
             }
             let combined = combine_trades(store.iter());
@@ -709,27 +732,55 @@ mod tests {
                 vec![Live(vec![trade(10, 10.0), trade(11, 11.0)]),
                     Page(vec![trade(8, 8.0), trade(9, 9.0)]), Live(vec![trade(12, 12.0)])],
                 vec![9.0, 10.0, 11.0, 12.0], 0, vec![10.0, 11.0, 12.0]),
+            // The old stream stopped between two trades of 10:00:02: ids 1 and 2 are held, 3 is not.
+            ("after an interval change, with ids, a page trade at the tape's last instant joins", 10,
+                vec![Live(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]), Reanchor,
+                    Live(vec![id(trade(3, 5.0), 5)]),
+                    Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(2, 3.0), 3),
+                        id(trade(3, 5.0), 5)])],
+                vec![1.0, 2.0, 3.0, 5.0], 0, vec![5.0]),
+            ("after an interval change, with ids, a page trade stamped earlier than the live copy \
+                is dropped", 10,
+                vec![Live(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]), Reanchor,
+                    Live(vec![id(later(trade(3, 5.0), 400), 5)]),
+                    Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(3, 5.0), 5)])],
+                vec![1.0, 2.0, 5.0], 0, vec![5.0]),
         ];
         for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);
             let mut dropped = 0;
+            // The prices `changed` reports added and not evicted since.
+            let mut reported = Vec::new();
+            let mut changed = |trade: &Tick, added| {
+                if added {
+                    reported.push(trade.price);
+                } else {
+                    let evicted = reported.iter().position(|price| *price == trade.price);
+                    reported.remove(evicted.expect(name));
+                }
+            };
             for step in steps {
                 match step {
                     Live(trades) => {
                         let mut pending = store.empty();
                         trades.into_iter().for_each(|trade| pending.push(trade));
-                        store.append(pending, &mut |_, _| ());
+                        store.append(pending, &mut changed);
                     }
-                    Page(page) => dropped += store.prepend(page, &mut |_, _| ()),
+                    Page(page) => dropped += store.prepend(page, &mut changed),
+                    Reanchor => store.reanchor(),
                 }
             }
             let held = Vec::from_iter(store.iter().map(|trade| trade.price));
             let live = Vec::from_iter(store.live().map(|trade| trade.price));
+            reported.sort_by(f64::total_cmp);
+            let mut sorted = held.clone();
+            sorted.sort_by(f64::total_cmp);
             assert_eq!(
                 (held, dropped, live),
                 (prices, rejected, live_prices),
                 "{name}"
             );
+            assert_eq!(reported, sorted, "{name}: reported by `changed`");
             let ids = store.iter().filter(|trade| trade.id.is_some()).count();
             assert_eq!(store.ids.len(), ids, "{name}: held ids");
             let repeats: Vec<_> = store.iter().filter(|t| t.id.is_some()).cloned().collect();

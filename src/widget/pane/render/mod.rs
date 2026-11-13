@@ -575,6 +575,12 @@ impl Chart {
                 config.show_grid &= Some(entry) == first;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
+                panel.background = Some((
+                    self.background_frame(panel_rect),
+                    self.config.background_style,
+                    self.config.background_color,
+                ));
+                panel.text_color = Some(self.config.text_color);
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
@@ -1300,7 +1306,7 @@ impl Chart {
                                 item,
                                 self.series_map(item, chart_rect),
                                 index,
-                                |_| ui.active_theme().chart.bg,
+                                |point| self.background_at(panel_rect, point),
                             );
                         }
                     }

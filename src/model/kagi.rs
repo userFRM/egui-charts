@@ -13,7 +13,9 @@
 //!
 //! A new line segment is created whenever price reverses by at least the
 //! configured [`reversal_amount`](KagiConfig::reversal_amount). Time is
-//! ignored -- only price movement matters.
+//! ignored -- only price movement matters. The first line starts at the first
+//! close and runs to the first price beyond the reversal amount from it, up or
+//! down.
 //!
 //! Use [`to_kagi_lines`] to transform a slice of [`Bar`]s.
 
@@ -217,8 +219,18 @@ impl PriceBuilder for KagiBuilder {
             return;
         };
         st.last_ts = bar.time;
+        // Only the first line can be unmoved: it has no direction until a price lies beyond the
+        // reversal amount from the first close. A bar beyond it on both sides counts as a rise.
+        let first = st.curr_price == st.line_start_price;
         let price = match self.source {
             PriceBasedSource::Close => bar.close,
+            PriceBasedSource::HighLow if first => {
+                if bar.high > st.curr_price + reversal {
+                    bar.high
+                } else {
+                    bar.low
+                }
+            }
             PriceBasedSource::HighLow if st.line_direction_up => {
                 if bar.high > st.curr_price {
                     bar.high
@@ -234,6 +246,14 @@ impl PriceBuilder for KagiBuilder {
                 }
             }
         };
+
+        if first {
+            if price > st.curr_price + reversal || price < st.curr_price - reversal {
+                st.line_direction_up = price > st.curr_price;
+                st.curr_price = price;
+            }
+            return;
+        }
 
         let up = st.line_direction_up;
         if up && price < st.curr_price - reversal || !up && price > st.curr_price + reversal {
@@ -285,36 +305,55 @@ mod tests {
     #[test]
     fn thickness_changes_where_a_line_crosses_the_prior_shoulder_or_waist() {
         use KagiThickness::{Thick, Thin};
+        type Line = (f64, f64, KagiThickness, Option<f64>);
+        let cases: [(&[f64], &[Line]); 2] = [
+            // 100 up to 105, down to 102, up through the 105 shoulder to 107 in one bar, down to
+            // 103 and on through the 102 waist to 101.
+            (
+                &[100.0, 105.0, 102.0, 107.0, 103.0, 101.0],
+                &[
+                    (100.0, 105.0, Thin, None),
+                    (105.0, 102.0, Thin, None),
+                    (102.0, 107.0, Thick, Some(105.0)),
+                    (107.0, 101.0, Thin, Some(102.0)),
+                ],
+            ),
+            // A first move down starts a falling line at the first close: 100 down to 95, up to
+            // 98 short of the 100 shoulder, down to 94, up through the 98 shoulder to 101, and
+            // down to 99, above the 94 waist.
+            (
+                &[100.0, 95.0, 98.0, 94.0, 101.0, 99.0],
+                &[
+                    (100.0, 95.0, Thin, None),
+                    (95.0, 98.0, Thin, None),
+                    (98.0, 94.0, Thin, None),
+                    (94.0, 101.0, Thick, Some(98.0)),
+                    (101.0, 99.0, Thick, None),
+                ],
+            ),
+        ];
         let start = Utc::now();
-        // 100 up to 105, down to 102, up through the 105 shoulder to 107 in one bar, down to
-        // 103 and on through the 102 waist to 101.
-        let bars: Vec<Bar> = [100.0, 105.0, 102.0, 107.0, 103.0, 101.0]
-            .into_iter()
-            .enumerate()
-            .map(|(i, close)| Bar {
-                time: start + Duration::minutes(i as i64),
-                open: close,
-                high: close,
-                low: close,
-                close,
-                volume: 0.0,
-                colors: None,
-                payload: None,
-            })
-            .collect();
-        let lines: Vec<_> = to_kagi_lines(&bars, &KagiConfig::new(1.0))
-            .into_iter()
-            .map(|l| (l.start_price, l.end_price, l.thickness, l.crossing))
-            .collect();
-        assert_eq!(
-            lines,
-            [
-                (100.0, 105.0, Thin, None),
-                (105.0, 102.0, Thin, None),
-                (102.0, 107.0, Thick, Some(105.0)),
-                (107.0, 101.0, Thin, Some(102.0)),
-            ]
-        );
+        for (closes, expected) in cases {
+            let bars: Vec<Bar> = closes
+                .iter()
+                .enumerate()
+                .map(|(i, &close)| Bar {
+                    time: start + Duration::minutes(i as i64),
+                    open: close,
+                    high: close,
+                    low: close,
+                    close,
+                    volume: 0.0,
+                    colors: None,
+                    payload: None,
+                })
+                .collect();
+            let lines: Vec<_> = to_kagi_lines(&bars, &KagiConfig::new(1.0))
+                .into_iter()
+                .map(|l| (l.start_price, l.end_price, l.thickness, l.crossing))
+                .collect();
+            assert_eq!(lines, expected, "closes {closes:?}");
+        }
     }
 
     #[test]

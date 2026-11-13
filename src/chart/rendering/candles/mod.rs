@@ -269,7 +269,6 @@ pub fn render_chart_type(
                 params.chart_rect_min_x(),
                 &idx_to_coord,
                 &params.type_params.styles.hlc_area,
-                params.price_source(),
             );
         }
         ChartType::Columns => {
