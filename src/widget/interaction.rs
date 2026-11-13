@@ -233,8 +233,8 @@ impl Chart {
                     }
                 }
                 TrackingModeExitMode::OnTouchEnd => {
-                    // Exit when drag/touch ends
-                    if !response.dragged() && self.scroll_start_pos.is_some() {
+                    // Exit when a press on the chart is released, whether or not it moved
+                    if response.clicked() || response.drag_stopped() {
                         self.tracking_mode_active = false;
                     }
                 }
@@ -306,8 +306,70 @@ impl Chart {
 
 #[cfg(test)]
 mod tests {
-    use crate::widget::test_frames::chart;
-    use egui::{Context, Event, Key, Modifiers, RawInput, Rect, Vec2};
+    use crate::widget::test_frames::{chart, frame};
+    use egui::{Context, Event, Key, Modifiers, PointerButton, RawInput, Rect, Vec2};
+
+    /// Live-edge following ends on the gesture its exit mode names, and on a drag or the wheel
+    /// under every mode; a press that is still held ends it under none.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn tracking_exit_modes_follow_their_documented_gesture() {
+        use crate::config::TrackingModeExitMode::{OnMouseLeave, OnNextTap, OnTouchEnd};
+        // Whether following survives a press, a click, a drag, the pointer leaving and the wheel.
+        for (mode, survives) in [
+            (OnTouchEnd, [true, false, false, true, false]),
+            (OnMouseLeave, [true, true, false, false, false]),
+            (OnNextTap, [true, false, false, true, false]),
+        ] {
+            for (gesture, survives) in ["press", "click", "drag", "leave", "wheel"]
+                .into_iter()
+                .zip(survives)
+            {
+                let ctx = Context::default();
+                let mut chart = chart(&[100.0], &[101.0]);
+                chart.chart_options.tracking_mode.exit_mode = mode;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let pos = chart.last_rendered_price_rect.center();
+                let end = pos + egui::vec2(40.0, 0.0);
+                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pos)]);
+                chart.enable_tracking_mode();
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let steps = match gesture {
+                    "press" => vec![button(pos, true)],
+                    "click" => vec![button(pos, true), button(pos, false)],
+                    "drag" => vec![
+                        button(pos, true),
+                        Event::PointerMoved(end),
+                        button(end, false),
+                    ],
+                    "leave" => vec![Event::PointerGone],
+                    _ => vec![Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -240.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: Modifiers::NONE,
+                    }],
+                };
+                let settled = 0.04 + steps.len() as f64 * 0.02;
+                for (step, event) in steps.into_iter().enumerate() {
+                    frame(&ctx, &mut chart, 0.04 + step as f64 * 0.02, vec![event]);
+                }
+                // A pointer that has gone stops hovering the chart in the following frame.
+                frame(&ctx, &mut chart, settled, vec![]);
+                assert_eq!(
+                    chart.is_tracking_mode_active(),
+                    survives,
+                    "{mode:?}, {gesture}"
+                );
+            }
+        }
+    }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
