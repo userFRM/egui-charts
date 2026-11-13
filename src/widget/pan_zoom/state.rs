@@ -19,12 +19,12 @@ pub struct KineticScrollState {
     pub velocity: f32,
     /// Last pointer position during drag (for velocity calculation).
     pub last_pos: Option<Pos2>,
-    /// Timestamp of the last pointer sample.
-    pub last_time: Option<Instant>,
+    /// Frame time of the last pointer sample, in seconds.
+    pub last_time: Option<f64>,
     /// Whether kinetic animation is currently running.
     pub is_active: bool,
-    /// Last animation frame time (for delta-time calculation).
-    pub anim_last_time: Option<Instant>,
+    /// Frame time of the last animation step, in seconds (for delta-time calculation).
+    pub anim_last_time: Option<f64>,
 }
 
 impl Default for KineticScrollState {

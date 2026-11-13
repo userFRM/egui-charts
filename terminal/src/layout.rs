@@ -82,11 +82,15 @@ impl Terminal {
         self.show_region(ui, Region::Left);
         self.show_region(ui, Region::Right);
         self.show_region(ui, Region::Bottom);
+        let mut financials_shown = false;
         egui::CentralPanel::default()
             .frame(panel_frame(panel_bg))
             .show(ui, |ui| {
-                let mut slots: Vec<_> = self.charts.iter_mut().collect();
-                self.layout.show_with(ui, &mut slots, &mut render);
+                financials_shown = self.show_financials(ui);
+                if !financials_shown {
+                    let mut slots: Vec<_> = self.charts.iter_mut().collect();
+                    self.layout.show_with(ui, &mut slots, &mut render);
+                }
             });
         if self.layout.active() != self.active {
             self.activate_slot(self.layout.active());
@@ -104,9 +108,11 @@ impl Terminal {
                 self.toasts.error(error.to_string());
             }
         }
-        self.show_region(ui, Region::Chart);
-        if let Some(action) = self.menus.show(&ctx, &mut self.charts[self.active]) {
-            self.emit(Action::ChartMenu(action));
+        if !financials_shown {
+            self.show_region(ui, Region::Chart);
+            if let Some(action) = self.menus.show(&ctx, &mut self.charts[self.active]) {
+                self.emit(Action::ChartMenu(action));
+            }
         }
         self.show_region(ui, Region::Windows);
         self.show_storage_conflict(&ctx);

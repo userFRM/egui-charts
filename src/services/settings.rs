@@ -3,7 +3,7 @@
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::{CursorType, DrawingSort, DrawingToolType};
-use crate::model::{ReplaySession, Timeframe, Watchlist};
+use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -59,6 +59,18 @@ pub struct UserSettings {
     /// know is left out when reading.
     #[serde(deserialize_with = "known_items")]
     pub interval_favorites: Vec<Timeframe>,
+    /// The intervals the user added to the interval menu, in order. An interval this release does
+    /// not know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub custom_intervals: Vec<Timeframe>,
+    /// The intervals the user hid from the interval menu. An interval this release does not know
+    /// is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub hidden_intervals: Vec<Timeframe>,
+    /// The chart types starred in the chart type menu, in order. A chart type this release does
+    /// not know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub chart_type_favorites: Vec<ChartType>,
     /// The properties each drawing tool starts with, keyed by tool, as the JSON of
     /// its `DrawingTemplate`. A tool without an entry starts with
     /// the built-in defaults.
@@ -141,9 +153,9 @@ impl UserSettings {
 
     /// Reads a document [`to_json`](Self::to_json) wrote, migrating older versions. Fails on
     /// invalid JSON and on a version this release does not know. A missing field takes its
-    /// default. A drawing order, tool, cursor mode or interval a newer release added is left out,
-    /// as each field says, and the rest is read. Values left out when reading are absent from the
-    /// next save.
+    /// default. A drawing order, tool, cursor mode, interval or chart type a newer release added
+    /// is left out, as each field says, and the rest is read. Values left out when reading are
+    /// absent from the next save.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
@@ -386,8 +398,10 @@ mod tests {
         );
     }
 
-    /// An interval from a newer release is left out of the starred intervals and unsets the last
-    /// interval and the replay position; the same places keep an interval this release knows.
+    /// An interval from a newer release is left out of the starred, custom and hidden intervals
+    /// and unsets the last interval and the replay position; the same places keep an interval
+    /// this release knows. A chart type from a newer release is left out of the starred chart
+    /// types.
     #[test]
     fn unknown_intervals_keep_the_other_settings() {
         use chrono::TimeZone;
@@ -409,6 +423,8 @@ mod tests {
                 UserSettings {
                     interval: Some(Timeframe::Day1),
                     interval_favorites: vec![Timeframe::Min5, Timeframe::Day1],
+                    custom_intervals: vec![Timeframe::Day1],
+                    hidden_intervals: vec![Timeframe::Day1],
                     replay_session: Some((session, Timeframe::Day1)),
                     ..UserSettings::default()
                 },
@@ -416,8 +432,9 @@ mod tests {
         ];
         for (interval, mut expected) in rows {
             expected.theme = Some("Dark".into());
+            expected.chart_type_favorites = vec![ChartType::Bars];
             let json = format!(
-                r#"{{"version":1,"theme":"Dark","interval":"{interval}","interval_favorites":["Min5","{interval}"],"replay_session":[{{"symbol":"AAA","time":"2026-01-02T00:00:00Z","speed":2.0}},"{interval}"]}}"#
+                r#"{{"version":1,"theme":"Dark","interval":"{interval}","interval_favorites":["Min5","{interval}"],"custom_intervals":["{interval}"],"hidden_intervals":["{interval}"],"chart_type_favorites":["Bars","FutureChartType"],"replay_session":[{{"symbol":"AAA","time":"2026-01-02T00:00:00Z","speed":2.0}},"{interval}"]}}"#
             );
             assert_eq!(
                 UserSettings::from_json(&json).map_err(|error| error.to_string()),
