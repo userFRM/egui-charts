@@ -383,9 +383,9 @@ fn add_volume(volume: f64, added: f64) -> f64 {
 }
 
 /// The order a bar's prices are taken to have traded in: open, the extreme nearer the open, the
-/// other extreme, close. The rule is that of `price_path` in `strategies/backtest.rs`: the high
-/// first when both extremes are as near within a few ulps.
-fn price_path(bar: &Bar) -> [f64; 4] {
+/// other extreme, close; the high first when both extremes are as near within a few ulps. The
+/// strategy tester fills orders along the same path.
+pub(crate) fn price_path(bar: &Bar) -> [f64; 4] {
     let tie = rounding_tolerance(bar.high.abs().max(bar.low.abs()), 4.0 * f64::EPSILON);
     if (bar.high - bar.open) - (bar.open - bar.low) <= tie {
         [bar.open, bar.high, bar.low, bar.close]
