@@ -10,6 +10,7 @@ use crate::drawings::services::HistoryService;
 use crate::model::{ChartType, ChartTypeParams, SeriesAlerts, SeriesScale, Timeframe};
 use crate::scales::PriceScale;
 use crate::studies::{Indicator, StudySettingsSnapshot};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub(super) struct ChartHistory {
@@ -18,6 +19,10 @@ pub(super) struct ChartHistory {
     pending: Option<Pending>,
     /// Expires when the divider drag ends or its layout is dropped.
     pub(super) resizing: std::sync::Weak<()>,
+    /// Split size and link membership steps undone or redone since a layout last showed the
+    /// chart, for that layout to apply in the order of their process-wide numbers.
+    pub(super) size_steps: Vec<(u64, Arc<Mutex<super::layout::SizeChange>>)>,
+    pub(super) link_steps: Vec<(u64, Arc<Mutex<super::layout::LinkChange>>)>,
     changed: bool,
     /// User edits recorded, undone or redone, kept when the history is cleared.
     pub(super) edits: u64,
@@ -37,8 +42,8 @@ struct Pending {
 
 #[derive(Default)]
 struct Action {
-    layout_sizes: Option<super::layout::SizeChange>,
-    layout_links: Option<super::layout::LinkChange>,
+    layout_sizes: Option<Arc<Mutex<super::layout::SizeChange>>>,
+    layout_links: Option<Arc<Mutex<super::layout::LinkChange>>>,
     /// The cross-chart edit this action is one chart's part of.
     layout_edit: Option<super::layout::LayoutEditLink>,
     symbol: Option<String>,
@@ -58,6 +63,7 @@ struct Action {
     panes: Option<super::pane::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
+    extended_hours: Option<bool>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
@@ -90,6 +96,7 @@ impl Action {
             && self.panes.is_none()
             && self.chart_type.is_none()
             && self.interval.is_none()
+            && self.extended_hours.is_none()
             && self.studies.is_empty()
             && !drawings_changed
     }
@@ -223,7 +230,7 @@ impl ChartHistory {
 
     pub(super) fn record_links(&mut self, change: super::layout::LinkChange) {
         self.push(Action {
-            layout_links: Some(change),
+            layout_links: Some(Arc::new(Mutex::new(change))),
             ..Action::default()
         });
     }
@@ -260,7 +267,7 @@ impl ChartHistory {
 
     pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
         self.push(Action {
-            layout_sizes: Some(change),
+            layout_sizes: Some(Arc::new(Mutex::new(change))),
             ..Action::default()
         });
     }
@@ -289,6 +296,9 @@ impl ChartHistory {
         *self = Self {
             edits: self.edits,
             drawing_edits: self.drawing_edits,
+            // Already undone or redone; the layout still has to apply them.
+            size_steps: std::mem::take(&mut self.size_steps),
+            link_steps: std::mem::take(&mut self.link_steps),
             ..Self::default()
         };
     }
@@ -436,6 +446,7 @@ impl Chart {
                 panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
+                extended_hours: Some(self.extended_hours),
                 ..Action::default()
             },
             #[cfg(feature = "drawings")]
@@ -514,6 +525,9 @@ impl Chart {
         }
         if action.interval == Some(self.timeframe) {
             action.interval = None;
+        }
+        if action.extended_hours == Some(self.extended_hours) {
+            action.extended_hours = None;
         }
         if let Some(scale) = &action.scale
             && same_scale(scale, self.state.price_scale())
@@ -843,7 +857,8 @@ impl Chart {
     }
 
     /// Drain a notification that undo/redo changed chart state. Hosts that own the data must
-    /// reload it if [`Self::timeframe`] or [`Self::bar_clock`] changed, and synchronize their UI.
+    /// reload it if [`Self::timeframe`], [`Self::bar_clock`] or [`Self::extended_hours`] changed,
+    /// and synchronize their UI.
     /// Added series that the step removed or brought back are reported by
     /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
     /// [`ChartEvent::SeriesAdded`].
@@ -936,11 +951,14 @@ impl Chart {
             return false;
         };
         let current_view = self.get_time_scale_state();
-        if let Some(sizes) = &mut action.layout_sizes {
-            sizes.swap();
+        // Steps of one preset or slot on different charts only restore it in the order taken.
+        static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let order = ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(sizes) = &action.layout_sizes {
+            self.history.size_steps.push((order, Arc::clone(sizes)));
         }
-        if let Some(links) = &mut action.layout_links {
-            links.swap();
+        if let Some(links) = &action.layout_links {
+            self.history.link_steps.push((order, Arc::clone(links)));
         }
         let mut current: Vec<_> = action
             .studies
@@ -967,6 +985,12 @@ impl Chart {
                 self.drawings.curr_timeframe.clear();
             }
             *interval = current;
+        }
+        if let Some(extended_hours) = &mut action.extended_hours {
+            let current = self.extended_hours;
+            // The setter reloads the history and the subscription of the restored session.
+            self.set_extended_hours(*extended_hours);
+            *extended_hours = current;
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);

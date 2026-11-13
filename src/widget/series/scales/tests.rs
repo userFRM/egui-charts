@@ -150,11 +150,12 @@ fn fit_content_includes_added_series_across_panes() {
         };
         let margin = if case == "fixed edges" { 0.0 } else { 3.0 };
         let pixels = if case == "pixels" { 60.0 } else { 0.0 };
-        let expected =
-            ((plot.width() - pixels) / (slots + if pixels > 0.0 { 0.0 } else { margin })).clamp(
-                if case == "minimum" { 100.0 } else { 0.5 },
-                if case == "maximum" { 4.0 } else { f32::MAX },
-            );
+        let expected = ((plot.width() - 1.0 - pixels)
+            / (slots + if pixels > 0.0 { 0.0 } else { margin }))
+        .clamp(
+            if case == "minimum" { 100.0 } else { 0.5 },
+            if case == "maximum" { 4.0 } else { f32::MAX },
+        );
         assert!(
             (chart.get_time_scale_state().0 - expected).abs() < 0.001,
             "{case}: spacing {:?} != {expected}",
@@ -237,7 +238,7 @@ fn fit_content_includes_added_series_across_panes() {
             };
             assert!(
                 (chart.get_time_scale_state().0
-                    - chart.get_rendered_price_rect().width() / (slots + 3.0))
+                    - (chart.get_rendered_price_rect().width() - 1.0) / (slots + 3.0))
                     .abs()
                     < 0.001,
                 "{case}: fit after replacing the fallback domain"
@@ -291,10 +292,10 @@ fn added_only_appends_keep_a_scrolled_back_view() {
 }
 
 /// A fit of 1000 added bars into 800 points is below one point per bar, so the visible range groups
-/// the slots of the added series while the main series has no groups to read. The volume pane, on
-/// by default, draws nothing and the frame ends on the newest added bar.
+/// the slots of the added series while the main series has no groups to read. The frame completes
+/// with the volume pane on and ends on the newest added bar.
 #[test]
-fn added_only_fit_paints_the_volume_pane() {
+fn added_only_fit_below_one_point_per_bar_groups_the_added_slots() {
     let ctx = egui::Context::default();
     let mut chart = Chart::new(BarData::from_bars(vec![]));
     let id = chart.add_series(SeriesOptions::default());
@@ -3837,11 +3838,11 @@ fn series_data_is_queried_popped_and_reported() {
     assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 4.0)));
     frame(&ctx, &mut chart, 0.1, vec![]);
     let plot = chart.get_rendered_price_rect();
-    let spacing = plot.width() / 5.0;
+    let spacing = (plot.width() - 1.0) / 5.0;
     for index in 0..5 {
         let time = minute(index);
         let x = chart.time_to_x(time).unwrap();
-        let expected = plot.left() + (index as f32 + 0.5) * spacing - 1.0;
+        let expected = plot.left() + (index as f32 + 0.5) * spacing;
         assert!(
             (x - expected).abs() < 0.001,
             "centre {index}: {x} != {expected}"
@@ -4799,6 +4800,43 @@ fn study_without_values_in_view_adds_nothing_to_its_scale() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A volume study in a pane of its own fits 0 to its highest visible volume, 1000 here, as
+/// the pane scale has no fractional margins. Scrolled past the last bar, no volume is in view
+/// and the pane has nothing else to fit, so it keeps that range.
+#[cfg(feature = "studies")]
+#[test]
+fn volume_pane_keeps_its_range_without_volume_in_view() {
+    let start = "2024-01-01T00:00:00Z"
+        .parse::<chrono::DateTime<Utc>>()
+        .unwrap();
+    let bars = (0..100)
+        .map(|day| Bar::new(start + TimeDelta::days(day), 10.0, 20.0, 10.0, 20.0, 1000.0))
+        .collect();
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars));
+    chart.config.show_volume = false;
+    let study = chart.add_indicator(Box::new(
+        crate::studies::Volume::default().with_overlay(false),
+    ));
+    let pane = chart.series_pane(study).unwrap();
+    assert_ne!(pane, PaneId::MAIN);
+    for step in 0..3 {
+        frame(&ctx, &mut chart, step as f64 * 0.1, vec![]);
+    }
+    let fitted = chart.pane_price_scale(pane, SeriesScale::Right).range();
+    chart.scroll_to_position(300.0, false);
+    for step in 1..=3 {
+        frame(&ctx, &mut chart, step as f64, vec![]);
+    }
+    let (first, end) = chart.state().visible_range();
+    assert_eq!(first, end, "no bar in view");
+    let kept = chart.pane_price_scale(pane, SeriesScale::Right).range();
+    assert_eq!(
+        [(fitted.min, fitted.max), (kept.min, kept.max)],
+        [(0.0, 1000.0); 2]
+    );
 }
 
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the

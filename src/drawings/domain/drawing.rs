@@ -11,7 +11,7 @@
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
     FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
     RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
@@ -177,7 +177,8 @@ pub struct Drawing {
     /// drawings have it on.
     #[serde(default = "enabled")]
     pub background: bool,
-    /// Whether an annotation's box has a 1 px border. Older drawings have it on.
+    /// Whether an annotation's box has a 1 px border. Older drawings have it on, except price
+    /// labels saved before they had a border.
     #[serde(default = "enabled")]
     pub border: bool,
     /// Border colour of annotation boxes; `None` uses the drawing colour.
@@ -200,6 +201,11 @@ pub struct Drawing {
     /// saved drawings.
     #[serde(default)]
     pub text_zoom_spacing: Option<f32>,
+    /// Colour, size and emphasis of the text typed on a price note. `None` draws it as the price
+    /// beside it, in the label's text settings, as price notes saved before this setting do. Other
+    /// tools ignore it.
+    #[serde(default)]
+    pub note_text_style: Option<NoteTextStyle>,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
     /// extends past its first anchor, whichever way it was drawn
     pub extend_left: bool,
@@ -567,6 +573,7 @@ impl Drawing {
             text_wrap_width: default_text_wrap_width(),
             text_follows_zoom: false,
             text_zoom_spacing: None,
+            note_text_style: None,
             extend_left: tool_type == DrawingToolType::ExtendedLine,
             extend_right: matches!(
                 tool_type,
@@ -639,21 +646,24 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; fills and pitchfork levels sharing the
-    /// tool's line colour take the new RGB at their own opacity.
+    /// Create a new drawing with a specific line colour; fills, borders and pitchfork levels
+    /// sharing the tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
         drawing.set_line_color(color);
         drawing
     }
 
-    /// Set the line colour and retint fills and pitchfork levels sharing its current RGB,
-    /// keeping each one's opacity. Independently coloured fills and levels keep their colours.
+    /// Set the line colour and retint fills, borders and pitchfork levels sharing its current
+    /// RGB, keeping each one's opacity. Independently coloured fills, borders and levels keep
+    /// their colours.
     pub fn set_line_color(&mut self, color: [u8; 4]) {
-        if let Some(fill) = &mut self.fill_color
-            && fill[..3] == self.color[..3]
-        {
-            fill[..3].copy_from_slice(&color[..3]);
+        for shared in [&mut self.fill_color, &mut self.border_color] {
+            if let Some(shared) = shared
+                && shared[..3] == self.color[..3]
+            {
+                shared[..3].copy_from_slice(&color[..3]);
+            }
         }
         if let Some(config) = &mut self.pitchfork {
             for level in &mut config.levels {
@@ -663,6 +673,17 @@ impl Drawing {
             }
         }
         self.color = color;
+    }
+
+    /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
+    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    #[cfg(feature = "ui")]
+    pub(crate) fn recolor(&mut self, color: [u8; 4]) {
+        if self.tool_type == DrawingToolType::PriceLabel {
+            self.set_line_color(color);
+        } else {
+            self.color = color;
+        }
     }
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not

@@ -59,6 +59,8 @@ use egui::{Pos2, Rect, Vec2};
 pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
+#[cfg(feature = "ui")]
+pub(crate) use readout::SeriesFingerprint;
 use std::collections::BTreeMap;
 
 // Re-export from logic layer
@@ -406,9 +408,6 @@ pub struct Chart {
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,
     event_click: Option<String>,
-    /// Host marker rectangles from this frame and the previous one, for early selection gating.
-    mark_hits: std::cell::RefCell<Vec<Rect>>,
-    clickable_marks: Vec<Rect>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
@@ -467,6 +466,9 @@ pub struct Chart {
     marker_options: crate::model::MarkerOptions,
     /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
     change_marks: Option<change_marks::ChangeMarks>,
+    /// Clock of the last frame that showed the chart, which dates change marks recorded while no
+    /// frame shows it.
+    frame_clock: Option<change_marks::FrameClock>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
     /// The number of price line handles issued.

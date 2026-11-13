@@ -38,10 +38,11 @@ pub enum DataTableAction {
 }
 
 /// Inputs to the table, without copying bars, study settings or the instrument, whose changes
-/// move the chart's table revision.
+/// move the chart's table revision, and the added series, which it reads by their own revisions.
 #[derive(PartialEq)]
 struct Source {
     revision: (u64, u64),
+    series: Vec<crate::widget::SeriesFingerprint>,
     symbol: String,
     timeframe: Option<Timeframe>,
     len: usize,
@@ -53,6 +54,7 @@ impl Source {
     fn of(chart: &Chart) -> Self {
         Self {
             revision: chart.data_table_revision(),
+            series: chart.data_table_series(),
             symbol: chart.symbol().to_owned(),
             timeframe: chart.timeframe(),
             len: chart.bars(SeriesId::MAIN).len(),
@@ -710,7 +712,10 @@ mod tests {
         assert!(matches!(action, DataTableAction::Export(csv) if csv.contains("RSI: RSI(14)")));
 
         assert_eq!(headers(&mut dialog, &first), without_sma);
-        let saved = first.snapshot().unwrap();
+        // Read back as storage would, which must keep the chart that took it.
+        let saved =
+            serde_json::from_str(&serde_json::to_string(&first.snapshot().unwrap()).unwrap())
+                .unwrap();
         for _ in 0..2 {
             first.restore(&saved).unwrap();
             assert_eq!(first.data_table().headers.len(), 7);
@@ -941,5 +946,110 @@ mod tests {
             }
             assert_eq!(shown(&mut dialog, &chart), expected, "{case}");
         }
+    }
+
+    /// After a chart restores its own layout, a study of another chart's layout starts with its
+    /// column shown, also when it was saved under the id of a study whose column is off here, and
+    /// turning off the column of one study hides that study only, also when the studies share a
+    /// title. Another chart's layout restored again starts with every column shown.
+    #[test]
+    fn restored_studies_of_one_title_keep_separate_column_choices() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..300)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        let mut other = Chart::new(BarData::from_bars(bars.clone()));
+        let five = other.add_indicator(Box::new(crate::studies::SMA::new(5)));
+        other.add_indicator(Box::new(crate::studies::SMA::new(20)));
+        let layout = other.snapshot().unwrap();
+        // The same chart's layout once its SMA(5) is removed: the SMA(20) alone, saved with id 3.
+        other.remove_series(five);
+        let lone = other.snapshot().unwrap();
+        // The layout of a third chart, with an EMA under the saved id of the SMA(5).
+        let mut third = Chart::new(BarData::from_bars(bars.clone()));
+        third.add_indicator(Box::new(crate::studies::EMA::new(9)));
+        third.add_indicator(Box::new(crate::studies::SMA::new(20)));
+        let mixed = third.snapshot().unwrap();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(crate::studies::SMA::new(10)));
+        chart.restore(&chart.snapshot().unwrap()).unwrap();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        // The study columns shown after turning off the column of `off`, if any, as its box in
+        // the Columns menu does.
+        let mut shown = |chart: &Chart, off: Option<&str>| {
+            shown_rows(&ctx, &mut dialog, chart);
+            let headers = &dialog.cached.as_ref().unwrap().1.headers;
+            let hidden = dialog.hidden.get_mut(&chart.data_table_identity()).unwrap();
+            if let Some(at) = headers.iter().position(|h| Some(h.as_str()) == off) {
+                hidden.insert(dialog.column_ids[at].clone());
+            }
+            headers
+                .iter()
+                .zip(&dialog.column_ids)
+                .skip(6)
+                .filter(|(_, column)| !hidden.contains(*column))
+                .map(|(header, _)| header.clone())
+                .collect::<Vec<_>>()
+        };
+        // `lone` saved its SMA(20) with id 3, the id of the SMA(10) turned off here.
+        assert!(shown(&chart, Some("SMA: SMA(10)")).is_empty());
+        chart.restore(&lone).unwrap();
+        assert_eq!(shown(&chart, None), ["SMA: SMA(20)"]);
+        chart.restore(&layout).unwrap();
+        assert_eq!(shown(&chart, Some("SMA: SMA(5)")), ["SMA: SMA(20)"]);
+        chart.restore(&mixed).unwrap();
+        assert_eq!(shown(&chart, Some("EMA: EMA(9)")), ["SMA: SMA(20)"]);
+        chart.restore(&mixed).unwrap();
+        assert_eq!(shown(&chart, None), ["EMA: EMA(9)", "SMA: SMA(20)"]);
+    }
+
+    /// The open table shows a new last bar of an added series, which leaves the chart's revisions
+    /// as they are. A column turned off for an added series stays off when the chart restores its
+    /// own layout, which adds the series again under a new id.
+    #[test]
+    fn added_series_column_follows_its_last_bar_and_keeps_its_choice_through_a_restore() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..5)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let [_, other] = ["Peer", "Other"].map(|name| {
+            chart.add_series(crate::widget::SeriesOptions {
+                name: name.into(),
+                ..Default::default()
+            })
+        });
+        let layout = chart.snapshot().unwrap();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        shown_rows(&ctx, &mut dialog, &chart);
+        chart.update(
+            other,
+            Bar::from_value(start + chrono::Duration::days(4), 42.0),
+        );
+        shown_rows(&ctx, &mut dialog, &chart);
+        // Newest row first: time, the five main columns, Peer, Other.
+        assert_eq!(dialog.cached.as_ref().unwrap().1.rows[0][7], "42.00");
+        let headers = &dialog.cached.as_ref().unwrap().1.headers;
+        let at = headers.iter().position(|h| h == "Peer").unwrap();
+        let column = dialog.column_ids[at].clone();
+        dialog
+            .hidden
+            .get_mut(&chart.data_table_identity())
+            .unwrap()
+            .insert(column);
+        chart.restore(&layout).unwrap();
+        shown_rows(&ctx, &mut dialog, &chart);
+        let hidden = &dialog.hidden[&chart.data_table_identity()];
+        let shown: Vec<_> = dialog.cached.as_ref().unwrap().1.headers[6..]
+            .iter()
+            .zip(&dialog.column_ids[6..])
+            .filter(|(_, column)| !hidden.contains(*column))
+            .map(|(header, _)| header.as_str())
+            .collect();
+        assert_eq!(shown, ["Other"]);
     }
 }

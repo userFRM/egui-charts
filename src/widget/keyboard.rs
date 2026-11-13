@@ -161,25 +161,20 @@ pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
 impl super::Chart {
     /// Pointer commands yield to editors, popups and in-progress drawing operations.
     pub(crate) fn pointer_commands_enabled(&self, ctx: &Context) -> bool {
-        if !self.chart_options.keyboard.enabled
+        let blocked = !self.chart_options.keyboard.enabled
             || shortcuts_suppressed(ctx)
             || ctx.text_edit_focused()
             || self.menu_open
             || egui::Popup::is_any_open(ctx)
-            || ctx.input(|input| input.pointer.is_decidedly_dragging())
-        {
-            return false;
-        }
+            || ctx.input(|input| input.pointer.is_decidedly_dragging());
         #[cfg(feature = "drawings")]
-        if self.drawings.text_editor.is_some()
+        let blocked = blocked
+            || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
             || self.drawings.dragging_handle.is_some()
             || self.drawings.active_tool.is_some()
-            || self.drawings.eraser_mode
-        {
-            return false;
-        }
-        true
+            || self.drawings.eraser_mode;
+        !blocked
     }
 
     /// Pane and price under `pos`, read on that pane's own scale. `None` outside the plot, over
@@ -473,6 +468,7 @@ impl super::Chart {
             A::PanLeft | A::PanRight | A::PanLeftFast | A::PanRightFast => {
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
                 let amount = if matches!(action, A::PanLeftFast | A::PanRightFast) {
                     self.state
                         .time_scale()
@@ -493,6 +489,7 @@ impl super::Chart {
             A::ZoomIn | A::ZoomOut | A::PageUp | A::PageDown => {
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
                 let step = self.chart_options.keyboard.zoom_step;
                 let delta = match action {
                     A::ZoomIn => step,

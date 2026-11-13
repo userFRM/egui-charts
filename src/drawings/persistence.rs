@@ -197,6 +197,9 @@ impl StoredDrawing {
         {
             return Some("text_zoom_spacing".into());
         }
+        if d.note_text_style.is_some_and(|style| !style.is_valid()) {
+            return Some("note_text_style.font_size".into());
+        }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
@@ -350,8 +353,10 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 9 draws a callout's border at its stored width;
-    /// those saved before that change load with the 1 px border they were drawn with. Version 8
+    /// Current storage format version. Version 10 draws a price label without a border colour
+    /// with a border in its own colour; those saved before that change load with the border off,
+    /// as drawn. Version 9 draws a callout's border at its stored width; those saved before that
+    /// change load with the 1 px border they were drawn with. Version 8
     /// extends a trend line past the anchor its Left or Right names; those saved before that
     /// change load with the reach they were drawn with.
     /// Version 7 does the same for rays, extended lines, info lines and trend angles.
@@ -363,7 +368,7 @@ impl DrawingStorage {
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 9;
+    pub const CURRENT_VERSION: u32 = 10;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -627,6 +632,14 @@ impl DrawingStorage {
                             // Earlier renderers drew a callout's border 1 px wide whatever its
                             // width.
                             drawing.drawing.stroke_width = 1.0;
+                        }
+                        if version < 10
+                            && tool == T::PriceLabel
+                            && drawing.drawing.border_color.is_none()
+                        {
+                            // Earlier renderers drew no border on a price label without a border
+                            // colour, which now follows the label's colour.
+                            drawing.drawing.border = false;
                         }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
@@ -1354,6 +1367,12 @@ mod tests {
         d.text_wrap_width = 120.0;
         d.text_follows_zoom = true;
         d.text_zoom_spacing = Some(6.5);
+        d.note_text_style = Some(crate::drawings::NoteTextStyle {
+            color: [21, 22, 23, 24],
+            font_size: 18.0,
+            bold: true,
+            italic: true,
+        });
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1642,6 +1661,7 @@ mod tests {
             want.text_wrap_width = 200.0;
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
+            want.note_text_style = None;
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2183,10 +2203,10 @@ mod tests {
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
         let error =
-            DrawingStorage::from_json(&current.replace("\"version\": 9", "\"version\": 10"))
+            DrawingStorage::from_json(&current.replace("\"version\": 10", "\"version\": 11"))
                 .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 10, supported } if *supported == (1..=9)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 11, supported } if *supported == (1..=10)),
             "{error}"
         );
     }
@@ -2289,7 +2309,9 @@ mod tests {
                 }
                 assert_eq!(drawing.font_weight, FontWeight::Normal, "{tool:?}");
                 assert_eq!(drawing.text_color, None, "{tool:?}");
-                assert!(drawing.background && drawing.border, "{tool:?}");
+                // A price label drew no border then, which one without a colour now has.
+                assert!(drawing.background, "{tool:?}");
+                assert_eq!(drawing.border, tool != T::PriceLabel, "{tool:?}");
                 assert_eq!(drawing.border_color, None, "{tool:?}");
                 assert!(!drawing.channel_midline, "{tool:?}");
                 if tool == T::Measure {
@@ -2481,6 +2503,54 @@ mod tests {
         }
     }
 
+    /// The fixture is a price label and a price note as the release before their badge and text
+    /// settings saved them: the label stored no border colour and drew a plain badge, also once
+    /// saved again, and the note drew its typed text as its price. A version 9 label with a border
+    /// colour keeps it, and a new label's border takes the colour it is given, also once saved.
+    #[test]
+    fn price_label_and_note_saved_before_their_settings_keep_their_look() {
+        use egui::{Color32, Stroke};
+        let saved = include_str!("fixtures/storage_v9_price_label_note.json");
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let blue = Color32::from_rgb(41, 98, 255);
+        let red = Color32::from_rgb(242, 54, 69);
+        let (again, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+        for storage in [&storage, &again] {
+            let colors = restore(&storage.drawings[0], 1).price_label_colors();
+            assert_eq!(
+                (colors.text, colors.fill, colors.border),
+                (Color32::WHITE, blue, Stroke::NONE)
+            );
+        }
+        // A red label with the default blue border, as version 9 saved one recoloured through
+        // `Drawing::color` or given that border in its settings: it was drawn so.
+        let mut recoloured: serde_json::Value = serde_json::from_str(saved).unwrap();
+        let settings = &mut recoloured["drawings"][0]["drawing"];
+        settings["color"] = serde_json::json!([242, 54, 69, 255]);
+        settings["border_color"] = serde_json::json!([41, 98, 255, 255]);
+        let (old, skipped) = DrawingStorage::from_json(&recoloured.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let colors = restore(&old.drawings[0], 1).price_label_colors();
+        assert_eq!((colors.fill, colors.border), (red, Stroke::new(1.0, blue)));
+        let mut placed = Drawing::new(1, DrawingToolType::PriceLabel);
+        placed.chart_points = vec![ChartPoint::new(1.0, 108.0)];
+        placed.color = [242, 54, 69, 255];
+        let mut fresh = DrawingStorage::new("AAPL");
+        fresh.add_drawing(drawing_to_stored(&placed, bar_to_time));
+        let (loaded, skipped) = DrawingStorage::from_json(&fresh.to_json().unwrap()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        for label in [&placed, &restore(&loaded.drawings[0], 1)] {
+            let colors = label.price_label_colors();
+            assert_eq!((colors.fill, colors.border), (red, Stroke::new(1.0, red)));
+        }
+        let note = restore(&storage.drawings[1], 2);
+        assert_eq!(note.text.as_deref(), Some("Entry"));
+        assert_eq!(note.note_text_style, None);
+        let colors = note.text_box_colors(&egui::Context::default());
+        assert_eq!((colors.text, colors.fill), (Color32::WHITE, blue));
+    }
+
     /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
     /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
     /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
@@ -2575,7 +2645,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 37] = [
+        let cases: [(Spoil, &str); 38] = [
             (
                 |s| {
                     first(s)
@@ -2666,6 +2736,13 @@ mod tests {
             (
                 |s| first(s).drawing.text_zoom_spacing = Some(0.0),
                 "invalid text_zoom_spacing",
+            ),
+            (
+                |s| {
+                    let style = first(s).drawing.note_text_style.as_mut().unwrap();
+                    style.font_size = 0.0;
+                },
+                "invalid note_text_style.font_size",
             ),
             (
                 |s| first(s).points[1].price = f64::NAN,

@@ -573,8 +573,7 @@ impl Terminal {
         self.layout_stop_replay();
         self.layouts.tabs[self.layouts.tab].name = name;
         self.charts = charts;
-        // A copy owns its sizes, so size changes not yet in a chart's history cannot change the
-        // restored ones.
+        // A copy drops a divider drag in progress, which would overwrite the restored sizes.
         self.layout = self.layout.clone();
         self.layout.reset_sizes(true);
         let sized = match &layout.sizing {

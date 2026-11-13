@@ -991,6 +991,8 @@ impl PositionReadout {
 
     /// Resolve account economics from a host-supplied rate. Matching currencies need no rate;
     /// a missing rate for a different currency returns `None`, rather than a mislabeled result.
+    /// A code that mixes cases, such as `GBp` for pence, matches only itself; other codes match
+    /// regardless of case.
     pub fn account_sizing(
         &self,
         mut sizing: PositionSizing,
@@ -1000,7 +1002,7 @@ impl PositionReadout {
             return None;
         }
         if let Some(currency) = &self.account_currency
-            && !instrument_currency.is_some_and(|base| base.eq_ignore_ascii_case(currency))
+            && !instrument_currency.is_some_and(|base| crate::model::same_currency(base, currency))
         {
             sizing.point_value *= self.conversion_rate?;
         }
@@ -1110,6 +1112,26 @@ impl PositionStyle {
     /// Whether the line width lies in 1 to 100 points and the font size in 1 to 256 points.
     pub fn is_valid(&self) -> bool {
         (1.0..=100.0).contains(&self.line_width) && (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
+/// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NoteTextStyle {
+    /// Text colour as RGBA.
+    pub color: [u8; 4],
+    /// Size of the text, in points.
+    pub font_size: f32,
+    /// Whether the text is bold.
+    pub bold: bool,
+    /// Whether the text is slanted.
+    pub italic: bool,
+}
+
+impl NoteTextStyle {
+    /// Whether the font size lies in 1 to 256 points.
+    pub fn is_valid(&self) -> bool {
+        (1.0..=256.0).contains(&self.font_size)
     }
 }
 
@@ -1860,6 +1882,63 @@ mod tests {
                     "log {logarithmic}, reverse {reverse}, ratio {ratio}: {got} != {want}"
                 );
             }
+        }
+    }
+
+    /// A code that mixes cases names a minor unit (`GBp` pence, `ZAr` South African cents) and
+    /// matches only itself; codes in a single case match regardless of case. The instrument's
+    /// point is worth one unit of its currency, times the rate when the codes differ.
+    #[test]
+    fn minor_unit_instrument_converts_into_the_account_currency() {
+        let sizing = PositionSizing::default();
+        for (instrument, account, rate, point_value) in [
+            // One pence is 1 x 0.01 = 0.01 pounds.
+            ("GBp", "GBP", Some(0.01), Some(0.01)),
+            ("GBp", "gbp", Some(0.01), Some(0.01)),
+            ("ZAr", "ZAR", Some(0.01), Some(0.01)),
+            // One pound is 1 x 100 = 100 pence.
+            ("GBP", "GBp", Some(100.0), Some(100.0)),
+            // Pence without a rate have no pound value, rather than a mislabeled one.
+            ("GBp", "GBP", None, None),
+            // The same currency takes no rate: the point stays 1.
+            ("GBp", "GBp", Some(0.01), Some(1.0)),
+            ("gbp", "GBP", Some(0.01), Some(1.0)),
+            ("GBP", "GBP", None, Some(1.0)),
+            // Different letters are different currencies in any case.
+            ("GBX", "GBP", Some(0.01), Some(0.01)),
+        ] {
+            let readout = PositionReadout {
+                account_currency: Some(account.into()),
+                conversion_rate: rate,
+                ..Default::default()
+            };
+            assert_eq!(
+                readout
+                    .account_sizing(sizing, Some(instrument))
+                    .map(|sizing| sizing.point_value),
+                point_value,
+                "{instrument} in {account}"
+            );
+        }
+        // Risking 10 pounds with the stop 10 pence away: 10 / (10 x 0.01) = 100 units. Quoted in
+        // pounds, the stop is 10 pounds away: 10 / (10 x 1) = 1 unit.
+        let readout = PositionReadout {
+            account_currency: Some("GBP".into()),
+            conversion_rate: Some(0.01),
+            ..Default::default()
+        };
+        for (instrument, expected) in [("GBp", 100.0), ("gbp", 1.0)] {
+            let quantity = readout.quantity(
+                PositionSize::RiskAmount(10.0),
+                250.0,
+                240.0,
+                sizing,
+                Some(instrument),
+            );
+            assert!(
+                quantity.is_some_and(|quantity| (quantity - expected).abs() < 1e-9),
+                "{instrument}: {quantity:?}"
+            );
         }
     }
 }

@@ -265,7 +265,7 @@ impl FloatingSelectionToolbar {
                 chart.user_action(|chart| {
                     let edit = |drawing: &mut crate::drawings::Drawing| {
                         if slot == 0 {
-                            drawing.color = color.to_srgba_unmultiplied();
+                            drawing.recolor(color.to_srgba_unmultiplied());
                         } else {
                             drawing.fill_color = Some(color.to_srgba_unmultiplied());
                         }
@@ -770,6 +770,52 @@ mod tests {
             assert_eq!(toolbar.color_slots[0].label, label, "{tool:?}");
             assert_eq!(toolbar.stroke.is_some(), tool.draws_line(), "{tool:?}");
         }
+    }
+
+    /// The colour slot recolours the whole badge of a price label: the border that shares the
+    /// colour follows it, where it would otherwise stay behind as an outline in the old colour.
+    #[test]
+    fn colour_slot_recolours_a_price_label_with_its_border() {
+        use crate::drawings::{Drawing, DrawingToolType};
+        use crate::ui_kit::color_picker::{MAIN_COLORS, tests::click};
+        let swatch = MAIN_COLORS[3];
+        let ctx = egui::Context::default();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let mut chart = Chart::new(crate::model::BarData::new());
+        let mut label = Drawing::new(7, DrawingToolType::PriceLabel);
+        // A border kept in the label's colour, as an older save holds it.
+        label.border_color = Some(label.color);
+        label.completed = true;
+        label.points = vec![Pos2::new(100.0, 100.0)];
+        chart.drawings_mut().drawings = vec![label];
+        chart.drawings_mut().select(7);
+        let mut toolbar = FloatingSelectionToolbar::new();
+        let mut frame = |toolbar: &mut FloatingSelectionToolbar, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    toolbar.show_and_apply(ui, &mut chart);
+                },
+            );
+            let well = output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            well
+        };
+        frame(&mut toolbar, vec![]);
+        toolbar.pickers[0].is_open = true;
+        frame(&mut toolbar, vec![]);
+        let pos = frame(&mut toolbar, vec![]).expect("the palette shows the swatch");
+        frame(&mut toolbar, click(pos));
+        let label = &chart.drawings().drawings[0];
+        let green = swatch.to_srgba_unmultiplied();
+        assert_eq!((label.color, label.border_color), (green, Some(green)));
     }
 
     /// Floating surfaces and group rules follow each preset's popup and separator visuals.

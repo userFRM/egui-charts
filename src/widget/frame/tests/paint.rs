@@ -32,50 +32,71 @@ fn legend_marks_a_chart_only_while_it_replays() {
     );
 }
 
+/// Renders `chart` with a footprint of one two-lot buy at every tick of every bar, the example
+/// of #2458, at `spacing` points per bar, and returns the shapes with the chart.
+fn host_footprint(
+    mut chart: crate::widget::Chart,
+    config: &crate::chart::overlays::FootprintConfig,
+    spacing: f32,
+) -> (Vec<egui::epaint::ClippedShape>, crate::widget::Chart) {
+    use crate::data::Footprint;
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+    let ctx = egui::Context::default();
+    chart.set_symbol("FLOW");
+    chart.apply_synced_time_scale(spacing, 1.0);
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for bar in chart.bars(crate::widget::SeriesId::MAIN) {
+        for price in bar.low as i32..=bar.high as i32 {
+            flow.push(&Tick::new(
+                bar.time,
+                f64::from(price),
+                2.0,
+                Some(OrderSide::Buy),
+            ))
+            .unwrap();
+        }
+    }
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 500.0))),
+            ..Default::default()
+        },
+        |ui| {
+            chart.show_footprint(ui, &flow, config);
+        },
+    );
+    output.textures_delta.clear();
+    (std::mem::take(&mut output.shapes), chart)
+}
+
 /// A low of 103 lies in the four-tick row 100..103, whose bottom edge is 99.5.
-/// The fit must leave the summary's room below that edge, including with single-tick rows.
+/// The fit must leave the summary's room below that edge, including with single-tick rows and
+/// with automatic rows, which never group below `row_ticks` and ignore an unusable height.
+/// Beside a bar reaching 250, without a bottom scale margin, automatic rows group seven ticks:
+/// the low of 101 then lies in the row 98..104, whose bottom edge is 97.5.
 #[test]
 fn footprint_summary_below_a_grouped_lowest_row_stays_in_the_plot() {
     use crate::chart::overlays::FootprintConfig;
-    use crate::data::Footprint;
-    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
-    for (row_ticks, low, edge) in [(1, 100.0, 99.5), (4, 103.0, 99.5)] {
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[low, low + 4.0], &[low + 6.0, low + 10.0]);
-        chart.set_symbol("FLOW");
-        chart.apply_synced_time_scale(160.0, 1.0);
-        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        for bar in chart.bars(crate::widget::SeriesId::MAIN) {
-            for price in bar.low as i32..=bar.high as i32 {
-                flow.push(&Tick::new(
-                    bar.time,
-                    f64::from(price),
-                    2.0,
-                    Some(OrderSide::Buy),
-                ))
-                .unwrap();
-            }
-        }
+    for (auto_row_height, row_ticks, low, high, bottom, edge) in [
+        (None, 1, 100.0, 110.0, 0.1, 99.5),
+        (None, 4, 103.0, 113.0, 0.1, 99.5),
+        (Some(16.0), 4, 103.0, 113.0, 0.1, 99.5),
+        (Some(0.0), 4, 103.0, 113.0, 0.1, 99.5),
+        (Some(f32::NAN), 4, 103.0, 113.0, 0.1, 99.5),
+        (Some(16.0), 4, 101.0, 250.0, 0.0, 97.5),
+    ] {
         let config = FootprintConfig {
-            auto_row_height: None,
+            auto_row_height,
             row_ticks,
             ..Default::default()
         };
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 500.0))),
-                ..Default::default()
-            },
-            |ui| {
-                chart.show_footprint(ui, &flow, &config);
-            },
-        );
-        output.textures_delta.clear();
+        let mut bars = chart(&[low, low + 4.0], &[low + 6.0, high]);
+        bars.price_scale_mut().options_mut().scale_margins.bottom = bottom;
+        let (shapes, chart) = host_footprint(bars, &config, 160.0);
         let map = chart.get_chart_mapping();
         let plot = chart.get_rendered_price_rect();
         let edge = map.price_to_y(edge);
-        let boxes: Vec<_> = output
-            .shapes
+        let boxes: Vec<_> = shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
                 Shape::Text(text) if text.galley.text() == "Delta" => {
@@ -88,7 +109,7 @@ fn footprint_summary_below_a_grouped_lowest_row_stays_in_the_plot() {
             boxes
                 .iter()
                 .any(|rect| rect.top() > edge && plot.contains_rect(*rect)),
-            "row_ticks {row_ticks}: plot bottom {}, low {low} at {}, row edge at {edge}, Delta at {boxes:?}",
+            "auto {auto_row_height:?}, row_ticks {row_ticks}: plot bottom {}, low {low} at {}, row edge at {edge}, Delta at {boxes:?}",
             plot.bottom(),
             map.price_to_y(low)
         );
@@ -100,7 +121,7 @@ fn footprint_summary_below_a_grouped_lowest_row_stays_in_the_plot() {
             }
             for label in ["Delta", "Total"] {
                 assert!(
-                    output.shapes.iter().any(|shape| match &shape.shape {
+                    shapes.iter().any(|shape| match &shape.shape {
                         Shape::Text(text) if text.galley.text() == label => {
                             let rect = Rect::from_min_size(text.pos, text.galley.size());
                             (rect.center().x - x).abs() < half
@@ -109,11 +130,62 @@ fn footprint_summary_below_a_grouped_lowest_row_stays_in_the_plot() {
                         }
                         _ => false,
                     }),
-                    "row_ticks {row_ticks}: bar {index} keeps {label} below its lowest row"
+                    "auto {auto_row_height:?}, row_ticks {row_ticks}, low {low}: bar {index} keeps {label} below its lowest row"
                 );
             }
         }
     }
+}
+
+/// Below one point of cell width every bar is a candle, so fixed rows must not widen the fit.
+#[test]
+fn footprint_drawn_as_candles_keeps_the_candle_fit() {
+    use crate::chart::overlays::FootprintConfig;
+    let lows: Vec<f32> = [0, 4]
+        .into_iter()
+        .map(|row_ticks| {
+            let config = FootprintConfig {
+                auto_row_height: None,
+                row_ticks,
+                ..Default::default()
+            };
+            let bars = chart(&[103.0, 107.0], &[109.0, 113.0]);
+            let (_, chart) = host_footprint(bars, &config, 3.0);
+            chart.get_chart_mapping().price_to_y(103.0)
+        })
+        .collect();
+    assert!(
+        (lows[0] - lows[1]).abs() < 0.5,
+        "low 103 at y {} with input rows, at y {} with four-tick rows",
+        lows[0],
+        lows[1]
+    );
+}
+
+/// A plot 70 points high leaves 8 between its scale margins and the summary's room, half an
+/// automatic row. No range holds the rows zoom groups there, since each wider fit groups more
+/// ticks than the last, so the fit must stay the one fixed rows of `row_ticks` get.
+#[test]
+fn footprint_short_of_two_automatic_rows_keeps_the_minimum_group_fit() {
+    use crate::chart::overlays::FootprintConfig;
+    let ranges: Vec<_> = [None, Some(16.0)]
+        .into_iter()
+        .map(|auto_row_height| {
+            let config = FootprintConfig {
+                auto_row_height,
+                row_ticks: 4,
+                ..Default::default()
+            };
+            let mut bars = chart(&[101.0, 105.0], &[107.0, 250.0]);
+            bars.set_size(Some(egui::vec2(1440.0, 105.0)));
+            let (_, mut chart) = host_footprint(bars, &config, 160.0);
+            chart.price_scale_mut().range()
+        })
+        .collect();
+    assert_eq!(
+        ranges[0], ranges[1],
+        "fixed four-tick rows, then automatic rows"
+    );
 }
 
 #[test]
@@ -1202,8 +1274,8 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             .parse::<chrono::DateTime<Utc>>()
             .unwrap(),
     ));
-    let draw = |chart: &mut Chart| {
-        chart.apply_synced_time_scale(160.0, 1.0);
+    let draw_at = |chart: &mut Chart, spacing: f32| {
+        chart.apply_synced_time_scale(spacing, 1.0);
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
@@ -1216,6 +1288,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         output.textures_delta.clear();
         output.shapes
     };
+    let draw = |chart: &mut Chart| draw_at(chart, 160.0);
     for _ in 0..5 {
         draw(&mut chart);
     }
@@ -1261,6 +1334,26 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             );
         }
     }
+    // Cells narrower than one point are candles, so four-tick rows must not widen the fit.
+    let lows: Vec<f32> = [0, 4]
+        .into_iter()
+        .map(|ticks| {
+            chart.set_chart_type_params(ChartTypeParams {
+                footprint_row_ticks: ticks,
+                ..Default::default()
+            });
+            for _ in 0..2 {
+                draw_at(&mut chart, 3.0);
+            }
+            chart.get_chart_mapping().price_to_y(100.0)
+        })
+        .collect();
+    assert!(
+        (lows[0] - lows[1]).abs() < 0.5,
+        "low 100 at y {} with automatic rows, at y {} with four-tick rows",
+        lows[0],
+        lows[1]
+    );
     let params = ChartTypeParams {
         footprint_modes: vec![FootprintMode::Delta],
         footprint_row_ticks: 1,

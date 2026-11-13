@@ -242,7 +242,7 @@ impl Chart {
             let merged = merge(&mut item.bars, &mut BTreeMap::new(), &clock, incoming);
             item.feed.rejected_bars += merged.rejected;
             if let Some(marks) = &mut item.change_marks {
-                marks.record(&item.bars, &clock, before);
+                marks.record(&item.bars, &clock, before, self.frame_clock.as_ref());
             }
             if merged.first_changed.is_some_and(|first| first + 1 < len) {
                 item.revision = crate::model::next_revision();
@@ -371,6 +371,7 @@ impl Chart {
         if !self.bar_series_present(series, "remove_oldest_bars") || count == 0 {
             return Vec::new();
         }
+        let merge_clock = self.clock();
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
@@ -387,7 +388,7 @@ impl Chart {
                 item.revision = crate::model::next_revision();
                 shrink_bars(&mut item.bars);
                 if let Some(marks) = &mut item.change_marks {
-                    marks.clear();
+                    marks.retain_bars(&item.bars, &merge_clock);
                 }
             }
             removed
@@ -409,7 +410,7 @@ impl Chart {
                     self.from_ticks.clear();
                 }
                 if let Some(marks) = &mut self.change_marks {
-                    marks.clear();
+                    marks.retain_bars(&self.state.data().bars, &merge_clock);
                 }
                 // A study that keeps the values of the remaining bars draws them until its turn.
                 for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
@@ -749,7 +750,12 @@ impl Chart {
             merged.first_changed
         });
         if let (Some(marks), Some(closes)) = (&mut self.change_marks, closes) {
-            marks.record(&self.state.data().bars, clock, closes);
+            marks.record(
+                &self.state.data().bars,
+                clock,
+                closes,
+                self.frame_clock.as_ref(),
+            );
         }
         self.feed.rejected_bars += merged.rejected;
         #[cfg(feature = "drawings")]
@@ -991,7 +997,7 @@ impl Chart {
         }
         let right = self.right_edge().right;
         let scale = self.state.time_scale_mut();
-        let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
+        let full = (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing()) - 1.0;
         let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
         let stop = full.clamp(0.0, last);
         // The right edge a stop leaves at `full` can read back a rounding error short of it.

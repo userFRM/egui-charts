@@ -3,8 +3,9 @@
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::{CursorType, DrawingSort, DrawingToolType};
-use crate::model::{ReplaySession, Timeframe, Watchlist};
+use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +40,9 @@ pub struct UserSettings {
     /// Whether the user hid the favourites strip with its close or toggle button.
     pub drawing_favorites_hidden: bool,
     /// The top-left corner of the favourites strip, in logical points, where the user left it;
-    /// `None` until it has been shown, when it starts beside the drawing toolbar.
+    /// `None` until it has been shown, when it starts beside the drawing toolbar. A non-finite
+    /// position reads as `None`.
+    #[serde(deserialize_with = "known_or_unset")]
     pub drawing_favorites_pos: Option<(f32, f32)>,
     /// Whether the user dismissed the drawing toolbar's card that explains the magnet; a document
     /// without it reads as not dismissed.
@@ -56,6 +59,18 @@ pub struct UserSettings {
     /// know is left out when reading.
     #[serde(deserialize_with = "known_items")]
     pub interval_favorites: Vec<Timeframe>,
+    /// The intervals the user added to the interval menu, in order. An interval this release does
+    /// not know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub custom_intervals: Vec<Timeframe>,
+    /// The intervals the user hid from the interval menu. An interval this release does not know
+    /// is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub hidden_intervals: Vec<Timeframe>,
+    /// The chart types starred in the chart type menu, in order. A chart type this release does
+    /// not know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub chart_type_favorites: Vec<ChartType>,
     /// The properties each drawing tool starts with, keyed by tool, as the JSON of
     /// its `DrawingTemplate`. A tool without an entry starts with
     /// the built-in defaults.
@@ -65,8 +80,8 @@ pub struct UserSettings {
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at. A position
-    /// this release cannot read, such as one at an interval a newer release added, reads as
-    /// `None`.
+    /// this release cannot read, such as one at an interval a newer release added or one with a
+    /// non-finite speed, reads as `None`.
     #[serde(deserialize_with = "known_or_unset")]
     pub replay_session: Option<(ReplaySession, Timeframe)>,
 }
@@ -138,9 +153,9 @@ impl UserSettings {
 
     /// Reads a document [`to_json`](Self::to_json) wrote, migrating older versions. Fails on
     /// invalid JSON and on a version this release does not know. A missing field takes its
-    /// default. A drawing order, tool, cursor mode or interval a newer release added is left out,
-    /// as each field says, and the rest is read. Values left out when reading are absent from the
-    /// next save.
+    /// default. A drawing order, tool, cursor mode, interval or chart type a newer release added
+    /// is left out, as each field says, and the rest is read. Values left out when reading are
+    /// absent from the next save.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
@@ -150,6 +165,30 @@ impl UserSettings {
                 Self::VERSION
             ))),
         }
+    }
+
+    /// The settings as [`from_json`](Self::from_json) reads back what [`to_json`](Self::to_json)
+    /// writes: JSON has no non-finite numbers, so a replay position with such a speed and such a
+    /// favourites position are unset.
+    fn as_read_back(&self) -> Cow<'_, Self> {
+        let speed = self
+            .replay_session
+            .as_ref()
+            .is_some_and(|(session, _)| !session.speed.is_finite());
+        let pos = self
+            .drawing_favorites_pos
+            .is_some_and(|(x, y)| !x.is_finite() || !y.is_finite());
+        if !speed && !pos {
+            return Cow::Borrowed(self);
+        }
+        let mut settings = self.clone();
+        if speed {
+            settings.replay_session = None;
+        }
+        if pos {
+            settings.drawing_favorites_pos = None;
+        }
+        Cow::Owned(settings)
     }
 }
 
@@ -196,6 +235,8 @@ impl SettingsStore {
     /// `current` once it has stayed the same for [`DELAY`](Self::DELAY), and at once while a
     /// conflict is unsettled, so that the choice applies to the newest settings.
     pub fn poll(&mut self, ctx: &egui::Context, current: &UserSettings) -> Option<UserSettings> {
+        // Compared with the settings read back from the last save.
+        let current = &*current.as_read_back();
         self.document.hold(
             self.written
                 .as_ref()
@@ -240,6 +281,7 @@ impl SettingsStore {
     /// [`poll`](Self::poll) has not returned yet are pending, nor while a conflict is unsettled;
     /// it returns `false` then, so a host that waits for `true` bounds the wait.
     pub fn flush(&mut self, current: &UserSettings) -> bool {
+        let current = &*current.as_read_back();
         if self.written.is_none() {
             return false;
         }
@@ -356,8 +398,10 @@ mod tests {
         );
     }
 
-    /// An interval from a newer release is left out of the starred intervals and unsets the last
-    /// interval and the replay position; the same places keep an interval this release knows.
+    /// An interval from a newer release is left out of the starred, custom and hidden intervals
+    /// and unsets the last interval and the replay position; the same places keep an interval
+    /// this release knows. A chart type from a newer release is left out of the starred chart
+    /// types.
     #[test]
     fn unknown_intervals_keep_the_other_settings() {
         use chrono::TimeZone;
@@ -379,6 +423,8 @@ mod tests {
                 UserSettings {
                     interval: Some(Timeframe::Day1),
                     interval_favorites: vec![Timeframe::Min5, Timeframe::Day1],
+                    custom_intervals: vec![Timeframe::Day1],
+                    hidden_intervals: vec![Timeframe::Day1],
                     replay_session: Some((session, Timeframe::Day1)),
                     ..UserSettings::default()
                 },
@@ -386,8 +432,9 @@ mod tests {
         ];
         for (interval, mut expected) in rows {
             expected.theme = Some("Dark".into());
+            expected.chart_type_favorites = vec![ChartType::Bars];
             let json = format!(
-                r#"{{"version":1,"theme":"Dark","interval":"{interval}","interval_favorites":["Min5","{interval}"],"replay_session":[{{"symbol":"AAA","time":"2026-01-02T00:00:00Z","speed":2.0}},"{interval}"]}}"#
+                r#"{{"version":1,"theme":"Dark","interval":"{interval}","interval_favorites":["Min5","{interval}"],"custom_intervals":["{interval}"],"hidden_intervals":["{interval}"],"chart_type_favorites":["Bars","FutureChartType"],"replay_session":[{{"symbol":"AAA","time":"2026-01-02T00:00:00Z","speed":2.0}},"{interval}"]}}"#
             );
             assert_eq!(
                 UserSettings::from_json(&json).map_err(|error| error.to_string()),
@@ -584,6 +631,89 @@ mod tests {
         }
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
+        }
+    }
+
+    /// Storage that keeps one document and counts its saves.
+    #[derive(Default)]
+    struct Counted(Host, std::sync::atomic::AtomicUsize);
+
+    impl Storage for Counted {
+        fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
+            self.0.list(kind, reply);
+        }
+        fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
+            self.0.load(kind, name, reply);
+        }
+        fn save(&self, kind: StoreKind, name: &str, document: String, reply: Reply<()>) {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.0.save(kind, name, document, reply);
+        }
+        fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>) {
+            self.0.delete(kind, name, reply);
+        }
+    }
+
+    /// A non-finite replay speed or favourites position is written as unset, so the settings
+    /// are saved once, a second after they changed, and the document reads back.
+    #[test]
+    fn non_finite_settings_are_saved_once_and_read_back() {
+        use chrono::TimeZone;
+        let session = |speed| ReplaySession {
+            symbol: "AAA".into(),
+            time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
+            speed,
+        };
+        let cases = [
+            (
+                "infinite speed",
+                UserSettings {
+                    replay_session: Some((session(f32::INFINITY), Timeframe::Day1)),
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "NaN speed",
+                UserSettings {
+                    replay_session: Some((session(f32::NAN), Timeframe::Day1)),
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "infinite position",
+                UserSettings {
+                    drawing_favorites_pos: Some((f32::INFINITY, 0.0)),
+                    ..UserSettings::default()
+                },
+            ),
+        ];
+        for (case, mut settings) in cases {
+            settings.theme = Some("Dark".into());
+            let ctx = egui::Context::default();
+            let host = Arc::new(Counted::default());
+            let saves = || host.1.load(std::sync::atomic::Ordering::Relaxed);
+            let mut store = SettingsStore::new(host.clone());
+            poll_at(&ctx, &mut store, 0.0, &UserSettings::default());
+            for tenth in 1..=100 {
+                poll_at(&ctx, &mut store, f64::from(tenth) / 10.0, &settings);
+                if tenth < 11 {
+                    assert_eq!(saves(), 0, "{case} at {tenth}");
+                }
+            }
+            assert_eq!(saves(), 1, "{case}");
+            assert!(store.flush(&settings), "{case}");
+            assert_eq!(saves(), 1, "{case}");
+            let expected = UserSettings {
+                theme: Some("Dark".into()),
+                ..UserSettings::default()
+            };
+            let mut store = SettingsStore::new(host.clone());
+            assert_eq!(
+                poll_at(&ctx, &mut store, 20.0, &UserSettings::default()),
+                Some(expected),
+                "{case}"
+            );
+            assert_eq!(store.take_error(), None, "{case}");
         }
     }
 

@@ -1,7 +1,10 @@
 //! Price label and price note rendering
 
-use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::{ChartView, style::label_text_color};
+use crate::drawings::domain::{Drawing, FontWeight};
+use crate::drawings::rendering::{
+    ChartView,
+    style::{BOLD_OFFSET, TextBoxColors, label_text_color},
+};
 use crate::scales::{
     DefaultPriceFormatter, PriceFormatter, instrument_price_precision, price_decimals,
 };
@@ -111,15 +114,32 @@ impl Drawing {
         price_text(price, view)
     }
 
+    /// Colours of a price label's badge. Unset text is white or black, whichever reads on the
+    /// fill, and an unset border takes the label's colour, which it keeps when its background
+    /// changes.
+    pub(crate) fn price_label_colors(&self) -> TextBoxColors {
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let fill = self.fill_color32().unwrap_or(self.color32());
+        TextBoxColors {
+            text: self.text_color.map_or_else(|| label_text_color(fill), rgba),
+            fill,
+            border: if self.border {
+                let color = self.border_color.map_or_else(|| self.color32(), rgba);
+                Stroke::new(stroke::HAIRLINE, color)
+            } else {
+                Stroke::NONE
+            },
+        }
+    }
+
     /// Renders a price label: the anchor's price in a badge up and to the right of the point, with
     /// a pointer from the badge's corner to the point.
     pub(crate) fn render_price_label(&self, painter: &egui::Painter, view: &ChartView) {
         let (Some(&point), Some(text)) = (self.points.first(), self.anchor_price_text(view)) else {
             return;
         };
-        let fill = self.fill_color32().unwrap_or(self.color32());
-        let text_color = label_text_color(fill);
-        let galley = painter.layout_no_wrap(text, self.annotation_font(), text_color);
+        let colors = self.price_label_colors();
+        let galley = painter.layout_no_wrap(text, self.annotation_font(), colors.text);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.label_padding_x,
             DESIGN_TOKENS.sizing.annotation.label_padding_y,
@@ -138,38 +158,74 @@ impl Drawing {
                 Pos2::new(badge.left(), badge.bottom() - offset),
             ),
             closed: true,
-            fill,
-            stroke: Stroke::NONE.into(),
+            fill: colors.fill,
+            stroke: colors.border.into(),
         });
-        painter.galley(badge.min + padding, galley, text_color);
+        painter.galley(badge.min + padding, galley, colors.text);
     }
 
     /// Renders a price note: the anchor's price and any typed text in a solid label at the second
-    /// anchor, joined to the anchor by a thin line.
+    /// anchor, joined to the anchor by a thin line. The price takes the label's text settings and
+    /// the typed text its own, once it has any.
     pub(crate) fn render_price_note(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(&anchor) = self.points.first() else {
             return;
         };
-        let mut text = self.anchor_price_text(view).unwrap_or_default();
+        let colors = self.text_box_colors(painter.ctx());
+        let format = |font_size: f32, color: Color32, italics: bool| egui::TextFormat {
+            italics,
+            ..egui::TextFormat::simple(
+                egui::FontId::proportional(crate::styles::typography::font_size(font_size)),
+                color,
+            )
+        };
+        // Each part with its format and whether it is bold.
+        let mut parts = vec![(
+            self.anchor_price_text(view).unwrap_or_default(),
+            format(self.font_size, colors.text, self.italic),
+            self.font_weight == FontWeight::Bold,
+        )];
         if let Some(typed) = self.text.as_deref().filter(|typed| !typed.is_empty()) {
-            if !text.is_empty() {
-                text.push(' ');
+            let space = if parts[0].0.is_empty() { "" } else { " " };
+            match self.note_text_style {
+                Some(style) => {
+                    let [r, g, b, a] = style.color;
+                    parts.push((
+                        format!("{space}{typed}"),
+                        format(
+                            style.font_size,
+                            Color32::from_rgba_unmultiplied(r, g, b, a),
+                            style.italic,
+                        ),
+                        style.bold,
+                    ));
+                }
+                None => parts[0].0 += &format!("{space}{typed}"),
             }
-            text.push_str(typed);
         }
-        if text.is_empty() {
+        if parts.iter().all(|(text, ..)| text.is_empty()) {
             return;
         }
-        let color = self.color32();
-        let colors = self.text_box_colors(painter.ctx());
-        let galley = self.annotation_galley(painter, text, colors.text);
+        // The copy that thickens bold text lays out alike, with the other part left transparent.
+        let layout = |weight: bool| {
+            let mut job = egui::text::LayoutJob::default();
+            for (text, format, bold) in &parts {
+                let mut format = format.clone();
+                if weight && !bold {
+                    format.color = Color32::TRANSPARENT;
+                }
+                job.append(text, 0.0, format);
+            }
+            painter.layout_job(job)
+        };
+        let galley = layout(false);
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.label_padding_x,
             DESIGN_TOKENS.sizing.annotation.label_padding_y,
         );
         let corner = self.points.get(1).copied().unwrap_or(anchor);
         let label = Rect::from_min_size(corner, galley.size() + padding * 2.0);
-        paint_anchor_line(painter, label, anchor, color);
+        paint_anchor_line(painter, label, anchor, self.color32());
         painter.rect(
             label,
             DESIGN_TOKENS.rounding.sm,
@@ -178,13 +234,17 @@ impl Drawing {
             StrokeKind::Inside,
         );
         painter.galley(label.min + padding, galley, colors.text);
+        if parts.iter().any(|&(_, _, bold)| bold) {
+            let pos = label.min + padding + egui::vec2(BOLD_OFFSET, 0.0);
+            painter.galley(pos, layout(true), colors.text);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::{ChartPoint, DrawingToolType};
+    use crate::drawings::{ChartPoint, DrawingToolType, NoteTextStyle};
     use crate::model::Instrument;
     use crate::scales::CustomPriceFormatter;
 
@@ -311,6 +371,186 @@ mod tests {
                 drawing.anchor_price_text(&view).as_deref(),
                 expected,
                 "{price}"
+            );
+        }
+    }
+
+    /// Flat shapes of `drawing` as the chart paints it, style pass included.
+    fn painted(drawing: &Drawing) -> Vec<egui::Shape> {
+        let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let input = egui::RawInput {
+            screen_rect: Some(pane),
+            ..Default::default()
+        };
+        let output = egui::Context::default().run_ui(input, |ui| {
+            let view = ChartView {
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
+                instrument: None,
+                bars: &[],
+                revision: 0,
+                bar_to_x: &|bar| bar,
+                price_to_y: &|price| price as f32,
+                y_to_price: &f64::from,
+                time_axis: true,
+                executions: None,
+                timeframe: None,
+                finer: &[],
+            };
+            drawing.render_with_selection(ui.painter(), pane, &view, false);
+        });
+        fn flatten(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| flatten(s, out)),
+                _ => out.push(shape.clone()),
+            }
+        }
+        let mut shapes = Vec::new();
+        for clipped in &output.shapes {
+            flatten(&clipped.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// A price label's badge takes its text and border colours with their opacity. A border never
+    /// chosen takes the label's colour however that is set, and a chosen one stays when the colour
+    /// changes. A label without a border, as one saved before it had a border loads, keeps its
+    /// plain badge.
+    #[test]
+    fn price_label_badge_takes_its_text_and_border_colours() {
+        const BLUE: Color32 = Color32::from_rgb(41, 98, 255);
+        const RED: Color32 = Color32::from_rgb(242, 54, 69);
+        type Row = (fn(&mut Drawing), Color32, Stroke);
+        let rows: [Row; 5] = [
+            (|_| {}, Color32::WHITE, Stroke::new(1.0, BLUE)),
+            // A border that shares the label's colour follows it.
+            (
+                |d| d.set_line_color([242, 54, 69, 255]),
+                Color32::WHITE,
+                Stroke::new(1.0, RED),
+            ),
+            // The public field, as the `Drawing` example and `edit_drawing` closures set it.
+            (
+                |d| d.color = [242, 54, 69, 255],
+                Color32::WHITE,
+                Stroke::new(1.0, RED),
+            ),
+            (|d| d.border = false, Color32::WHITE, Stroke::NONE),
+            (
+                |d| {
+                    d.fill_color = Some([255, 235, 59, 255]);
+                    d.text_color = Some([1, 2, 3, 128]);
+                    d.border_color = Some([0, 128, 0, 64]);
+                    d.set_line_color([242, 54, 69, 255]);
+                },
+                Color32::from_rgba_unmultiplied(1, 2, 3, 128),
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 128, 0, 64)),
+            ),
+        ];
+        for (row, (setup, text, border)) in rows.into_iter().enumerate() {
+            let mut drawing = Drawing::new(1, DrawingToolType::PriceLabel);
+            drawing.points = vec![Pos2::new(100.0, 300.0)];
+            setup(&mut drawing);
+            let shapes = painted(&drawing);
+            let badge = shapes
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Path(path) => Some(path),
+                    _ => None,
+                })
+                .expect("the badge is one path");
+            let stroke = match badge.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => Stroke::new(badge.stroke.width, color),
+                egui::epaint::ColorMode::UV(_) => panic!("row {row}: a gradient border"),
+            };
+            assert_eq!(stroke, border, "row {row}");
+            let price = shapes
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .expect("the badge shows the price");
+            assert_eq!(price.galley.job.sections[0].format.color, text, "row {row}");
+        }
+    }
+
+    /// A price note's typed text takes its own colour, size and emphasis once set, beside a price
+    /// that keeps the label's. Bold text is painted twice, and the copy leaves the part that is
+    /// not bold transparent. Without settings of its own the text is one run with the price.
+    #[test]
+    fn price_note_text_is_styled_apart_from_its_price() {
+        const WHITE: Color32 = Color32::WHITE;
+        const YELLOW: Color32 = Color32::from_rgb(255, 235, 59);
+        const CLEAR: Color32 = Color32::TRANSPARENT;
+        let style = |bold| NoteTextStyle {
+            color: [255, 235, 59, 255],
+            font_size: 18.0,
+            bold,
+            italic: true,
+        };
+        // Label weight, text style, then the colours of each painted copy's parts.
+        type Row = (
+            FontWeight,
+            Option<NoteTextStyle>,
+            &'static [&'static [Color32]],
+        );
+        let rows: [Row; 5] = [
+            (FontWeight::Normal, None, &[&[WHITE]]),
+            (FontWeight::Bold, None, &[&[WHITE], &[WHITE]]),
+            (FontWeight::Normal, Some(style(false)), &[&[WHITE, YELLOW]]),
+            (
+                FontWeight::Bold,
+                Some(style(false)),
+                &[&[WHITE, YELLOW], &[WHITE, CLEAR]],
+            ),
+            (
+                FontWeight::Normal,
+                Some(style(true)),
+                &[&[WHITE, YELLOW], &[CLEAR, YELLOW]],
+            ),
+        ];
+        for (row, (weight, text_style, copies)) in rows.into_iter().enumerate() {
+            let mut drawing = Drawing::new(1, DrawingToolType::PriceNote);
+            drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(200.0, 100.0)];
+            drawing.text = Some("Entry".into());
+            drawing.font_weight = weight;
+            drawing.note_text_style = text_style;
+            let shapes = painted(&drawing);
+            let texts: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect();
+            let colors: Vec<Vec<_>> = texts
+                .iter()
+                .map(|text| {
+                    let sections = &text.galley.job.sections;
+                    sections.iter().map(|s| s.format.color).collect()
+                })
+                .collect();
+            assert_eq!(colors, copies, "row {row}");
+            assert!(
+                texts
+                    .iter()
+                    .all(|text| text.galley.text() == "300.00 Entry"),
+                "row {row}"
+            );
+            if let Some(copy) = texts.get(1) {
+                let shift = copy.pos - texts[0].pos - egui::vec2(BOLD_OFFSET, 0.0);
+                assert!(shift.length() < 1e-3, "row {row}: {shift:?}");
+                assert_eq!(copy.galley.rect, texts[0].galley.rect, "row {row}");
+            }
+            let typed = &texts[0].galley.job.sections[copies[0].len() - 1].format;
+            let label_size = crate::styles::typography::font_size(drawing.font_size);
+            assert_eq!(
+                (typed.font_id.size, typed.italics),
+                text_style.map_or((label_size, false), |_| (18.0, true)),
+                "row {row}"
             );
         }
     }
