@@ -51,10 +51,11 @@ impl AxisMenus {
         if egui::Popup::is_any_open(ctx) {
             return false;
         }
+        // A touch held in place asks for the menu as a secondary click does. egui reports the
+        // hold to the widget a tap would click, which every axis that takes clicks is part of.
+        let held = ctx.interaction_snapshot(|widgets| widgets.long_touched.is_some());
         let Some(pos) = ctx.input(|input| {
-            input
-                .pointer
-                .secondary_clicked()
+            (held || input.pointer.secondary_clicked())
                 .then(|| input.pointer.interact_pos())
                 .flatten()
         }) else {
