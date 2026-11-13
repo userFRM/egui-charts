@@ -529,7 +529,7 @@ impl Chart {
         if visible_bars == 0 {
             self.chart_options.time_scale.bar_spacing
         } else {
-            width / visible_bars as f32
+            (width - 1.0) / visible_bars as f32
         }
     }
 
@@ -1270,9 +1270,10 @@ mod tests {
         }
     }
 
-    /// Both entry points fit 50 slots once and leave the same view at the latest bar.
+    /// Both entry points fit 50 slots once and leave the same view at the latest bar, and the
+    /// time scale reads a set count back, also below one point per bar.
     #[test]
-    fn visible_bars_matches_the_setter_on_initial_frames() {
+    fn visible_bars_matches_the_setter_on_initial_frames_and_reads_back() {
         let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let data = BarData::from_bars(
             (0..600)
@@ -1310,7 +1311,7 @@ mod tests {
                 );
                 assert_eq!(
                     built.state.time_scale().bar_spacing(),
-                    built.get_rendered_price_rect().width() / 50.0
+                    (built.get_rendered_price_rect().width() - 1.0) / 50.0
                 );
                 assert_eq!(built.get_visible_bars(), set.get_visible_bars());
                 assert_eq!(built.get_visible_bars(), 49);
@@ -1321,6 +1322,15 @@ mod tests {
             built.state.time_scale_mut().set_bar_spacing(20.0);
             built.apply_timescale_config(width - 166.0);
             assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
+        }
+        // The time scale reads the count back, also at less than a point per bar.
+        for (width, count) in [(600.0, 1000), (801.0, 800), (740.0, 50)] {
+            let mut chart = Chart::new(data.clone());
+            chart.state.time_scale_mut().set_min_bar_spacing(0.01);
+            chart.set_visible_bars(count);
+            chart.apply_timescale_config(width);
+            let candles = chart.state.time_scale().visible_candles();
+            assert_eq!(candles, count, "width {width}");
         }
     }
 }
