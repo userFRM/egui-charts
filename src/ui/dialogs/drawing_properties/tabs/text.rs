@@ -2,7 +2,7 @@
 
 use crate::drawings::{
     DrawingToolType, FontWeight, LineTextHorizontalAlign, LineTextOrientation,
-    LineTextVerticalAlign,
+    LineTextVerticalAlign, NoteTextStyle,
 };
 use crate::localization as l10n;
 use egui::Ui;
@@ -15,7 +15,7 @@ use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPickerState, FormGrid};
 
 /// Font sizes
-const FONT_SIZES: &[f32] = &[8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0];
+pub(super) const FONT_SIZES: &[f32] = &[8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0];
 
 /// Tools whose text sits in a box drawn from the text, background and border settings; tables,
 /// posts and ideas keep the theme's colours for their text.
@@ -239,6 +239,76 @@ impl TextTab {
                 });
                 ui.end_row();
             });
+            return;
+        }
+        if let DrawingProps {
+            tool_settings: Some(template),
+            label,
+            font_size,
+            color,
+            fill_enabled,
+            fill_color,
+            ..
+        } = props
+            && template.settings.tool_type == DrawingToolType::PriceNote
+        {
+            // The typed text alone: the price beside it and the label are styled on the Style
+            // tab. Until the text has settings of its own it is drawn as the price, so it opens
+            // with the price's.
+            let settings = &mut template.settings;
+            let mut shown = settings.clone();
+            shown.color = color.to_srgba_unmultiplied();
+            shown.fill_color = fill_color
+                .filter(|_| *fill_enabled)
+                .map(|fill| fill.to_srgba_unmultiplied());
+            let mut style = settings.note_text_style.unwrap_or(NoteTextStyle {
+                color: shown.text_box_colors(ui.ctx()).text.to_srgba_unmultiplied(),
+                font_size: *font_size,
+                bold: settings.font_weight == FontWeight::Bold,
+                italic: settings.italic,
+            });
+            let opened = style;
+            let [text_picker, ..] = pickers;
+            FormGrid::new("price_note_text").show(ui, |ui| {
+                let row = ui.label(l10n::text(ui.ctx(), "Label"));
+                ui.add(
+                    egui::TextEdit::multiline(label)
+                        .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
+                        .desired_rows(3),
+                )
+                .labelled_by(row.id);
+                ui.end_row();
+
+                let row = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.label_inputs_by(row.id, |ui| {
+                    ui.combo_select(
+                        "price_note_text_size",
+                        &mut style.font_size,
+                        FONT_SIZES.iter().copied(),
+                        |v| format!("{}px", *v as i32),
+                    );
+                });
+                ui.end_row();
+
+                ui.label(l10n::text(ui.ctx(), "Text color"));
+                let [r, g, b, a] = style.color;
+                let text = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                if let Some(picked) = color_swatch(ui, text_picker, text, "price_note_text_color") {
+                    style.color =
+                        keep_opacity(picked, text, text_picker.custom_mode).to_srgba_unmultiplied();
+                }
+                ui.end_row();
+
+                ui.label(l10n::text(ui.ctx(), "Text style"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut style.bold, l10n::text(ui.ctx(), "Bold"));
+                    ui.checkbox(&mut style.italic, l10n::text(ui.ctx(), "Italic"));
+                });
+                ui.end_row();
+            });
+            if style != opened {
+                settings.note_text_style = Some(style);
+            }
             return;
         }
 
@@ -532,5 +602,42 @@ mod tests {
             );
             output.drop_without_applying_deltas();
         }
+    }
+
+    /// A price note's Text tab styles the typed text alone: it opens with the settings of the
+    /// price beside it, and an edit there leaves the price's as they were.
+    #[test]
+    fn price_note_text_tab_styles_the_typed_text_alone() {
+        use crate::ui_kit::color_picker::tests::{click, text_pos};
+        let chart = crate::Chart::new(crate::model::BarData::default());
+        let mut drawing = Drawing::new(1, DrawingToolType::PriceNote);
+        drawing.italic = true;
+        let mut props = DrawingProps::from_drawing(&drawing, &chart);
+        let ctx = egui::Context::default();
+        let mut pickers: [ColorPickerState; 3] = Default::default();
+        let mut frame = |events| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| TextTab::show(ui, &mut props, &mut pickers));
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        frame(vec![]);
+        let shapes = frame(vec![]);
+        frame(click(text_pos(&shapes, "Bold")));
+        let settings = &props.tool_settings.as_ref().unwrap().settings;
+        assert_eq!(
+            settings.note_text_style,
+            Some(NoteTextStyle {
+                color: [255, 255, 255, 255],
+                font_size: 12.0,
+                bold: true,
+                italic: true,
+            })
+        );
+        assert_eq!(settings.font_weight, FontWeight::Normal);
     }
 }

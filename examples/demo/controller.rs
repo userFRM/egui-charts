@@ -148,8 +148,12 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         })
         .collect();
     // An anchor or session choice identifies the study, which names its price only once edited.
+    // Flags, which the caption leaves out, can precede that choice.
     let anchored = matches!(
-        inputs.first().map(|input| &input.kind),
+        inputs
+            .iter()
+            .map(|input| &input.kind)
+            .find(|kind| !matches!(kind, InputKind::Toggle)),
         Some(InputKind::Choice(_))
     );
     let edited = inputs
@@ -3241,7 +3245,7 @@ impl DemoApp {
                 let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
                 let width = self.chart.get_rendered_price_rect().width();
                 // Include the latest slot in the scale's exclusive data range.
-                let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+                let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
                 self.chart.disable_tracking_mode();
                 self.chart.apply_synced_time_scale(spacing, 0.5);
                 if self.layout.sync.sync_date_range
@@ -9231,7 +9235,7 @@ mod tests {
                         let (shown_start, shown_end) = app.chart.state().visible_range();
                         assert_eq!(shown_end, end, "{range:?}");
                         assert!(shown_start.abs_diff(start) <= 1, "{range:?}");
-                        let expected = app.chart.get_rendered_price_rect().width()
+                        let expected = (app.chart.get_rendered_price_rect().width() - 1.0)
                             / ((end - start) as f32 + 0.5);
                         assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
                         assert_eq!(app.replay.is_some(), replay);

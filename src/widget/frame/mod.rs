@@ -359,11 +359,14 @@ impl Chart {
                     .time_scale
                     .lock_visible_time_range_on_resize)
                 && previous_axis_width > 0.0
-                && old_width > 0.0
-                && new_width > 0.0
+                && old_width >= 2.0
+                && new_width >= 2.0
             {
-                let scale = self.state.time_scale_mut();
-                scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
+                self.state
+                    .time_scale_mut()
+                    .keep_slots_on_resize(old_width, new_width);
+                // The rerun pass must not resize the scale again from the old width.
+                self.prev_width = Some(new_width);
             }
             ui.ctx().request_discard("Chart measured its axis labels");
         }
@@ -922,9 +925,6 @@ impl Chart {
                 self.config.text_color,
             );
             self.paint_empty_pane_primitives(ui, &painter);
-            // This frame paints no marks, and those of the last frame went with its bars.
-            self.mark_hits.get_mut().clear();
-            self.clickable_marks.clear();
             self.record_host_click(ui, &response);
             return response;
         }
@@ -1039,9 +1039,9 @@ impl Chart {
         let drawn_as_cells = move |config: &FootprintConfig| {
             crate::chart::overlays::footprint_column_width(spacing, config).is_some()
         };
-        // Rows fit the edges of their minimum group, which automatic grouping can only raise; a
-        // group zoom raises above it is not fitted. A usable automatic height on single-tick
-        // rows sizes them by zoom alone, so those keep the candle fit.
+        // Rows fit the edges of their minimum group, which automatic grouping can only raise; the
+        // rows zoom groups above it are fitted once the scale is, below. A usable automatic
+        // height on single-tick rows sizes them by zoom alone, so those keep the candle fit.
         let fixed_footprint = match footprint {
             Some((flow, config)) => (drawn_as_cells(config)
                 && (config.row_ticks > 1
@@ -1067,26 +1067,14 @@ impl Chart {
             .into_iter()
             .flat_map(|(flow, row_ticks)| {
                 let group = crate::chart::overlays::fixed_row_group(flow, row_ticks);
-                let step = flow.price_step() * group as f64;
-                self.state.shown()[start_idx..end_idx]
-                    .iter()
-                    .filter(|bar| flow.complete_from().is_some_and(|from| bar.time >= from))
-                    .filter_map(|bar| flow.bar_at(bar.time))
-                    .filter_map(|bar| {
-                        bar.levels
-                            .first_key_value()
-                            .zip(bar.levels.last_key_value())
-                    })
-                    .flat_map(move |((&low, _), (&high, _))| {
-                        [
-                            low.div_euclid(group) as f64 * step - flow.tick_size() * 0.5,
-                            (high.div_euclid(group) as f64 + 1.0) * step - flow.tick_size() * 0.5,
-                        ]
-                    })
+                let bars = &self.state.shown()[start_idx..end_idx];
+                crate::chart::overlays::row_edges(bars, flow, move |_| group)
             })
             .filter(|price| price.is_finite())
             .map(|price| [price, price])
             .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])]);
+        // Only a host's rows can have both a tick minimum and an automatic height.
+        let zoomed_rows = footprint.filter(|_| fixed_footprint.is_some());
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
@@ -1310,6 +1298,54 @@ impl Chart {
             }
         }
         self.fit_marker_scales(&painter, price_rect, &margins);
+        if let Some((flow, config)) = zoomed_rows
+            && let Some(height) = crate::chart::overlays::automatic_row_height(config)
+            && !self.state.price_scale().is_manual()
+        {
+            // Zoom raises an automatic group and its rows start at multiples of it, so add the
+            // edges of the rows painted at the fitted range until it holds them. Fitted edges
+            // stay, so groups that are not multiples of each other cannot alternate ranges.
+            let main_margins = margins
+                .get(&self.main_series_scale)
+                .copied()
+                .unwrap_or_default();
+            let mut fitted = data_range;
+            // shortcut: the rounds are bounded to bound a frame's work; a plot with room for
+            // little more than two automatic rows can need more and then leaves the group of
+            // the last round unfitted. Raise the bound if such plots must fit.
+            for _ in 0..32 {
+                let mapping = ChartMapping {
+                    price: self.state.price_scale().map(
+                        transform,
+                        price_rect.top(),
+                        price_rect.bottom(),
+                    ),
+                    ..self.get_chart_mapping()
+                };
+                // A round adds less than one row at either end, so the rounds are sure to settle
+                // only while the fitted prices span more than two automatic rows: a shorter plot
+                // keeps the range of the minimum group instead of widening round after round.
+                let span = mapping.price.scale_to_y(fitted.0) - mapping.price.scale_to_y(fitted.1);
+                if span.abs() <= 2.0 * height {
+                    break;
+                }
+                let bars = &self.state.shown()[start_idx..end_idx];
+                let edges = crate::chart::overlays::row_edges(bars, flow, |bar| {
+                    crate::chart::overlays::row_group(&mapping, bar, flow, config)
+                })
+                .map(|price| transform.to_scale(price))
+                .filter(|value| value.is_finite())
+                .fold(fitted, |(low, high), value| {
+                    (low.min(value), high.max(value))
+                });
+                if edges == fitted {
+                    break;
+                }
+                fitted = edges;
+                self.state.price_scale_mut().autoscale(fitted.0, fitted.1);
+                self.fit_main_marker_scale(&painter, price_rect, main_margins);
+            }
+        }
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
@@ -1345,7 +1381,6 @@ impl Chart {
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
-        self.begin_mark_hits();
         self.pump_marks(ui.ctx());
 
         // Get visible data
@@ -1985,16 +2020,19 @@ impl Chart {
                 if let Some(color) = study.background() {
                     painter.rect_filled(rect, 0.0, color);
                 }
-                super::volume::paint(
-                    &painter,
-                    rect,
-                    study.as_ref(),
-                    &(start_idx..end_idx),
-                    &coords,
-                    min,
-                    max,
-                    Some(&self.merge_groups),
-                );
+                // A custom series draws in place of the columns.
+                if !self.has_renderer(*id) {
+                    super::volume::paint(
+                        &painter,
+                        rect,
+                        study.as_ref(),
+                        &(start_idx..end_idx),
+                        &coords,
+                        min,
+                        max,
+                        Some(&self.merge_groups),
+                    );
+                }
             }
             // TPO studies draw the chart type's profiles beside the bars.
             if let Some(config) = study
@@ -2297,17 +2335,22 @@ impl Chart {
             }
         }
 
-        // Resolve a click on the main chart area into a selection. Overlay
-        // indicators take priority over the series beneath them; an empty-area
-        // click clears the selection. Clicks in a study's pane are resolved
-        // where the panes are rendered, outside this rect.
+        // Resolve a click on the main chart area into a selection. A drawing
+        // sits on top and takes the click, which selects it alone, as in a
+        // study's pane. Otherwise overlay indicators take priority over the
+        // series beneath them; an empty-area click clears the selection. Clicks
+        // in a study's pane are resolved where the panes are rendered, outside
+        // this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
-            && self.mark_at(click_pos).is_none()
         {
+            #[cfg(feature = "drawings")]
+            let on_drawing = self.drawings.hit_test(click_pos).is_some();
+            #[cfg(not(feature = "drawings"))]
+            let on_drawing = false;
             match element_at(click_pos) {
-                Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
-                None => self.selection.deselect(),
+                Some((id, bar_idx)) if !on_drawing => self.selection.select(id, Some(bar_idx)),
+                _ => self.selection.deselect(),
             }
         }
 

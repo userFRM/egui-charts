@@ -992,7 +992,7 @@ impl Chart {
         }
         let right = self.right_edge().right;
         let scale = self.state.time_scale_mut();
-        let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
+        let full = (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing()) - 1.0;
         let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
         let stop = full.clamp(0.0, last);
         // The right edge a stop leaves at `full` can read back a rounding error short of it.
