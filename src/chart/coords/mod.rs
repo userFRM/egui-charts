@@ -39,7 +39,7 @@ impl ChartMapping {
             .as_ref()
             .map_or(self.bar_spacing, |positions| {
                 let right = self.base_idx as f64 + self.right_offset + 0.5;
-                let left = right - f64::from(self.rect.width()) / f64::from(self.bar_spacing);
+                let left = right - f64::from(self.rect.width() - 1.0) / f64::from(self.bar_spacing);
                 self.bar_spacing * positions.min_gap(left, right) as f32
             })
     }
