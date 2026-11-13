@@ -2734,8 +2734,9 @@ fn autoscale_contributions_reserve_pixels_per_pane_and_scale() {
                 assert!(!chart.series_price_scale(target).unwrap().is_manual());
                 let transform = chart.series_price_map(target).unwrap().transform();
                 let (low, high) = (transform.to_scale(100.0), transform.to_scale(200.0));
-                // Secondary bar panes already pad their raw span by 10% on each side.
-                let padding = if placement == "added" && mode != PriceScaleMode::Logarithmic {
+                // Secondary bar panes already pad their span by 10% on each side, in
+                // logarithmic units too.
+                let padding = if placement == "added" {
                     (high - low) * 0.1
                 } else {
                     0.0
