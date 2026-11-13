@@ -50,24 +50,12 @@ fn fixed_categories() -> Vec<(&'static str, Vec<Entry>)> {
             ],
         ),
         (
-            "Drawings",
+            "Selected drawing",
             vec![
-                entry(
-                    "Move the selected drawing one bar earlier",
-                    vec![key(Key::ArrowLeft, none)],
-                ),
-                entry(
-                    "Move the selected drawing one bar later",
-                    vec![key(Key::ArrowRight, none)],
-                ),
-                entry(
-                    "Move the selected drawing up one tick",
-                    vec![key(Key::ArrowUp, none)],
-                ),
-                entry(
-                    "Move the selected drawing down one tick",
-                    vec![key(Key::ArrowDown, none)],
-                ),
+                entry("Move one bar earlier", vec![key(Key::ArrowLeft, none)]),
+                entry("Move one bar later", vec![key(Key::ArrowRight, none)]),
+                entry("Move up one tick", vec![key(Key::ArrowUp, none)]),
+                entry("Move down one tick", vec![key(Key::ArrowDown, none)]),
             ],
         ),
         (
@@ -398,8 +386,8 @@ mod tests {
         for label in [
             "Change the symbol",
             "Change the interval",
-            "Move the selected drawing one bar earlier",
-            "Move the selected drawing down one tick",
+            "Move one bar earlier",
+            "Move down one tick",
             "Play or pause the replay",
             "Replay one bar forward",
         ] {
