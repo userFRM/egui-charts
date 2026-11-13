@@ -7,12 +7,16 @@ use egui::Color32;
 
 /// Zero-mean close-to-close volatility, without subtracting the mean log return.
 ///
-/// `sqrt(mean(ln(close / previous_close)^2)) * sqrt(252) * 100`.
-/// Annualisation assumes daily bars and 252 trading days per year (see #672).
+/// `sqrt(mean(ln(close / previous_close)^2)) * sqrt(trading_days) * 100`.
+/// Annualisation takes the bars per year, 252 by default (daily bars), from the trading days
+/// input.
 /// A full `period` of returns from positive closes is required before a value exists.
 #[derive(Clone)]
 pub struct ZeroTrendVol {
     period: usize,
+    /// Trading days per year the result is annualized over, one bar per day (252 for stocks, 365
+    /// for crypto); bars shorter than a day need the bars in a year instead
+    trading_days: f64,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
@@ -23,10 +27,18 @@ impl ZeroTrendVol {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            trading_days: 252.0,
             values: IndicatorValues::new(),
             colors: vec![palette::LIGHT_BLUE],
             visible: true,
         }
+    }
+
+    /// Set the bars per year the volatility is annualized over, clamped into 0 to
+    /// `f64::MAX`, NaN to 0.
+    pub fn with_trading_days(mut self, days: f64) -> Self {
+        self.trading_days = super::clamp_param(days, 0.0, f64::MAX);
+        self
     }
 }
 
@@ -59,7 +71,7 @@ impl ZeroTrendVol {
                     return IndicatorValue::None;
                 }
                 let mean_squared = window.iter().map(|r| r * r).sum::<f64>() / self.period as f64;
-                IndicatorValue::Single(mean_squared.sqrt() * 252.0_f64.sqrt() * 100.0)
+                IndicatorValue::Single(mean_squared.sqrt() * self.trading_days.sqrt() * 100.0)
             })
             .collect()
     }
@@ -73,7 +85,8 @@ impl Indicator for ZeroTrendVol {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        trading_days: number("Trading days per year", 0.0, f64::MAX)
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -85,7 +98,7 @@ impl Indicator for ZeroTrendVol {
     }
 
     fn desc(&self) -> &str {
-        "Zero-Trend Close-to-Close Volatility - Annualised percentage assuming daily bars"
+        "Zero-Trend Close-to-Close Volatility - Annualised percentage"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -140,5 +153,42 @@ impl Indicator for ZeroTrendVol {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("Zero-Trend Vol({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::test_support::make_bar;
+
+    /// Closes 100, 110, a bar without a close, 110 and 99 (a tie in the middle of the window), then
+    /// the second close corrected to 105. Expected values come from the definition over the three
+    /// returns of the usable bars, evaluated independently, annualized over 252 and 365 bars.
+    #[test]
+    fn zero_trend_annualizes_over_the_bars_per_year_across_gaps_ties_and_corrections() {
+        let bars = |second: f64| -> Vec<Bar> {
+            [100.0, second, f64::NAN, 110.0, 99.0]
+                .map(make_bar)
+                .to_vec()
+        };
+        for (days, as_saved, corrected) in [
+            (252.0, 130.21247886655595, 114.63926638193587),
+            (365.0, 156.7107425738662, 137.96837844741043),
+        ] {
+            let mut study = ZeroTrendVol::new(3).with_trading_days(days);
+            let mut data = bars(110.0);
+            study.calculate(&data);
+            assert_eq!(
+                study.values().value(0, 2),
+                None,
+                "{days}: bar without a close"
+            );
+            let got = study.values().value(0, 4).unwrap();
+            assert!((got - as_saved).abs() < 1e-9, "{days}: {got}");
+            data = bars(105.0);
+            study.update(&data, 1);
+            let got = study.values().value(0, 4).unwrap();
+            assert!((got - corrected).abs() < 1e-9, "{days} corrected: {got}");
+        }
     }
 }

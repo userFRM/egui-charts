@@ -142,7 +142,7 @@ fn render_high_low_labels(
     }
 }
 
-/// Range bars at their element slots.
+/// Range bars at their element slots, each over its whole range from its low to its high.
 pub(super) fn render_range_bars(
     painter: &Painter,
     range_bars: &[Bar],
@@ -159,7 +159,7 @@ pub(super) fn render_range_bars(
         } else {
             bearish_color
         };
-        let rect = calc_brick_rect(x, range_bar, price_scale, bar_width);
+        let rect = calc_brick_rect(x, range_bar.low, range_bar.high, price_scale, bar_width);
         painter.add(Shape::rect_filled(rect, 0.0, color));
     }
 }

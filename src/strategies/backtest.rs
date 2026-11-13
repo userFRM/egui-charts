@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 mod live;
 pub use live::StrategyFill;
 
+use crate::model::range_bar::price_path;
 use crate::model::rounding_tolerance;
 use crate::model::{
     Bar, ChartType, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade, Timeframe,
@@ -830,22 +831,6 @@ fn sign(side: OrderSide) -> f64 {
         OrderSide::Buy => 1.0,
         OrderSide::Sell => -1.0,
     }
-}
-
-fn price_path(bar: &Bar) -> [f64; 4] {
-    let near = if (bar.high - bar.open) - (bar.open - bar.low)
-        <= rounding_tolerance(bar.high.abs().max(bar.low.abs()), 4.0 * f64::EPSILON)
-    {
-        bar.high
-    } else {
-        bar.low
-    };
-    [
-        bar.open,
-        near,
-        if near == bar.high { bar.low } else { bar.high },
-        bar.close,
-    ]
 }
 
 struct Run<'a> {
