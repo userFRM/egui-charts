@@ -80,6 +80,8 @@ pub use chart_type::{
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) use instrument::same_currency;
 pub use instrument::{
     DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
     SessionOverride, SessionWindow, SymbolType,
