@@ -198,7 +198,11 @@ mod tests {
             let mut study = CloseToCloseVol::new(3).with_trading_days(days);
             let mut data = bars(110.0);
             study.calculate(&data);
-            assert_eq!(study.values().value(0, 2), None, "{days}: bar without a close");
+            assert_eq!(
+                study.values().value(0, 2),
+                None,
+                "{days}: bar without a close"
+            );
             let got = study.values().value(0, 4).unwrap();
             assert!((got - as_saved).abs() < 1e-9, "{days}: {got}");
             data = bars(105.0);
