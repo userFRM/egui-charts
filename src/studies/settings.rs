@@ -478,7 +478,8 @@ impl StudySettingsSnapshot {
 ///
 /// Calculated on another interval or symbol, a study's volume profiles and zones span the chart
 /// bars that share time with their bars, its markers sit on the last such chart bar once the
-/// values on the chart reach their bar, and its labels are hidden.
+/// values on the chart reach their bar, and its labels are hidden. Its visible range is the range
+/// of its own bars that share time with the chart bars in view.
 #[derive(Clone)]
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
@@ -500,6 +501,8 @@ pub struct ConfiguredStudy {
     /// For each chart bar, the bars of another interval or symbol that share its time, by which
     /// the study's profiles, zones and markers are placed on chart bars.
     spans: Vec<std::ops::Range<usize>>,
+    /// The chart bars in view, from `set_visible_range`.
+    visible: Option<std::ops::Range<usize>>,
     /// The study's markers and zones on chart bars while it runs on another interval or symbol.
     aligned_markers: Vec<super::IndicatorMarker>,
     aligned_zones: Vec<super::StudyZone>,
@@ -545,6 +548,7 @@ impl ConfiguredStudy {
             aligned: None,
             aligned_bars: Vec::new(),
             spans: Vec::new(),
+            visible: None,
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             kept: None,
@@ -831,6 +835,11 @@ impl Indicator for ConfiguredStudy {
         self.study.set_instrument(source.instrument);
         self.study.set_timeframe(source.timeframe);
         self.study.set_bar_clock(&source.clock);
+        self.spans = spans_of(data, &self.clock, source);
+        if let Some(visible) = &self.visible {
+            self.study
+                .set_visible_range(source_bars(&self.spans, visible));
+        }
         if self.data_requests().len() > 1 {
             self.study.update_data(source.bars, 0, sources);
         } else {
@@ -866,7 +875,6 @@ impl Indicator for ConfiguredStudy {
             aligned.push(super::IndicatorValue::Multiple(values));
         }
         self.aligned = Some(aligned);
-        self.spans = spans_of(data, &self.clock, source);
         // A marker appears once the values on the chart reach its bar (Wait for interval close).
         let shown = self.aligned_bars.iter().flatten().max().copied();
         self.aligned_markers = self
@@ -964,7 +972,13 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn set_visible_range(&mut self, range: std::ops::Range<usize>) -> bool {
-        self.study.set_visible_range(range)
+        self.visible = Some(range.clone());
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            return self.study.set_visible_range(range);
+        }
+        // Mapped by the spans of the last calculation; `update_data` maps it again on its bars.
+        self.study
+            .set_visible_range(source_bars(&self.spans, &range))
     }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.clock = clock.clone();
