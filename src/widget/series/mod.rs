@@ -731,22 +731,11 @@ impl Chart {
     /// invalid ones in the feed state.
     pub(crate) fn apply(&mut self, incoming: Vec<(Bar, Origin)>) -> Merged {
         let clock = self.clock();
-        self.merge_live(&clock, incoming, true)
+        self.apply_by(&clock, incoming)
     }
 
-    /// [`apply`](Self::apply) with the slots of `clock`, the chart's, for bars of a feed.
+    /// [`apply`](Self::apply) with the slots of `clock`, the chart's.
     pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
-        self.merge_live(clock, incoming, false)
-    }
-
-    /// Merges `incoming` into the main bars; `dated` change marks start their fade at the frame
-    /// of the update when the chart is not shown.
-    fn merge_live(
-        &mut self,
-        clock: &BarClock,
-        incoming: Vec<(Bar, Origin)>,
-        dated: bool,
-    ) -> Merged {
         let before = self.edge();
         #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
@@ -760,9 +749,13 @@ impl Chart {
             merged = merge(bars, from_ticks, clock, incoming);
             merged.first_changed
         });
-        let frames = self.frame_clock.as_ref().filter(|_| dated);
         if let (Some(marks), Some(closes)) = (&mut self.change_marks, closes) {
-            marks.record(&self.state.data().bars, clock, closes, frames);
+            marks.record(
+                &self.state.data().bars,
+                clock,
+                closes,
+                self.frame_clock.as_ref(),
+            );
         }
         self.feed.rejected_bars += merged.rejected;
         #[cfg(feature = "drawings")]

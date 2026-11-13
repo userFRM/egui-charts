@@ -21,7 +21,7 @@ struct Mark {
     up: bool,
     at: Option<f64>,
     /// The first pass that can show the update and the input time of the pass it was made in;
-    /// `None` for a feed or a chart not yet shown.
+    /// `None` for a chart not yet shown.
     born: Option<(u64, f64)>,
 }
 
@@ -71,7 +71,7 @@ impl ChangeMarks {
     }
 
     /// Marks each slot of `before` whose close in `bars` differs from the close it had, dated
-    /// by `frames` for an update the host made.
+    /// by `frames`, the clock of the chart's last frame.
     pub(super) fn record(
         &mut self,
         bars: &[Bar],

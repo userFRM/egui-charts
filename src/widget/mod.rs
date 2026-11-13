@@ -464,8 +464,8 @@ pub struct Chart {
     marker_options: crate::model::MarkerOptions,
     /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
     change_marks: Option<change_marks::ChangeMarks>,
-    /// Clock of the last frame that showed the chart, which dates change marks recorded by
-    /// [`update`](Self::update) while no frame shows it.
+    /// Clock of the last frame that showed the chart, which dates change marks recorded while no
+    /// frame shows it.
     frame_clock: Option<change_marks::FrameClock>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
