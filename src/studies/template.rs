@@ -320,6 +320,24 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // A Correlation Coefficient drew its zero guide alone before it opened with guides at
+            // its bounds; hidden, they leave the pane as it was saved. One guide bounded no band,
+            // so a fill saved on draws none between them either. A host study under the name,
+            // which has no log returns, keeps its own guides.
+            "Correlation Coefficient"
+                if self.settings.levels.len() < 2 && declares("log_returns") =>
+            {
+                let (mut levels, ..) =
+                    super::settings::declared_levels(&crate::studies::Correlation::default());
+                for bound in &mut levels[..2] {
+                    bound.visible = false;
+                }
+                if let Some(zero) = self.settings.levels.first() {
+                    levels[2] = *zero;
+                }
+                template.settings.levels = levels;
+                template.settings.fill_between_levels = false;
+            }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
             "RankCorr" if !has("smoothing") || self.settings.levels.is_empty() => {
@@ -338,6 +356,27 @@ impl StudyTemplate {
                             ..level
                         })
                         .collect();
+                }
+            }
+            // An auto anchored VWAP drew one line before it had bands; hidden, the bands and their
+            // fill keep the styles they take once shown.
+            "VWAP Auto Anchored" if !has("band_multiplier") && self.settings.plots.len() == 1 => {
+                let declared = crate::studies::VwapAutoAnchored::new().settings();
+                template.inputs.extend([
+                    ("percentage_bands".to_owned(), InputValue::Toggle(false)),
+                    ("band_multiplier".to_owned(), InputValue::Number(1.0)),
+                ]);
+                for mut plot in declared.plots.into_iter().skip(1) {
+                    plot.visible = false;
+                    template.settings.plots.push(plot);
+                }
+                template
+                    .settings
+                    .untagged_plots
+                    .extend(declared.untagged_plots);
+                template.settings.fills = declared.fills;
+                for fill in &mut template.settings.fills {
+                    fill.visible = false;
                 }
             }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
@@ -470,11 +509,12 @@ mod tests {
         let rows: Vec<Box<dyn Indicator>> = vec![
             // Exported studies outside the catalogue.
             Box::new(CVD::default()),
-            Box::new(CloseToCloseVol::default()),
             Box::new(HL2::default()),
             Box::new(HLC3::default()),
             Box::new(PriceChannel::default()),
             Box::new(EhlersFisher::default()),
+            // A catalogue study with the bars per year it is annualized over.
+            Box::new(CloseToCloseVol::default().with_trading_days(365.0)),
             // Fewer averages than the ribbon that the name creates, with a crossing pair.
             Box::new(
                 MACombination::new(vec![
@@ -713,6 +753,27 @@ mod tests {
                 vec![("auto_interval", Toggle(true))],
                 vec![("auto_interval", Toggle(true))],
             ),
+            // Saved before the bars per year could be set, when every volatility used 252.
+            (
+                "C2C Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "GK Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("trading_days", Number(365.0))],
+                vec![("trading_days", Number(365.0))],
+            ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (
                 "Vol Profile FR",
@@ -783,9 +844,10 @@ mod tests {
         }
     }
 
-    /// An RSI and a VWAP saved before their defaults gained an average and a band restore with the
-    /// plots they had, and a Rank Correlation saved before it had an average, levels and a filled
-    /// band restores without them.
+    /// An RSI, a VWAP, an auto anchored VWAP and a Correlation Coefficient saved before their
+    /// defaults gained an average, bands, and an area with guides at its bounds restore with the
+    /// plots and guides they had, and a Rank Correlation saved before it had an average, levels
+    /// and a filled band restores without them.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -807,6 +869,21 @@ mod tests {
             [80.0, 30.0, 50.0]
         );
         assert!(!restored.settings().levels[2].visible);
+
+        // Saved with a banded average by the release before the divergence input, an RSI restores
+        // its four plots as they were styled and calculates no divergences.
+        let banded: StudyTemplate = serde_json::from_str(
+            r#"{"name":"RSI","inputs":[["period",{"Length":14}],["smoothing",{"Choice":2}],["smoothing_length",{"Length":14}],["smoothing_deviation",{"Number":2.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RSI.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[253,216,53,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[13,9,20,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[8,18,8,26],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let restored = banded.create().unwrap();
+        assert_eq!(restored.settings().plots, banded.settings.plots);
+        let divergence = restored.inputs().into_iter().find(|i| i.id == "divergence");
+        assert_eq!(divergence.unwrap().value, InputValue::Toggle(false));
+        // Saved since with the input on, it restores the four divergence plots too.
+        let marked = ConfiguredStudy::new(Box::new(RSI::default().with_divergence(true)));
+        let restored = StudyTemplate::from_study(&marked).create().unwrap();
+        assert_eq!(restored.line_count(), 6);
 
         // Saved with an EMA from the shorter list of types, under the average's earlier ids.
         let mut older = StudyTemplate::from_study(&RSI::default());
@@ -846,6 +923,68 @@ mod tests {
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
 
+        // A Correlation Coefficient opens as an area with guides at its bounds and at zero. Saved
+        // as a line with the zero guide alone, here dotted, 3 px wide and orange with its value
+        // line, it restores as that line with the bounds hidden, and a bound shown since stays
+        // shown through a template.
+        let fresh =
+            ConfiguredStudy::new(Box::new(crate::studies::Correlation::default())).settings();
+        assert_eq!(fresh.plots[0].plot_type, crate::studies::PlotType::Area);
+        assert!(fresh.levels.iter().all(|level| level.visible));
+        let saved = r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut restored = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        let settings = restored.settings();
+        assert_eq!(settings.plots[0].plot_type, crate::studies::PlotType::Line);
+        let values: Vec<_> = restored.pane().levels.iter().map(|l| l.0).collect();
+        assert_eq!(values, [1.0, -1.0, 0.0]);
+        let [upper, lower, zero] = settings.levels[..] else {
+            panic!("three guides");
+        };
+        assert!(!upper.visible && !lower.visible);
+        assert_eq!(
+            zero,
+            crate::studies::LevelStyle {
+                value: None,
+                color: Color32::from_rgb(255, 152, 0),
+                pattern: crate::model::LineStyle::Dotted,
+                width: 3.0,
+                visible: true,
+                price_line: true,
+            }
+        );
+        let mut shown = settings.clone();
+        shown.levels[0].visible = true;
+        restored.apply_settings(&[], shown.clone()).unwrap();
+        let again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings().levels, shown.levels);
+        // A host could switch the fill on while the one guide bounded no band.
+        let mut filled: StudyTemplate = serde_json::from_str(saved).unwrap();
+        filled.settings.fill_between_levels = true;
+        assert!(!filled.create().unwrap().pane().fill_between_levels);
+
+        // An auto anchored VWAP as a chart saved it before the study had bands, its line edited
+        // to orange at two pixels and its length to 30: it draws that line alone, and the hidden
+        // bands are tagged as on a study added now.
+        let saved = r#"{"name":"VWAP Auto Anchored","inputs":[["anchor",{"Choice":0}],["length",{"Length":30}],["source",{"Choice":5}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VwapAutoAnchored.html","plots":[{"color":[230,81,0,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,9,14,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.plot_style(0), saved.settings.plots[0]);
+        let lines = 0..restored.line_count();
+        let drawn: Vec<_> = lines
+            .clone()
+            .filter(|&line| restored.plot_style(line).visible)
+            .collect();
+        let tagged: Vec<_> = lines.filter(|&line| restored.plot_tagged(line)).collect();
+        assert_eq!((drawn, tagged), (vec![0], vec![0, 1, 2]));
+        assert!(restored.fills().is_empty());
+        let length = restored.inputs().into_iter().find(|i| i.id == "length");
+        assert_eq!(length.unwrap().value, InputValue::Length(30));
+
         // A Rank Correlation as the release before its levels saved it draws none of them and
         // fills no band, one saved before it had an average draws none, and one saved since draws
         // the average, all three levels and the band.
@@ -884,6 +1023,7 @@ mod tests {
         let rows = [
             ("RSI", vec![], 1),
             ("VWAP", vec![], 1),
+            ("VWAP Auto Anchored", vec![], 1),
             ("Trading Sessions", vec![], 1),
             // Built-in templates with `offset_percent` restore as Envelopes, which draws three
             // lines too.

@@ -540,7 +540,7 @@ fn set_data_newer_window_keeps_a_scrolled_back_view_on_bars() {
     // left edge, then that bar stays there as the window moves on. At 23 px a bar the right
     // edge of the stopped view reads back a rounding error short of a full plot.
     let mut chart = scrolled(23.0, -30.0);
-    let visible = f64::from(chart.state.time_scale().width()) / 23.0;
+    let visible = (f64::from(chart.state.time_scale().width()) - 1.0) / 23.0;
     for start in 1..=60 {
         chart.set_data(SeriesId::MAIN, window(start, 100));
         frame(&ctx, &mut chart, start as f64, Vec::new());
@@ -556,7 +556,7 @@ fn set_data_newer_window_keeps_a_scrolled_back_view_on_bars() {
     // view. Indices 56, 43 and 30 at the right edge of a plot of about 35 bars, and the 88
     // bars left fill the plot from its left border.
     let mut chart = scrolled(20.0, -30.0);
-    let visible = f64::from(chart.state.time_scale().width()) / 20.0;
+    let visible = (f64::from(chart.state.time_scale().width()) - 1.0) / 20.0;
     chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(100));
     for minute in 100..=126 {
         chart.update(SeriesId::MAIN, bar(minute * 60, 10.0));

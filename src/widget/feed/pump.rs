@@ -799,7 +799,7 @@ impl Chart {
         // The oldest held trade's bar is complete once nothing is left before it.
         let reached_start = end && !link.trades_from_start;
         link.trades_from_start |= end;
-        let left_out = link.trades.left_out_at();
+        let unproven = (link.trades.left_out_at(), link.trades.retained_until());
         let bubbles = &mut link.bubbles;
         let mut changed = false;
         let fold = &mut |trade: &Tick, added| {
@@ -812,8 +812,9 @@ impl Chart {
                 input.replace_trades(&link.clock, &link.trades, &self.state.data().bars);
             }
         }
-        // A page that only leaves executions out adds none, yet the held ones then prove less.
-        let cut = link.trades.left_out_at() != left_out;
+        // A page that only leaves executions out, or fills the time after the retained ones with
+        // none, adds none, yet the held ones then prove less or more.
+        let cut = (link.trades.left_out_at(), link.trades.retained_until()) != unproven;
         if (changed || reached_start || cut) && link.footprint.is_some() {
             link.footprint = link.footprint(None, &self.state.data().bars);
         }

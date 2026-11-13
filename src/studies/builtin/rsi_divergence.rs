@@ -52,8 +52,9 @@ use egui::Color32;
 /// scale together, as on a flat bar, but rounds to neighbouring floats.
 const RSI_TIE: f64 = 1e-9;
 
-/// Text of the marks on outputs 5 to 8.
-const MARKS: [&str; 4] = ["Bull", "H Bull", "Bear", "H Bear"];
+/// Text of the marks of the regular bullish, hidden bullish, regular bearish and hidden bearish
+/// divergence.
+pub(super) const MARKS: [&str; 4] = ["Bull", "H Bull", "Bear", "H Bear"];
 
 /// RSI Divergence Indicator: the RSI with regular and hidden divergences against price.
 #[derive(Clone)]
@@ -69,7 +70,7 @@ pub struct RsiDivergence {
     hidden_bearish: bool,
     values: IndicatorValues,
     stepper: Stepper<State>,
-    undo: Vec<(usize, usize, f64)>,
+    undo: Confirmed,
     rsi_color: Color32,
     fill_color: Color32,
     bull_color: Color32,
@@ -89,18 +90,216 @@ struct Pivot {
 #[derive(Clone, Default)]
 struct State {
     source: usize,
-    position: usize,
     rsi: RsiState,
+    pivots: Pivots,
+}
+
+/// The pivots a divergence search compares and the outputs it draws each divergence on.
+pub(super) struct Search {
+    left: usize,
+    right: usize,
+    min_range: usize,
+    max_range: usize,
+    /// The segment and mark outputs of the regular bullish, hidden bullish, regular bearish and
+    /// hidden bearish divergence, `None` for one that is not shown.
+    lines: [Option<(usize, usize)>; 4],
+}
+
+impl Search {
+    /// The regular divergences between the default pivots: the bullish and bearish segments on
+    /// outputs `first` and `first + 1`, their marks on the two outputs after.
+    pub(super) fn regular(first: usize) -> Self {
+        let RsiDivergence {
+            left,
+            right,
+            min_range,
+            max_range,
+            ..
+        } = RsiDivergence::default();
+        Self {
+            left,
+            right,
+            min_range,
+            max_range,
+            lines: [
+                Some((first, first + 2)),
+                None,
+                Some((first + 1, first + 3)),
+                None,
+            ],
+        }
+    }
+}
+
+/// The bars a divergence search still compares and the last pivot low and high. A study keeps
+/// it in its checkpointed state.
+#[derive(Clone, Default)]
+pub(super) struct Pivots {
+    position: usize,
     window: std::collections::VecDeque<Pivot>,
     previous: [Option<Pivot>; 2],
 }
 
-struct Segment {
-    line: usize,
+/// A divergence found on bar `confirming`: its segment over `sources`, from one pivot's RSI to
+/// the other's, and its mark on the last of them.
+pub(super) struct Segment {
+    lines: (usize, usize),
     sources: Vec<usize>,
     from: f64,
     to: f64,
     confirming: usize,
+}
+
+impl Pivots {
+    /// Adds bar `source`, whose prices are finite and whose RSI is NaN until it has a value, and
+    /// pushes the divergences that bar confirms onto `found`. A bar with a missing price is not
+    /// added, so it takes no place between pivots.
+    pub(super) fn next(
+        &mut self,
+        search: &Search,
+        source: usize,
+        rsi: f64,
+        high: f64,
+        low: f64,
+        found: &mut Vec<Segment>,
+    ) {
+        let keep = search
+            .left
+            .max(search.max_range.saturating_add(1))
+            .saturating_add(search.right)
+            .saturating_add(1);
+        self.window.push_back(Pivot {
+            source,
+            position: self.position,
+            rsi,
+            high,
+            low,
+        });
+        self.position += 1;
+        if self.window.len() > keep {
+            self.window.pop_front();
+        }
+        let Some(at) = self
+            .window
+            .len()
+            .checked_sub(search.right.saturating_add(1))
+            .filter(|&at| at >= search.left)
+        else {
+            return;
+        };
+        let p = self.window[at];
+        let mut window = self.window.range(at - search.left..);
+        if !window.all(|pivot| pivot.rsi.is_finite()) {
+            return;
+        }
+        for high in [false, true] {
+            let before = self.window.range(at - search.left..at).all(|v| {
+                if high {
+                    v.rsi <= p.rsi + RSI_TIE
+                } else {
+                    v.rsi >= p.rsi - RSI_TIE
+                }
+            });
+            let after = self.window.range(at + 1..).all(|v| {
+                if high {
+                    v.rsi < p.rsi - RSI_TIE
+                } else {
+                    v.rsi > p.rsi + RSI_TIE
+                }
+            });
+            if !(before && after) {
+                continue;
+            }
+            let previous = self.previous[usize::from(high)].replace(p);
+            let Some(q) = previous else {
+                continue;
+            };
+            if !(search.min_range..=search.max_range).contains(&(p.position - q.position - 1)) {
+                continue;
+            }
+            let divergences = if high {
+                [(2, false, true), (3, true, false)]
+            } else {
+                [(0, true, false), (1, false, true)]
+            };
+            for (kind, rsi_rises, price_rises) in divergences {
+                let Some(lines) = search.lines[kind] else {
+                    continue;
+                };
+                // Prices compare exactly, so the rule holds at any price scale.
+                let moved = |rises: bool, from: f64, to: f64, tie: f64| {
+                    if rises {
+                        to > from + tie
+                    } else {
+                        to < from - tie
+                    }
+                };
+                let price = |pivot: Pivot| if high { pivot.high } else { pivot.low };
+                if moved(rsi_rises, q.rsi, p.rsi, RSI_TIE)
+                    && moved(price_rises, price(q), price(p), 0.0)
+                {
+                    found.push(Segment {
+                        lines,
+                        sources: self
+                            .window
+                            .iter()
+                            .filter(|v| (q.position..=p.position).contains(&v.position))
+                            .map(|v| v.source)
+                            .collect(),
+                        from: q.rsi,
+                        to: p.rsi,
+                        confirming: source,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// What the divergences confirmed on the last bar replaced. A study keeps it beside its values,
+/// so that a correction of that bar can withdraw them.
+#[derive(Clone, Default)]
+pub(super) struct Confirmed(Vec<(usize, usize, f64)>);
+
+impl Confirmed {
+    /// Readies `values` for an update from bar `from` of `len`: a last bar about to be
+    /// recalculated gives back what its divergences replaced. `false` when no bar changed, where
+    /// the update must do nothing so that a later correction can still withdraw them.
+    pub(super) fn begin(&mut self, values: &mut IndicatorValues, len: usize, from: usize) -> bool {
+        let old = values.len();
+        if old > 0 && from == old && len == old {
+            return false;
+        }
+        if old > 0 && from == old - 1 && len >= old {
+            // A developing confirmation can be withdrawn, restoring the earlier segment it replaced.
+            for &(line, bar, value) in &self.0 {
+                values.set_value(line, bar, value);
+            }
+        }
+        self.0.clear();
+        true
+    }
+
+    /// Draws `found` on `values` of `len` bars, each segment interpolated so that the line joins
+    /// its two pivots.
+    pub(super) fn draw(&mut self, values: &mut IndicatorValues, found: Vec<Segment>, len: usize) {
+        for segment in found {
+            let mut set = |line: usize, bar: usize, value: f64| {
+                if segment.confirming + 1 == len {
+                    self.0
+                        .push((line, bar, values.value(line, bar).unwrap_or(f64::NAN)));
+                }
+                values.set_value(line, bar, value);
+            };
+            let (line, mark) = segment.lines;
+            let last = segment.sources.len() - 1;
+            for (position, &bar) in segment.sources.iter().enumerate() {
+                let t = position as f64 / last as f64;
+                set(line, bar, segment.from + (segment.to - segment.from) * t);
+            }
+            set(mark, segment.sources[last], segment.to);
+        }
+    }
 }
 
 impl RsiDivergence {
@@ -125,7 +324,7 @@ impl RsiDivergence {
             hidden_bearish: false,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            undo: Vec::new(),
+            undo: Confirmed::default(),
             rsi_color: palette::BLUE,
             fill_color: palette::LIGHT_BLUE.gamma_multiply_u8(26),
             bull_color: palette::GREEN,
@@ -194,23 +393,22 @@ impl Indicator for RsiDivergence {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let len = self.values.len();
-        if len > 0 && from == len && data.len() == len {
+        if !self.undo.begin(&mut self.values, data.len(), from) {
             return;
         }
-        if len > 0 && from == len - 1 && data.len() >= len {
-            // A developing confirmation can be withdrawn, restoring the earlier segment it replaced.
-            for &(line, bar, value) in &self.undo {
-                self.values.set_value(line, bar, value);
-            }
-        }
-        self.undo.clear();
-        let mut segments = Vec::new();
-        let keep = self
-            .left
-            .max(self.max_range.saturating_add(1))
-            .saturating_add(self.right)
-            .saturating_add(1);
+        let search = Search {
+            left: self.left,
+            right: self.right,
+            min_range: self.min_range,
+            max_range: self.max_range,
+            lines: [
+                self.bullish.then_some((1, 5)),
+                self.hidden_bullish.then_some((2, 6)),
+                self.bearish.then_some((3, 7)),
+                self.hidden_bearish.then_some((4, 8)),
+            ],
+        };
+        let mut found = Vec::new();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 let source = state.source;
@@ -222,130 +420,14 @@ impl Indicator for RsiDivergence {
                     IndicatorValue::Single(value) if value.is_finite() => value,
                     _ => f64::NAN,
                 };
-                let current = Pivot {
-                    source,
-                    position: state.position,
-                    rsi,
-                    high: bar.high,
-                    low: bar.low,
-                };
-                state.position += 1;
-                state.window.push_back(current);
-                if state.window.len() > keep {
-                    state.window.pop_front();
-                }
-                if let Some(at) = state
-                    .window
-                    .len()
-                    .checked_sub(self.right.saturating_add(1))
-                    .filter(|&at| at >= self.left)
-                {
-                    let p = state.window[at];
-                    let window = state.window.range(at - self.left..);
-                    if window.clone().all(|pivot| pivot.rsi.is_finite()) {
-                        for high in [false, true] {
-                            let before = state.window.range(at - self.left..at).all(|v| {
-                                if high {
-                                    v.rsi <= p.rsi + RSI_TIE
-                                } else {
-                                    v.rsi >= p.rsi - RSI_TIE
-                                }
-                            });
-                            let after = state.window.range(at + 1..).all(|v| {
-                                if high {
-                                    v.rsi < p.rsi - RSI_TIE
-                                } else {
-                                    v.rsi > p.rsi + RSI_TIE
-                                }
-                            });
-                            if !(before && after) {
-                                continue;
-                            }
-                            let previous = state.previous[usize::from(high)].replace(p);
-                            let Some(q) = previous else {
-                                continue;
-                            };
-                            if !(self.min_range..=self.max_range)
-                                .contains(&(p.position - q.position - 1))
-                            {
-                                continue;
-                            }
-                            let divergences = if high {
-                                [
-                                    (self.bearish, 3, false, true),
-                                    (self.hidden_bearish, 4, true, false),
-                                ]
-                            } else {
-                                [
-                                    (self.bullish, 1, true, false),
-                                    (self.hidden_bullish, 2, false, true),
-                                ]
-                            };
-                            for (shown, line, rsi_rises, price_rises) in divergences {
-                                // Prices compare exactly, so the rule holds at any price scale.
-                                let moved = |rises: bool, from: f64, to: f64, tie: f64| {
-                                    if rises {
-                                        to > from + tie
-                                    } else {
-                                        to < from - tie
-                                    }
-                                };
-                                let price =
-                                    |pivot: Pivot| if high { pivot.high } else { pivot.low };
-                                if shown
-                                    && moved(rsi_rises, q.rsi, p.rsi, RSI_TIE)
-                                    && moved(price_rises, price(q), price(p), 0.0)
-                                {
-                                    segments.push(Segment {
-                                        line,
-                                        sources: state
-                                            .window
-                                            .iter()
-                                            .filter(|v| {
-                                                (q.position..=p.position).contains(&v.position)
-                                            })
-                                            .map(|v| v.source)
-                                            .collect(),
-                                        from: q.rsi,
-                                        to: p.rsi,
-                                        confirming: source,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
+                state
+                    .pivots
+                    .next(&search, source, rsi, bar.high, bar.low, &mut found);
                 let mut row = vec![f64::NAN; 9];
                 row[0] = rsi;
                 IndicatorValue::Multiple(row)
             });
-        for segment in segments {
-            let last = segment.sources.len() - 1;
-            for (position, &bar) in segment.sources.iter().enumerate() {
-                if segment.confirming + 1 == data.len() {
-                    self.undo.push((
-                        segment.line,
-                        bar,
-                        self.values.value(segment.line, bar).unwrap_or(f64::NAN),
-                    ));
-                }
-                let t = position as f64 / last as f64;
-                self.values.set_value(
-                    segment.line,
-                    bar,
-                    segment.from + (segment.to - segment.from) * t,
-                );
-            }
-            let bar = segment.sources[last];
-            if segment.confirming + 1 == data.len() {
-                self.undo.push((
-                    segment.line + 4,
-                    bar,
-                    self.values.value(segment.line + 4, bar).unwrap_or(f64::NAN),
-                ));
-            }
-            self.values.set_value(segment.line + 4, bar, segment.to);
-        }
+        self.undo.draw(&mut self.values, found, data.len());
     }
 
     fn is_incremental(&self) -> bool {

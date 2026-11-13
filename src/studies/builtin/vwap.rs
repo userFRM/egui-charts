@@ -90,6 +90,12 @@ const VWAP_ANCHORS: [VwapAnchor; 11] = [
 
 /// The most bands that the study inputs can hold.
 const MAX_BANDS: usize = 10;
+/// The colours of successive band pairs: green, olive and dark teal.
+pub(super) const BAND_COLORS: [Color32; 3] = [
+    palette::GREEN,
+    Color32::from_rgb(128, 128, 0),
+    Color32::from_rgb(0, 137, 123),
+];
 /// The most event anchors that the study inputs can hold.
 const MAX_EVENTS: usize = 1000;
 
@@ -183,6 +189,8 @@ pub struct VolumeWeightedAvgPrice {
     shared: Option<usize>,
     /// Whether no two consecutive bars shared a UTC date at the last update.
     daily: bool,
+    /// Whether the study has no values on intervals of a day or longer.
+    hide_daily: bool,
     timeframe: Option<Timeframe>,
     /// One per line: the VWAP, then the upper and lower band of each multiplier.
     colors: Vec<Color32>,
@@ -217,6 +225,7 @@ impl VolumeWeightedAvgPrice {
             stepper: Stepper::default(),
             shared: None,
             daily: true,
+            hide_daily: false,
             timeframe: None,
             colors: vec![palette::BLUE],
             visible: true,
@@ -274,14 +283,9 @@ impl VolumeWeightedAvgPrice {
 
     /// One colour per line, with green, olive and dark teal for successive band pairs.
     fn fit_colors(&mut self) {
-        let colors = [
-            palette::GREEN,
-            Color32::from_rgb(128, 128, 0),
-            Color32::from_rgb(0, 137, 123),
-        ];
         while self.colors.len() < self.line_count() {
             let band = (self.colors.len() - 1) / 2;
-            self.colors.push(colors[band.min(2)]);
+            self.colors.push(BAND_COLORS[band.min(2)]);
         }
     }
 
@@ -330,6 +334,13 @@ impl Indicator for VolumeWeightedAvgPrice {
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
         use crate::studies::{InputKind, InputValue, StudyInput};
         let mut inputs = vec![
+            StudyInput::new(
+                "hide_daily",
+                "Hide on daily and longer intervals",
+                InputValue::Toggle(self.hide_daily),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
             StudyInput::new(
                 "anchor",
                 "Anchor",
@@ -415,7 +426,9 @@ impl Indicator for VolumeWeightedAvgPrice {
     /// local time takes its first occurrence. Events are applied sorted and deduplicated.
     /// `time_zone` and `day_start` count trading days while the chart passes no instrument; an
     /// instrument's time zone and session, given with
-    /// [`set_instrument`](Indicator::set_instrument), take their place.
+    /// [`set_instrument`](Indicator::set_instrument), take their place. `hide_daily` leaves every
+    /// line without values while the bars are a day or longer: by the chart interval, or without
+    /// one when no two consecutive bars share a UTC date.
     fn set_input(
         &mut self,
         id: &str,
@@ -441,6 +454,7 @@ impl Indicator for VolumeWeightedAvgPrice {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
+            ("hide_daily", InputValue::Toggle(value)) => self.hide_daily = value,
             ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
             ("time_zone", InputValue::Text(name)) => {
                 self.time_zone = TimezoneId::named(&name).ok_or_else(|| {
@@ -545,10 +559,12 @@ impl Indicator for VolumeWeightedAvgPrice {
         events.dedup();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                // A bar with a non-finite price or volume has no value and adds nothing.
-                if ![bar.high, bar.low, bar.close, bar.volume]
-                    .iter()
-                    .all(|x| x.is_finite())
+                // A bar with a non-finite price or volume has no value and adds nothing, and
+                // no bar has one while the study is hidden on this interval.
+                if (self.hide_daily && daily)
+                    || ![bar.high, bar.low, bar.close, bar.volume]
+                        .iter()
+                        .all(|x| x.is_finite())
                 {
                     return IndicatorValue::None;
                 }
@@ -1148,7 +1164,7 @@ mod tests {
             if interval_first {
                 chart.set_timeframe(crate::model::Timeframe::Hour1);
             }
-            chart.add_indicator(
+            let id = chart.add_indicator(
                 crate::studies::IndicatorFactory::new()
                     .create("VWAP")
                     .unwrap(),
@@ -1164,6 +1180,20 @@ mod tests {
             assert_eq!(
                 chart.indicators().next().unwrap().1.values().value(0, 1),
                 Some(14.0)
+            );
+            // Hidden on daily intervals, the VWAP and its band have no values on this one and
+            // return on the hourly one below.
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("hide_daily", InputValue::Toggle(true))
+                .unwrap();
+            shapes(&egui::Context::default(), &mut chart, 1.5, Vec::new());
+            let values = chart.indicators().next().unwrap().1.values();
+            assert_eq!(values.len(), 2);
+            assert!(
+                (0..3).all(|line| values.line(line).iter().all(|v| v.is_nan())),
+                "{values:?}"
             );
             chart.set_timeframe(crate::model::Timeframe::Hour1);
             chart.set_symbol("UTC");
