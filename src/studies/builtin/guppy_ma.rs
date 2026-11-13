@@ -145,23 +145,15 @@ impl Indicator for GuppyMA {
 mod tests {
     use super::*;
     use crate::studies::InputValue;
-    use chrono::{Duration, Utc};
 
     /// Bars whose open, high and low lie away from the close, so only the close can feed the averages.
     fn bars(closes: &[f64]) -> Vec<Bar> {
-        let start = Utc::now();
         closes
             .iter()
             .enumerate()
             .map(|(i, &c)| {
-                Bar::new(
-                    start + Duration::minutes(i as i64),
-                    c - 3.0,
-                    c + 5.0,
-                    c - 7.0,
-                    c,
-                    1.0,
-                )
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, c - 3.0, c + 5.0, c - 7.0, c, 1.0)
             })
             .collect()
     }
@@ -177,18 +169,18 @@ mod tests {
         assert!((got - want).abs() < 1e-9, "{what}: {got} != {want}");
     }
 
-    /// Lengths 1 and 2 replace the first two defaults, giving alphas 1 and 2/3; the third stays 3
-    /// (alpha 1/2) and the last 60 (alpha 2/61). Closes 10, 12, none, 9, 9, hand-derived:
+    /// Lengths 1 and 2 replace the first two defaults, giving alphas 1 and 2/3; the third stays 8
+    /// and the last 60 (alpha 2/61). Closes 10, 12, none, 9, 9, hand-derived:
     ///
-    /// | bar | close | EMA(1) | EMA(2)  | EMA(3) | EMA(60)    |
-    /// |-----|-------|--------|---------|--------|------------|
-    /// | 0   | 10    | 10     | 10      | 10     | 10         |
-    /// | 1   | 12    | 12     | 34/3    | 11     | 10 + 4/61  |
-    /// | 2   | none  | none   | none    | none   | none       |
-    /// | 3   | 9     | 9      | 88/9    | 10     | kept       |
-    /// | 4   | 9     | 9      | 250/27  | 9.5    | kept       |
+    /// | bar | close | EMA(1) | EMA(2)  | EMA(60)    |
+    /// |-----|-------|--------|---------|------------|
+    /// | 0   | 10    | 10     | 10      | 10         |
+    /// | 1   | 12    | 12     | 34/3    | 10 + 4/61  |
+    /// | 2   | none  | none   | none    | none       |
+    /// | 3   | 9     | 9      | 88/9    | kept       |
+    /// | 4   | 9     | 9      | 250/27  | kept       |
     ///
-    /// A corrected close of 8 at bar 3 gives EMA(1) 8, EMA(2) 82/9 and EMA(3) 9.5.
+    /// A corrected close of 8 at bar 3 gives EMA(1) 8 and EMA(2) 82/9.
     #[test]
     fn periods_drive_the_averages() {
         let mut g = GuppyMA::new();
@@ -212,7 +204,7 @@ mod tests {
         assert_close(r[1], 250.0 / 27.0, "bar 4 EMA(2), equal closes");
 
         // A correction to bar 3 recomputes from there and matches a fresh calculation.
-        data[3] = bars(&[0.0, 0.0, 0.0, 8.0])[3].clone();
+        data[3] = Bar::new(data[3].time, 5.0, 13.0, 1.0, 8.0, 1.0);
         let mut fresh = g.clone();
         fresh.calculate(&data);
         g.update(&data, 3);
