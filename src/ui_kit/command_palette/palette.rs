@@ -1,7 +1,7 @@
 //! Command palette widget
 
 use super::command::Command;
-use super::fuzzy::{FuzzyMatch, fuzzy_match};
+use super::fuzzy::{FuzzyMatch, rank};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
@@ -70,17 +70,27 @@ impl CommandPalette {
         // An empty query lists nothing, so no command is highlighted before the user types.
         if !self.search_query.is_empty() {
             for (idx, cmd) in self.commands.iter().enumerate() {
-                let mut searchable = cmd.searchable_text();
+                // The row paints the translated text, but the English text matches too.
+                let mut labels = vec![cmd.label.clone()];
+                let mut other: Vec<String> = cmd
+                    .description
+                    .iter()
+                    .chain(cmd.category.iter())
+                    .chain(cmd.keywords.iter())
+                    .cloned()
+                    .collect();
                 if let Some(ctx) = &self.context {
-                    for text in std::iter::once(&cmd.label)
-                        .chain(cmd.description.iter())
-                        .chain(cmd.category.iter())
-                    {
-                        searchable.push(' ');
-                        searchable.push_str(&l10n::text(ctx, text));
+                    labels.insert(0, l10n::text(ctx, &cmd.label));
+                    for text in cmd.description.iter().chain(cmd.category.iter()) {
+                        other.push(l10n::text(ctx, text));
                     }
                 }
-                if let Some(m) = fuzzy_match(&self.search_query, &searchable) {
+                let other = other.join(" ");
+                let best = labels
+                    .iter()
+                    .filter_map(|label| rank(&self.search_query, label, &other))
+                    .reduce(|a, b| if b.score > a.score { b } else { a });
+                if let Some(m) = best {
                     self.filtered.push((idx, m));
                 }
             }
@@ -235,7 +245,6 @@ impl CommandPalette {
                                 if row.clicked() {
                                     executed_command = Some(cmd.id.clone());
                                 }
-
                             }
                         });
                 }
