@@ -3,6 +3,11 @@
 use super::{Chart, CursorDataPolicy, SeriesId};
 use crate::chart::rendering::StudyValue;
 
+/// What the data table reads of a visible added series: id, title, bar revision and last bar
+/// (time in nanoseconds, close bits).
+#[cfg(feature = "ui")]
+pub(crate) type SeriesFingerprint = (usize, String, u64, Option<(i64, u64)>);
+
 impl Chart {
     /// The table is current while this is unchanged: the history revision and a revision moved
     /// by edits of the last bar, study edits, host-fed study data and the instrument.
@@ -14,7 +19,7 @@ impl Chart {
     /// What the table lists of each visible added series: its id, title, bar revision and last
     /// bar, which the revision leaves out. The table is current while this is unchanged too.
     #[cfg(feature = "ui")]
-    pub(crate) fn data_table_series(&self) -> Vec<(usize, String, u64, Option<(i64, u64)>)> {
+    pub(crate) fn data_table_series(&self) -> Vec<SeriesFingerprint> {
         self.price_series
             .iter()
             .filter(|item| item.visible)

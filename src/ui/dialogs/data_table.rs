@@ -42,7 +42,7 @@ pub enum DataTableAction {
 #[derive(PartialEq)]
 struct Source {
     revision: (u64, u64),
-    series: Vec<(usize, String, u64, Option<(i64, u64)>)>,
+    series: Vec<crate::widget::SeriesFingerprint>,
     symbol: String,
     timeframe: Option<Timeframe>,
     len: usize,
@@ -1003,5 +1003,45 @@ mod tests {
         assert_eq!(shown(&chart, Some("EMA: EMA(9)")), ["SMA: SMA(20)"]);
         chart.restore(&mixed).unwrap();
         assert_eq!(shown(&chart, None), ["EMA: EMA(9)", "SMA: SMA(20)"]);
+    }
+
+    /// A column turned off for an added series stays off when the chart restores its own layout,
+    /// which adds the series again under a new id.
+    #[test]
+    fn added_series_column_choice_survives_a_restore() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..5)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        for name in ["Peer", "Other"] {
+            chart.add_series(crate::widget::SeriesOptions {
+                name: name.into(),
+                ..Default::default()
+            });
+        }
+        let layout = chart.snapshot().unwrap();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        shown_rows(&ctx, &mut dialog, &chart);
+        let headers = &dialog.cached.as_ref().unwrap().1.headers;
+        let at = headers.iter().position(|h| h == "Peer").unwrap();
+        let column = dialog.column_ids[at].clone();
+        dialog
+            .hidden
+            .get_mut(&chart.data_table_identity())
+            .unwrap()
+            .insert(column);
+        chart.restore(&layout).unwrap();
+        shown_rows(&ctx, &mut dialog, &chart);
+        let hidden = &dialog.hidden[&chart.data_table_identity()];
+        let shown: Vec<_> = dialog.cached.as_ref().unwrap().1.headers[6..]
+            .iter()
+            .zip(&dialog.column_ids[6..])
+            .filter(|(_, column)| !hidden.contains(*column))
+            .map(|(header, _)| header.as_str())
+            .collect();
+        assert_eq!(shown, ["Other"]);
     }
 }

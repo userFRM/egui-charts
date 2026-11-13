@@ -59,6 +59,8 @@ use egui::{Pos2, Rect, Vec2};
 pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
+#[cfg(feature = "ui")]
+pub(crate) use readout::SeriesFingerprint;
 use std::collections::BTreeMap;
 
 // Re-export from logic layer
