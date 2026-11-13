@@ -569,6 +569,9 @@ impl Chart {
             .unwrap_or_else(|| ctx.active_theme());
         if options.transparent_background {
             theme.chart.bg = egui::Color32::TRANSPARENT;
+            // The fills that repeat the background behind text have nothing to repeat.
+            chart.config.background_color = egui::Color32::TRANSPARENT;
+            chart.config.background_style = crate::config::BackgroundStyle::Solid;
         }
         chart.theme_override = Some(theme);
         if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
@@ -1249,6 +1252,8 @@ mod tests {
         chart.config.show_watermark = true;
         chart.config.watermark_text = Some("WATERMARK".into());
         frame(&ctx, &mut chart, 0.0, vec![]);
+        // A colour of the chart's own, which no theme supplies.
+        chart.config.background_color = egui::Color32::from_rgb(120, 10, 10);
         let base = ImageExportOptions {
             size: [480, 320],
             include_title: false,

@@ -92,6 +92,12 @@ pub struct IndicatorPane {
     pub(super) primitive_axis_labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
     pub(super) axis_options: crate::config::PriceAxisOptions,
     pub(super) legend_backdrop: f32,
+    /// The background of the chart showing the pane: the rect its gradient spans, its style and
+    /// its solid colour. A pane shown on its own has the theme's chart background.
+    pub(super) background: Option<(Rect, crate::config::BackgroundStyle, egui::Color32)>,
+    /// Colour of the legend text and the axis labels, the scale text colour of the chart showing
+    /// the pane. A pane shown on its own takes them from the egui style and the theme.
+    pub(super) text_color: Option<egui::Color32>,
 }
 
 impl IndicatorPane {
@@ -117,7 +123,17 @@ impl IndicatorPane {
             primitive_axis_labels: Vec::new(),
             axis_options,
             legend_backdrop: 0.6,
+            background: None,
+            text_color: None,
         }
+    }
+
+    /// The colour of the background behind `pos`.
+    pub(super) fn background_at(&self, ctx: &egui::Context, pos: Pos2) -> egui::Color32 {
+        self.background.map_or_else(
+            || ctx.active_theme().chart.bg,
+            |(frame, style, color)| crate::widget::frame::background_at(frame, style, color, pos),
+        )
     }
 
     /// Render the indicator panel with proper x-axis alignment
@@ -376,7 +392,9 @@ impl IndicatorPane {
         // Get chart background and text colors from theme
         let colors = ui.active_theme().chart;
         let chart_bg = colors.bg;
-        let text_color = ui.style().visuals.text_color();
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| ui.style().visuals.text_color());
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
@@ -401,9 +419,17 @@ impl IndicatorPane {
 
         let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 
-        // Fill background
+        // Fill background: the part of the chart's that lies behind the pane, also when a container
+        // paints the chart's: the fill hides the crosshair line the price frame draws through panes.
         if !self.overlay {
-            painter.rect_filled(rect, 0.0, chart_bg);
+            match self.background {
+                Some((frame, style, color)) => {
+                    crate::widget::frame::paint_background(painter, frame, rect, style, color);
+                }
+                None => {
+                    painter.rect_filled(rect, 0.0, chart_bg);
+                }
+            }
         }
 
         // Calculate drawing area to match main chart layout
@@ -652,7 +678,7 @@ impl IndicatorPane {
                 ui,
                 row,
                 controls,
-                true,
+                Some(self.background_at(ui.ctx(), controls.center())),
                 response.id.with("study_controls"),
                 indicator,
             )
