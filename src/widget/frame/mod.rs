@@ -2233,12 +2233,23 @@ impl Chart {
                 if let Some(table) = statistics_rect
                     && let Some((flow, config)) = host.or_else(|| feed.zip(feed_config.as_ref()))
                 {
+                    // The trading days the session breaks divide intraday bars into; a bar of a
+                    // day or longer holds one of its own.
+                    let trading_days = config.session_cumulative_delta.then(|| {
+                        exchange_session
+                            .clone()
+                            .with_timeframe(crate::model::Timeframe::Min1)
+                    });
+                    let sessions = trading_days
+                        .as_ref()
+                        .map(|days| self.session_provider.as_deref().unwrap_or(days));
                     crate::chart::overlays::render_footprint_statistics_rows(
                         &painter,
                         &self.get_chart_mapping().with_rect(table),
                         self.bars(super::SeriesId::MAIN),
                         flow,
                         config,
+                        sessions,
                     );
                 }
                 if let Some((_, Some(volume))) = &merged {

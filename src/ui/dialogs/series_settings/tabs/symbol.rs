@@ -431,6 +431,13 @@ impl SymbolTab {
                             .filter(|r| if *r == row { enabled } else { rows.contains(r) })
                             .collect();
                     }
+                    if enabled && row == FootprintStatistic::CumulativeDelta {
+                        Self::switch(
+                            ui,
+                            "Restart CVD each session",
+                            &mut params.footprint_session_cumulative_delta,
+                        );
+                    }
                 }
             }
         });

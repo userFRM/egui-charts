@@ -3,7 +3,7 @@
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::draw_dashed_line;
 use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
-use crate::model::{Bar, ChartTypeParams, FootprintStatistic};
+use crate::model::{Bar, ChartTypeParams, FootprintStatistic, SessionProvider};
 use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
@@ -111,6 +111,11 @@ pub struct FootprintConfig {
     pub statistics: bool,
     /// Statistics rows in display order. An empty list hides the table.
     pub statistics_rows: Vec<FootprintStatistic>,
+    /// Restart the cumulative delta row of the statistics at the first bar of each trading day,
+    /// or of each session of the chart's session provider, rather than summing every complete
+    /// bar. A bar of a day or longer then shows its own delta. Used by the footprint chart type
+    /// and [`crate::widget::Chart::show_footprint`].
+    pub session_cumulative_delta: bool,
     /// Annotations calculated from the displayed rows after executions or grouping change.
     /// `None` hides them. Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     #[cfg(feature = "studies")]
@@ -151,6 +156,7 @@ impl Default for FootprintConfig {
             statistics: false,
             // Keep the existing volume statistics selected; execution metrics are opt-in.
             statistics_rows: FootprintStatistic::ALL[..9].to_vec(),
+            session_cumulative_delta: false,
             #[cfg(feature = "studies")]
             studies: None,
         }
@@ -187,6 +193,7 @@ impl FootprintConfig {
             info_box: params.footprint_info_box,
             statistics: params.footprint_statistics,
             statistics_rows: params.footprint_statistics_rows.clone(),
+            session_cumulative_delta: params.footprint_session_cumulative_delta,
             #[cfg(feature = "studies")]
             studies: (params.footprint_stacked_imbalances
                 || params.footprint_naked_poc
@@ -1288,13 +1295,15 @@ pub fn render_footprint_statistics(
         text_color,
         ..Default::default()
     };
-    render_footprint_statistics_rows(painter, mapping, bars, flow, &config);
+    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None);
 }
 
 /// Draws the rows of [`FootprintConfig::statistics_rows`] in their order and in
 /// [`FootprintConfig::text_color`]. An empty selection draws nothing. Uses the same fitting and
 /// clipping rules as [`render_footprint_statistics`]; an undefined value is shown as `n/a`.
 ///
+/// The cumulative delta sums every complete bar. With `sessions` it restarts at the first bar of
+/// each session, so a bar's value no longer depends on how much earlier history is loaded.
 /// Buy and sell percentages are shares of the bar's total volume, and the volume change is
 /// relative to the previous bar with executions and blank for the first; all percentages have
 /// one decimal. The range is the bar's high minus its low. The point of control is the lowest
@@ -1307,6 +1316,7 @@ pub fn render_footprint_statistics_rows(
     bars: &[Bar],
     flow: &Footprint,
     config: &FootprintConfig,
+    sessions: Option<&dyn SessionProvider>,
 ) {
     let (rows, text_color) = (config.statistics_rows.as_slice(), config.text_color);
     if rows.is_empty() {
@@ -1326,12 +1336,40 @@ pub fn render_footprint_statistics_rows(
         .map(|label| label.size().x)
         .fold(0.0, f32::max)
         + 8.0;
+    // The first bar of each session in view, from the session the first bar in view belongs to:
+    // sessions before it end before any column.
+    let mut restarts = Vec::new();
+    if let (Some(sessions), Some(last)) = (sessions, bars.len().checked_sub(1)) {
+        let shown = mapping
+            .x_to_idx(mapping.rect.left())
+            .saturating_sub(1)
+            .min(last);
+        let end = mapping
+            .x_to_idx(mapping.rect.right())
+            .saturating_add(2)
+            .clamp(shown + 1, bars.len());
+        let first = bars[..shown].partition_point(|bar| {
+            sessions
+                .session_break_between(&bar.time, &bars[shown].time)
+                .is_some()
+        });
+        restarts.push(first);
+        restarts.extend(
+            sessions
+                .session_breaks(&bars[first..end])
+                .into_iter()
+                .map(|(i, _)| first + i),
+        );
+    }
     let mut cumulative = 0.0;
     let mut last_volume = None;
     let complete = flow.complete_from();
     let mut has_data = false;
     let mut columns = Vec::new();
     for (i, bar) in bars.iter().enumerate() {
+        if restarts.binary_search(&i).is_ok() {
+            cumulative = 0.0;
+        }
         let Some(row) = flow
             .bar_at(bar.time)
             .filter(|_| complete.is_some_and(|from| bar.time >= from))
@@ -2869,7 +2907,14 @@ mod tests {
                             statistics_rows: FootprintStatistic::ALL[..count].to_vec(),
                             ..Default::default()
                         };
-                        render_footprint_statistics_rows(ui.painter(), &map, &bars, flow, &config)
+                        render_footprint_statistics_rows(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            flow,
+                            &config,
+                            None,
+                        )
                     }
                 },
             );
@@ -2945,6 +2990,72 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A delta of 5 in the last bar of a UTC day and 2 in the first bar of the next: summed over
+    /// every bar the row reads 5 and then 7, restarted with the day 5 and then 2.
+    #[test]
+    fn cumulative_delta_restarts_with_the_session_when_given_sessions() {
+        let last: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
+        let first = last + chrono::TimeDelta::minutes(1);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (at, size) in [(last, 5.0), (first, 2.0)] {
+            flow.push(&Tick::new(at, 100.0, size, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let bars = [last, first].map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 16.0));
+        let map = ChartMapping::new(
+            rect,
+            60.0,
+            0,
+            1,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                16.0,
+                false,
+            ),
+        );
+        let config = FootprintConfig {
+            statistics_rows: vec![FootprintStatistic::CumulativeDelta],
+            ..Default::default()
+        };
+        let days =
+            crate::model::ExchangeSessionProvider::new(crate::model::TimezoneId::utc(), None);
+        for (sessions, expected) in [
+            (None, ["CVD", "5", "7"]),
+            (Some(&days as &dyn SessionProvider), ["CVD", "5", "2"]),
+        ] {
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    render_footprint_statistics_rows(
+                        ui.painter(),
+                        &map,
+                        &bars,
+                        &flow,
+                        &config,
+                        sessions,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(texts, expected, "restarting: {}", sessions.is_some());
         }
     }
 

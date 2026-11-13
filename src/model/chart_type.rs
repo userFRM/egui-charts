@@ -670,6 +670,9 @@ pub struct ChartTypeParams {
     pub footprint_statistics: bool,
     /// Footprint: statistics rows in display order; an empty list hides the table.
     pub footprint_statistics_rows: Vec<FootprintStatistic>,
+    /// Footprint: restart the cumulative delta row at the first bar of each session, rather than
+    /// summing every complete bar.
+    pub footprint_session_cumulative_delta: bool,
     /// Execution-based session profile display settings.
     pub profile: TradeProfileSettings,
     /// Independent line, area and baseline styles, retained across chart type changes.
@@ -786,6 +789,7 @@ impl Default for ChartTypeParams {
                 FootprintStatistic::Delta,
                 FootprintStatistic::DeltaPercent,
             ],
+            footprint_session_cumulative_delta: false,
             profile: TradeProfileSettings::default(),
             styles: super::ChartTypeStyles::default(),
             renko_size_method: super::BoxSizeMethod::Fixed,
@@ -930,6 +934,7 @@ mod tests {
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
             "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
+            "footprint_session_cumulative_delta": true,
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
             "footprint_imbalance_colors": [[200, 30, 220, 255], null],
             "tpo_letters": false,
@@ -985,6 +990,7 @@ mod tests {
             legacy["footprint_imbalance_colors"],
             serde_json::json!([null, null])
         );
+        assert_eq!(legacy["footprint_session_cumulative_delta"], false);
         for field in [
             "footprint_stacked_imbalances",
             "footprint_naked_poc",
