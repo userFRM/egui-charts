@@ -226,15 +226,11 @@ impl Chart {
                         self.tracking_mode_active = false;
                     }
                 }
-                TrackingModeExitMode::OnNextTap => {
-                    // Exit on any click
+                // A click or tap is both the next tap and a touch that ended. A press that
+                // moved has ended tracking as a drag, below, and a contact that a touch
+                // readout owns is not the chart's to end on.
+                TrackingModeExitMode::OnNextTap | TrackingModeExitMode::OnTouchEnd => {
                     if response.clicked() {
-                        self.tracking_mode_active = false;
-                    }
-                }
-                TrackingModeExitMode::OnTouchEnd => {
-                    // Exit when a press on the chart is released, whether or not it moved
-                    if response.clicked() || response.drag_stopped() {
                         self.tracking_mode_active = false;
                     }
                 }
