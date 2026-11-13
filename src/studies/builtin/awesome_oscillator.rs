@@ -61,7 +61,7 @@ impl AwesomeOscillator {
         Self::new(5, 34)
     }
 
-    /// Set colors for positive and negative values
+    /// Set colours for increasing and decreasing oscillator values
     pub fn with_colors(mut self, positive: Color32, negative: Color32) -> Self {
         self.positive_color = positive;
         self.negative_color = negative;
@@ -136,13 +136,25 @@ impl Indicator for AwesomeOscillator {
     }
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
-        let value = self.values.value(0, bar)?;
-        let previous = bar.checked_sub(1).and_then(|bar| self.values.value(0, bar));
-        Some(if previous.is_some_and(|previous| value <= previous) {
+        self.values.value(0, bar)?;
+        Some(if self.plot_variant(0, bar).is_some() {
             self.negative_color
         } else {
             self.positive_color
         })
+    }
+
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        vec![crate::studies::PlotVariant::new(
+            "Decreasing bars",
+            self.negative_color,
+        )]
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        let value = self.values.value(0, bar)?;
+        let previous = self.values.value(0, bar.checked_sub(1)?)?;
+        (value <= previous).then_some(0)
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {

@@ -31,6 +31,10 @@ pub enum StudyContextMenuAction {
     AddIndicator,
     /// Add the study's catalogue name to the indicators dialog's favorites.
     AddToFavorites(String),
+    /// Add the study to the other charts of the layout, with
+    /// [`LayoutCopy::Study`](crate::widget::LayoutCopy::Study). Offered after
+    /// [`ChartMenus::set_layout_copies`](crate::ui::context_menu::ChartMenus::set_layout_copies).
+    AddToLayout,
     /// Change the study's place in the draw order of its pane.
     VisualOrder(VisualOrder),
     /// Show the study only on the intervals of this range around the chart's interval.
@@ -49,6 +53,8 @@ pub enum StudyContextMenuAction {
     ObjectTree,
     /// Open the study's settings, through [`Chart::take_indicator_settings_request`].
     Settings,
+    /// Ask the host to open this study's metadata help article.
+    Help(String),
 }
 
 /// Intervals on which a study is shown, relative to the chart's interval.
@@ -149,7 +155,11 @@ pub(crate) struct StudyContextMenu {
     catalogue_name: String,
     alert: Option<(Alert, String)>,
     visible: bool,
+    editable: bool,
+    help_url: Option<String>,
     overlay: bool,
+    /// Whether the original price pane still exists as a destination.
+    main_pane: bool,
     volume: bool,
     scale: Option<StudyScale>,
     /// The side of the pane's price axis.
@@ -157,6 +167,8 @@ pub(crate) struct StudyContextMenu {
     /// Other panes by their stable ids, with their titles.
     panes: Vec<(PaneId, String)>,
     has_interval: bool,
+    /// Whether the layout has other charts to copy the study to.
+    pub(crate) layout_copies: bool,
     next_scale: u64,
     shared_scales: Vec<u64>,
     /// Controls the host hid, set through
@@ -191,7 +203,10 @@ impl StudyContextMenu {
                 (alert, study.format_plot_value(output, value))
             });
         self.visible = study.is_visible();
+        self.editable = study.user_edit_enabled();
+        self.help_url = study.help_url().map(str::to_owned);
         self.overlay = study.is_overlay();
+        self.main_pane = chart.panes().contains(&PaneId::MAIN);
         self.scale = Some(study.scale());
         self.shared_scales = chart
             .indicators()
@@ -213,10 +228,10 @@ impl StudyContextMenu {
         self.next_scale = (0..)
             .find(|key| !self.shared_scales.contains(key))
             .unwrap_or(0);
-        self.axis_side = if chart.config().show_right_axis || !chart.config().show_left_axis {
-            "right"
-        } else {
+        self.axis_side = if chart.main_axis_on_left() {
             "left"
+        } else {
+            "right"
         };
         self.panes = other_panes(Some(ctx), chart, chart.series_pane(id));
         self.has_interval = chart.timeframe().is_some();
@@ -275,6 +290,11 @@ impl StudyContextMenu {
                 )
                 .with_icon(&embedded_icons::STAR_EMPTY),
             ),
+        ]);
+        if self.layout_copies {
+            items.push(item("Add to all charts in layout", A::AddToLayout));
+        }
+        items.extend([
             MenuEntry::Separator,
             MenuEntry::Submenu {
                 label: "Visual order".into(),
@@ -311,7 +331,7 @@ impl StudyContextMenu {
         for (pane, title) in &self.panes {
             moves.push(item(title, A::MoveTo(PaneTarget::Pane(*pane))));
         }
-        if !self.overlay {
+        if !self.overlay && self.main_pane {
             moves.push(item("Main pane", A::MoveTo(PaneTarget::Main)));
         }
         items.push(MenuEntry::Submenu {
@@ -394,11 +414,29 @@ impl StudyContextMenu {
                 MenuItem::new("Settings…", A::Settings).with_icon(&embedded_icons::SETTINGS_GEAR),
             ),
         ]);
+        if let Some(url) = &self.help_url {
+            items.push(item("Study help", A::Help(url.clone())));
+        }
+        for entry in &mut items {
+            match entry {
+                MenuEntry::Item(item) if matches!(item.action, A::Settings | A::Remove) => {
+                    item.enabled = self.editable
+                }
+                MenuEntry::Submenu { entries, .. } if !self.editable => {
+                    for entry in entries {
+                        if let MenuEntry::Item(item) = entry {
+                            item.enabled = false;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         items.retain(|entry| {
             let control = match entry {
                 MenuEntry::Item(item) => match item.action {
                     A::AddAlert(_) => Control::Alerts,
-                    A::AddIndicator | A::AddToFavorites(_) => Control::Indicators,
+                    A::AddIndicator | A::AddToFavorites(_) | A::AddToLayout => Control::Indicators,
                     A::ObjectTree => Control::ObjectTree,
                     A::Settings => Control::Settings,
                     _ => return true,
@@ -415,6 +453,13 @@ impl StudyContextMenu {
 /// Apply a chart-owned action to study `id`. The caller wraps it in a user action.
 pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAction) {
     use StudyContextMenuAction as A;
+    if matches!(
+        action,
+        A::Settings | A::VisualOrder(_) | A::Intervals(_) | A::MoveTo(_) | A::PinTo(_) | A::Remove
+    ) && !chart.indicator_user_edit_enabled(id)
+    {
+        return;
+    }
     match action {
         A::VisualOrder(order) => {
             chart.reorder_indicator(id, *order);
@@ -481,6 +526,117 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
                     });
             chart.indicator_source_request = source;
         }
-        A::AddAlert(_) | A::AddToFavorites(_) | A::Copy | A::ObjectTree => {}
+        A::AddAlert(_)
+        | A::AddToFavorites(_)
+        | A::AddToLayout
+        | A::Copy
+        | A::ObjectTree
+        | A::Help(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A menu opened before permission is revoked must refuse every study mutation.
+    #[test]
+    fn revoked_study_editing_blocks_stale_menu_actions() {
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        chart.set_timeframe(Timeframe::Min1);
+        let id = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+        let mut menu = StudyContextMenu::default();
+        menu.open(&ctx, &chart, id, 0);
+        let study = chart.indicator_mut(id).unwrap();
+        let mut saved = serde_json::to_value(study.settings()).unwrap();
+        saved["user_edit_enabled"] = false.into();
+        saved["help_url"] = "https://example.org/study".into();
+        study
+            .apply_settings(&[], serde_json::from_value(saved).unwrap())
+            .unwrap();
+        let before = chart.indicators().next().unwrap().1.snapshot_settings();
+        let draw_order = |chart: &Chart| {
+            chart
+                .snapshot()
+                .unwrap()
+                .panes
+                .into_iter()
+                .find(|pane| pane.main)
+                .unwrap()
+                .members
+        };
+        let order = draw_order(&chart);
+        for action in [
+            StudyContextMenuAction::Settings,
+            StudyContextMenuAction::Intervals(IntervalRange::Only),
+            StudyContextMenuAction::PinTo(StudyScale::None),
+            StudyContextMenuAction::MoveTo(PaneTarget::NewPaneBelow),
+            StudyContextMenuAction::VisualOrder(VisualOrder::SendToBack),
+            StudyContextMenuAction::Remove,
+        ] {
+            apply(&mut chart, id, &action);
+            assert!(
+                chart.take_indicator_settings_request().is_none(),
+                "{action:?}"
+            );
+            assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));
+            assert_eq!(draw_order(&chart), order);
+            assert!(
+                chart.indicators().next().unwrap().1.snapshot_settings() == before,
+                "{action:?}"
+            );
+        }
+        use crate::ui::widget_bar::panels::object_tree::{
+            ObjectTreeAction, ObjectTreePanel, SourceItem,
+        };
+        let mut tree = ObjectTreePanel::new();
+        let sources = [SourceItem::indicator(1, "SMA", egui::Color32::BLUE).with_series_id(id)];
+        for action in [
+            ObjectTreeAction::RemoveIndicator(1),
+            ObjectTreeAction::Delete(1),
+            ObjectTreeAction::DeleteSelected,
+            ObjectTreeAction::RemoveAllIndicators,
+        ] {
+            tree.state_mut().select(1);
+            assert!(tree.apply_to_chart(&mut chart, &action, &sources));
+            assert!(chart.indicators().next().unwrap().1.snapshot_settings() == before);
+        }
+        chart
+            .selection
+            .select(crate::widget::ChartElementId::Indicator(id), None);
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            0.1,
+            vec![egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(chart.indicators().next().unwrap().1.snapshot_settings() == before);
+        apply(&mut chart, id, &StudyContextMenuAction::ToggleVisibility);
+        assert!(!chart.indicators().next().unwrap().1.is_visible());
+        apply(&mut chart, id, &StudyContextMenuAction::ToggleVisibility);
+        assert!(chart.indicators().next().unwrap().1.is_visible());
+        menu.open(&ctx, &chart, id, 0);
+        for entry in menu.build_menu_items(&ctx, &crate::widget::ShortcutMap::default()) {
+            if let MenuEntry::Item(item) = entry {
+                match item.action {
+                    StudyContextMenuAction::Settings | StudyContextMenuAction::Remove => {
+                        assert!(!item.enabled)
+                    }
+                    _ if item.label == "Study help" => {
+                        assert!(format!("{:?}", item.action).contains("https://example.org/study"));
+                        assert!(item.enabled);
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }

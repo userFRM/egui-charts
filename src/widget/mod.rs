@@ -55,6 +55,8 @@ use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
 use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
+#[cfg(feature = "ui")]
+pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 use std::collections::BTreeMap;
@@ -85,7 +87,9 @@ mod targets;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use events::ImageRequest;
-pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
+pub use events::{
+    ChartEvent, ChartPointer, CursorDataPolicy, DataOperation, PointerKind, PointerTarget,
+};
 mod export;
 mod format;
 mod frame;
@@ -94,14 +98,16 @@ pub(crate) mod interaction;
 pub(crate) mod keyboard;
 mod layout;
 mod navigation;
-mod palette;
+pub(crate) mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
+#[doc(inline)]
 pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
 mod primitives;
+#[cfg(feature = "png-export")]
 mod raster;
 mod readout;
 mod replay;
@@ -130,18 +136,27 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
+    CustomPoint, PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit,
+    PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
-pub use series::SeriesOptions;
-pub use series::{BarsInRange, MismatchDirection, PriceLineId};
+pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
+pub use series::{PaneScale, SeriesOptions};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{
     ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
-pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
+pub use layout::{
+    ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+};
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use layout::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use layout::{SymbolDrawing, SymbolDrawings};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
@@ -275,6 +290,12 @@ pub struct Chart {
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    /// Changes when what the data table calculates from changes, unlike the steps of the chart's
+    /// own refresh, whose results the table does not read.
+    readout_revision: u64,
+    /// See [`Self::data_table_identity`].
+    #[cfg(feature = "ui")]
+    data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
@@ -292,6 +313,11 @@ pub struct Chart {
     pub(crate) study_inputs: Vec<String>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
+    /// For each study in `studies`, whether it must be recomputed from the first bar while its
+    /// values still hold: on the bars that remain after an eviction, after a drop of its
+    /// order-flow input's oldest bars or after a live bar of a history it reads. It draws them
+    /// until its recompute, which waits for `next_refresh` like a tail update.
+    pub(crate) stale: Vec<bool>,
     /// For each study in `studies`, the input time in seconds from which it may be recomputed
     /// in full again.
     pub(crate) next_refresh: Vec<f64>,
@@ -301,6 +327,8 @@ pub struct Chart {
     primitives: Vec<primitives::Attached>,
     /// Id of the next primitive attached.
     next_primitive: u64,
+    /// Omit the above-drawings primitive pass in an export snapshot.
+    hide_foreground: bool,
     /// The chart's drawings and the active drawing tool.
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,
@@ -317,6 +345,9 @@ pub struct Chart {
     /// The id each study a snapshot saved has since [`Chart::restore`] added it again.
     #[cfg(feature = "drawings")]
     restored_studies: std::collections::HashMap<usize, usize>,
+    /// Original column ids of restored studies, retained for snapshots from earlier restores.
+    #[cfg(feature = "drawings")]
+    study_column_ids: std::collections::HashMap<usize, usize>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)
@@ -330,7 +361,6 @@ pub struct Chart {
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
-    watermark: Option<Watermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
@@ -376,10 +406,6 @@ pub struct Chart {
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,
     event_click: Option<String>,
-    /// Bar marks with host IDs painted this frame, and those of the previous frame, which
-    /// clicks resolve against.
-    mark_hits: std::cell::RefCell<Vec<marks::MarkHit>>,
-    clickable_marks: Vec<marks::MarkHit>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
@@ -407,14 +433,25 @@ pub struct Chart {
     // =========================================================================
     /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
     pub(crate) layout_inactive: bool,
+    /// The layout's field selectors occupy the right end of the status line's first row this frame.
+    pub(crate) layout_link_controls: bool,
+    /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
+    /// whose symbol and interval are no change for the layout to send to linked charts.
+    pub(crate) layout_identity: u64,
+    /// Host period, price and target, retained while a linked pointer takes precedence.
+    host_crosshair: Option<(sync::CrosshairPeriod, Option<f64>, Option<SeriesId>)>,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
     synced_crosshair_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    /// Main-pane price of the external crosshair; `None` centres its horizontal line.
+    /// Price of the external crosshair in its target's units; `None` centres its horizontal line.
     synced_crosshair_price: Option<f64>,
-    /// Time and main-pane price of the crosshair last drawn, for exported images.
+    /// Target bar series of a programmatic position; `None` uses the main scale.
+    synced_crosshair_series: Option<SeriesId>,
+    /// Time and target price of the crosshair last drawn, for exported images.
     last_crosshair: Option<(DateTime<Utc>, Option<f64>)>,
+    /// Series whose units the last drawn host position used; `None` uses the main scale.
+    last_crosshair_series: Option<SeriesId>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
 
@@ -514,6 +551,9 @@ impl Chart {
     /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
+        if self.legend_instrument != instrument {
+            self.readout_revision = crate::model::next_revision();
+        }
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
@@ -547,9 +587,11 @@ impl Chart {
 
     /// Paints `watermark` behind the series of the price pane, in addition to the symbol
     /// watermark of [`ChartConfig::show_watermark`](crate::config::ChartConfig::show_watermark).
-    /// `None` removes it.
+    /// `None` removes it. This assigns the pane currently holding the main series; use
+    /// [`Self::set_pane_watermark`] to address another pane. It stays with that pane when
+    /// series move.
     pub fn set_watermark(&mut self, watermark: Option<Watermark>) {
-        self.watermark = watermark;
+        self.set_pane_watermark(self.main_series_pane(), watermark);
     }
 
     /// Supplies status marks and their host-defined meaning and colours.
@@ -671,26 +713,94 @@ impl Chart {
         self.chart_options.tooltip.enabled = enabled;
     }
 
+    /// The rising and falling body, border and wick colors of a chart type that series settings
+    /// offer from its own style, in that order; `None` for a type they keep in the chart
+    /// configuration.
+    fn candle_style_colors(
+        styles: &mut crate::model::ChartTypeStyles,
+        chart_type: ChartType,
+    ) -> Option<[&mut egui::Color32; 6]> {
+        match chart_type {
+            ChartType::Heikin => {
+                let style = &mut styles.heikin;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            ChartType::HollowCandles => {
+                let style = &mut styles.hollow;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            ChartType::VolumeCandles => {
+                let style = &mut styles.volume_candles;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            _ => None,
+        }
+    }
+
     /// Apply series settings to chart colors, price source and price scale.
     ///
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
     /// price source field from the given [`SeriesSettings`] into the chart's
     /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. A new scale mode returns the scale to auto-scaling and clears the
-    /// zoom history, whose ranges are in the old mode's units. Call this when
-    /// the user changes series appearance in a settings dialog.
+    /// scale. Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
+    /// candle colors in that chart type's style instead, a `None` border or wick meaning the
+    /// body color, and these colors win over the same colors in `chart_type_params`. A new
+    /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
+    /// are in the old mode's units. Call this when the user changes series appearance in a
+    /// settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
-        self.config.bullish_color = settings.bullish_color;
-        self.config.bearish_color = settings.bearish_color;
-        self.config.bullish_border_color = settings.bullish_border_color;
-        self.config.bearish_border_color = settings.bearish_border_color;
-        self.config.bullish_wick_color = settings.bullish_wick_color;
-        self.config.bearish_wick_color = settings.bearish_wick_color;
+        let mut params = settings.chart_type_params.clone();
+        if let Some(
+            [
+                body_up,
+                body_down,
+                border_up,
+                border_down,
+                wick_up,
+                wick_down,
+            ],
+        ) = Self::candle_style_colors(&mut params.styles, settings.chart_type)
+        {
+            *body_up = settings.bullish_color;
+            *body_down = settings.bearish_color;
+            *border_up = settings.effective_bullish_border();
+            *border_down = settings.effective_bearish_border();
+            *wick_up = settings.effective_bullish_wick();
+            *wick_down = settings.effective_bearish_wick();
+        } else {
+            self.config.bullish_color = settings.bullish_color;
+            self.config.bearish_color = settings.bearish_color;
+            self.config.bullish_border_color = settings.bullish_border_color;
+            self.config.bearish_border_color = settings.bearish_border_color;
+            self.config.bullish_wick_color = settings.bullish_wick_color;
+            self.config.bearish_wick_color = settings.bearish_wick_color;
+        }
         self.config.price_source = settings.price_source;
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
-        self.set_chart_type_params(settings.chart_type_params.clone());
+        self.set_chart_type_params(params);
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -702,9 +812,10 @@ impl Chart {
 
     /// Read the current appearance and chart type parameters for the series settings dialog.
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
-    /// [`Self::apply_series_settings`]. The active chart type is dialog context only.
+    /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
+    /// where the candle colors are read from and written to; applying keeps the chart's type.
     pub fn series_settings(&self) -> SeriesSettings {
-        SeriesSettings {
+        let mut settings = SeriesSettings {
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             bullish_color: self.config.bullish_color,
@@ -720,7 +831,26 @@ impl Chart {
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()
+        };
+        if let Some(
+            [
+                body_up,
+                body_down,
+                border_up,
+                border_down,
+                wick_up,
+                wick_down,
+            ],
+        ) = Self::candle_style_colors(&mut settings.chart_type_params.styles, self.chart_type)
+        {
+            settings.bullish_color = *body_up;
+            settings.bearish_color = *body_down;
+            settings.bullish_border_color = (*border_up != *body_up).then_some(*border_up);
+            settings.bearish_border_color = (*border_down != *body_down).then_some(*border_down);
+            settings.bullish_wick_color = (*wick_up != *body_up).then_some(*wick_up);
+            settings.bearish_wick_color = (*wick_down != *body_down).then_some(*wick_down);
         }
+        settings
     }
 
     /// Get a [`ChartMapping`] for coordinate conversions.
@@ -731,14 +861,16 @@ impl Chart {
     /// for drawing tool restoration and hit testing. On price-based chart types its indices
     /// count elements instead of source bars.
     pub fn get_chart_mapping(&self) -> ChartMapping {
-        ChartMapping::new(
+        let mut mapping = ChartMapping::new(
             self.last_rendered_price_rect,
             self.state.time_scale().bar_spacing(),
             self.start_idx,
             self.state.time_scale().base_idx(),
             self.state.time_scale().right_offset_precise(),
             self.last_price_map,
-        )
+        );
+        mapping.numeric_positions = self.state.time_scale().numeric_positions().cloned();
+        mapping
     }
 
     /// Returns a mutable reference to the chart's visual configuration.
@@ -753,25 +885,27 @@ impl Chart {
 
     /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
     ///
-    /// Other charts sharing the context follow the active theme on their next frame, keeping
-    /// colours the host has edited and any per-chart theme override.
+    /// Unedited chart type style colours follow the theme; edited ones stay. Other charts sharing
+    /// the context follow the active theme on their next frame, keeping colours the host has
+    /// edited and any per-chart theme override.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
         self.config = self.config.clone().with_theme(theme);
         self.theme_override = None;
-        self.inherited_theme = Some(theme.clone());
+        self.follow_chart_theme(theme);
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
     }
 
     /// Overrides this chart's palette and text sizes without changing sibling charts or egui.
     ///
-    /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
-    /// configuration edits made afterwards are kept. `None` follows the host's palette again,
-    /// retaining host-edited colours. `set_theme` clears this override and themes egui.
+    /// `Some(theme)` also applies its series colours to the chart configuration, and unedited
+    /// chart type style colours follow it while edited ones stay. Explicit configuration edits
+    /// made afterwards are kept. `None` follows the host's palette again, retaining host-edited
+    /// colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
             self.config = self.config.clone().with_theme(theme);
-            self.inherited_theme = Some(theme.clone());
+            self.follow_chart_theme(theme);
         }
         self.theme_override = theme;
     }

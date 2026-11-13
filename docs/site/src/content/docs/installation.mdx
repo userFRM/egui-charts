@@ -4,8 +4,13 @@ title: Installation
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Use Rust 1.95 or newer. egui-charts uses egui 0.37; use the matching eframe
-version so both dependencies share the same egui types.
+This guide follows **main (0.3 in development)**. Use Rust 1.95 or newer and
+**egui/eframe 0.37** so both dependencies share the same egui types.
+
+| Documentation | Dependency | egui / eframe |
+| --- | --- | --- |
+| [main API (rustdoc)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html) · 0.3 in development | Git, branch `main` | `0.37` |
+| [Published 0.2.0 API](https://docs.rs/egui-charts/0.2.0/egui_charts/) | `egui-charts = "0.2.0"` | `0.33.3` |
 
 <Steps>
 
@@ -26,7 +31,7 @@ version so both dependencies share the same egui types.
 
      ```toml title="Cargo.toml"
      [dependencies]
-     egui-charts = { git = "https://github.com/userFRM/egui-charts", default-features = false, features = ["widget"] }
+     egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget"] }
      eframe = "0.37"
      chrono = "0.4"
      ```
@@ -36,7 +41,7 @@ version so both dependencies share the same egui types.
 
      ```toml title="Cargo.toml"
      [dependencies]
-     egui-charts = { git = "https://github.com/userFRM/egui-charts" }
+     egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main" }
      eframe = "0.37"
      chrono = "0.4"
      ```
@@ -46,7 +51,7 @@ version so both dependencies share the same egui types.
 
      ```toml title="Cargo.toml"
      [dependencies]
-     egui-charts = { git = "https://github.com/userFRM/egui-charts", default-features = false }
+     egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false }
      chrono = "0.4"
      ```
 
@@ -64,8 +69,9 @@ version so both dependencies share the same egui types.
 </Steps>
 
 <Aside title="Using a published release?">
-These examples follow `main`. For the published API, replace the Git dependency
-with `version = "0.2"` and use [the release documentation](https://docs.rs/egui-charts/0.2.0).
+For published **0.2.0**, use `egui-charts = "0.2.0"` and **egui/eframe 0.33.3**
+with [the release documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+The examples and feature table on this site describe main (0.3 in development).
 </Aside>
 
 ## Enable what your application uses
@@ -77,16 +83,21 @@ with `version = "0.2"` and use [the release documentation](https://docs.rs/egui-
 | `alert-engine` | `services::AlertEngine`, which evaluates alerts on the bars the host feeds it; also works headlessly |
 | `detectors` | `services::OrderFlowDetectors`, which finds order-flow events in the trades and depth the host feeds it; also works headlessly |
 | `strategies` | `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a `StrategyReport`; also works headlessly |
+| `http` | `data::http::HttpDatafeed`, HTTP column history, symbol search and live bar refresh from your server; also works headlessly |
 | `drawings` | Drawing tools, interaction, undo and persistence; enables `widget` |
 | `icons` | Embedded SVG icons; enables `widget` |
-| `ui` | Toolbars, panels, dialogs, `ui_kit` and extension helpers; enables `icons`, `studies` and `drawings` |
+| `csv` | CSV import and export for bars, strategy reports and chart data |
+| `png-export` | PNG image export and image textures in SVG export; enables `widget` |
+| `ui` | Toolbars, panels, dialogs, `ui_kit` and extension helpers; enables `icons`, `studies`, `drawings`, `csv` and `png-export` |
 | `locales` | Localized month and weekday names and AM/PM markers |
 | `timezones` | IANA zones and daylight-saving rules |
 | `serde` | Serialization for `Theme` |
 
-The defaults are `ui`, `locales` and `timezones`. Omit `default-features = false`
+The defaults are `ui`, `locales`, `timezones`, `csv` and `png-export`. Omit `default-features = false`
 and the explicit feature list for that setup. Add `studies` or `drawings` to the
-widget-only list for those capabilities without the full application UI.
+widget-only list for those capabilities without the full application UI. Without
+default features, add `csv` or `png-export` for CSV or PNG methods. With `icons`
+alone, the chart installs only its embedded icon loader.
 
 With `default-features = false` and no features, the headless engine provides
 models, data contracts, scales, services and the indicator trait layer without egui.

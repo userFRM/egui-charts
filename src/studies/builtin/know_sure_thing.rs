@@ -180,6 +180,13 @@ impl Indicator for KnowSureThing {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(0.0, crate::studies::palette::GRAY, "Zero")],
+            ..Default::default()
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false
     }

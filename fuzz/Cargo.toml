@@ -11,7 +11,7 @@ cargo-fuzz = true
 arbitrary = { version = "1", features = ["derive"] }
 chrono = "0.4.43"
 egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
-egui-charts = { path = ".." }
+egui-charts = { path = "..", default-features = false, features = ["drawings", "studies"] }
 libfuzzer-sys = "0.4"
 
 # Not a member of the library's workspace; cargo-fuzz builds it on its own.

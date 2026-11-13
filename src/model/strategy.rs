@@ -6,13 +6,16 @@
 //! one definition each, so reports from different sources compare.
 
 use super::{Bar, OrderSide, Timeframe};
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+#[cfg(feature = "csv")]
+use chrono::SecondsFormat;
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// A year of 365.25 days, in milliseconds.
 const YEAR_MS: f64 = 31_557_600_000.0;
 
 /// Keep spreadsheet formula prefixes literal; CSV quoting alone does not prevent evaluation.
+#[cfg(feature = "csv")]
 fn csv_text(value: &str) -> String {
     if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
         format!("'{value}")
@@ -66,6 +69,7 @@ fn curve_null_as_nan<'de, D: Deserializer<'de>>(
 /// assert_eq!(performance.max_drawdown, Some(2.0));
 /// // Three hours of equity are too short to annualise.
 /// assert_eq!(performance.sharpe_ratio, None);
+/// # #[cfg(feature = "csv")]
 /// assert!(report.trades_csv().starts_with("number,side,quantity,"));
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -564,6 +568,8 @@ impl StrategyReport {
     /// same value, and an open trade leaves the three exit columns empty.
     /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
     /// so spreadsheets treat them as text. Numeric cells, including negative numbers, are unchanged.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn trades_csv(&self) -> String {
         const IN_MEMORY: &str = "writing CSV to memory cannot fail";
         let mut trades: Vec<&StrategyTrade> = self.trades.iter().filter(|t| t.is_valid()).collect();
@@ -629,6 +635,8 @@ impl StrategyReport {
     /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
     /// so spreadsheets treat them as text. This also applies to property names and currencies;
     /// numeric cells, including negative numbers, are unchanged by this protection.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn summary_csv(
         &self,
         performance: &StrategyPerformance,
@@ -1389,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "csv")]
     fn trades_csv_writes_valid_trades_in_entry_order() {
         let mut r = report(10_000.0);
         let mut late = StrategyTrade::new(OrderSide::Sell, 2.0, t0() + TimeDelta::hours(5), 101.5);
@@ -1457,6 +1466,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "csv")]
     fn summary_csv_writes_metrics_and_properties_with_unavailable_values() {
         let mut r = fixture_a();
         r.currency = Some("USD".into());

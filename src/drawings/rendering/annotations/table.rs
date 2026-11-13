@@ -105,7 +105,8 @@ impl Drawing {
         first.expect("a table has at least one cell")
     }
 
-    /// Renders a plain grid with left-aligned cells, each column as wide as its widest text.
+    /// Renders a plain grid in the drawing's colour with left-aligned cells, each column as wide
+    /// as its widest text.
     pub(crate) fn render_table(&self, painter: &egui::Painter) {
         if self.points.is_empty() {
             return;
@@ -154,7 +155,7 @@ impl Drawing {
         painter.rect_filled(table_rect, DESIGN_TOKENS.rounding.md, theme.ui.panel_bg);
 
         // Grid lines
-        let grid_stroke = Stroke::new(stroke::HAIRLINE, theme.ui.border);
+        let grid_stroke = Stroke::new(stroke::HAIRLINE, self.readable_line_color(painter.ctx()));
         for r in 1..rows.len() {
             painter.hline(
                 egui::Rangef::new(pos.x, pos.x + table_width),
@@ -198,12 +199,19 @@ mod tests {
     use egui::{Color32, Context, LayerId, Painter, RawInput, Shape};
 
     /// Guards #984 and #1399: cells and empty tables use a neutral grid with equal
-    /// 22 px rows, thin borders and padded, left-aligned text in every theme.
+    /// 22 px rows, thin borders and padded, left-aligned text in every theme. The default light
+    /// grey keeps 4:1 on the theme: grey 127 is the first shade towards black that reaches it on
+    /// white, 1.05 / (0.2122 + 0.05) = 4.004.
     #[test]
     fn tables_paint_their_own_cells() {
         let mut table = Drawing::new(1, DrawingToolType::Table);
         table.points = vec![Pos2::new(10.0, 10.0)];
-        for (_, theme) in crate::theme::presets() {
+        for (name, theme) in crate::theme::presets() {
+            let grid = if name == "light" {
+                Color32::from_gray(127)
+            } else {
+                Color32::from_gray(219)
+            };
             for (text, rows, height, cells) in [
                 (None, 4, 88.0, vec![]),
                 (
@@ -259,11 +267,11 @@ mod tests {
                             }
                             if !rect.stroke.is_empty() {
                                 borders += 1;
-                                assert_eq!(rect.stroke, Stroke::new(1.0, theme.ui.border));
+                                assert_eq!(rect.stroke, Stroke::new(1.0, grid));
                             }
                         }
                         Shape::LineSegment { stroke, .. } => {
-                            assert_eq!(*stroke, Stroke::new(1.0, theme.ui.border));
+                            assert_eq!(*stroke, Stroke::new(1.0, grid));
                         }
                         Shape::Text(text) if !text.galley.text().is_empty() => {
                             assert!(

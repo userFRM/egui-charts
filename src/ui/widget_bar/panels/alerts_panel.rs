@@ -1,11 +1,12 @@
 //! Host-supplied alerts and their trigger log. The host stores and evaluates alerts.
 
 use crate::localization as l10n;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use egui::{Color32, RichText, Ui};
+use serde::{Deserialize, Serialize};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
@@ -49,17 +50,73 @@ pub enum AlertPanelAction {
 }
 
 /// The property the alert list is ordered by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum AlertSortKey {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlertSortKey {
     /// Arrival order, as the host pushed the alerts.
-    #[default]
     Arrival,
+    /// Creation timestamp, with unknown times after known times.
+    #[default]
+    Created,
+    /// Most recent trigger timestamp, with alerts that never fired last.
+    Fired,
+    /// The notification message, ignoring case.
+    Message,
     /// The alert name, ignoring case.
     Name,
     /// The symbol, ignoring case.
     Symbol,
     /// Active, triggered, disabled, then expired.
     Status,
+}
+
+/// Saved presentation of the manager. Every optional field starts visible.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlertListOptions {
+    /// Property to order by; creation time by default.
+    pub sort: AlertSortKey,
+    /// Order newest first or text in reverse alphabetical order; enabled by default. Choosing a
+    /// key in the panel starts times newest first and other keys ascending.
+    pub descending: bool,
+    /// Show the user-assigned alert name.
+    pub name: bool,
+    /// Show the notification message.
+    pub message: bool,
+    /// Show an icon for the monitored source.
+    pub source_icon: bool,
+    /// Show the host's instrument image, or an initial while it is unavailable.
+    pub symbol_icon: bool,
+    /// Show the most recent firing time when known.
+    pub last_firing: bool,
+}
+
+impl Default for AlertListOptions {
+    fn default() -> Self {
+        Self {
+            sort: AlertSortKey::Created,
+            descending: true,
+            name: true,
+            message: true,
+            source_icon: true,
+            symbol_icon: true,
+            last_firing: true,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum PresentationEdit {
+    List(AlertListOptions),
+    Marker(AlertId, bool, bool),
+}
+
+// Reserve both history positions while the host confirms the marker change.
+struct PresentationRestore {
+    redo: bool,
+    request: u64,
+    source_index: usize,
+    destination_index: usize,
+    inverse: PresentationEdit,
 }
 
 /// One trigger the host reported, retained even after the alert is removed.
@@ -75,6 +132,8 @@ pub struct AlertTrigger {
     pub price: Option<f64>,
     /// The alert's message with its placeholders filled in, empty if there is none.
     pub message: String,
+    /// The trigger fell outside the alert's notification schedule: logged without a popup.
+    pub silent: bool,
 }
 
 /// Reply key of the inline draft's save, apart from the stream generations and other replies.
@@ -97,8 +156,13 @@ pub struct AlertsPanel {
     error: Option<FeedError>,
     show_log: bool,
     notification_seconds: f32,
-    sort: AlertSortKey,
-    descending: bool,
+    options: AlertListOptions,
+    marks: HashMap<String, egui::ImageSource<'static>>,
+    undo: Vec<PresentationEdit>,
+    redo: Vec<PresentationEdit>,
+    restoring: Option<PresentationRestore>,
+    staged_display: Vec<(u64, PresentationEdit, bool)>,
+    next_reply: u64,
     sources: Vec<(AlertSource, String)>,
     symbol: String,
     draft: Alert,
@@ -129,8 +193,13 @@ impl AlertsPanel {
             error: None,
             show_log: false,
             notification_seconds: 5.0,
-            sort: AlertSortKey::default(),
-            descending: false,
+            options: AlertListOptions::default(),
+            marks: HashMap::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            restoring: None,
+            staged_display: Vec::new(),
+            next_reply: DRAFT_REPLY - 1,
             sources: Vec::new(),
             symbol: String::new(),
             draft: Alert::new("", AlertCondition::Crossing(0.0)),
@@ -139,6 +208,117 @@ impl AlertsPanel {
             pending: 0,
             sound_choice: None,
             sound: None,
+        }
+    }
+
+    /// Manager presentation for the host to save independently of chart layouts.
+    pub fn options(&self) -> &AlertListOptions {
+        &self.options
+    }
+
+    /// Restore saved manager presentation. This starts a new presentation history.
+    pub fn set_options(&mut self, options: AlertListOptions) {
+        self.options = options;
+        self.undo.clear();
+        self.redo.clear();
+        self.restoring = None;
+        self.staged_display.clear();
+    }
+
+    /// Supply the instrument's image. Unknown, loading or unreadable images show an initial.
+    pub fn set_mark(&mut self, symbol: &str, mark: egui::ImageSource<'static>) {
+        self.marks.insert(symbol.to_owned(), mark);
+    }
+
+    fn remember(&mut self, edit: PresentationEdit, keep_redo: bool) {
+        self.undo.push(edit);
+        if self.undo.len() > 100 {
+            self.undo.remove(0);
+            if let Some(restore) = &mut self.restoring {
+                if restore.redo {
+                    restore.destination_index = restore.destination_index.saturating_sub(1);
+                } else {
+                    restore.source_index = restore.source_index.saturating_sub(1);
+                }
+            }
+        }
+        if !keep_redo {
+            self.redo.clear();
+        }
+    }
+
+    fn restore_presentation(&mut self, redo: bool) {
+        if self.pending > 0 || self.restoring.is_some() {
+            return;
+        }
+        let Some(edit) = (if redo { &self.redo } else { &self.undo }).last().cloned() else {
+            return;
+        };
+        // Acknowledged saves can still be waiting for their host pushes.
+        for (_, _, keep_redo) in &mut self.staged_display {
+            *keep_redo = true;
+        }
+        match edit {
+            PresentationEdit::List(options) => {
+                let inverse = PresentationEdit::List(std::mem::replace(&mut self.options, options));
+                (if redo { &mut self.redo } else { &mut self.undo }).pop();
+                (if redo { &mut self.undo } else { &mut self.redo }).push(inverse);
+            }
+            PresentationEdit::Marker(id, line, blink) => {
+                let Some(mut alert) = self
+                    .alerts
+                    .iter()
+                    .find(|a| a.id.as_ref() == Some(&id))
+                    .cloned()
+                else {
+                    return;
+                };
+                if alert.extend_line == line && alert.blink_on_trigger == blink {
+                    (if redo { &mut self.redo } else { &mut self.undo }).pop();
+                    (if redo { &mut self.undo } else { &mut self.redo })
+                        .push(PresentationEdit::Marker(id, line, blink));
+                    return;
+                }
+                let inverse =
+                    PresentationEdit::Marker(id, alert.extend_line, alert.blink_on_trigger);
+                alert.extend_line = line;
+                alert.blink_on_trigger = blink;
+                if let Some(key) = self.save_with(alert, 0) {
+                    let from = if redo { &mut self.redo } else { &mut self.undo };
+                    from.pop();
+                    self.restoring = Some(PresentationRestore {
+                        redo,
+                        request: key,
+                        source_index: from.len(),
+                        destination_index: if redo {
+                            self.undo.len()
+                        } else {
+                            self.redo.len()
+                        },
+                        inverse,
+                    });
+                }
+            }
+        }
+    }
+
+    fn cancel_restore(&mut self) {
+        let Some(PresentationRestore {
+            redo,
+            request: key,
+            source_index,
+            ..
+        }) = self.restoring.take()
+        else {
+            return;
+        };
+        if let Some((_, edit, _)) = self
+            .staged_display
+            .iter()
+            .find(|(request, ..)| *request == key)
+        {
+            let from = if redo { &mut self.redo } else { &mut self.undo };
+            from.insert(source_index.min(from.len()), edit.clone());
         }
     }
 
@@ -195,6 +375,11 @@ impl AlertsPanel {
         self.service = Some(service);
         self.alerts.clear();
         self.log.clear();
+        self.marks.clear();
+        self.undo.clear();
+        self.redo.clear();
+        self.restoring = None;
+        self.staged_display.clear();
         self.error = None;
         self.pending = 0;
         self.draft_saving = false;
@@ -229,16 +414,24 @@ impl AlertsPanel {
             ));
             return;
         }
-        self.save_with(alert, 0);
+        let _ = self.save_with(alert, 0);
     }
 
-    /// Send `alert` and say whether a service took it; its reply arrives under `key`.
-    fn save_with(&mut self, mut alert: Alert, key: u64) -> bool {
+    /// Send `alert` and return its reply key, or `None` without a service.
+    fn save_with(&mut self, mut alert: Alert, key: u64) -> Option<u64> {
+        if alert.id.is_none() {
+            alert.created_at = Some(Utc::now());
+            alert.last_triggered_at = None;
+        }
         let Some(service) = &self.service else {
             self.error = Some(FeedError::NotSupported);
-            return false;
+            return None;
         };
-        if let Some((available, timeframe)) = &self.inputs {
+        let display_only = self
+            .alerts
+            .iter()
+            .any(|old| old.id == alert.id && old.same_monitoring(&alert));
+        if !display_only && let Some((available, timeframe)) = &self.inputs {
             if let Some(inputs) = &mut alert.inputs {
                 inputs.add_sources_from(available);
             } else if alert.id.is_none() {
@@ -255,12 +448,47 @@ impl AlertsPanel {
                 alert.inputs = Some(Box::new(inputs));
             }
         }
+        // A reply belongs to its own save even when the host answers out of order.
+        let key = if key == 0 {
+            let key = self.next_reply;
+            self.next_reply -= 1;
+            key
+        } else {
+            key
+        };
+        if self.alerts.iter().any(|old| {
+            old.id == alert.id
+                && (old.extend_line != alert.extend_line
+                    || old.blink_on_trigger != alert.blink_on_trigger)
+        }) && let Some(id) = alert.id.clone()
+        {
+            // A later confirmation must not erase the redo produced by the pending restore.
+            self.staged_display.push((
+                key,
+                PresentationEdit::Marker(id, alert.extend_line, alert.blink_on_trigger),
+                self.restoring.is_some(),
+            ));
+        }
         self.pending += 1;
         service.save(alert, self.inbox.reply(key));
-        true
+        Some(key)
     }
 
-    /// Alerts ordered by `key`, reversed when `descending`; equal values keep arrival order.
+    fn last_firing(&self, alert: &Alert) -> Option<DateTime<Utc>> {
+        alert
+            .last_triggered_at
+            .into_iter()
+            .chain(
+                self.log
+                    .iter()
+                    .filter(|trigger| !trigger.silent && Some(&trigger.id) == alert.id.as_ref())
+                    .map(|trigger| trigger.time),
+            )
+            .max()
+    }
+
+    /// Missing timestamps stay last in either direction; ties use host identity after reconnects,
+    /// shorter ids first so that numbered alerts keep their numeric order.
     fn sorted(&self) -> Vec<&Alert> {
         let mut alerts: Vec<&Alert> = self.alerts.iter().filter(|a| a.id.is_some()).collect();
         let rank = |a: &Alert| match a.status {
@@ -270,17 +498,36 @@ impl AlertsPanel {
             AlertStatus::Expired => 3,
         };
         alerts.sort_by(|a, b| {
-            let order = match self.sort {
+            let timestamp = match self.options.sort {
+                AlertSortKey::Created => Some((a.created_at, b.created_at)),
+                AlertSortKey::Fired => Some((a.last_triggered_at, b.last_triggered_at)),
+                _ => None,
+            };
+            if let Some((left, right)) = timestamp {
+                match (left.is_some(), right.is_some()) {
+                    (true, false) => return std::cmp::Ordering::Less,
+                    (false, true) => return std::cmp::Ordering::Greater,
+                    _ => {}
+                }
+            }
+            let order = match self.options.sort {
                 AlertSortKey::Arrival => return std::cmp::Ordering::Equal,
+                AlertSortKey::Created => a.created_at.cmp(&b.created_at),
+                AlertSortKey::Fired => a.last_triggered_at.cmp(&b.last_triggered_at),
+                AlertSortKey::Message => a.message.to_lowercase().cmp(&b.message.to_lowercase()),
                 AlertSortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 AlertSortKey::Symbol => a.symbol.to_lowercase().cmp(&b.symbol.to_lowercase()),
                 AlertSortKey::Status => rank(a).cmp(&rank(b)),
             };
-            if self.descending {
+            let order = if self.options.descending {
                 order.reverse()
             } else {
                 order
-            }
+            };
+            order.then_with(|| {
+                let (a, b) = (&a.id.as_ref().unwrap().0, &b.id.as_ref().unwrap().0);
+                (a.len(), a).cmp(&(b.len(), b))
+            })
         });
         alerts
     }
@@ -293,6 +540,8 @@ impl AlertsPanel {
         if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
             self.listener = None;
             self.alerts.clear();
+            self.cancel_restore();
+            self.staged_display.clear();
             self.watch();
         }
         for (key, answer) in self.inbox.drain().answers {
@@ -300,9 +549,7 @@ impl AlertsPanel {
                 if let Ok(event) = answer.downcast::<AlertEvent>() {
                     self.apply_event(ctx, *event, toasts);
                 }
-            } else if (key == 0 || key == DRAFT_REPLY)
-                && let Ok(result) = answer.downcast::<Result<(), FeedError>>()
-            {
+            } else if let Ok(result) = answer.downcast::<Result<(), FeedError>>() {
                 self.pending = self.pending.saturating_sub(1);
                 self.draft_saving &= key != DRAFT_REPLY;
                 match *result {
@@ -313,7 +560,17 @@ impl AlertsPanel {
                                 Alert::new(self.symbol.clone(), AlertCondition::Crossing(0.0));
                         }
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => {
+                        if self
+                            .restoring
+                            .as_ref()
+                            .is_some_and(|restore| restore.request == key)
+                        {
+                            self.cancel_restore();
+                        }
+                        self.staged_display.retain(|(request, ..)| *request != key);
+                        self.error = Some(error);
+                    }
                 }
             }
         }
@@ -322,17 +579,88 @@ impl AlertsPanel {
     fn apply_event(&mut self, ctx: &egui::Context, event: AlertEvent, toasts: &mut Toasts) {
         match event {
             AlertEvent::Upsert(alert) => {
+                let mut alert = *alert;
                 if alert.id.is_none() {
                     return;
                 }
-                if let Some(existing) = self.alerts.iter_mut().find(|a| a.id == alert.id) {
-                    *existing = alert;
+                alert.last_triggered_at = self.last_firing(&alert);
+                if let Some(index) = self.alerts.iter().position(|a| a.id == alert.id) {
+                    let old = &self.alerts[index];
+                    if let Some(staged) = self.staged_display.iter().position(|(_, edit, _)| {
+                        matches!(edit, PresentationEdit::Marker(id, line, blink)
+                            if alert.id.as_ref() == Some(id)
+                                && alert.extend_line == *line
+                                && alert.blink_on_trigger == *blink)
+                    }) {
+                        let (key, _, keep_redo) = self.staged_display.remove(staged);
+                        let inverse = PresentationEdit::Marker(
+                            alert.id.clone().unwrap(),
+                            old.extend_line,
+                            old.blink_on_trigger,
+                        );
+                        if self
+                            .restoring
+                            .as_ref()
+                            .is_some_and(|restore| restore.request == key)
+                        {
+                            let restore = self.restoring.take().unwrap();
+                            let to = if restore.redo {
+                                &mut self.undo
+                            } else {
+                                &mut self.redo
+                            };
+                            to.insert(restore.destination_index.min(to.len()), restore.inverse);
+                        } else if old.extend_line != alert.extend_line
+                            || old.blink_on_trigger != alert.blink_on_trigger
+                        {
+                            self.remember(inverse, keep_redo);
+                        }
+                    }
+                    self.alerts[index] = alert;
                 } else {
                     self.alerts.push(alert);
                 }
             }
-            AlertEvent::Remove(id) => self.alerts.retain(|a| a.id.as_ref() != Some(&id)),
-            AlertEvent::Clear => self.alerts.clear(),
+            AlertEvent::Remove(id) => {
+                self.alerts.retain(|a| a.id.as_ref() != Some(&id));
+                if let Some(restore) = &self.restoring
+                    && self.staged_display.iter().any(|(request, edit, _)| {
+                        *request == restore.request
+                            && matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id)
+                    })
+                {
+                    self.restoring = None;
+                }
+                self.staged_display.retain(|(_, edit, _)|
+                    !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id));
+                if let Some(restore) = &mut self.restoring {
+                    let (from, to) = if restore.redo {
+                        (&self.redo, &self.undo)
+                    } else {
+                        (&self.undo, &self.redo)
+                    };
+                    let retained = |history: &[PresentationEdit], index| {
+                        history.iter().take(index).filter(
+                        |edit| !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id)
+                    ).count()
+                    };
+                    restore.source_index = retained(from, restore.source_index);
+                    restore.destination_index = retained(to, restore.destination_index);
+                }
+                self.undo.retain(
+                    |edit| !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id),
+                );
+                self.redo.retain(
+                    |edit| !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id),
+                );
+            }
+            AlertEvent::Clear => {
+                self.alerts.clear();
+                self.undo.clear();
+                self.redo.clear();
+                self.restoring = None;
+                self.staged_display.clear();
+            }
             AlertEvent::TriggeredForSymbol {
                 id,
                 symbol,
@@ -348,9 +676,27 @@ impl AlertsPanel {
                         time,
                         price,
                         message,
+                        silent: false,
                     },
                     toasts,
                 );
+            }
+            AlertEvent::SilentTriggered {
+                id,
+                symbol,
+                time,
+                price,
+                message,
+            } => {
+                let price = price.filter(|p| p.is_finite());
+                self.log_trigger(AlertTrigger {
+                    id,
+                    symbol,
+                    time,
+                    price,
+                    message,
+                    silent: true,
+                });
             }
             AlertEvent::Triggered { id, time, price } => {
                 let symbol = self
@@ -367,6 +713,7 @@ impl AlertsPanel {
                         time,
                         price,
                         message: String::new(),
+                        silent: false,
                     },
                     toasts,
                 );
@@ -398,18 +745,43 @@ impl AlertsPanel {
                 },
             )],
         );
-        toasts.add(
-            Toast::info(if message.is_empty() {
-                title
-            } else {
-                format!("{title}\n{message}")
-            })
-            .duration(self.notification_seconds),
-        );
-        self.sound = self.sound_choice.clone();
-        let extra = toasts.len().saturating_sub(5);
-        toasts.toasts_mut().drain(..extra);
+        // A firing of an alert removed meanwhile keeps the default delivery.
+        let delivery = self
+            .alerts
+            .iter()
+            .find(|a| a.id.as_ref() == Some(id))
+            .map(|a| &a.delivery);
+        if delivery.is_none_or(|d| d.popup) {
+            toasts.add(
+                Toast::info(if message.is_empty() {
+                    title
+                } else {
+                    format!("{title}\n{message}")
+                })
+                .duration(self.notification_seconds),
+            );
+            let extra = toasts.len().saturating_sub(5);
+            toasts.toasts_mut().drain(..extra);
+        }
+        if delivery.is_none_or(|d| d.sound) {
+            self.sound = self.sound_choice.clone();
+        }
+        if let Some(alert) = self
+            .alerts
+            .iter_mut()
+            .find(|a| a.id.as_ref() == Some(&trigger.id))
+        {
+            alert.last_triggered_at = Some(
+                alert
+                    .last_triggered_at
+                    .map_or(trigger.time, |old| old.max(trigger.time)),
+            );
+        }
         trigger.price = trigger.price.filter(|p| p.is_finite());
+        self.log_trigger(trigger);
+    }
+
+    fn log_trigger(&mut self, trigger: AlertTrigger) {
         self.log.push_back(trigger);
         if self.log.len() > 10_000 {
             self.log.pop_front();
@@ -418,16 +790,17 @@ impl AlertsPanel {
 
     /// Export the retained trigger log. Text fields are quoted and embedded quotes doubled.
     pub fn log_csv(&self) -> String {
-        let mut csv = String::from("id,symbol,time,price,message\r\n");
+        let mut csv = String::from("id,symbol,time,price,message,silent\r\n");
         for trigger in &self.log {
             let id = trigger.id.0.replace('"', "\"\"");
             let symbol = trigger.symbol.replace('"', "\"\"");
             let price = trigger.price.map(|p| p.to_string()).unwrap_or_default();
             let message = trigger.message.replace('"', "\"\"");
             csv.push_str(&format!(
-                "\"{id}\",\"{symbol}\",{},{},\"{message}\"\r\n",
+                "\"{id}\",\"{symbol}\",{},{},\"{message}\",{}\r\n",
                 trigger.time.to_rfc3339(),
-                price
+                price,
+                trigger.silent
             ));
         }
         csv
@@ -444,35 +817,95 @@ impl AlertsPanel {
     }
 
     fn sort_controls(&mut self, ui: &mut Ui) {
+        let before = self.options.clone();
+        let mut history_action = None;
         ui.horizontal_wrapped(|ui| {
+            // Keep list preferences steady until the host confirms the marker restore.
+            if self.restoring.is_some() {
+                ui.disable();
+            }
             ui.label(l10n::text(ui.ctx(), "Sort by"));
             egui::ComboBox::from_id_salt("alert_sort")
                 .selected_text(l10n::text(
                     ui.ctx(),
-                    match self.sort {
+                    match self.options.sort {
                         AlertSortKey::Name => "Name",
                         AlertSortKey::Symbol => "Symbol",
                         AlertSortKey::Status => "Status",
                         AlertSortKey::Arrival => "Arrival",
+                        AlertSortKey::Created => "Created",
+                        AlertSortKey::Fired => "Last firing",
+                        AlertSortKey::Message => "Message",
                     },
                 ))
                 .show_ui(ui, |ui| {
                     for (key, label) in [
                         (AlertSortKey::Arrival, "Arrival"),
+                        (AlertSortKey::Created, "Created"),
+                        (AlertSortKey::Fired, "Last firing"),
+                        (AlertSortKey::Message, "Message"),
                         (AlertSortKey::Name, "Name"),
                         (AlertSortKey::Symbol, "Symbol"),
                         (AlertSortKey::Status, "Status"),
                     ] {
-                        ui.selectable_value(&mut self.sort, key, l10n::text(ui.ctx(), label));
+                        ui.selectable_value(
+                            &mut self.options.sort,
+                            key,
+                            l10n::text(ui.ctx(), label),
+                        );
                     }
                 })
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Sort by"));
+            if self.options.sort != before.sort {
+                self.options.descending = matches!(
+                    self.options.sort,
+                    AlertSortKey::Created | AlertSortKey::Fired
+                );
+            }
             ui.add_enabled(
-                self.sort != AlertSortKey::Arrival,
-                egui::Checkbox::new(&mut self.descending, l10n::text(ui.ctx(), "Descending")),
+                self.options.sort != AlertSortKey::Arrival,
+                egui::Checkbox::new(
+                    &mut self.options.descending,
+                    l10n::text(ui.ctx(), "Descending"),
+                ),
             );
+            ui.menu_button(l10n::text(ui.ctx(), "Fields"), |ui| {
+                for (value, label) in [
+                    (&mut self.options.name, "Name"),
+                    (&mut self.options.message, "Message"),
+                    (&mut self.options.source_icon, "Source symbol"),
+                    (&mut self.options.symbol_icon, "Instrument image"),
+                    (&mut self.options.last_firing, "Last firing"),
+                ] {
+                    ui.checkbox(value, l10n::text(ui.ctx(), label));
+                }
+            });
+            if ui
+                .add_enabled(
+                    !self.undo.is_empty() && self.pending == 0,
+                    egui::Button::new(l10n::text(ui.ctx(), "Undo")),
+                )
+                .clicked()
+            {
+                history_action = Some(false);
+            }
+            if ui
+                .add_enabled(
+                    !self.redo.is_empty() && self.pending == 0,
+                    egui::Button::new(l10n::text(ui.ctx(), "Redo")),
+                )
+                .clicked()
+            {
+                history_action = Some(true);
+            }
         });
+        if self.options != before {
+            self.remember(PresentationEdit::List(before), false);
+        }
+        if let Some(redo) = history_action {
+            self.restore_presentation(redo);
+        }
     }
 
     /// The inline form for a price, study-output or volume alert; the shared validation and the
@@ -502,7 +935,7 @@ impl AlertsPanel {
                     )
                     .clicked()
                 {
-                    self.draft_saving = self.save_with(self.draft.clone(), DRAFT_REPLY);
+                    self.draft_saving = self.save_with(self.draft.clone(), DRAFT_REPLY).is_some();
                 }
             });
         if self.pending > 0 {
@@ -545,9 +978,14 @@ impl AlertsPanel {
                 .show(ui, |ui| {
                     for trigger in self.log.iter().rev() {
                         ui.label(format!(
-                            "{} · {}",
+                            "{} · {}{}",
                             trigger.symbol,
-                            trigger.time.format("%Y-%m-%d %H:%M:%S UTC")
+                            trigger.time.format("%Y-%m-%d %H:%M:%S UTC"),
+                            if trigger.silent {
+                                format!(" · {}", l10n::text(ui.ctx(), "Silent"))
+                            } else {
+                                String::new()
+                            }
                         ));
                         if let Some(price) = trigger.price {
                             ui.label(l10n::text(ui.ctx(), price.to_string()));
@@ -566,6 +1004,7 @@ impl AlertsPanel {
             }
         } else if self.alerts.is_empty() {
             self.draft_form(ui);
+            self.sort_controls(ui);
             if EmptyState::new("No alerts yet")
                 .icon(&icons::ALERTS)
                 .description("Create an alert with the + button or the chart menu.")
@@ -581,6 +1020,7 @@ impl AlertsPanel {
             let mut remove = None;
             let mut toggle = None;
             let mut duplicate = None;
+            let mut presentation = None;
             egui::ScrollArea::vertical()
                 .max_height(self.config.max_height)
                 .show(ui, |ui| {
@@ -597,7 +1037,34 @@ impl AlertsPanel {
                                     )
                                 },
                             );
-                            ui.label(RichText::new(l10n::text(ui.ctx(), subject)).strong());
+                            ui.horizontal(|ui| {
+                                if self.options.symbol_icon {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::Vec2::splat(18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    crate::painting::symbol_mark::paint_symbol_mark(
+                                        ui.painter(),
+                                        rect,
+                                        &alert.symbol,
+                                        self.marks.get(&alert.symbol).cloned(),
+                                    );
+                                }
+                                if self.options.source_icon {
+                                    let icon = match alert.source {
+                                        AlertSource::Price => &icons::CHART_LINE,
+                                        AlertSource::Volume => &icons::CHART_COLUMNS,
+                                        AlertSource::Study { .. } => &icons::INDICATORS,
+                                        AlertSource::Drawing(_) => &icons::TREND_LINE,
+                                    };
+                                    ui.add(icon.as_image_tinted(
+                                        egui::Vec2::splat(16.0),
+                                        ui.visuals().text_color(),
+                                    ))
+                                    .on_hover_text(l10n::text(ui.ctx(), "Alert source"));
+                                }
+                                ui.label(RichText::new(&subject).strong());
+                            });
                             ui.label(l10n::text(ui.ctx(), alert.condition.to_string()));
                             if !alert.additional_conditions.is_empty() {
                                 ui.label(l10n::format_text(
@@ -606,26 +1073,56 @@ impl AlertsPanel {
                                     &[("0", format!("{}", alert.additional_conditions.len()))],
                                 ));
                             }
-                            if !alert.name.is_empty() {
+                            if self.options.name && !alert.name.is_empty() {
                                 ui.label(l10n::text(ui.ctx(), &alert.name));
                             }
                             let color = self.status_color(ui, alert.status);
-                            ui.colored_label(
-                                color,
-                                l10n::text(
+                            ui.horizontal(|ui| {
+                                ui.colored_label(
+                                    color,
+                                    l10n::text(
+                                        ui.ctx(),
+                                        match alert.status {
+                                            AlertStatus::Active => "Active",
+                                            AlertStatus::Triggered => "Triggered",
+                                            AlertStatus::Disabled => "Disabled",
+                                            AlertStatus::Expired => "Expired",
+                                        },
+                                    ),
+                                );
+                                if let Some(schedule) = &alert.schedule {
+                                    ui.add(icons::WIDGET_BAR_CALENDAR.as_image_tinted(
+                                        egui::Vec2::splat(16.0),
+                                        ui.visuals().text_color(),
+                                    ))
+                                    .on_hover_ui(|ui| schedule_tooltip(ui, schedule));
+                                }
+                            });
+                            if self.options.message && !alert.message.is_empty() {
+                                ui.label(&alert.message);
+                            }
+                            if self.options.last_firing
+                                && let Some(time) = alert.last_triggered_at
+                            {
+                                let zone =
+                                    alert.schedule.as_ref().map(|s| &s.timezone).or_else(|| {
+                                        alert.inputs.as_ref().and_then(|i| i.timezone.as_ref())
+                                    });
+                                let zone =
+                                    zone.cloned().unwrap_or_else(crate::model::TimezoneId::utc);
+                                ui.label(l10n::format_text(
                                     ui.ctx(),
-                                    match alert.status {
-                                        AlertStatus::Active => "Active",
-                                        AlertStatus::Triggered => "Triggered",
-                                        AlertStatus::Disabled => "Disabled",
-                                        AlertStatus::Expired => "Expired",
-                                    },
-                                ),
-                            );
-                            if !alert.message.is_empty() {
-                                ui.label(l10n::text(ui.ctx(), &alert.message));
+                                    "Last firing: {time}",
+                                    &[(
+                                        "time",
+                                        time.with_timezone(&zone)
+                                            .format("%Y-%m-%d %H:%M:%S %:z")
+                                            .to_string(),
+                                    )],
+                                ));
                             }
                             ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
                                 if Button::new("Edit").show(ui).clicked() {
                                     action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
                                 }
@@ -642,9 +1139,34 @@ impl AlertsPanel {
                                     };
                                     toggle = Some(changed);
                                 }
+                                ui.add_enabled_ui(self.pending == 0, |ui| {
+                                    ui.menu_button("...", |ui| {
+                                        let mut updated = alert.clone();
+                                        let line = ui
+                                            .checkbox(
+                                                &mut updated.extend_line,
+                                                l10n::text(ui.ctx(), "Line across chart"),
+                                            )
+                                            .changed();
+                                        let blink = ui
+                                            .checkbox(
+                                                &mut updated.blink_on_trigger,
+                                                l10n::text(ui.ctx(), "Blink after firing"),
+                                            )
+                                            .changed();
+                                        if line || blink {
+                                            presentation = Some(updated);
+                                        }
+                                    })
+                                    .response
+                                    .accessible_name(l10n::text(ui.ctx(), "Marker"))
+                                    .on_hover_text(l10n::text(ui.ctx(), "Marker options"));
+                                });
                                 if Button::new("Duplicate").show(ui).clicked() {
                                     let mut copy = alert.clone();
                                     copy.id = None;
+                                    copy.created_at = None;
+                                    copy.last_triggered_at = None;
                                     copy.status = AlertStatus::Active;
                                     duplicate = Some(copy);
                                 }
@@ -657,9 +1179,18 @@ impl AlertsPanel {
                                 }
                             });
                             ui.separator();
+                        })
+                        .response
+                        .on_hover_ui(|ui| {
+                            if let Some(schedule) = &alert.schedule {
+                                schedule_tooltip(ui, schedule);
+                            }
                         });
                     }
                 });
+            if let Some(alert) = presentation {
+                self.save(alert);
+            }
             if let Some(alert) = toggle {
                 self.save(alert);
             }
@@ -677,6 +1208,29 @@ impl AlertsPanel {
     }
 }
 
+fn schedule_tooltip(ui: &mut Ui, schedule: &crate::model::NotificationSchedule) {
+    ui.label(l10n::text(ui.ctx(), "Notification hours"));
+    ui.label(schedule.timezone.to_string());
+    let days = schedule
+        .days
+        .iter()
+        .map(|day| l10n::text(ui.ctx(), day.to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    ui.label(days);
+    for window in &schedule.windows {
+        let range = format!(
+            "{} - {}",
+            window.start.format("%H:%M"),
+            window.end.format("%H:%M")
+        );
+        ui.label(range);
+        if window.end <= window.start {
+            ui.label(l10n::text(ui.ctx(), "Ends on the following day"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,17 +1243,92 @@ mod tests {
     struct Host {
         events: Mutex<Option<Events<AlertEvent>>>,
         reply: Mutex<Option<Reply<()>>>,
+        saved: Mutex<Vec<Alert>>,
     }
 
     impl Alerts for Host {
         fn watch(&self, events: Events<AlertEvent>) {
             *self.events.lock().unwrap() = Some(events);
         }
-        fn save(&self, _: Alert, reply: Reply<()>) {
+        fn save(&self, alert: Alert, reply: Reply<()>) {
+            self.saved.lock().unwrap().push(alert);
             *self.reply.lock().unwrap() = Some(reply);
         }
         fn remove(&self, _: AlertId, reply: Reply<()>) {
             reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_silent_log_entry_is_not_taken_for_a_firing() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        let silent = "2026-11-02T03:00:00Z".parse().unwrap();
+        let delivered = "2026-11-02T09:00:00Z".parse().unwrap();
+        for previous in [None, Some("2026-11-01T09:00:00Z".parse().unwrap())] {
+            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            alert.id = Some(AlertId(format!("{previous:?}")));
+            alert.last_triggered_at = previous;
+            panel.apply_event(
+                &ctx,
+                AlertEvent::Upsert(Box::new(alert.clone())),
+                &mut toasts,
+            );
+            panel.apply_event(
+                &ctx,
+                AlertEvent::SilentTriggered {
+                    id: alert.id.clone().unwrap(),
+                    symbol: alert.symbol.clone(),
+                    time: silent,
+                    price: Some(101.0),
+                    message: String::new(),
+                },
+                &mut toasts,
+            );
+            alert.status = AlertStatus::Disabled;
+            panel.apply_event(
+                &ctx,
+                AlertEvent::Upsert(Box::new(alert.clone())),
+                &mut toasts,
+            );
+            let mut resumed = panel.alerts().last().unwrap().clone();
+            assert_eq!(resumed.last_triggered_at, previous);
+            resumed.status = AlertStatus::Active;
+            panel.save(resumed);
+            assert_eq!(
+                host.saved.lock().unwrap().last().unwrap().last_triggered_at,
+                previous
+            );
+            host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+            assert!(panel.log().back().unwrap().silent);
+            assert!(panel.log_csv().ends_with(",101,\"\",true\r\n"));
+            panel.apply_event(
+                &ctx,
+                AlertEvent::Triggered {
+                    id: alert.id.clone().unwrap(),
+                    time: delivered,
+                    price: Some(102.0),
+                },
+                &mut toasts,
+            );
+            // A stale push keeps the delivered firing, and a newer host firing wins over it.
+            for expected in [delivered, delivered + chrono::TimeDelta::hours(1)] {
+                if expected != delivered {
+                    alert.last_triggered_at = Some(expected);
+                }
+                panel.apply_event(
+                    &ctx,
+                    AlertEvent::Upsert(Box::new(alert.clone())),
+                    &mut toasts,
+                );
+                assert_eq!(
+                    panel.alerts().last().unwrap().last_triggered_at,
+                    Some(expected)
+                );
+            }
         }
     }
 
@@ -724,22 +1353,23 @@ mod tests {
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
-        events.push(AlertEvent::Upsert(alert.clone()));
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
         events.push(AlertEvent::Triggered {
             id: alert.id.clone().unwrap(),
             time: "2026-10-23T12:00:00Z".parse().unwrap(),
             price: Some(12.5),
         });
         frame(&mut panel);
+        alert.last_triggered_at = Some("2026-10-23T12:00:00Z".parse().unwrap());
         assert_eq!(panel.alerts(), &[alert.clone()]);
         assert_eq!(panel.alerts()[0].status, AlertStatus::Active);
         assert_eq!(panel.log().len(), 1);
         assert_eq!(
             panel.log_csv(),
-            "id,symbol,time,price,message\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5,\"\"\r\n"
+            "id,symbol,time,price,message,silent\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5,\"\",false\r\n"
         );
         alert.status = AlertStatus::Disabled;
-        events.push(AlertEvent::Upsert(alert.clone()));
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
         frame(&mut panel);
         assert_eq!(panel.alerts(), &[alert.clone()]);
         panel.save(alert.clone());
@@ -751,6 +1381,22 @@ mod tests {
             .send(Err(FeedError::NotSupported));
         frame(&mut panel);
         assert_eq!(panel.error, Some(FeedError::NotSupported));
+        let mut display = alert.clone();
+        display.extend_line = !display.extend_line;
+        panel.save(display);
+        host.reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(Err(FeedError::NotSupported));
+        frame(&mut panel);
+        assert_eq!(panel.alerts(), &[alert.clone()]);
+        assert!(
+            panel.undo.is_empty(),
+            "a rejected display edit must not create undo history"
+        );
+        assert!(panel.staged_display.is_empty());
         events.push(AlertEvent::Remove(alert.id.clone().unwrap()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
@@ -801,16 +1447,33 @@ mod tests {
         assert!(
             panel
                 .log_csv()
-                .ends_with(",123,\"AAPL closed at \"\"123\"\"\"\r\n")
+                .ends_with(",123,\"AAPL closed at \"\"123\"\"\",false\r\n")
         );
         assert_eq!(panel.take_sound(), Some("Bell".into()));
+        assert_eq!(panel.take_sound(), None);
+        // A silent trigger is logged and marked, without a popup or a sound.
+        let popups = toasts.toasts().len();
+        panel.apply_event(
+            &egui::Context::default(),
+            AlertEvent::SilentTriggered {
+                id: AlertId("watchlist".into()),
+                symbol: "AAPL".into(),
+                time: Utc::now(),
+                price: Some(124.0),
+                message: String::new(),
+            },
+            &mut toasts,
+        );
+        assert!(panel.log().back().unwrap().silent);
+        assert!(panel.log_csv().ends_with(",124,\"\",true\r\n"));
+        assert_eq!(toasts.toasts().len(), popups);
         assert_eq!(panel.take_sound(), None);
         drop(panel);
         assert!(!renewed.is_active());
     }
 
     #[test]
-    fn sorting_orders_by_key_in_either_direction_and_keeps_arrival_order_for_equal_values() {
+    fn sorting_orders_by_key_in_either_direction_and_breaks_ties_by_identity() {
         let mut panel = AlertsPanel::default();
         for (id, name, symbol, status) in [
             ("1", "beta", "MSFT", AlertStatus::Disabled),
@@ -822,6 +1485,22 @@ mod tests {
             alert.id = Some(AlertId(id.into()));
             alert.name = name.into();
             alert.status = status;
+            alert.created_at = match id {
+                "1" | "3" => Some(DateTime::from_timestamp(200, 0).unwrap()),
+                "2" => Some(DateTime::from_timestamp(100, 0).unwrap()),
+                _ => None,
+            };
+            alert.last_triggered_at = match id {
+                "2" | "3" => Some(DateTime::from_timestamp(300, 0).unwrap()),
+                "4" => Some(DateTime::from_timestamp(100, 0).unwrap()),
+                _ => None,
+            };
+            alert.message = match id {
+                "1" | "3" => "beta",
+                "2" => "Alpha",
+                _ => "",
+            }
+            .into();
             panel.alerts.push(alert);
         }
         let ids = |panel: &AlertsPanel| {
@@ -833,6 +1512,12 @@ mod tests {
         };
         for (key, descending, expected) in [
             (AlertSortKey::Arrival, true, "1234"),
+            (AlertSortKey::Created, false, "2134"),
+            (AlertSortKey::Created, true, "1324"),
+            (AlertSortKey::Fired, false, "4231"),
+            (AlertSortKey::Fired, true, "2341"),
+            (AlertSortKey::Message, false, "4213"),
+            (AlertSortKey::Message, true, "1324"),
             (AlertSortKey::Name, false, "4213"),
             (AlertSortKey::Name, true, "1324"),
             (AlertSortKey::Symbol, false, "2314"),
@@ -840,8 +1525,298 @@ mod tests {
             (AlertSortKey::Status, false, "2314"),
             (AlertSortKey::Status, true, "4123"),
         ] {
-            (panel.sort, panel.descending) = (key, descending);
+            (panel.options.sort, panel.options.descending) = (key, descending);
             assert_eq!(ids(&panel), expected, "{key:?} descending={descending}");
+            if key != AlertSortKey::Arrival {
+                panel.alerts.reverse();
+                assert_eq!(ids(&panel), expected, "reconnected {key:?}");
+                panel.alerts.reverse();
+            }
+        }
+        // Equal keys keep the host's numbering past nine alerts, in either direction, and ids
+        // that are not numbers keep one order whatever the push order.
+        let numbered: Vec<_> = (1..=12).map(|n| n.to_string()).collect();
+        for (pushed, expected) in [
+            (numbered.clone(), numbered.concat()),
+            (vec!["b".into(), "aa".into(), "a".into()], "abaa".into()),
+        ] {
+            panel.alerts = pushed
+                .iter()
+                .map(|id| {
+                    let mut alert = Alert::new("AAPL", AlertCondition::Above(1.0));
+                    alert.id = Some(AlertId(id.clone()));
+                    alert
+                })
+                .collect();
+            for key in [
+                AlertSortKey::Created,
+                AlertSortKey::Symbol,
+                AlertSortKey::Status,
+            ] {
+                for descending in [false, true] {
+                    (panel.options.sort, panel.options.descending) = (key, descending);
+                    assert_eq!(ids(&panel), expected, "{key:?} descending={descending}");
+                    panel.alerts.reverse();
+                    assert_eq!(ids(&panel), expected, "pushed reversed {key:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn list_change_during_a_pending_undo_stays_undoable() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let answer = || host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(300.0, 700.0))
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+        alert.id = Some(AlertId("1".into()));
+        alert.extend_line = true;
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        // The marker menu turns the line off and the host applies it.
+        alert.extend_line = false;
+        h.state_mut().save(alert.clone());
+        answer();
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        // Undo it and press Descending before the host pushes the alert back.
+        let descending = h.state().options.descending;
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        answer();
+        h.run_steps(3);
+        h.get_by_label("Descending").click();
+        h.run_steps(3);
+        alert.extend_line = true;
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        assert!(h.state().alerts()[0].extend_line);
+        assert_eq!(h.state().options.descending, descending);
+        // Once the restore has finished the direction changes again and Undo reverts it.
+        h.get_by_label("Descending").click();
+        h.run_steps(3);
+        assert_eq!(h.state().options.descending, !descending);
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        assert_eq!(h.state().options.descending, descending);
+        assert!(h.state().alerts()[0].extend_line);
+    }
+
+    #[test]
+    fn marker_change_during_a_pending_undo_stays_undoable() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (reverse_pushes, duplicate, edit_before_restore) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+            (true, false, true),
+        ] {
+            for pending_redo in [false, true] {
+                for next_redo in [false, true] {
+                    let host = Arc::new(Host::default());
+                    let answer = || host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+                    let mut panel = AlertsPanel::default();
+                    panel.set_service(host.clone());
+                    let events = host.events.lock().unwrap().clone().unwrap();
+                    let mut toasts = Toasts::new();
+                    let mut h = Harness::builder()
+                        .allow_missing_glyphs()
+                        .with_size(egui::vec2(300.0, 900.0))
+                        .with_context_setup(move |ctx| {
+                            let theme = if reverse_pushes {
+                                crate::theme::Theme::dark()
+                            } else {
+                                crate::theme::Theme::light()
+                            };
+                            crate::theme::apply_to_egui(ctx, &theme);
+                        })
+                        .build_ui_state(
+                            move |ui, panel: &mut AlertsPanel| {
+                                panel.poll(ui.ctx(), &mut toasts);
+                                panel.show(ui);
+                            },
+                            panel,
+                        );
+                    let mut first = Alert::new("AAPL", AlertCondition::Above(100.0));
+                    first.id = Some(AlertId("1".into()));
+                    first.extend_line = true;
+                    let mut second = first.clone();
+                    second.id = Some(AlertId("2".into()));
+                    events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                    events.push(AlertEvent::Upsert(Box::new(second.clone())));
+                    h.run_steps(3);
+                    first.extend_line = false;
+                    h.state_mut().save(first.clone());
+                    answer();
+                    events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                    h.run_steps(3);
+                    if edit_before_restore {
+                        second.extend_line = false;
+                        h.state_mut().save(second.clone());
+                        answer();
+                        h.run_steps(3);
+                    }
+                    h.get_by_label("Undo").click();
+                    h.run_steps(3);
+                    answer();
+                    h.run_steps(3);
+                    first.extend_line = true;
+                    if pending_redo {
+                        events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                        h.run_steps(3);
+                        h.get_by_label("Redo").click();
+                        h.run_steps(3);
+                        answer();
+                        h.run_steps(3);
+                        first.extend_line = false;
+                    }
+                    // The host answered the restore but has not pushed it. A chart marker menu
+                    // uses this public save path while the row menu is also available again.
+                    second.extend_line = false;
+                    if !edit_before_restore {
+                        h.state_mut().save(second.clone());
+                        answer();
+                        h.run_steps(3);
+                    }
+                    if duplicate {
+                        h.state_mut().save(second.clone());
+                        answer();
+                        h.run_steps(3);
+                    }
+                    for alert in if reverse_pushes {
+                        [&second, &first]
+                    } else {
+                        [&first, &second]
+                    } {
+                        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                        h.run_steps(3);
+                        if duplicate && alert.id == second.id {
+                            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                            h.run_steps(3);
+                        }
+                    }
+                    let saved = host.saved.lock().unwrap().len();
+                    h.get_by_label(if next_redo { "Redo" } else { "Undo" })
+                        .click();
+                    h.run_steps(3);
+                    let saves = host.saved.lock().unwrap();
+                    if pending_redo && next_redo {
+                        assert_eq!(saves.len(), saved, "a completed redo leaves no redo entry");
+                    } else {
+                        assert_eq!(
+                            saves.len(),
+                            saved + 1,
+                            "reverse_pushes={reverse_pushes}, duplicate={duplicate}, edit_before_restore={edit_before_restore}, pending_redo={pending_redo}, next_redo={next_redo}"
+                        );
+                        let sent = saves.last().unwrap();
+                        let expected = if next_redo { ("1", false) } else { ("2", true) };
+                        assert_eq!(
+                            (sent.id.as_ref().unwrap().0.as_str(), sent.extend_line),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn marker_restore_and_another_save_keep_their_own_failures() {
+        for reject_restore in [false, true] {
+            for reverse_replies in [false, true] {
+                let host = Arc::new(Host::default());
+                let mut panel = AlertsPanel::default();
+                panel.set_service(host.clone());
+                let events = host.events.lock().unwrap().clone().unwrap();
+                let ctx = egui::Context::default();
+                let mut toasts = Toasts::new();
+                let mut poll = |panel: &mut AlertsPanel| {
+                    ctx.run_ui(Default::default(), |ui| panel.poll(ui.ctx(), &mut toasts))
+                        .drop_without_applying_deltas();
+                };
+                let mut first = Alert::new("AAPL", AlertCondition::Above(100.0));
+                first.id = Some(AlertId("1".into()));
+                first.extend_line = true;
+                let mut second = first.clone();
+                second.id = Some(AlertId("2".into()));
+                let mut older = first.clone();
+                older.id = Some(AlertId("older".into()));
+                events.push(AlertEvent::Upsert(Box::new(older.clone())));
+                events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                events.push(AlertEvent::Upsert(Box::new(second.clone())));
+                poll(&mut panel);
+                older.extend_line = false;
+                panel.save(older.clone());
+                host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+                events.push(AlertEvent::Upsert(Box::new(older.clone())));
+                poll(&mut panel);
+                first.extend_line = false;
+                panel.save(first.clone());
+                host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+                events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                poll(&mut panel);
+                panel.restore_presentation(false);
+                let restore = host.reply.lock().unwrap().take().unwrap();
+                second.extend_line = false;
+                panel.save(second.clone());
+                let edit = host.reply.lock().unwrap().take().unwrap();
+                // A confirmed new edit stays newer than a failed restore even if an earlier
+                // history entry is removed before the replies arrive.
+                if reject_restore {
+                    events.push(AlertEvent::Upsert(Box::new(second)));
+                }
+                events.push(AlertEvent::Remove(older.id.unwrap()));
+                let mut replies = vec![(restore, reject_restore), (edit, !reject_restore)];
+                if reverse_replies {
+                    replies.reverse();
+                }
+                for (reply, reject) in replies {
+                    reply.send(if reject {
+                        Err(FeedError::NotSupported)
+                    } else {
+                        Ok(())
+                    });
+                }
+                if !reject_restore {
+                    first.extend_line = true;
+                    events.push(AlertEvent::Upsert(Box::new(first)));
+                }
+                poll(&mut panel);
+                panel.restore_presentation(!reject_restore);
+                let saves = host.saved.lock().unwrap();
+                assert_eq!(
+                    saves.len(),
+                    5,
+                    "reject_restore={reject_restore}, reverse_replies={reverse_replies}"
+                );
+                let sent = saves.last().unwrap();
+                assert_eq!(
+                    (sent.id.as_ref().unwrap().0.as_str(), sent.extend_line),
+                    if reject_restore {
+                        ("2", true)
+                    } else {
+                        ("1", false)
+                    }
+                );
+            }
         }
     }
 
@@ -860,7 +1835,7 @@ mod tests {
         };
         panel.set_symbol("SIM");
         panel.draft.condition = AlertCondition::CrossingUp(10.0);
-        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
+        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
         assert_eq!((panel.pending, panel.draft_saving), (1, true));
         host.reply
             .lock()
@@ -872,13 +1847,139 @@ mod tests {
         assert_eq!((panel.pending, panel.draft_saving), (0, false));
         assert_eq!(panel.error, Some(FeedError::NotSupported));
         assert_eq!(panel.draft.symbol, "SIM");
-        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
+        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert_eq!(panel.error, None);
         assert_eq!(panel.draft.symbol, "SIM");
         assert_eq!(panel.draft.condition, AlertCondition::Crossing(0.0));
         assert!(panel.alerts().is_empty());
+    }
+
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn manager_fields_and_markers_can_be_changed_undone_and_redone() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let alert: Alert = serde_json::from_value(serde_json::json!({
+                "id":"saved", "symbol":"SAMPLE", "condition":{"Above":100.0},
+                "name":"Price watch", "message":"Notify me", "created_at":"2026-10-01T10:00:00Z",
+                "last_triggered_at":"2026-10-02T11:30:00Z",
+                "schedule":{"timezone":"+05:45", "days":["Fri"], "windows":[{"start":"22:00:00", "end":"02:00:00"}]}
+            })).unwrap();
+            let service = Arc::new(crate::services::AlertEngine::new().with_alerts(vec![alert]));
+            let mut panel = AlertsPanel::default();
+            panel.set_service(service.clone());
+            let mut toasts = Toasts::new();
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(egui::vec2(300.0, 700.0))
+                .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                .build_ui_state(
+                    move |ui, panel: &mut AlertsPanel| {
+                        panel.poll(ui.ctx(), &mut toasts);
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            h.run_steps(3);
+            assert!(h.query_by_label("Price watch").is_some());
+            assert!(h.query_by_label("Notify me").is_some());
+            // 11:30 UTC + 5h45 is 17:15 on the schedule's clock.
+            let firing = "Last firing: 2026-10-02 17:15:00 +05:45";
+            assert!(h.query_by_label(firing).is_some());
+            // The calendar marker sits beside the status and shows the row's schedule.
+            let status = h.get_by_label("Active").rect();
+            h.hover_at(egui::pos2(status.right() + 14.0, status.center().y));
+            h.run_steps(60);
+            assert!(h.query_by_label("+05:45").is_some());
+            assert!(h.query_by_label("22:00 - 02:00").is_some());
+            assert!(h.query_by_label("Ends on the following day").is_some());
+            for (field, text) in [
+                ("Name", "Price watch"),
+                ("Message", "Notify me"),
+                ("Last firing", firing),
+            ] {
+                h.get_by_label("Fields").click();
+                h.run_steps(3);
+                h.get_by_label(field).click();
+                h.run_steps(3);
+                h.key_press(egui::Key::Escape);
+                h.run_steps(3);
+                assert!(h.query_by_label(text).is_none(), "{field}");
+                h.get_by_label("Undo").click();
+                h.run_steps(3);
+                assert!(h.query_by_label(text).is_some(), "undo {field}");
+                h.get_by_label("Redo").click();
+                h.run_steps(3);
+                assert!(h.query_by_label(text).is_none(), "redo {field}");
+            }
+            // Choosing text starts alphabetically even though times start newest first.
+            for (key, descending) in [("Message", false), ("Created", true)] {
+                h.get_all_by_label("Sort by").last().unwrap().click();
+                h.run_steps(3);
+                h.get_all_by_label(key).last().unwrap().click();
+                h.run_steps(3);
+                assert_eq!(h.state().options.descending, descending, "{key}");
+            }
+            h.get_by_label("Marker").click();
+            h.run_steps(3);
+            h.get_by_label("Line across chart").click();
+            h.run_steps(3);
+            h.get_by_label("Marker").click();
+            h.run_steps(3);
+            h.get_by_label("Blink after firing").click();
+            h.run_steps(3);
+            h.key_press(egui::Key::Escape);
+            h.run_steps(3);
+            let saved = || serde_json::to_value(service.alerts()[0].clone()).unwrap();
+            assert_eq!(saved()["extend_line"], false);
+            assert_eq!(saved()["blink_on_trigger"], false);
+            h.get_by_label("Undo").click();
+            h.run_steps(3);
+            assert_eq!(saved()["blink_on_trigger"], true);
+            assert_eq!(saved()["extend_line"], false);
+            h.get_by_label("Undo").click();
+            h.run_steps(3);
+            assert_eq!(saved()["extend_line"], true);
+            h.get_by_label("Redo").click();
+            h.run_steps(3);
+            assert_eq!(saved()["extend_line"], false);
+            // Save and restore the host's record, with no transient UI state to retain.
+            let restored: Alert = serde_json::from_value(saved()).unwrap();
+            assert_eq!(serde_json::to_value(restored).unwrap(), saved());
+        }
+    }
+
+    #[test]
+    fn a_firing_is_logged_and_shown_only_on_the_channels_its_alert_keeps() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        panel.set_sound(Some("Bell".into()));
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let ctx = egui::Context::default();
+        for (popup, sound) in [(true, true), (false, true), (true, false)] {
+            let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+            alert.id = Some(AlertId("1".into()));
+            alert.delivery.popup = popup;
+            alert.delivery.sound = sound;
+            let logged = panel.log().len();
+            let mut toasts = Toasts::new();
+            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+            events.push(AlertEvent::Triggered {
+                id: alert.id.clone().unwrap(),
+                time: "2026-10-23T12:00:00Z".parse().unwrap(),
+                price: None,
+            });
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.poll(ui.ctx(), &mut toasts)
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(panel.log().len(), logged + 1);
+            assert_eq!(toasts.len(), usize::from(popup));
+            assert_eq!(panel.take_sound().is_some(), sound);
+        }
     }
 
     #[test]

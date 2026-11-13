@@ -109,6 +109,8 @@ pub struct TPOConfig {
     pub show_poc: bool,
     /// Show Value Area
     pub show_value_area: bool,
+    /// Show the caption and marker at the middle of the profile's range
+    pub show_midpoint: bool,
     /// Show Initial Balance
     pub show_initial_balance: bool,
     /// Draw one and two initial balance ranges above its high and below its low.
@@ -117,6 +119,8 @@ pub struct TPOConfig {
     pub show_poor_highs_lows: bool,
     /// Show single prints
     pub show_single_prints: bool,
+    /// Show the session statistics table below the profile
+    pub show_statistics: bool,
     /// Highlight opening range
     pub show_opening_range: bool,
     /// Split each session where it moves between extended and regular hours, giving separate
@@ -147,10 +151,12 @@ impl Default for TPOConfig {
             color_mode: TPOColorMode::ByPeriod,
             show_poc: true,
             show_value_area: true,
+            show_midpoint: false,
             show_initial_balance: true,
             show_initial_balance_extensions: false,
             show_poor_highs_lows: false,
             show_single_prints: false,
+            show_statistics: false,
             show_opening_range: true,
             split_sessions: false,
             custom_letters: None,
@@ -712,6 +718,61 @@ pub enum ProfileShape {
 }
 
 impl TPOProfile {
+    /// Height of the initial balance, or `None` for a profile without one.
+    pub fn initial_balance_range(&self) -> Option<f64> {
+        (self.initial_balance_high != f64::MIN)
+            .then_some(self.initial_balance_high - self.initial_balance_low)
+    }
+
+    /// TPOs of the rows below and of the rows above the point of control's row, `(below, above)`.
+    /// The point of control's row counts in neither.
+    pub fn tpo_counts_around_poc(&self) -> (usize, usize) {
+        let poc = self.key(self.poc_price);
+        let sum = |side: std::cmp::Ordering| -> usize {
+            self.price_tpo_count
+                .iter()
+                .filter(|&(key, _)| key.cmp(&poc) == side)
+                .map(|(_, count)| count)
+                .sum()
+        };
+        (
+            sum(std::cmp::Ordering::Less),
+            sum(std::cmp::Ordering::Greater),
+        )
+    }
+
+    /// Rotation factor: for each period after the first, +1 for a higher high and +1 for a higher
+    /// low than the previous period's, -1 for a lower high and -1 for a lower low, summed. Highs
+    /// and lows are compared on the profile's rows, so a move inside one row counts 0. A composite
+    /// reads its periods in time order.
+    pub fn rotation_factor(&self) -> i32 {
+        let periods: Vec<(i64, i64)> = self
+            .letters
+            .chunk_by(|a, b| a.ts == b.ts)
+            .map(|period| {
+                let keys = period.iter().map(|letter| self.key(letter.price));
+                (
+                    keys.clone().max().unwrap_or_default(),
+                    keys.min().unwrap_or_default(),
+                )
+            })
+            .collect();
+        periods
+            .windows(2)
+            .map(|pair| pair[1].0.cmp(&pair[0].0) as i32 + pair[1].1.cmp(&pair[0].1) as i32)
+            .sum()
+    }
+
+    /// How far the profile's range reaches beyond its initial balance, `(below, above)`, in price,
+    /// or `None` for a profile without one.
+    pub fn range_extension(&self) -> Option<(f64, f64)> {
+        self.initial_balance_range()?;
+        Some((
+            (self.initial_balance_low - self.profile_low).max(0.0),
+            (self.profile_high - self.initial_balance_high).max(0.0),
+        ))
+    }
+
     /// Classify the profile shape
     pub fn classify_shape(&self) -> ProfileShape {
         let levels = self.price_levels();
@@ -1417,5 +1478,43 @@ mod tests {
                 .iter()
                 .all(|letter| profile.row_price(letter.price) == letter.price)
         );
+    }
+
+    #[test]
+    fn session_statistics_follow_a_hand_counted_session() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
+        let bars = [
+            bar_at(start, 0, 101.0, 103.0, 100.0, 102.0),
+            bar_at(start, 30, 102.0, 104.0, 101.0, 103.0),
+            bar_at(start, 60, 104.0, 106.0, 103.0, 105.0),
+            bar_at(start, 90, 104.0, 105.0, 99.0, 100.0),
+        ];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let clock = Timeframe::Min30.into();
+        // Rows 99 to 106 hold 1, 2, 3, 3, 4, 3, 2 and 1 TPOs, 19 in all. The value area takes 14:
+        // from 103 (4), the two rows below (6) beat the two above (5), then the two above (5) beat
+        // the rest below (3).
+        let session = to_tpo_profiles(&bars, &config, &clock).remove(0);
+        assert_eq!(session.poc_price, 103.0);
+        assert_eq!(
+            (session.value_area_low, session.value_area_high),
+            (101.0, 105.0)
+        );
+        assert_eq!(session.initial_balance_range(), Some(4.0));
+        assert_eq!(session.tpo_counts_around_poc(), (9, 6));
+        // B over A +2, C over B +2, D under C -2.
+        assert_eq!(session.rotation_factor(), 2);
+        assert_eq!(session.range_extension(), Some((1.0, 2.0)));
+
+        // After A and B: rows 100 to 104 hold 1, 2, 2, 2 and 1, and a tie takes the lower price.
+        let partial = to_tpo_profiles(&bars[..2], &config, &clock).remove(0);
+        assert_eq!(partial.poc_price, 101.0);
+        assert_eq!(partial.initial_balance_range(), Some(4.0));
+        assert_eq!(partial.tpo_counts_around_poc(), (1, 5));
+        assert_eq!(partial.rotation_factor(), 2);
+        assert_eq!(partial.range_extension(), Some((0.0, 0.0)));
     }
 }

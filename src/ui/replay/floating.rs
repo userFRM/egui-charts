@@ -1,14 +1,17 @@
 //! Floating Replay Control
 //!
-//! A floating toolbar for controlling bar replay.
-//! Displays play/pause, step controls, and speed selector.
+//! A toolbar for controlling bar replay, docked in a strip the host reserves below its chart or
+//! floating over a rect. Displays the start control, play/pause, step controls, and speed selector.
 
+use super::start::ReplayStartAction;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
-use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::{Button, ButtonSize, ButtonVariant, IconButton};
 use crate::ui_kit::ext::UiExt;
+use crate::ui_kit::list_item::ListItem;
 use egui::{
     Align2, Context, CursorIcon, FontId, Id, Key, Modifiers, Rect, RichText, Ui, Vec2, pos2,
 };
@@ -130,6 +133,8 @@ pub enum ReplayControlAction {
     SetUpdateInterval(crate::model::Timeframe),
     /// Close the control (but don't stop replay)
     Close,
+    /// Start, or restart, the replay from this choice of the start control.
+    Start(ReplayStartAction),
 }
 
 /// Floating replay control widget
@@ -140,6 +145,12 @@ pub struct FloatingReplayControl {
     pub state: ReplayControlState,
     /// Area the bar docks in, set by the host each frame
     dock_rect: Option<Rect>,
+    /// `dock_rect` is a strip reserved for the bar rather than a rect the bar floats over
+    docked: bool,
+    /// The host waits for a click on a bar, so the start control is lit and the transport is off
+    selecting: bool,
+    /// The start control offers the host's saved session
+    can_resume: bool,
     /// Whether control is visible
     visible: bool,
     /// User explicitly dismissed the control (prevents auto-show until replay restarts)
@@ -157,12 +168,21 @@ impl Default for FloatingReplayControl {
 }
 
 impl FloatingReplayControl {
+    /// Height of the strip to reserve for [`Self::set_dock_strip`].
+    pub const STRIP_HEIGHT: f32 = 48.0;
+
     /// Create a new floating replay control
     pub fn new() -> Self {
         Self {
             id: Id::unique("floating_replay_control"),
-            state: ReplayControlState::default(),
+            state: ReplayControlState {
+                speed: 1.0,
+                ..Default::default()
+            },
             dock_rect: None,
+            docked: false,
+            selecting: false,
+            can_resume: false,
             visible: false,
             user_dismissed: false,
             at_end: false,
@@ -171,13 +191,37 @@ impl FloatingReplayControl {
         }
     }
 
-    /// Dock the bar in `rect`, usually the chart's rect.
+    /// Float the bar over `rect`.
     ///
-    /// The bar opens centred at the bottom of this rect and can be dragged only within it. Call
-    /// it before [`Self::show`] in each frame; without it the bar docks in the window's content
-    /// rect.
+    /// The bar opens centred at the bottom of this rect and can be dragged only within it, so it
+    /// covers what is drawn there; to keep a chart's time axis clear, reserve a strip for
+    /// [`Self::set_dock_strip`] instead. Call it before [`Self::show`] in each frame; without it
+    /// the bar floats over the window's content rect.
     pub fn set_dock_rect(&mut self, rect: Rect) {
         self.dock_rect = Some(rect);
+        self.docked = false;
+    }
+
+    /// Dock the bar in `strip`, a band [`Self::STRIP_HEIGHT`] high that the host reserves between
+    /// its chart and bottom bar while [`Self::is_visible`].
+    ///
+    /// The bar is centred in the strip and drawn flat on the host's panel. Call it before
+    /// [`Self::show`] in each frame.
+    pub fn set_dock_strip(&mut self, strip: Rect) {
+        self.dock_rect = Some(strip);
+        self.docked = true;
+    }
+
+    /// Say whether the host waits for a click on a bar after [`ReplayStartAction::SelectBar`].
+    ///
+    /// Meanwhile the start control is lit and the transport and its shortcuts are off.
+    pub fn set_selecting(&mut self, selecting: bool) {
+        self.selecting = selecting;
+    }
+
+    /// Say whether the start control offers [`ReplayStartAction::Resume`].
+    pub fn set_can_resume(&mut self, can_resume: bool) {
+        self.can_resume = can_resume;
     }
 
     /// Supplies source intervals the host can serve. An empty list hides the selector.
@@ -289,21 +333,27 @@ impl FloatingReplayControl {
             .unwrap_or_else(|| ctx.content_rect())
             .intersect(ctx.content_rect());
         let inset = ctx.active_theme().spacing.lg.max(8.0);
-        egui::Area::new(self.id)
-            .order(egui::Order::Foreground)
-            .movable(true)
-            .pivot(Align2::CENTER_BOTTOM)
-            .default_pos(pos2(dock.center().x, dock.bottom() - inset))
-            .constrain_to(dock.shrink(inset))
-            .show(ctx, |ui| {
-                ui.set_max_width((dock.width() - 2.0 * inset).max(0.0));
-                // Keep the shadow outside the inset while constraining the toolbar itself.
-                ui.set_clip_rect(dock);
-                let clicked = self.render_control(ui);
-                if clicked != ReplayControlAction::None {
-                    action = clicked;
-                }
-            });
+        let area = egui::Area::new(self.id).order(egui::Order::Foreground);
+        let area = if self.docked {
+            area.movable(false)
+                .pivot(Align2::CENTER_CENTER)
+                .current_pos(dock.center())
+                .constrain_to(dock)
+        } else {
+            area.movable(true)
+                .pivot(Align2::CENTER_BOTTOM)
+                .default_pos(pos2(dock.center().x, dock.bottom() - inset))
+                .constrain_to(dock.shrink(inset))
+        };
+        area.show(ctx, |ui| {
+            ui.set_max_width((dock.width() - 2.0 * inset).max(0.0));
+            // Keep the shadow outside the inset while constraining the toolbar itself.
+            ui.set_clip_rect(dock);
+            let clicked = self.render_control(ui);
+            if clicked != ReplayControlAction::None {
+                action = clicked;
+            }
+        });
 
         action
     }
@@ -320,6 +370,7 @@ impl FloatingReplayControl {
             .and_then(|id| ctx.read_response(id))
             .is_some_and(|r| r.layer_id.order != egui::Order::Background);
         if !self.visible
+            || self.selecting
             || crate::widget::keyboard::shortcuts_suppressed(ctx)
             || ctx.text_edit_focused()
             || focus_off_background
@@ -364,7 +415,8 @@ impl FloatingReplayControl {
     }
 
     /// Render the control contents
-    /// Layout: grip | start, previous, play or pause, next, end | speed | symbol, progress | exit, hide
+    /// Layout: grip | start control | start, previous, play or pause, next, end | speed | symbol,
+    /// progress | exit, hide. A docked bar has no grip.
     fn render_control(&mut self, ui: &mut Ui) -> ReplayControlAction {
         let mut action = ReplayControlAction::None;
 
@@ -373,11 +425,16 @@ impl FloatingReplayControl {
         let visuals = ui.visuals();
         let row = ButtonSize::MD.pixels();
 
-        egui::Frame::new()
-            .fill(visuals.window_fill)
-            .stroke(visuals.window_stroke)
-            .corner_radius(visuals.window_corner_radius)
-            .shadow(visuals.popup_shadow)
+        let frame = if self.docked {
+            egui::Frame::new()
+        } else {
+            egui::Frame::new()
+                .fill(visuals.window_fill)
+                .stroke(visuals.window_stroke)
+                .corner_radius(visuals.window_corner_radius)
+                .shadow(visuals.popup_shadow)
+        };
+        frame
             .inner_margin(egui::Margin::symmetric(
                 theme.spacing.sm as i8,
                 (theme.spacing.xs - visuals.window_stroke.width).max(0.0) as i8,
@@ -392,18 +449,26 @@ impl FloatingReplayControl {
                             ui.spacing_mut().item_spacing.x = theme.spacing.sm;
                             ui.spacing_mut().interact_size.y = row;
 
-                            // The whole frame drags the bar; the grip says so.
-                            ui.add(icons::UI_DRAG_HANDLE.as_image_tinted(
-                                Vec2::splat(icon_sizes::COMPACT),
-                                theme.ui.text_muted,
-                            ))
-                            .on_hover_cursor(CursorIcon::Grab)
-                            .on_hover_text(l10n::text(ui.ctx(), "Move"));
+                            if !self.docked {
+                                // The whole frame drags the bar; the grip says so.
+                                ui.add(icons::UI_DRAG_HANDLE.as_image_tinted(
+                                    Vec2::splat(icon_sizes::COMPACT),
+                                    theme.ui.text_muted,
+                                ))
+                                .on_hover_cursor(CursorIcon::Grab)
+                                .on_hover_text(l10n::text(ui.ctx(), "Move"));
+
+                                ui.separator();
+                            }
+
+                            if let Some(start) = self.show_start_control(ui) {
+                                action = ReplayControlAction::Start(start);
+                            }
 
                             ui.separator();
 
-                            let at_start = self.state.progress_pct <= 0.0;
-                            let at_end = self.at_end;
+                            let at_start = self.selecting || self.state.progress_pct <= 0.0;
+                            let at_end = self.selecting || self.at_end;
                             if IconButton::new(&icons::MEDIA_SKIP_BACK)
                                 .tooltip("Go to start (Home)")
                                 .enabled(!at_start)
@@ -437,6 +502,7 @@ impl FloatingReplayControl {
                             };
                             if IconButton::new(play_icon)
                                 .tooltip(play_tooltip)
+                                .enabled(!self.selecting)
                                 .show(ui)
                                 .clicked()
                             {
@@ -499,13 +565,17 @@ impl FloatingReplayControl {
 
                             if !self.update_intervals.is_empty()
                                 && let Some(mut interval) = self.update_interval
-                                && ui.combo_select_width(
-                                    "replay_update_interval",
-                                    &mut interval,
-                                    self.update_intervals.iter().copied(),
-                                    |interval| format!("{} updates", interval),
-                                    110.0,
-                                )
+                                && ui
+                                    .add_enabled_ui(!self.selecting, |ui| {
+                                        ui.combo_select_width(
+                                            "replay_update_interval",
+                                            &mut interval,
+                                            self.update_intervals.iter().copied(),
+                                            |interval| format!("{} updates", interval),
+                                            110.0,
+                                        )
+                                    })
+                                    .inner
                             {
                                 action = ReplayControlAction::SetUpdateInterval(interval);
                             }
@@ -563,6 +633,73 @@ impl FloatingReplayControl {
             });
 
         action
+    }
+
+    /// The start control: a button that selects a bar, and a menu of every start.
+    fn show_start_control(&self, ui: &mut Ui) -> Option<ReplayStartAction> {
+        let mut start = None;
+        if Button::icon_and_text(&icons::REPLAY_SELECT_BAR, "Select bar")
+            .variant(if self.selecting {
+                ButtonVariant::Secondary
+            } else {
+                ButtonVariant::Ghost
+            })
+            .tooltip("Click a bar on the chart to start replay there (Esc cancels)")
+            .show(ui)
+            .clicked()
+        {
+            start = Some(ReplayStartAction::SelectBar);
+        }
+        let menu = IconButton::new(&icons::CHEVRON_DOWN)
+            .tooltip("Replay start")
+            .show(ui);
+        egui::Popup::menu(&menu)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
+                let theme = ui.active_theme();
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "Replay start").to_uppercase())
+                        .size(theme.text.small)
+                        .color(crate::ui_kit::section::menu_heading_color(&theme)),
+                );
+                let resume = self.can_resume.then_some((
+                    &icons::REPLAY,
+                    "Resume saved session",
+                    ReplayStartAction::Resume,
+                ));
+                for (icon, label, choice) in [
+                    (
+                        &icons::REPLAY_SELECT_BAR,
+                        "Select bar",
+                        ReplayStartAction::SelectBar,
+                    ),
+                    (
+                        &icons::WIDGET_BAR_CALENDAR,
+                        "Select date…",
+                        ReplayStartAction::SelectDate,
+                    ),
+                    (
+                        &icons::FLAG_MARK,
+                        "First available bar",
+                        ReplayStartAction::First,
+                    ),
+                    (
+                        &icons::REPLAY_RANDOM,
+                        "Random bar",
+                        ReplayStartAction::Random,
+                    ),
+                ]
+                .into_iter()
+                .chain(resume)
+                {
+                    if ListItem::new().show_with_icon(ui, label, icon).clicked() {
+                        start = Some(choice);
+                        ui.close();
+                    }
+                }
+            });
+        start
     }
 }
 
@@ -688,6 +825,66 @@ mod tests {
         }
     }
 
+    /// Every start other than a click on a bar stays one menu away on the bar, in the strip.
+    #[test]
+    fn start_control_offers_every_start_and_selection_takes_the_transport_keys() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (can_resume, label, start) in [
+            (false, "Select bar", ReplayStartAction::SelectBar),
+            (false, "Select date…", ReplayStartAction::SelectDate),
+            (false, "First available bar", ReplayStartAction::First),
+            (false, "Random bar", ReplayStartAction::Random),
+            (true, "Resume saved session", ReplayStartAction::Resume),
+        ] {
+            let mut bar = FloatingReplayControl::new();
+            bar.show_control();
+            bar.set_can_resume(can_resume);
+            let strip = Rect::from_min_size(pos2(0.0, 500.0), Vec2::new(900.0, 48.0));
+            bar.set_dock_strip(strip);
+            let mut harness = Harness::builder()
+                .allow_missing_glyphs()
+                .with_accessibility_check(false)
+                .with_size(Vec2::new(900.0, 600.0))
+                .build_ui_state(
+                    |ui, (bar, action): &mut (FloatingReplayControl, ReplayControlAction)| {
+                        let shown = bar.show(ui.ctx());
+                        if shown != ReplayControlAction::None {
+                            *action = shown;
+                        }
+                    },
+                    (bar, ReplayControlAction::None),
+                );
+            harness.run();
+            let rect = harness.ctx.memory(|m| m.area_rect(harness.state().0.id));
+            assert!(strip.contains_rect(rect.unwrap()), "{rect:?} in {strip:?}");
+            assert!(harness.query_by_label("Move").is_none());
+            harness.get_by_label("Replay start").click();
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("Resume saved session").is_some(),
+                can_resume
+            );
+            harness
+                .get_by_role_and_label(egui::Role::MenuItem, label)
+                .click();
+            harness.run();
+            assert_eq!(harness.state().1, ReplayControlAction::Start(start));
+        }
+
+        // Waiting for the click leaves the transport off and its keys to the chart.
+        let ctx = Context::default();
+        let mut bar = FloatingReplayControl::new();
+        bar.show_control();
+        bar.set_selecting(true);
+        for _ in 0..3 {
+            frame(&ctx, &mut bar, vec![], false);
+        }
+        assert_eq!(
+            frame(&ctx, &mut bar, vec![key(Key::Space)], false),
+            ReplayControlAction::None
+        );
+    }
+
     /// `current_bar` is zero-based: the first of 300 bars is 0% and the last 100%.
     #[test]
     fn progress_spans_first_to_last_bar() {
@@ -711,7 +908,7 @@ mod tests {
                 vec![key(Key::Tab)],
                 false,
                 Key::Space,
-                ReplayControlAction::GoToStart,
+                ReplayControlAction::Start(ReplayStartAction::SelectBar),
             ),
         ];
         for (before, focus_field, pressed, expected) in cases {

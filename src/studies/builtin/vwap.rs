@@ -90,6 +90,12 @@ const VWAP_ANCHORS: [VwapAnchor; 11] = [
 
 /// The most bands that the study inputs can hold.
 const MAX_BANDS: usize = 10;
+/// The colours of successive band pairs: green, olive and dark teal.
+pub(super) const BAND_COLORS: [Color32; 3] = [
+    palette::GREEN,
+    Color32::from_rgb(128, 128, 0),
+    Color32::from_rgb(0, 137, 123),
+];
 /// The most event anchors that the study inputs can hold.
 const MAX_EVENTS: usize = 1000;
 
@@ -167,7 +173,8 @@ pub(super) fn trading_day(
 }
 
 /// Volume Weighted Average Price, restarted at each anchor period, with optional
-/// standard deviation bands.
+/// standard deviation bands. [`default`](Self::default) opens with the filled band at one
+/// standard deviation; [`new`](Self::new) opens without bands.
 ///
 /// [`new`](Self::new) restarts at each UTC day until a time zone is set with
 /// [`with_time_zone`](Self::with_time_zone). Pass the instrument's
@@ -182,6 +189,8 @@ pub struct VolumeWeightedAvgPrice {
     shared: Option<usize>,
     /// Whether no two consecutive bars shared a UTC date at the last update.
     daily: bool,
+    /// Whether the study has no values on intervals of a day or longer.
+    hide_daily: bool,
     timeframe: Option<Timeframe>,
     /// One per line: the VWAP, then the upper and lower band of each multiplier.
     colors: Vec<Color32>,
@@ -216,6 +225,7 @@ impl VolumeWeightedAvgPrice {
             stepper: Stepper::default(),
             shared: None,
             daily: true,
+            hide_daily: false,
             timeframe: None,
             colors: vec![palette::BLUE],
             visible: true,
@@ -257,8 +267,8 @@ impl VolumeWeightedAvgPrice {
 
     /// Adds an upper and a lower band at each multiple of the volume-weighted
     /// standard deviation of the typical price over the period. Multipliers clamp
-    /// to 0 or more, NaN to 0, and at most ten are kept. The bands are drawn in the VWAP
-    /// colour at half intensity.
+    /// to 0 or more, NaN to 0, and at most ten are kept. Each pair is green, olive or dark teal
+    /// and filled between its lines in that colour at 5% opacity.
     pub fn with_std_dev_bands(mut self, multipliers: impl IntoIterator<Item = f64>) -> Self {
         self.percentage_bands = false;
         self.bands = multipliers
@@ -273,14 +283,9 @@ impl VolumeWeightedAvgPrice {
 
     /// One colour per line, with green, olive and dark teal for successive band pairs.
     fn fit_colors(&mut self) {
-        let colors = [
-            palette::GREEN,
-            Color32::from_rgb(128, 128, 0),
-            Color32::from_rgb(0, 137, 123),
-        ];
         while self.colors.len() < self.line_count() {
             let band = (self.colors.len() - 1) / 2;
-            self.colors.push(colors[band.min(2)]);
+            self.colors.push(BAND_COLORS[band.min(2)]);
         }
     }
 
@@ -312,9 +317,10 @@ impl VolumeWeightedAvgPrice {
     }
 }
 
+/// A VWAP with one filled band at one standard deviation.
 impl Default for VolumeWeightedAvgPrice {
     fn default() -> Self {
-        Self::new()
+        Self::new().with_std_dev_bands([1.0])
     }
 }
 
@@ -328,6 +334,13 @@ impl Indicator for VolumeWeightedAvgPrice {
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
         use crate::studies::{InputKind, InputValue, StudyInput};
         let mut inputs = vec![
+            StudyInput::new(
+                "hide_daily",
+                "Hide on daily and longer intervals",
+                InputValue::Toggle(self.hide_daily),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
             StudyInput::new(
                 "anchor",
                 "Anchor",
@@ -367,7 +380,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 InputValue::Length(self.bands.len()),
                 InputKind::Length(0, MAX_BANDS),
             )
-            .with_default(InputValue::Length(0)),
+            .with_default(InputValue::Length(1)),
         ];
         inputs.extend(self.bands.iter().enumerate().map(|(i, k)| {
             StudyInput::new(
@@ -413,7 +426,9 @@ impl Indicator for VolumeWeightedAvgPrice {
     /// local time takes its first occurrence. Events are applied sorted and deduplicated.
     /// `time_zone` and `day_start` count trading days while the chart passes no instrument; an
     /// instrument's time zone and session, given with
-    /// [`set_instrument`](Indicator::set_instrument), take their place.
+    /// [`set_instrument`](Indicator::set_instrument), take their place. `hide_daily` leaves every
+    /// line without values while the bars are a day or longer: by the chart interval, or without
+    /// one when no two consecutive bars share a UTC date.
     fn set_input(
         &mut self,
         id: &str,
@@ -439,6 +454,7 @@ impl Indicator for VolumeWeightedAvgPrice {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
+            ("hide_daily", InputValue::Toggle(value)) => self.hide_daily = value,
             ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
             ("time_zone", InputValue::Text(name)) => {
                 self.time_zone = TimezoneId::named(&name).ok_or_else(|| {
@@ -543,10 +559,12 @@ impl Indicator for VolumeWeightedAvgPrice {
         events.dedup();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                // A bar with a non-finite price or volume has no value and adds nothing.
-                if ![bar.high, bar.low, bar.close, bar.volume]
-                    .iter()
-                    .all(|x| x.is_finite())
+                // A bar with a non-finite price or volume has no value and adds nothing, and
+                // no bar has one while the study is hidden on this interval.
+                if (self.hide_daily && daily)
+                    || ![bar.high, bar.low, bar.close, bar.volume]
+                        .iter()
+                        .all(|x| x.is_finite())
                 {
                     return IndicatorValue::None;
                 }
@@ -668,6 +686,18 @@ impl Indicator for VolumeWeightedAvgPrice {
         for (line, color) in self.colors.iter_mut().zip(colors) {
             *line = color;
         }
+    }
+
+    /// One band between the upper and lower line of each multiplier.
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        (0..self.bands.len())
+            .map(|band| crate::studies::StudyFill {
+                first: crate::studies::FillBoundary::Plot(1 + 2 * band),
+                second: crate::studies::FillBoundary::Plot(2 + 2 * band),
+                color: self.colors[1 + 2 * band].gamma_multiply_u8(13),
+                inverted_color: None,
+            })
+            .collect()
     }
 
     fn is_overlay(&self) -> bool {
@@ -1134,7 +1164,7 @@ mod tests {
             if interval_first {
                 chart.set_timeframe(crate::model::Timeframe::Hour1);
             }
-            chart.add_indicator(
+            let id = chart.add_indicator(
                 crate::studies::IndicatorFactory::new()
                     .create("VWAP")
                     .unwrap(),
@@ -1150,6 +1180,20 @@ mod tests {
             assert_eq!(
                 chart.indicators().next().unwrap().1.values().value(0, 1),
                 Some(14.0)
+            );
+            // Hidden on daily intervals, the VWAP and its band have no values on this one and
+            // return on the hourly one below.
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("hide_daily", InputValue::Toggle(true))
+                .unwrap();
+            shapes(&egui::Context::default(), &mut chart, 1.5, Vec::new());
+            let values = chart.indicators().next().unwrap().1.values();
+            assert_eq!(values.len(), 2);
+            assert!(
+                (0..3).all(|line| values.line(line).iter().all(|v| v.is_nan())),
+                "{values:?}"
             );
             chart.set_timeframe(crate::model::Timeframe::Hour1);
             chart.set_symbol("UTC");
@@ -1323,6 +1367,7 @@ mod tests {
         let mut edited = study.clone();
         let mut settings = edited.settings();
         settings.plots[0].width = 3.0;
+        settings.fills[0].visible = false;
         edited
             .apply_settings(&[("band_count".into(), Length(3))], settings)
             .unwrap();
@@ -1330,6 +1375,17 @@ mod tests {
         let plots = edited.settings().plots;
         assert_eq!(plots.len(), 7);
         assert_eq!(plots[0].width, 3.0);
+        // Added bands keep the styles of the others, and removed bands take theirs away.
+        let fills = |study: &ConfiguredStudy| study.settings().fills;
+        assert_eq!(fills(&edited).len(), 3);
+        assert!(!fills(&edited)[0].visible);
+        let mut fewer = edited.clone();
+        let settings = fewer.settings();
+        fewer
+            .apply_settings(&[("band_count".into(), Length(1))], settings)
+            .unwrap();
+        assert_eq!(fills(&fewer).len(), 1);
+        assert!(!fills(&fewer)[0].visible);
         let bands: Vec<_> = edited
             .inputs()
             .into_iter()
@@ -1337,5 +1393,33 @@ mod tests {
             .map(|i| i.value)
             .collect();
         assert_eq!(bands, [0.5, 2.5, 3.0].map(InputValue::Number));
+    }
+
+    /// A study from the factory, as the indicators dialog adds it, has one band of multiplier 1,
+    /// filled in its line colour, and a study built without bands has no fill.
+    #[test]
+    fn the_default_study_opens_with_one_filled_band() {
+        let study = crate::studies::IndicatorFactory::new()
+            .create("VWAP")
+            .unwrap();
+        let input = |id: &str| {
+            let inputs = study.inputs();
+            inputs.into_iter().find(|input| input.id == id).unwrap()
+        };
+        assert_eq!(input("band_count").value, InputValue::Length(1));
+        assert_eq!(input("band_0").value, InputValue::Number(1.0));
+        assert_eq!(study.line_count(), 3);
+        assert_eq!(study.colors()[1], palette::GREEN);
+        let fills = study.fills();
+        assert_eq!(fills.len(), 1);
+        assert!(matches!(
+            (fills[0].first, fills[0].second),
+            (
+                crate::studies::FillBoundary::Plot(1),
+                crate::studies::FillBoundary::Plot(2)
+            )
+        ));
+        assert_eq!(fills[0].color, palette::GREEN.gamma_multiply_u8(13));
+        assert!(VolumeWeightedAvgPrice::new().fills().is_empty());
     }
 }

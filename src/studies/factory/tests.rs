@@ -65,6 +65,114 @@ fn every_registered_study_round_trips_and_supports_live_updates() {
             );
         }
     }
+
+    let mut factory = factory;
+    let defaults: Vec<_> = factory
+        .list()
+        .iter()
+        .map(|name| {
+            let mut template = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+            for plot in &mut template.settings.plots {
+                plot.width = 4.0;
+            }
+            template.settings.precision = Some(3);
+            template
+        })
+        .collect();
+    factory.set_defaults(&defaults).unwrap();
+    for template in defaults {
+        let study = factory.create(&template.name).unwrap();
+        assert_eq!(study.settings(), template.settings, "{}", template.name);
+    }
+}
+
+/// Defaults affect future creations only; failed batches and constructor changes cannot leave
+/// partially applied or stale settings behind.
+#[test]
+fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
+    let mut factory = IndicatorFactory::new();
+    let before = factory.create("SMA").unwrap();
+    let mut defaults = StudyTemplate::from_study(before.as_ref());
+    defaults.inputs = vec![("period".into(), InputValue::Length(3))];
+    defaults.settings.plots[0].width = 4.0;
+    factory
+        .set_defaults(std::slice::from_ref(&defaults))
+        .unwrap();
+    assert_eq!(before.plot_style(0).width, 1.0);
+    assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 4.0);
+
+    let invalid = |edit: fn(&mut StudyTemplate)| {
+        let mut template = defaults.clone();
+        edit(&mut template);
+        template
+    };
+    let unknown_name = invalid(|t| t.name = "Missing".into());
+    let unknown_input = invalid(|t| t.inputs[0].0 = "missing".into());
+    let zero_length = invalid(|t| t.inputs[0].1 = InputValue::Length(0));
+    let wrong_type = invalid(|t| t.inputs[0].1 = InputValue::Toggle(true));
+    let precision = invalid(|t| t.settings.precision = Some(13));
+    let width = invalid(|t| t.settings.plots[0].width = f32::NAN);
+    let plots = invalid(|t| t.settings.plots.clear());
+    let mut old_input =
+        StudyTemplate::from_study(factory.create("LinReg Channel").unwrap().as_ref());
+    old_input.inputs = vec![("multiplier".into(), InputValue::Number(3.0))];
+    let mut replacement = defaults.clone();
+    replacement.settings.plots[0].width = 6.0;
+    for template in [
+        unknown_name,
+        unknown_input,
+        zero_length,
+        wrong_type,
+        precision,
+        width,
+        plots,
+    ] {
+        assert!(
+            factory
+                .set_defaults(&[replacement.clone(), template])
+                .is_err()
+        );
+        assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 4.0);
+    }
+    factory.set_defaults(&[old_input]).unwrap();
+    let inputs = factory.create("LinReg Channel").unwrap().inputs();
+    for id in ["upper_multiplier", "lower_multiplier"] {
+        let input = inputs.iter().find(|input| input.id == id).unwrap();
+        assert_eq!(input.value, InputValue::Number(3.0));
+    }
+    factory.set_defaults(&[]).unwrap();
+    factory
+        .set_defaults(&[defaults.clone(), replacement])
+        .unwrap();
+    assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 6.0);
+    assert!(factory.clear_defaults("SMA"));
+    assert!(!factory.clear_defaults("SMA"));
+    assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 1.0);
+    factory
+        .set_defaults(std::slice::from_ref(&defaults))
+        .unwrap();
+    factory.register("SMA", || Box::new(SMA::new(7)));
+    assert!(!factory.clear_defaults("SMA"));
+    assert_eq!(
+        factory.create("SMA").unwrap().inputs()[0].value,
+        InputValue::Length(7)
+    );
+    factory
+        .set_defaults(std::slice::from_ref(&defaults))
+        .unwrap();
+    assert!(factory.unregister("SMA"));
+    factory.register("SMA", || Box::new(SMA::new(8)));
+    assert_eq!(
+        factory.create("SMA").unwrap().inputs()[0].value,
+        InputValue::Length(8)
+    );
+    factory.set_defaults(&[defaults]).unwrap();
+    factory.clear();
+    factory.register("SMA", || Box::new(SMA::new(9)));
+    assert_eq!(
+        factory.create("SMA").unwrap().inputs()[0].value,
+        InputValue::Length(9)
+    );
 }
 
 /// Confirming the settings dialog without an edit must preserve every drawn colour,
@@ -160,7 +268,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
     let mut duplicates = Vec::new();
     for name in names {
         let mut study = factory.create(&name).unwrap();
-        if !study.order_flow_inputs().is_empty() {
+        if study.needs_order_flow() {
             continue;
         }
         // External series have no values until the host supplies their distinct inputs.

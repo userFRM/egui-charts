@@ -2,10 +2,12 @@
 //!
 //! Provides actions for alerts, editing, layering, panes, locking, and deleting drawings.
 
+use super::study::IntervalRange;
 use crate::config::KeyboardAction;
+use crate::drawings::TimeframeVisibility;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::model::{Alert, AlertComparison, AlertCondition};
+use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
 use crate::theme::Theme;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
 use crate::widget::{Chart, PaneId};
@@ -26,7 +28,7 @@ pub(crate) fn move_targets(
 ) -> Vec<(PaneId, String)> {
     let current = chart.drawing_pane(drawing_id);
     let mut panes = super::study::other_panes(ctx, chart, current);
-    if current.is_some_and(|pane| pane != PaneId::MAIN) {
+    if current.is_some_and(|pane| pane != PaneId::MAIN) && chart.panes().contains(&PaneId::MAIN) {
         panes.push((
             PaneId::MAIN,
             ctx.map_or_else(
@@ -63,10 +65,17 @@ pub enum DrawingContextMenuAction {
     Copy,
     /// Move the drawing to this pane, for example with [`Chart::move_drawing_to_pane`].
     MoveTo(PaneId),
+    /// Set the drawing's interval filter. Applied by `ChartMenus` and the floating toolbar
+    /// as one undoable chart action; standalone menus call [`Self::apply_interval_visibility`].
+    Intervals(IntervalRange),
     /// Toggle drawing lock state
     Lock,
     /// Toggle drawing visibility
     Hide,
+    /// Exchange a position's target and stop and switch between long and short.
+    /// Applied by the mounted chart menu and floating toolbar through
+    /// [`Chart::reverse_position_drawing`]. Standalone hosts call that method themselves.
+    ReversePosition,
     /// Clone drawing with offset
     Clone,
     /// Delete drawing
@@ -90,6 +99,10 @@ pub struct DrawingContextMenu {
     pub alert: Option<Alert>,
     /// Panes the Move to submenu offers, by stable id and title; empty leaves it out.
     pub panes: Vec<(PaneId, String)>,
+    /// Current chart interval; `None` disables relative interval commands.
+    pub current_interval: Option<Timeframe>,
+    /// Saved interval filter used to mark matching quick commands.
+    pub timeframe_visibility: TimeframeVisibility,
     /// Last action taken
     pub last_action: DrawingContextMenuAction,
     /// Skip close detection on first frame
@@ -114,6 +127,8 @@ impl DrawingContextMenu {
             is_visible: true,
             alert: None,
             panes: Vec::new(),
+            current_interval: None,
+            timeframe_visibility: TimeframeVisibility::all(),
             last_action: DrawingContextMenuAction::None,
             just_opened: false,
         }
@@ -146,6 +161,10 @@ impl DrawingContextMenu {
         if let Some(drawing) = drawing {
             self.set_context(drawing.tool_type.as_str(), drawing.locked, drawing.visible);
         }
+        self.current_interval = chart.timeframe();
+        self.timeframe_visibility = drawing
+            .map(|d| d.timeframe_visibility.clone())
+            .unwrap_or_else(TimeframeVisibility::all);
         self.alert = drawing
             .filter(|_| !chart.symbol.is_empty())
             .and_then(|drawing| {
@@ -185,6 +204,55 @@ impl DrawingContextMenu {
     /// Take and consume the last action
     pub fn take_action(&mut self) -> DrawingContextMenuAction {
         std::mem::replace(&mut self.last_action, DrawingContextMenuAction::None)
+    }
+
+    fn interval_items(&self) -> Vec<MenuEntry<DrawingContextMenuAction>> {
+        let mut checked = false;
+        [
+            ("Show on higher intervals", IntervalRange::AndAbove),
+            ("Show on lower intervals", IntervalRange::AndBelow),
+            ("Show on current interval", IntervalRange::Only),
+            ("Show on all intervals", IntervalRange::All),
+        ]
+        .into_iter()
+        .map(|(label, range)| {
+            let mut item = MenuItem::new(label, DrawingContextMenuAction::Intervals(range));
+            item.enabled = range == IntervalRange::All || self.current_interval.is_some();
+            let filter = interval_filter(range, self.current_interval);
+            if !checked
+                && filter.as_ref().is_some_and(|filter| {
+                    let saved = &self.timeframe_visibility;
+                    // A single interval can be saved as an exact label or as a one-value range.
+                    *filter == *saved
+                        || range == IntervalRange::All && saved.show_on_all
+                        || range == IntervalRange::Only
+                            && !saved.show_on_all
+                            && filter
+                                .visible_timeframes
+                                .iter()
+                                .all(|label| saved.is_visible_on(label))
+                            && saved
+                                .visible_timeframes
+                                .iter()
+                                .all(|label| filter.is_visible_on(label))
+                            && saved.ranges.iter().all(|(unit, range)| {
+                                range.is_empty() || filter.range(*unit).as_ref() == Some(range)
+                            })
+                })
+            {
+                item.icon = Some(&embedded_icons::CHECK);
+                checked = true;
+            }
+            MenuEntry::Item(item)
+        })
+        .collect()
+    }
+
+    pub(crate) fn position_direction_available(&self) -> bool {
+        use crate::drawings::DrawingToolType as T;
+        [T::LongPos, T::ShortPos]
+            .iter()
+            .any(|tool| tool.as_str() == self.drawing_type)
     }
 
     /// Build menu items for the drawing context menu
@@ -251,8 +319,21 @@ impl DrawingContextMenu {
                         .collect(),
                 }
             }))
+            .chain(self.position_direction_available().then(|| {
+                let mut item = MenuItem::new(
+                    "Reverse position",
+                    DrawingContextMenuAction::ReversePosition,
+                );
+                item.enabled = !self.is_locked;
+                MenuEntry::Item(item)
+            }))
             .chain([
                 MenuEntry::Separator,
+                MenuEntry::Submenu {
+                    label: "Intervals visibility".into(),
+                    icon: None,
+                    entries: self.interval_items(),
+                },
                 // State toggles
                 MenuEntry::Item(
                     MenuItem::new(
@@ -327,10 +408,47 @@ impl DrawingContextMenu {
     }
 }
 
+fn interval_filter(
+    range: IntervalRange,
+    current: Option<Timeframe>,
+) -> Option<TimeframeVisibility> {
+    Some(match range {
+        IntervalRange::All => TimeframeVisibility::all(),
+        IntervalRange::Only => TimeframeVisibility::current_interval(current?),
+        IntervalRange::AndAbove => TimeframeVisibility::higher_intervals(current?),
+        IntervalRange::AndBelow => TimeframeVisibility::lower_intervals(current?),
+    })
+}
+
+impl DrawingContextMenuAction {
+    /// Apply an interval command to `id`, recording undo and saved-state updates. Returns
+    /// whether this is an interval command; other actions remain the caller's responsibility.
+    /// With no chart interval, only the all-intervals command changes the filter.
+    pub fn apply_interval_visibility(&self, chart: &mut Chart, id: usize) -> bool {
+        let Self::Intervals(range) = self else {
+            return false;
+        };
+        if let Some(filter) = interval_filter(*range, chart.timeframe())
+            && chart
+                .drawings()
+                .drawings
+                .iter()
+                .any(|d| d.id == id && d.timeframe_visibility != filter)
+        {
+            chart.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |d| d.timeframe_visibility = filter)
+            });
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig};
+    use crate::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType, FibonacciConfig};
     use crate::model::{AlertSource, BarData};
 
     /// The initial alert follows the first visible level, including when level zero is hidden.
@@ -364,6 +482,191 @@ mod tests {
                     })
                     .as_ref()
             );
+        }
+    }
+
+    #[test]
+    fn quick_interval_menu_is_reachable() {
+        let mut menu = DrawingContextMenu::new();
+        let ctx = Context::default();
+        let mut chart = Chart::new(crate::model::BarData::default());
+        chart.set_timeframe(Timeframe::Hour1);
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![
+            crate::drawings::ChartPoint::new(0.0, 100.0),
+            crate::drawings::ChartPoint::new(1.0, 110.0),
+        ];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing);
+        let mut mounted = crate::ui::context_menu::ChartMenus::default();
+        let frame =
+            |chart: &mut Chart, mounted: &mut crate::ui::context_menu::ChartMenus, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        mounted.show(ui.ctx(), chart);
+                    },
+                );
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                shapes
+            };
+        let text_position = |shapes: &[egui::epaint::ClippedShape], label: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing menu row: {label}"))
+        };
+        for (range, shown) in [
+            (IntervalRange::Only, [false, true, false]),
+            (IntervalRange::AndAbove, [false, true, true]),
+            (IntervalRange::AndBelow, [true, true, false]),
+            (IntervalRange::All, [true, true, true]),
+        ] {
+            let before = chart.drawings().drawings[0].timeframe_visibility.clone();
+            chart.right_click = Some(crate::widget::RightClickTarget::Drawing {
+                drawing_id: 7,
+                pos: Pos2::new(100.0, 100.0),
+            });
+            frame(&mut chart, &mut mounted, vec![]);
+            let shapes = frame(&mut chart, &mut mounted, vec![]);
+            let pos = text_position(&shapes, "Intervals visibility");
+            frame(
+                &mut chart,
+                &mut mounted,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            let shapes = frame(&mut chart, &mut mounted, vec![]);
+            let label = match range {
+                IntervalRange::Only => "Show on current interval",
+                IntervalRange::AndAbove => "Show on higher intervals",
+                IntervalRange::AndBelow => "Show on lower intervals",
+                IntervalRange::All => "Show on all intervals",
+            };
+            let pos = text_position(&shapes, label);
+            frame(
+                &mut chart,
+                &mut mounted,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            for pressed in [true, false] {
+                frame(
+                    &mut chart,
+                    &mut mounted,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+            let saved = chart.drawings().drawings[0].clone();
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].timeframe_visibility, before);
+            assert!(chart.redo());
+            assert_eq!(
+                chart.drawings().drawings[0].timeframe_visibility,
+                saved.timeframe_visibility
+            );
+            let template = crate::drawings::DrawingTemplate::from_drawing(&saved);
+            let template: crate::drawings::DrawingTemplate =
+                serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
+            let mut restored = Drawing::new(8, DrawingToolType::TrendLine);
+            template.apply_to(&mut restored).unwrap();
+            assert_eq!(restored.timeframe_visibility, saved.timeframe_visibility);
+            if range == IntervalRange::Only {
+                // Editing the tab back to the same single interval keeps the current checkmark.
+                chart.drawings_mut().drawings[0]
+                    .timeframe_visibility
+                    .set_range(crate::model::TimeframeUnit::Hour, Some(1..=1));
+            }
+            for (interval, shown) in [Timeframe::Min30, Timeframe::Hour1, Timeframe::Hour4]
+                .into_iter()
+                .zip(shown)
+            {
+                chart.set_timeframe(interval);
+                assert_eq!(saved.is_visible_on_timeframe(&interval.as_str()), shown);
+                menu.open_on(&ctx, &chart, Pos2::ZERO, 7);
+                for entry in menu.interval_items() {
+                    if let MenuEntry::Item(item) = entry {
+                        let checked = item.icon.is_some();
+                        assert_eq!(
+                            checked,
+                            item.action == DrawingContextMenuAction::Intervals(range)
+                                && (interval == Timeframe::Hour1 || range == IntervalRange::All)
+                        );
+                    }
+                }
+            }
+            chart.set_timeframe(Timeframe::Hour1);
+        }
+        // At a unit's boundary, a relative preset can cover the current interval alone.
+        for (count, range) in [
+            (1, IntervalRange::AndBelow),
+            (u64::MAX, IntervalRange::AndAbove),
+        ] {
+            let current = Timeframe::Ticks(std::num::NonZeroU64::new(count).unwrap());
+            chart.set_timeframe(current);
+            chart.drawings_mut().drawings[0].timeframe_visibility =
+                interval_filter(range, Some(current)).unwrap();
+            menu.open_on(&ctx, &chart, Pos2::ZERO, 7);
+            let checked: Vec<_> = menu
+                .interval_items()
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(item) if item.icon.is_some() => Some(item.action),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(checked, vec![DrawingContextMenuAction::Intervals(range)]);
+        }
+    }
+
+    #[test]
+    fn locked_interval_edits_keep_geometry_and_undo() {
+        for bulk in [false, true] {
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.locked = true;
+            drawing.chart_points = vec![
+                crate::drawings::ChartPoint::new(0.0, 100.0),
+                crate::drawings::ChartPoint::new(1.0, 110.0),
+            ];
+            manager.drawings.push(drawing.clone());
+            let filter = TimeframeVisibility::specific(&["4h"]);
+            let edit = |d: &mut Drawing| {
+                d.timeframe_visibility = filter.clone();
+                d.stroke_width = 9.0;
+                d.chart_points[0].price = 999.0;
+            };
+            if bulk {
+                manager.edit_drawings(&[7], edit);
+            } else {
+                manager.edit_drawing(7, edit);
+            }
+            assert_eq!(manager.drawings[0].timeframe_visibility, filter);
+            assert_eq!(manager.drawings[0].stroke_width, drawing.stroke_width);
+            assert_eq!(manager.drawings[0].chart_points, drawing.chart_points);
+            assert!(manager.undo());
+            assert_eq!(
+                manager.drawings[0].timeframe_visibility,
+                drawing.timeframe_visibility
+            );
+            assert!(manager.redo());
+            assert_eq!(manager.drawings[0].timeframe_visibility, filter);
         }
     }
 }

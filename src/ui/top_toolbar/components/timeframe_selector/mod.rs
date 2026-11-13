@@ -743,7 +743,7 @@ fn section_header(ui: &mut Ui, theme: &Theme, text: &str, separated: bool) -> bo
         egui::Label::new(
             RichText::new(l10n::text(ui.ctx(), text.to_uppercase()))
                 .size(theme.text.small)
-                .color(theme.ui.text_muted),
+                .color(crate::ui_kit::section::menu_heading_color(theme)),
         )
         .selectable(false)
         .sense(egui::Sense::hover()),
@@ -757,7 +757,10 @@ fn section_header(ui: &mut Ui, theme: &Theme, text: &str, separated: bool) -> bo
             center + vec2(0.0, tip),
             center + vec2(4.0, -tip),
         ],
-        egui::Stroke::new(DESIGN_TOKENS.stroke.medium, theme.ui.text_muted),
+        egui::Stroke::new(
+            DESIGN_TOKENS.stroke.medium,
+            crate::ui_kit::section::menu_heading_color(theme),
+        ),
     );
     menu_row_focus(ui, &response);
     !folded

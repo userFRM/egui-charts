@@ -1,0 +1,46 @@
+---
+title: Baseline
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/series.rs?raw';
+
+A baseline series uses different line and fill colours above and below a
+reference. See the [series overview](../series.mdx) for lifecycle and identity.
+
+## Data and reference
+
+Pass a scalar with
+[`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
+or OHLC bars, whose close is the default main-series price source. Set
+[`ChartTypeParams::baseline`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.baseline)
+to [`BaselineLevel::Price`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.BaselineLevel.html#variant.Price)
+for a fixed price, or `PercentOfPane` for a position measured from the pane bottom.
+The default is 50% of pane height, not a 50% price change. With a base price of
+108, values 110 and 106 are respectively above and below the base, including on
+an inverted price scale.
+
+## Style and running result
+
+The scene uses [the sample history](../first-chart.mdx) with a fixed 108 base and
+a separate gradient on each side fading to transparent at the base.
+
+<Example scene="series-baseline" title="Two fills around a fixed baseline"
+  task="Compare closes on both sides of 108, then pan without moving the reference price."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn baseline\b[^]*?\n\}/)[0]} />
+
+The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
+[`BaselineStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BaselineStyle.html)
+has independent `above` and `below` line styles and fill colours. Optional
+`above_fill_at_base` and `below_fill_at_base` set the gradient endpoints at the
+reference; `None` keeps each fill flat. Gradient endpoints interpolate in screen
+space between the pane edge and the base. Curvature follows the `above` line on
+both sides.
+
+Added baseline series always read close and use the default base at 50% of pane
+height. Set their full line/fill style through
+[`SeriesOptions::baseline_style`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.baseline_style).
+With `None`, `up_color`, `down_color` and `width` provide the lines and flat fills.
+Added options do not expose a fixed-price base. See the
+[added-series restrictions](../chart-types.mdx#added-series-restrictions) before
+choosing the main and added renderers.

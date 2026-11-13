@@ -1,21 +1,25 @@
 //! Text tab: the text, its font, colour and style, and its box.
 
-use crate::drawings::{DrawingToolType, FontWeight};
+use crate::drawings::{
+    DrawingToolType, FontWeight, LineTextHorizontalAlign, LineTextOrientation,
+    LineTextVerticalAlign, NoteTextStyle,
+};
 use crate::localization as l10n;
 use egui::Ui;
 
 use super::style::color_swatch;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPickerState, FormGrid};
 
 /// Font sizes
-const FONT_SIZES: &[f32] = &[8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0];
+pub(super) const FONT_SIZES: &[f32] = &[8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0];
 
 /// Tools whose text sits in a box drawn from the text, background and border settings; tables,
 /// posts and ideas keep the theme's colours for their text.
-fn has_text_box(tool: DrawingToolType) -> bool {
+pub(crate) fn has_text_box(tool: DrawingToolType) -> bool {
     use DrawingToolType as T;
     matches!(
         tool,
@@ -31,23 +35,297 @@ fn has_text_box(tool: DrawingToolType) -> bool {
     )
 }
 
+/// One row picking `value` from `options`, each with the name the row shows for it.
+fn alignment_row<T: Copy + PartialEq, const N: usize>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut T,
+    options: [(T, &str); N],
+) {
+    let label_response = ui.label(l10n::text(ui.ctx(), label));
+    ui.label_inputs_by(label_response.id, |ui| {
+        let ctx = ui.ctx().clone();
+        ui.combo_select(label, value, options.map(|(option, _)| option), |value| {
+            let name = options.iter().find(|(option, _)| option == value);
+            l10n::text(&ctx, name.map_or("", |(_, name)| *name))
+        });
+    });
+    ui.end_row();
+}
+
 /// Text tab renderer
 pub struct TextTab;
 
 impl TextTab {
+    /// Tools with text to write, and the trend angle, Fibonacci, Fibonacci time and position
+    /// tools, whose own labels have a font and a colour.
+    pub(crate) fn available(tool: DrawingToolType) -> bool {
+        tool.supports_text()
+            || matches!(
+                tool,
+                DrawingToolType::TrendAngle
+                    | DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::LongPos
+                    | DrawingToolType::ShortPos
+            )
+    }
+
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 3]) {
         ui.space_md();
+        if let Some(template) = &mut props.tool_settings
+            && matches!(
+                template.settings.tool_type,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
+            )
+        {
+            let time = matches!(
+                template.settings.tool_type,
+                DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime
+            );
+            let mut config = template.settings.fibonacci_config().into_owned();
+            let original = config.clone();
+            FormGrid::new("fibonacci_text").show(ui, |ui| {
+                let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.add(
+                    egui::DragValue::new(&mut config.label_size)
+                        .range(1.0..=256.0)
+                        .suffix(" px"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+                use LineTextHorizontalAlign as H;
+                use LineTextVerticalAlign as V;
+                let mut position = config.label_position.unwrap_or(if config.labels_on_left {
+                    H::Left
+                } else {
+                    H::Right
+                });
+                alignment_row(
+                    ui,
+                    "Label position",
+                    &mut position,
+                    [
+                        (H::Left, "Left"),
+                        (H::Center, "Center"),
+                        (H::Right, "Right"),
+                    ],
+                );
+                if position
+                    != config.label_position.unwrap_or(if config.labels_on_left {
+                        H::Left
+                    } else {
+                        H::Right
+                    })
+                {
+                    config.label_position = Some(position);
+                }
+                // Time projections run top to bottom of the pane; retracements measure from the line.
+                let (height, choices) = if time {
+                    (
+                        &mut config.time_label_vertical,
+                        [
+                            (V::Top, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Bottom, "Bottom"),
+                        ],
+                    )
+                } else {
+                    (
+                        &mut config.label_vertical,
+                        [
+                            (V::Bottom, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Top, "Bottom"),
+                        ],
+                    )
+                };
+                alignment_row(ui, "Label height", height, choices);
+                if time || template.settings.tool_type == DrawingToolType::FibonacciChannel {
+                    return;
+                }
+                ui.label("");
+                ui.checkbox(
+                    &mut config.show_text,
+                    l10n::text(ui.ctx(), "Show level text"),
+                );
+                ui.end_row();
+                alignment_row(
+                    ui,
+                    "Text position",
+                    &mut config.text_position,
+                    [
+                        (H::Left, "Left"),
+                        (H::Center, "Center"),
+                        (H::Right, "Right"),
+                    ],
+                );
+                alignment_row(
+                    ui,
+                    "Text height",
+                    &mut config.text_vertical,
+                    [
+                        (V::Bottom, "Top"),
+                        (V::Middle, "Middle"),
+                        (V::Top, "Bottom"),
+                    ],
+                );
+            });
+            if config != original {
+                template.settings.fib_config = Some(config);
+            }
+            return;
+        }
+        if let Some(template) = &mut props.tool_settings
+            && matches!(
+                template.settings.tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+        {
+            let target = template.settings.position_colors()[0];
+            let style = &mut template.settings.position_style;
+            let [text_picker, background_picker, _] = pickers;
+            let rgba = |[r, g, b, a]: [u8; 4]| egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+            FormGrid::new("position_text").show(ui, |ui| {
+                let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "position_font_size",
+                        &mut style.font_size,
+                        FONT_SIZES.iter().copied(),
+                        |v| format!("{}px", *v as i32),
+                    );
+                });
+                ui.end_row();
+
+                ui.label(l10n::text(ui.ctx(), "Text color"));
+                let text = style.text_color.map_or(egui::Color32::WHITE, rgba);
+                if let Some(picked) = color_swatch(ui, text_picker, text, "position_text_color") {
+                    style.text_color = Some(
+                        keep_opacity(picked, text, text_picker.custom_mode).to_srgba_unmultiplied(),
+                    );
+                }
+                ui.end_row();
+
+                // Until a plate colour is chosen, each label takes its level's colour.
+                let label = ui.label(l10n::text(ui.ctx(), "Background"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut style.label_background,
+                        l10n::text(ui.ctx(), "Show background"),
+                    )
+                    .labelled_by(label.id);
+                    let plate = rgba(
+                        style
+                            .label_color
+                            .unwrap_or([target[0], target[1], target[2], 255]),
+                    );
+                    if style.label_background
+                        && let Some(picked) =
+                            color_swatch(ui, background_picker, plate, "position_label_background")
+                    {
+                        style.label_color = Some(
+                            keep_opacity(picked, plate, background_picker.custom_mode)
+                                .to_srgba_unmultiplied(),
+                        );
+                    }
+                });
+                ui.end_row();
+            });
+            return;
+        }
+        if let DrawingProps {
+            tool_settings: Some(template),
+            label,
+            font_size,
+            color,
+            fill_enabled,
+            fill_color,
+            ..
+        } = props
+            && template.settings.tool_type == DrawingToolType::PriceNote
+        {
+            // The typed text alone: the price beside it and the label are styled on the Style
+            // tab. Until the text has settings of its own it is drawn as the price, so it opens
+            // with the price's.
+            let settings = &mut template.settings;
+            let mut shown = settings.clone();
+            shown.color = color.to_srgba_unmultiplied();
+            shown.fill_color = fill_color
+                .filter(|_| *fill_enabled)
+                .map(|fill| fill.to_srgba_unmultiplied());
+            let mut style = settings.note_text_style.unwrap_or(NoteTextStyle {
+                color: shown.text_box_colors(ui.ctx()).text.to_srgba_unmultiplied(),
+                font_size: *font_size,
+                bold: settings.font_weight == FontWeight::Bold,
+                italic: settings.italic,
+            });
+            let opened = style;
+            let [text_picker, ..] = pickers;
+            FormGrid::new("price_note_text").show(ui, |ui| {
+                let row = ui.label(l10n::text(ui.ctx(), "Label"));
+                ui.add(
+                    egui::TextEdit::multiline(label)
+                        .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
+                        .desired_rows(3),
+                )
+                .labelled_by(row.id);
+                ui.end_row();
+
+                let row = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.label_inputs_by(row.id, |ui| {
+                    ui.combo_select(
+                        "price_note_text_size",
+                        &mut style.font_size,
+                        FONT_SIZES.iter().copied(),
+                        |v| format!("{}px", *v as i32),
+                    );
+                });
+                ui.end_row();
+
+                ui.label(l10n::text(ui.ctx(), "Text color"));
+                let [r, g, b, a] = style.color;
+                let text = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                if let Some(picked) = color_swatch(ui, text_picker, text, "price_note_text_color") {
+                    style.color =
+                        keep_opacity(picked, text, text_picker.custom_mode).to_srgba_unmultiplied();
+                }
+                ui.end_row();
+
+                ui.label(l10n::text(ui.ctx(), "Text style"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut style.bold, l10n::text(ui.ctx(), "Bold"));
+                    ui.checkbox(&mut style.italic, l10n::text(ui.ctx(), "Italic"));
+                });
+                ui.end_row();
+            });
+            if style != opened {
+                settings.note_text_style = Some(style);
+            }
+            return;
+        }
 
         FormGrid::new("text_grid").show(ui, |ui| {
+            let writes = (props.tool_settings.as_ref())
+                .is_none_or(|template| template.settings.tool_type.supports_text());
             // Label text
-            let label = ui.label(l10n::text(ui.ctx(), "Label"));
-            ui.add(
-                egui::TextEdit::multiline(&mut props.label)
-                    .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
-                    .desired_rows(3),
-            )
-            .labelled_by(label.id);
-            ui.end_row();
+            if writes {
+                let label = ui.label(l10n::text(ui.ctx(), "Label"));
+                ui.add(
+                    egui::TextEdit::multiline(&mut props.label)
+                        .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
+                        .desired_rows(3),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
 
             // Font size
             let label = ui.label(l10n::text(ui.ctx(), "Font size"));
@@ -72,7 +350,90 @@ impl TextTab {
                 return;
             };
             let settings = &mut template.settings;
-            if !has_text_box(settings.tool_type) {
+            let line_text = matches!(
+                settings.tool_type,
+                DrawingToolType::HorizontalLine
+                    | DrawingToolType::HorizontalRay
+                    | DrawingToolType::VerticalLine
+            );
+            if writes && (line_text || settings.tool_type.supports_line_measurements()) {
+                use LineTextHorizontalAlign as H;
+                use LineTextOrientation as O;
+                use LineTextVerticalAlign as V;
+                let measurements = &mut settings.line_measurements;
+                let (along, across) = (
+                    &mut measurements.text_horizontal_align,
+                    &mut measurements.text_vertical_align,
+                );
+                // The dialog names the side of the line the text reads on, the setting the edge of
+                // the text that rests on it: "Top" is the text's bottom edge on the line. Down a
+                // vertical line the rows trade places: the text runs from the pane's bottom to its
+                // top, and its top faces left.
+                if settings.tool_type == DrawingToolType::VerticalLine {
+                    alignment_row(
+                        ui,
+                        "Horizontal alignment",
+                        across,
+                        [
+                            (V::Bottom, "Left"),
+                            (V::Middle, "Center"),
+                            (V::Top, "Right"),
+                        ],
+                    );
+                    alignment_row(
+                        ui,
+                        "Vertical alignment",
+                        along,
+                        [
+                            (H::Right, "Top"),
+                            (H::Center, "Middle"),
+                            (H::Left, "Bottom"),
+                        ],
+                    );
+                    alignment_row(
+                        ui,
+                        "Text orientation",
+                        &mut measurements.text_orientation,
+                        [(O::Vertical, "Vertical"), (O::Horizontal, "Horizontal")],
+                    );
+                } else {
+                    alignment_row(
+                        ui,
+                        "Horizontal alignment",
+                        along,
+                        [
+                            (H::Left, "Left"),
+                            (H::Center, "Center"),
+                            (H::Right, "Right"),
+                        ],
+                    );
+                    alignment_row(
+                        ui,
+                        "Vertical alignment",
+                        across,
+                        [
+                            (V::Bottom, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Top, "Bottom"),
+                        ],
+                    );
+                }
+            }
+            let boxed = has_text_box(settings.tool_type);
+            if !(boxed
+                || line_text
+                || matches!(
+                    settings.tool_type,
+                    DrawingToolType::TrendLine
+                        | DrawingToolType::Ray
+                        | DrawingToolType::ExtendedLine
+                        | DrawingToolType::InfoLine
+                        | DrawingToolType::TrendAngle
+                        | DrawingToolType::Rect
+                        | DrawingToolType::Circle
+                        | DrawingToolType::Ellipse
+                ))
+            {
                 return;
             }
             // The swatches show the colours the chart draws with the edits so far.
@@ -87,12 +448,15 @@ impl TextTab {
             // A box switched on this frame shows its colours at once.
             shown.background = true;
             shown.border = true;
-            let boxed = shown.text_box_colors(ui.ctx());
+            let box_colors = shown.text_box_colors(ui.ctx());
             let [text_picker, background_picker, border_picker] = pickers;
 
             ui.label(l10n::text(ui.ctx(), "Text color"));
             if let Some(picked) = color_swatch(ui, text_picker, text, "drawing_props_text_color") {
-                settings.text_color = Some(picked.to_srgba_unmultiplied());
+                // Palette swatches are opaque: keep the text's opacity unless it was edited.
+                let [r, g, b, a] = picked.to_srgba_unmultiplied();
+                let a = if text_picker.custom_mode { a } else { text.a() };
+                settings.text_color = Some([r, g, b, a]);
             }
             ui.end_row();
 
@@ -113,6 +477,39 @@ impl TextTab {
             });
             ui.end_row();
 
+            let plain = matches!(
+                settings.tool_type,
+                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+            );
+            if plain {
+                let label = ui.label(l10n::text(ui.ctx(), "Text size"));
+                ui.checkbox(
+                    &mut settings.text_follows_zoom,
+                    l10n::text(ui.ctx(), "Scale with zoom"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
+
+            if plain || settings.tool_type == DrawingToolType::Callout {
+                let label = ui.label(l10n::text(ui.ctx(), "Text wrap"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut settings.text_wrap, l10n::text(ui.ctx(), "Wrap text"))
+                        .labelled_by(label.id);
+                    ui.add_enabled(
+                        settings.text_wrap,
+                        egui::DragValue::new(&mut settings.text_wrap_width)
+                            .range(1.0..=crate::drawings::validation::MAX_TEXT_WRAP_WIDTH)
+                            .suffix(" px"),
+                    )
+                    .labelled_by(label.id);
+                });
+                ui.end_row();
+            }
+
+            if !boxed {
+                return;
+            }
             let label = ui.label(l10n::text(ui.ctx(), "Background"));
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -124,7 +521,7 @@ impl TextTab {
                     && let Some(picked) = color_swatch(
                         ui,
                         background_picker,
-                        boxed.fill,
+                        box_colors.fill,
                         "drawing_props_background",
                     )
                 {
@@ -142,7 +539,7 @@ impl TextTab {
                     && let Some(picked) = color_swatch(
                         ui,
                         border_picker,
-                        boxed.border.color,
+                        box_colors.border.color,
                         "drawing_props_border",
                     )
                 {
@@ -151,5 +548,96 @@ impl TextTab {
             });
             ui.end_row();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::Drawing;
+
+    /// Line tools offer the text placement, colour and emphasis they draw, and a vertical line
+    /// also offers the orientation of its text. A rectangle, circle or ellipse writes its text at
+    /// its centre, so it offers the colour and emphasis alone.
+    #[test]
+    fn tools_offer_the_text_settings_they_draw() {
+        let chart = crate::Chart::new(crate::model::BarData::default());
+        for (tool, placed) in [
+            (DrawingToolType::HorizontalLine, true),
+            (DrawingToolType::TrendLine, true),
+            (DrawingToolType::Ray, true),
+            (DrawingToolType::ExtendedLine, true),
+            (DrawingToolType::HorizontalRay, true),
+            (DrawingToolType::VerticalLine, true),
+            (DrawingToolType::Rect, false),
+            (DrawingToolType::Circle, false),
+            (DrawingToolType::Ellipse, false),
+        ] {
+            let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                let mut pickers = [(); 3].map(|_| ColorPickerState::new(props.color));
+                TextTab::show(ui, &mut props, &mut pickers);
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for (label, offered) in [
+                ("Horizontal alignment", placed),
+                ("Vertical alignment", placed),
+                ("Text color", true),
+                ("Bold", true),
+                ("Italic", true),
+            ] {
+                assert_eq!(labels.contains(&label), offered, "{tool:?} {label}");
+            }
+            assert_eq!(
+                labels.contains(&"Text orientation"),
+                tool == DrawingToolType::VerticalLine,
+                "{tool:?}"
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// A price note's Text tab styles the typed text alone: it opens with the settings of the
+    /// price beside it, and an edit there leaves the price's as they were.
+    #[test]
+    fn price_note_text_tab_styles_the_typed_text_alone() {
+        use crate::ui_kit::color_picker::tests::{click, text_pos};
+        let chart = crate::Chart::new(crate::model::BarData::default());
+        let mut drawing = Drawing::new(1, DrawingToolType::PriceNote);
+        drawing.italic = true;
+        let mut props = DrawingProps::from_drawing(&drawing, &chart);
+        let ctx = egui::Context::default();
+        let mut pickers: [ColorPickerState; 3] = Default::default();
+        let mut frame = |events| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| TextTab::show(ui, &mut props, &mut pickers));
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        frame(vec![]);
+        let shapes = frame(vec![]);
+        frame(click(text_pos(&shapes, "Bold")));
+        let settings = &props.tool_settings.as_ref().unwrap().settings;
+        assert_eq!(
+            settings.note_text_style,
+            Some(NoteTextStyle {
+                color: [255, 255, 255, 255],
+                font_size: 12.0,
+                bold: true,
+                italic: true,
+            })
+        );
+        assert_eq!(settings.font_weight, FontWeight::Normal);
     }
 }

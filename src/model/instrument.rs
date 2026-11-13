@@ -133,9 +133,14 @@ pub struct Instrument {
     pub exchange_logo: Option<String>,
     /// Country of the listing, as an ISO 3166-1 alpha-2 code such as "US".
     pub country: Option<String>,
+    /// Company sector reported by the host, such as "Technology".
+    pub sector: Option<String>,
+    /// Data provider for this listing; independent of its exchange. Keep the feed lookup key in
+    /// [`symbol`](Self::symbol), using distinct keys when the provider changes the feed request.
+    pub source: Option<String>,
     /// Root shared by related instruments, such as "ES" for the contracts of a futures root or
     /// one security listed on several exchanges. Symbol search lists the first instrument of a
-    /// root and offers the others under it.
+    /// root and offers the others under it, keeping the futures of each exchange apart.
     pub root: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
@@ -191,6 +196,8 @@ impl Instrument {
             logo: None,
             exchange_logo: None,
             country: None,
+            sector: None,
+            source: None,
             root: None,
             symbol_type: None,
             tick_size: None,
@@ -208,6 +215,21 @@ impl Instrument {
             dividend_adjustment: false,
             profile_resolutions: Vec::new(),
         }
+    }
+
+    /// Futures roots belong to a venue; other roots gather listings across venues and providers.
+    pub(crate) fn search_group(&self) -> Option<(&str, Option<SymbolType>, Option<&str>)> {
+        Some((
+            self.root.as_deref()?,
+            self.symbol_type,
+            if self.symbol_type == Some(SymbolType::Futures) {
+                self.exchange
+                    .as_deref()
+                    .or_else(|| self.symbol.split_once(':').map(|(venue, _)| venue))
+            } else {
+                None
+            },
+        ))
     }
 
     /// Sets [`description`](Self::description).
@@ -243,6 +265,18 @@ impl Instrument {
     /// Sets [`country`](Self::country).
     pub fn with_country(mut self, country: impl Into<String>) -> Self {
         self.country = Some(country.into());
+        self
+    }
+
+    /// Sets [`sector`](Self::sector).
+    pub fn with_sector(mut self, sector: impl Into<String>) -> Self {
+        self.sector = Some(sector.into());
+        self
+    }
+
+    /// Sets [`source`](Self::source).
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
         self
     }
 

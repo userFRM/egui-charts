@@ -18,18 +18,17 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
     ) {
         if self.config.fill_between_zones {
-            let lower = self
+            let indices = indicator.level_fill_indices();
+            let levels = self
                 .config
                 .zones
                 .iter()
-                .map(|z| z.0)
-                .fold(f64::INFINITY, f64::min);
-            let upper = self
-                .config
-                .zones
-                .iter()
-                .map(|z| z.0)
-                .fold(f64::NEG_INFINITY, f64::max);
+                .enumerate()
+                .filter(|(index, _)| indices.is_none_or(|indices| indices.contains(index)))
+                .map(|(_, zone)| zone.0)
+                .filter(|level| level.is_finite());
+            let lower = levels.clone().fold(f64::INFINITY, f64::min);
+            let upper = levels.fold(f64::NEG_INFINITY, f64::max);
             if lower < upper {
                 painter.rect_filled(
                     Rect::from_two_pos(
@@ -51,6 +50,9 @@ impl IndicatorPane {
         let colors = painter.ctx().active_theme().chart;
         let (bullish, bearish) = (colors.candle_up, colors.candle_down);
         for (level, color, label) in &self.config.zones {
+            if !level.is_finite() {
+                continue;
+            }
             let live_color = if *color == DESIGN_TOKENS.semantic.extended.bullish {
                 bullish
             } else if *color == DESIGN_TOKENS.semantic.extended.bearish {
@@ -99,7 +101,7 @@ impl IndicatorPane {
             // Design-token colours stand for the grid colour only for studies without their own
             // presentation; a configured study shows the colours of its Style tab.
             let tokens = !indicator.has_settings();
-            for (level, color, _label) in &self.config.zones {
+            for (index, (level, color, _label)) in self.config.zones.iter().enumerate() {
                 // A hidden level bounds the band but draws no line.
                 if *color == Color32::TRANSPARENT {
                     continue;
@@ -121,8 +123,8 @@ impl IndicatorPane {
                 if y >= rect.min.y && y <= rect.max.y {
                     let start = Pos2::new(rect.min.x, y);
                     let end = Pos2::new(rect.max.x, y);
-                    let stroke = Stroke::new(1.0_f32, live_color);
-                    let pattern = indicator.level_style(*level);
+                    let (pattern, width) = indicator.level_stroke(index, *level);
+                    let stroke = Stroke::new(width, live_color);
                     if pattern == crate::model::LineStyle::Solid {
                         painter.line_segment([start, end], stroke);
                         continue;
@@ -242,7 +244,7 @@ impl IndicatorPane {
             if count == 0 {
                 return;
             }
-            let spacing = rect.width() / count as f32;
+            let spacing = (rect.width() - 1.0) / count as f32;
             let coords = IndicatorCoordParams::new(
                 spacing,
                 0.0,
@@ -265,7 +267,7 @@ impl IndicatorPane {
         if count == 0 {
             return;
         }
-        let spacing = rect.width() / count as f32;
+        let spacing = (rect.width() - 1.0) / count as f32;
         let coords = IndicatorCoordParams::new(
             spacing,
             0.0,
@@ -353,6 +355,9 @@ impl IndicatorPane {
                 )
             })
             .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
+        let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
+            crate::widget::series::axis_label_rect(chart_rect, axis)
+        });
         let mut tags = self.axis_tags.clone();
         tags.push(crosshair_tag);
         if self.axis_options.show_study_values {
@@ -361,7 +366,7 @@ impl IndicatorPane {
             {
                 crate::widget::volume::tags(
                     painter,
-                    chart_rect,
+                    label_rect,
                     &map,
                     indicator,
                     axis_edge,
@@ -371,7 +376,7 @@ impl IndicatorPane {
             } else {
                 crate::chart::rendering::axes::render_study_tags(
                     painter,
-                    chart_rect,
+                    label_rect,
                     &map,
                     indicator,
                     axis_edge,
@@ -393,18 +398,21 @@ impl IndicatorPane {
                 self.price_formatter.as_deref(),
             )
         };
-        for tag in tags.iter().flatten() {
+        for tag in tags.iter().chain(&self.fixed_axis_tags).flatten() {
             width = width.max(tag.width() + 5.0 + 6.0);
         }
         self.axis_tags = tags.clone();
-        if self.overlay {
+        tags.extend(self.fixed_axis_tags.iter().copied());
+        if !self.draw_axis {
             return width;
         }
         if self.axis_options.border_visible {
             let x = if left {
                 axis_edge - 0.5
             } else {
-                chart_rect.right() + 0.5
+                self.axis_rect
+                    .map_or(chart_rect.right(), |axis| axis.left())
+                    + 0.5
             };
             painter.vline(
                 x,
@@ -422,13 +430,20 @@ impl IndicatorPane {
                 .map_or(chart_rect.left(), |axis| axis.right())
                 - DESIGN_TOKENS.spacing.sm
         } else {
-            chart_rect.right() + DESIGN_TOKENS.spacing.sm
+            self.axis_rect
+                .map_or(chart_rect.right(), |axis| axis.left())
+                + DESIGN_TOKENS.spacing.sm
         };
 
         for mark in crate::chart::rendering::price_marks(&map, self.price_formatter.as_deref()) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = if self.price_formatter.is_some() {
+                let label = if self.price_formatter.is_some()
+                    || matches!(
+                        map.transform().mode,
+                        crate::scales::PriceScaleMode::Percentage
+                            | crate::scales::PriceScaleMode::IndexedTo100
+                    ) {
                     mark.label
                 } else {
                     indicator.format_value(mark.price)
@@ -455,11 +470,13 @@ impl IndicatorPane {
         width
     }
 
-    /// Layout each value with its plot colour, using a swatch when text would be faint.
+    /// Layout the name, the inputs in `muted` and each value in its plot colour. A value whose
+    /// colour does not read on `background` is drawn in `text_color` after a swatch of it.
     fn legend_job(
         &self,
         indicator: &dyn Indicator,
         text_color: Color32,
+        muted: Color32,
         background: Color32,
         font_size: f32,
     ) -> egui::text::LayoutJob {
@@ -472,20 +489,35 @@ impl IndicatorPane {
             if !job.text.is_empty() {
                 job.append(" ", 0.0, format(text_color));
             }
-            job.append(&self.config.inputs, 0.0, format(text_color));
+            job.append(&self.config.inputs, 0.0, format(muted));
         }
         if self.config.show_values
             && let Some(bar) = self
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            let names = indicator.line_names();
-            for line in (0..indicator.line_count()).filter(|line| indicator.legend_visible(*line)) {
+            for line in indicator
+                .legend_lines()
+                .into_iter()
+                .filter(|line| indicator.legend_visible(*line))
+            {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
-                    let color = indicator.plot_style(line).color;
+                    let color = crate::chart::indicators::plots::plot_value_color(
+                        indicator,
+                        line,
+                        Some(bar),
+                    )
+                    .filter(|color| color.a() != 0)
+                    .unwrap_or_else(|| indicator.plot_style(line).color);
+                    // A fully transparent colour holds no RGB, so it has no opaque form.
+                    let color = if color.a() == 0 {
+                        text_color
+                    } else {
+                        color.to_opaque()
+                    };
                     let readable = crate::theme::contrast(color, background) >= 4.5;
                     if !readable {
                         let mut swatch = format(color);
@@ -494,11 +526,6 @@ impl IndicatorPane {
                         swatch.valign = egui::Align::Center;
                         job.append("  ", 0.0, swatch);
                         job.append(" ", 0.0, format(text_color));
-                    }
-                    if indicator.line_count() > 1
-                        && let Some(name) = names.get(line)
-                    {
-                        job.append(&format!("{name}: "), 0.0, format(text_color));
                     }
                     let label = indicator.format_plot_value(line, value);
                     job.append(
@@ -524,8 +551,9 @@ impl IndicatorPane {
         }
         let theme = painter.ctx().active_theme();
         let galley = self.legend_galley(painter, rect, indicator, theme.ui.text);
+        let width = crate::chart::rendering::controls_width(indicator);
         let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
-            .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
+            .min(rect.right() - width - if self.pane_controls { 40.0 } else { 0.0 })
             .max(rect.left());
         Some(
             Rect::from_min_size(
@@ -535,7 +563,7 @@ impl IndicatorPane {
                         + self.legend_offset
                         + (theme.text.ohlc + theme.spacing.md - 20.0).max(0.0) / 2.0,
                 ),
-                egui::vec2(80.0, 20.0),
+                egui::vec2(width, 20.0),
             )
             .intersect(rect),
         )
@@ -579,10 +607,19 @@ impl IndicatorPane {
         text_color: Color32,
     ) -> std::sync::Arc<egui::Galley> {
         let theme = painter.ctx().active_theme();
-        let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
-        job.wrap.max_width =
-            (rect.width() - if self.pane_controls { 120.0 } else { 80.0 } - 2.0 * theme.spacing.sm)
-                .max(1.0);
+        let mut job = self.legend_job(
+            indicator,
+            text_color,
+            theme.ui.text_muted,
+            theme.chart.bg,
+            theme.text.ohlc,
+        );
+        let controls_width = crate::chart::rendering::controls_width(indicator);
+        job.wrap.max_width = (rect.width()
+            - controls_width
+            - if self.pane_controls { 40.0 } else { 0.0 }
+            - 2.0 * theme.spacing.sm)
+            .max(1.0);
         painter.layout_job(job)
     }
 
@@ -642,23 +679,106 @@ mod tests {
         assert!(vertical <= 30, "{vertical} vertical lines");
     }
 
+    /// A study's levels in its own pane are painted over its pane tint, as on the price pane.
     #[test]
-    fn rsi_paints_the_band_and_guides_of_its_preset_and_its_level_settings() {
+    fn pane_tint_stays_beneath_the_study_levels() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[40.0], &[60.0]);
+        let id = chart.add_indicator(Box::new(crate::studies::RSI::default()));
+        let tint = Color32::from_rgb(20, 30, 40);
+        let level = Color32::from_rgb(250, 10, 10);
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.background = Some(tint);
+        settings.levels[0].color = level;
+        settings.levels[0].pattern = crate::model::LineStyle::Solid;
+        study.apply_settings(&[], settings).unwrap();
+        let ctx = egui::Context::default();
+        shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+        let is_tint = |shape: &egui::Shape| matches!(shape, egui::Shape::Rect(r) if r.fill == tint);
+        assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
+        let tinted = painted.iter().position(is_tint).unwrap();
+        let line = painted
+            .iter()
+            .position(|shape| {
+                matches!(shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == level)
+            })
+            .expect("the level line is painted");
+        assert!(line > tinted, "level painted at {line}, tint at {tinted}");
+
+        // Sharing the pane of the main series, it is painted with the price pane's geometry.
+        let pane = chart.series_pane(id).unwrap();
+        assert!(chart.move_series_to_pane(crate::widget::SeriesId::MAIN, pane));
+        let painted = shapes(&ctx, &mut chart, 2.0, Vec::new());
+        assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
+
+        // A volume study shown in a pane of its own is tinted once too.
+        let bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        let mut volume =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::Volume::default()));
+        let mut settings = volume.settings();
+        settings.background = Some(tint);
+        volume.apply_settings(&[], settings).unwrap();
+        volume.calculate(&bars);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            IndicatorPane::with_config(IndicatorPaneConfig::default()).show(
+                ui,
+                &volume,
+                &bars,
+                0..bars.len(),
+            );
+        });
+        let painted = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        let tints = painted
+            .iter()
+            .filter(|clipped| is_tint(&clipped.shape))
+            .count();
+        assert_eq!(tints, 1);
+    }
+
+    #[test]
+    fn rsi_and_crsi_paint_bands_and_guide_settings() {
         let config = IndicatorPaneConfig::rsi();
         assert_eq!(config.height, 138.0);
         assert_eq!(
             config.zones.iter().map(|z| z.0).collect::<Vec<_>>(),
-            vec![70.0, 30.0]
+            vec![70.0, 30.0, 50.0]
         );
         let mut edited =
             crate::studies::ConfiguredStudy::new(Box::new(crate::studies::RSI::default()));
         let mut settings = edited.settings();
         settings.levels[0].value = Some(80.0);
         settings.levels[0].color = Color32::WHITE;
+        let mut settings = serde_json::to_value(settings).unwrap();
+        settings["levels"][0]["width"] = 3.0.into();
+        let mut settings: crate::studies::StudySettings = serde_json::from_value(settings).unwrap();
         settings.levels[0].pattern = crate::model::LineStyle::LargeDashed;
         settings.levels[1].visible = false;
+        settings.levels[2].visible = false;
         settings.level_fill_color = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
         edited.apply_settings(&[], settings).unwrap();
+        let mut crsi =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::ConnorsRSI::default()));
+        let mut settings = crsi.settings();
+        let levels = edited.settings().levels;
+        settings.levels = vec![levels[0], levels[2], levels[1]];
+        settings.levels[1].value = Some(95.0);
+        settings.level_fill_color = edited.level_fill_color();
+        crsi.apply_settings(&[], settings).unwrap();
+        let mut crsi_below = crsi.clone();
+        let mut settings = crsi_below.settings();
+        settings.levels[1].value = Some(5.0);
+        crsi_below.apply_settings(&[], settings).unwrap();
+        let mut coincident = crsi.clone();
+        let mut settings = coincident.settings();
+        settings.levels[1].value = Some(80.0);
+        settings.levels[1].visible = true;
+        settings.levels[1].color = Color32::RED;
+        settings.levels[1].pattern = crate::model::LineStyle::Solid;
+        settings.levels[1].width = 2.0;
+        coincident.apply_settings(&[], settings).unwrap();
         let bare = crate::studies::RSI::default();
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
@@ -668,10 +788,11 @@ mod tests {
                 config,
                 &bare as &dyn Indicator,
                 [(30.0, 70.0), (30.0, 70.0)],
-                [&[30.0, 70.0][..], &[30.0, 70.0]],
+                [&[30.0, 50.0, 70.0][..], &[30.0, 50.0, 70.0]],
                 crate::studies::palette::GRAY,
                 4.0,
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+                false,
             ),
             (
                 IndicatorPaneConfig::from_study(&edited),
@@ -681,9 +802,41 @@ mod tests {
                 Color32::WHITE,
                 8.0,
                 Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                false,
+            ),
+            // The middle guide never changes the band, even hidden above or below its edges.
+            (
+                IndicatorPaneConfig::from_study(&crsi),
+                &crsi,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                false,
+            ),
+            (
+                IndicatorPaneConfig::from_study(&crsi_below),
+                &crsi_below,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                false,
+            ),
+            (
+                IndicatorPaneConfig::from_study(&coincident),
+                &coincident,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+                true,
             ),
         ];
-        for (config, study, band, guide_ys, color, dash, fill) in rows {
+        for (config, study, band, guide_ys, color, dash, fill, coincident) in rows {
             for inverted in [false, true] {
                 let mut pane = IndicatorPane::with_config(config.clone());
                 pane.price_map = Some(PriceMap::new(
@@ -707,6 +860,34 @@ mod tests {
                 });
                 let shapes = std::mem::take(&mut output.shapes);
                 output.drop_without_applying_deltas();
+                if study.has_settings() {
+                    let mut overlay = crate::studies::ConfiguredStudy::new(study.clone_box());
+                    overlay.set_overlay(true);
+                    let map = pane.price_map.unwrap();
+                    let coords =
+                        crate::chart::coords::ChartMapping::new(rect, 10.0, 0, 0, 0.0, map);
+                    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        crate::chart::rendering::IndicatorRenderer::render_study(
+                            &crate::chart::rendering::RenderContext::new(ui.painter(), rect),
+                            &overlay,
+                            &[],
+                            0,
+                            &map,
+                            &coords,
+                        );
+                    });
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::LineSegment { points, stroke } if stroke.color == color && stroke.width == 3.0 && (points[0].y - guide_ys[inverted as usize][0]).abs() < 0.001
+                    )));
+                    let (top, bottom) = band[inverted as usize];
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(r) if r.fill == fill && (r.rect.top() - top).abs() < 0.001 && (r.rect.bottom() - bottom).abs() < 0.001
+                    )));
+                    assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::LineSegment { points, stroke } if stroke.color == Color32::RED && stroke.width == 2.0 && (points[1].x - points[0].x - rect.width()).abs() < 0.001
+                    )), coincident);
+                    output.drop_without_applying_deltas();
+                }
                 let bands: Vec<_> = shapes
                     .iter()
                     .filter_map(|s| match &s.shape {
@@ -725,13 +906,25 @@ mod tests {
                         egui::Shape::LineSegment { points, stroke }
                             if stroke.color != Color32::BLACK =>
                         {
-                            Some((points, stroke.color))
+                            Some((points, stroke.color, stroke.width))
                         }
                         _ => None,
                     })
                     .collect();
                 assert!(!guides.is_empty());
-                for (guide, guide_color) in guides {
+                assert_eq!(
+                    guides.iter().any(|(points, color, width)| {
+                        *color == Color32::RED
+                            && *width == 2.0
+                            && (points[1].x - points[0].x - rect.width()).abs() < 0.001
+                    }),
+                    coincident
+                );
+                for (guide, guide_color, width) in guides {
+                    if guide_color == Color32::RED {
+                        continue;
+                    }
+                    assert_eq!(width, if color == Color32::WHITE { 3.0 } else { 1.0 });
                     assert_eq!(guide_color, color);
                     assert!(
                         guide_ys[inverted as usize]
@@ -767,6 +960,7 @@ mod tests {
                 "2.00M",
             ),
             (Box::new(shifted), "1.00M"),
+            (Box::new(crate::studies::Volume::new(9)), "1.00M"),
         ] {
             study.calculate(&bars);
             let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
@@ -774,55 +968,76 @@ mod tests {
                 study.as_ref(),
                 Color32::WHITE,
                 Color32::BLACK,
+                Color32::BLACK,
                 crate::theme::Theme::default().text.ohlc,
             );
             assert!(job.text.contains(expected), "{}", job.text);
             let ctx = egui::Context::default();
             let mut study = crate::studies::ConfiguredStudy::new(study);
             study.set_overlay(true);
-            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
-            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(0);
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
-                pane.draw_y_axis_labels(
-                    ui.painter(),
-                    rect,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
-                    0.0,
-                    3_000_000.0,
+            let mut studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            for show_values in [true, false] {
+                let mut settings = serde_json::to_value(studies[0].settings()).unwrap();
+                settings["show_legend_values"] = show_values.into();
+                studies[0]
+                    .apply_settings(&[], serde_json::from_value(settings).unwrap())
+                    .unwrap();
+                let pane_values = pane.legend_job(
                     studies[0].as_ref(),
-                    Some(crate::scales::PriceScaleId::Right),
-                    None,
+                    Color32::WHITE,
+                    Color32::BLACK,
+                    Color32::BLACK,
+                    crate::theme::Theme::default().text.ohlc,
                 );
-                let mut legend = crate::chart::rendering::Legend::new("SAMPLE", "1h", &bars[2]);
-                legend.studies = &studies;
-                legend.bar_index = 2;
-                legend.instrument = Some(&instrument);
-                legend.show(ui, rect);
-            });
-            let labels: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            output.drop_without_applying_deltas();
-            // Both the last-value tag and overlay legend use displayed values and study units.
-            assert_eq!(
-                labels
+                assert_eq!(
+                    pane_values.text.contains(expected),
+                    show_values,
+                    "{}",
+                    pane_values.text
+                );
+                let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(0);
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+                    pane.draw_y_axis_labels(
+                        ui.painter(),
+                        rect,
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
+                        0.0,
+                        3_000_000.0,
+                        studies[0].as_ref(),
+                        Some(crate::scales::PriceScaleId::Right),
+                        None,
+                    );
+                    let mut legend = crate::chart::rendering::Legend::new("SAMPLE", "1h", &bars[2]);
+                    legend.studies = &studies;
+                    legend.bar_index = 2;
+                    legend.instrument = Some(&instrument);
+                    legend.show(ui, rect);
+                });
+                let labels: Vec<_> = output
+                    .shapes
                     .iter()
-                    .filter(|label| label.as_str() == expected)
-                    .count(),
-                2,
-                "{labels:?}"
-            );
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                // Both the last-value tag and overlay legend use displayed values and study units.
+                assert_eq!(
+                    labels
+                        .iter()
+                        .filter(|label| label.as_str() == expected)
+                        .count(),
+                    if show_values { 2 } else { 1 },
+                    "{labels:?}"
+                );
+            }
         }
     }
 
     #[test]
-    fn legend_values_identify_each_plot_without_low_contrast_text() {
+    fn legend_values_take_their_plot_colours_without_names() {
         for (_, theme) in crate::theme::presets() {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -855,7 +1070,7 @@ mod tests {
                     .unwrap();
                 let sections = &text.galley.job.sections;
                 for name in study.line_names() {
-                    assert!(text.galley.text().contains(&format!("{name}: ")));
+                    assert!(!text.galley.text().contains(&name));
                 }
                 let backdrop = shapes
                     .iter()
@@ -872,18 +1087,19 @@ mod tests {
                 );
                 for (i, color) in colors.iter().enumerate() {
                     let value = format!("{:.2}", (i + 1) as f64);
-                    let section = sections
+                    let at = sections
                         .iter()
-                        .find(|s| {
+                        .position(|s| {
                             text.galley.job.text[s.byte_range.start.0..s.byte_range.end.0]
                                 .contains(&value)
                         })
                         .unwrap();
-                    assert!(crate::theme::contrast(section.format.color, theme.chart.bg) >= 4.5);
-                    assert!(
-                        sections.iter().any(|s| s.format.color == *color),
-                        "missing plot colour {color:?}"
-                    );
+                    if crate::theme::contrast(*color, theme.chart.bg) >= 4.5 {
+                        assert_eq!(sections[at].format.color, *color);
+                    } else {
+                        assert_eq!(sections[at].format.color, theme.ui.text);
+                        assert!(sections[..at].iter().any(|s| s.format.background == *color));
+                    }
                 }
                 assert_eq!(sections[0].format.color, theme.ui.text);
             }
@@ -943,25 +1159,13 @@ mod tests {
                     min < expected_rate && max > expected_rate && max < expected_rate * 2.0,
                     "{kind:?}: {min}..{max}"
                 );
-                let job = pane.legend_job(&study, Color32::WHITE, Color32::BLACK, 12.0);
+                let job =
+                    pane.legend_job(&study, Color32::WHITE, Color32::BLACK, Color32::BLACK, 12.0);
                 assert!(
-                    job.text.contains(&format!("{total_name}: {total} ")),
+                    job.text.contains(&format!("{total} {expected_rate:.2}")),
                     "{}",
                     job.text
                 );
-                assert!(
-                    job.text.contains(&format!(
-                        "Rolling 60s ({}): {expected_rate:.2}",
-                        if expected_rate == 4.0 {
-                            "executions/s"
-                        } else {
-                            "orders/s"
-                        }
-                    )),
-                    "{}",
-                    job.text
-                );
-                assert!(job.text.contains("Instant 5s"), "{}", job.text);
 
                 // A saved visible total uses count units in tags and data-window rows too.
                 let mut settings = study.settings();
@@ -1049,7 +1253,7 @@ mod tests {
         ]);
         study.calculate(&[]);
         let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
-        for width in [320.0, 800.0, 1440.0] {
+        for width in [200.0, 800.0, 1440.0] {
             let mut controls_left = 0.0;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 150.0));
@@ -1063,7 +1267,7 @@ mod tests {
             for shape in &output.shapes {
                 if let egui::Shape::Text(text) = &shape.shape {
                     assert!(text.pos.x + text.galley.size().x <= controls_left);
-                    if width == 320.0 {
+                    if width == 200.0 {
                         assert!(text.galley.rows.len() > 1);
                     }
                     assert!(!text.galley.elided);
@@ -1071,5 +1275,105 @@ mod tests {
             }
             output.drop_without_applying_deltas();
         }
+    }
+
+    fn bars_from_closes(closes: impl IntoIterator<Item = f64>) -> Vec<Bar> {
+        closes
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, c, c, c, c, 1.0)
+            })
+            .collect()
+    }
+
+    /// The pane legend colours a value as its plot shows it: a plot drawn one bar to the right of
+    /// its source bar takes the colour of the source bar its value comes from, and a transparent
+    /// colour at that bar, which hides only the segment into it, leaves the plot's own colour.
+    #[test]
+    fn pane_legend_colours_a_shifted_value_by_its_source_bar() {
+        let mut study = CustomIndicator::new("Shifted", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_overlay(false)
+        .with_offsets(vec![1])
+        .with_plot_color(|_, bar, _| Some([Color32::RED, Color32::BLUE][bar % 2]));
+        study.calculate(&bars_from_closes([1.0; 8]));
+        let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        // Bar 5 shows source bar 4, coloured red.
+        pane.bar_index = Some(5);
+        let job = pane.legend_job(&study, Color32::WHITE, Color32::GRAY, Color32::BLACK, 12.0);
+        let value = job
+            .sections
+            .iter()
+            .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("14"))
+            .map(|s| s.format.color);
+        assert_eq!(value, Some(Color32::RED), "{value:?} in {}", job.text);
+        let mut stepped = CustomIndicator::new("Stepped", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_overlay(false)
+        .with_color(Color32::GREEN)
+        .with_plot_color(|_, bar, _| (bar == 0).then_some(Color32::TRANSPARENT));
+        stepped.calculate(&bars_from_closes([1.0; 8]));
+        pane.bar_index = Some(0);
+        let job = pane.legend_job(
+            &stepped,
+            Color32::WHITE,
+            Color32::GRAY,
+            Color32::BLACK,
+            12.0,
+        );
+        let value = job
+            .sections
+            .iter()
+            .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("10"))
+            .map(|s| s.format.color);
+        assert_eq!(value, Some(Color32::GREEN), "{value:?} in {}", job.text);
+    }
+
+    /// Every value the pane legend draws in a plot colour reads at 4.5:1 or better on the pane in
+    /// every preset (#580), as the default RSI's two values and MACD's three must.
+    #[test]
+    fn pane_legend_values_in_plot_colours_read_on_every_preset() {
+        let bars = bars_from_closes(
+            (0..60).map(|i| 100.0 + f64::from(i % 7) * if i % 2 == 0 { 1.0 } else { -0.5 }),
+        );
+        let mut rsi = crate::studies::RSI::default();
+        rsi.calculate(&bars);
+        let mut macd = crate::studies::MACD::default();
+        macd.calculate(&bars);
+        assert!(rsi.plot_value(1, 59).is_some() && macd.plot_value(2, 59).is_some());
+        let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        let mut unreadable = Vec::new();
+        for (theme_name, theme) in crate::theme::presets() {
+            for study in [&rsi as &dyn Indicator, &macd] {
+                let job = pane.legend_job(
+                    study,
+                    theme.ui.text,
+                    theme.ui.text_muted,
+                    theme.chart.bg,
+                    12.0,
+                );
+                for section in &job.sections {
+                    let text = &job.text[section.byte_range.start.0..section.byte_range.end.0];
+                    let color = section.format.color;
+                    let ratio = crate::theme::contrast(color, theme.chart.bg);
+                    if !text.trim().is_empty()
+                        && color != theme.ui.text
+                        && color != theme.ui.text_muted
+                        && ratio < 4.5
+                    {
+                        unreadable.push(format!("{theme_name} {} {text} {ratio:.2}", study.name()));
+                    }
+                }
+            }
+        }
+        assert!(unreadable.is_empty(), "{unreadable:?}");
     }
 }

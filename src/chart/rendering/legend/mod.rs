@@ -3,7 +3,7 @@
 mod quotes;
 mod study_controls;
 
-pub(crate) use study_controls::study_controls;
+pub(crate) use study_controls::{controls_width, study_controls};
 
 use quotes::paint_quotes;
 
@@ -99,6 +99,9 @@ pub struct Legend<'a> {
     /// State of the instrument's session at the chart's clock. Only a chart knows its clock, so a
     /// standalone legend shows the data status alone.
     pub(crate) session: Option<MarketSession>,
+    /// Show the replay mark after the title in place of the market status, which describes the
+    /// present rather than the replayed time.
+    pub replaying: bool,
     /// Optional host-owned status marks.
     pub statuses: &'a [LegendStatus<'a>],
     /// Studies on the chart. Overlay studies retain a row while hidden so they can be shown again.
@@ -140,6 +143,9 @@ pub struct Legend<'a> {
     /// Groups the thousands of built-in price values; the chart sets it from
     /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
+    /// The rects the chart shades as extended hours under the legend, left to right, and their
+    /// shading. The chart sets it.
+    pub(crate) extended_hours: (&'a [Rect], Color32),
 }
 
 impl<'a> Legend<'a> {
@@ -157,6 +163,7 @@ impl<'a> Legend<'a> {
             show_logo: true,
             show_market_status: true,
             session: None,
+            replaying: false,
             statuses: &[],
             studies: &[],
             study_inputs: &[],
@@ -175,6 +182,7 @@ impl<'a> Legend<'a> {
             study_backdrop: 0.6,
             quantity: None,
             thousands_sep: None,
+            extended_hours: (&[], Color32::TRANSPARENT),
         }
     }
 
@@ -203,16 +211,19 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors);
+        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors, None, f32::INFINITY);
         (quote, study)
     }
 
     /// Also returns the bottom of the legend and the quantity box, when the user clicked it.
+    /// The first row keeps its usual inset from `first_row_end`, where another control starts.
     pub(crate) fn show_with_colors(
         &self,
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
+        study_indices: Option<&[usize]>,
+        first_row_end: f32,
     ) -> (
         Option<QuoteSide>,
         Option<StudyAction>,
@@ -230,9 +241,18 @@ impl<'a> Legend<'a> {
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(plot);
-        let mut layout = Layout::new(&painter, bounds, colors);
+        let mut layout = Layout::new(
+            &painter,
+            bounds,
+            colors,
+            (first_row_end - theme.spacing.lg).min(bounds.right()),
+            (
+                self.extended_hours.0,
+                theme.chart.bg.blend(self.extended_hours.1),
+            ),
+        );
         #[cfg(feature = "icons")]
-        let title_start = layout.pos;
+        let (title_start, title_end) = (layout.pos, layout.row_end);
         if self.show_title {
             let image = self.badge.clone().or_else(|| {
                 self.instrument
@@ -253,7 +273,10 @@ impl<'a> Legend<'a> {
             let small = FontId::proportional(theme.text.small);
             // The market status pill: the session's state, then delayed or end-of-day data.
             let mut pill: Vec<(StatusGlyph, &'static str, Color32, f32)> = Vec::new();
-            if self.show_market_status {
+            if self.replaying {
+                let ink = theme.ui.accent_text;
+                pill.push((StatusGlyph::Replay(ink), "Replay", theme.ui.accent, 20.0));
+            } else if self.show_market_status {
                 if let Some(session) = self.session {
                     let (label, color) = session_status(session, &theme);
                     pill.push((StatusGlyph::Session(session), label, color, 20.0));
@@ -293,7 +316,7 @@ impl<'a> Legend<'a> {
             } else {
                 pill_width + 8.0
             } + host_width;
-            let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
+            let title_width = (layout.row_end - layout.pos.x - status_width - 64.0).max(0.0);
             layout.text(
                 title,
                 theme.text.chart_title,
@@ -322,7 +345,10 @@ impl<'a> Legend<'a> {
                     if index < last {
                         (corners.ne, corners.se) = (0, 0);
                     }
-                    painter.rect_filled(rect, corners, fill);
+                    // The replay mark is its own disc.
+                    if !matches!(glyph, StatusGlyph::Replay(_)) {
+                        painter.rect_filled(rect, corners, fill);
+                    }
                     paint_status_glyph(&painter, rect.center(), glyph, color, fill);
                     let name = l10n::text(ui.ctx(), label);
                     let response = ui
@@ -380,7 +406,7 @@ impl<'a> Legend<'a> {
                         self.thousands_sep,
                     )
                 },
-                |formatter| formatter.format(change),
+                |formatter| formatter.format_change(change),
             );
             let percent = self
                 .formatters
@@ -416,11 +442,12 @@ impl<'a> Legend<'a> {
         #[cfg(feature = "icons")]
         if self.show_title {
             let size = Vec2::new(116.0, 20.0);
-            // On a full row the controls cover its end instead of opening an empty row.
-            let controls = if layout.pos.x + size.x > bounds.right() {
+            // On a full row the controls cover its end instead of opening an empty row. They and
+            // the outline keep to the end of the title's first row on every row the title spans.
+            let controls = if layout.pos.x + size.x > title_end {
                 Rect::from_min_size(
                     Pos2::new(
-                        bounds.right() - size.x,
+                        (title_end - size.x).max(bounds.left()),
                         layout.pos.y + (layout.height - size.y) / 2.0,
                     ),
                     size,
@@ -429,9 +456,9 @@ impl<'a> Legend<'a> {
                 layout.reserve(size)
             };
             let row_right = if layout.pos.y > title_start.y {
-                bounds.right()
+                title_end
             } else {
-                controls.right().min(bounds.right())
+                controls.right()
             };
             let title_rect =
                 Rect::from_min_max(title_start, Pos2::new(row_right, controls.bottom()));
@@ -473,7 +500,7 @@ impl<'a> Legend<'a> {
                     Stroke::new(1.0, theme.ui.accent),
                     egui::StrokeKind::Inside,
                 );
-                painter.rect_filled(controls, 0.0, theme.chart.bg);
+                painter.add(layout.fill(controls, theme.chart.bg));
                 let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
                 crate::icons::icons::FLAG_MARK
                     .as_image_tinted(
@@ -615,13 +642,20 @@ impl<'a> Legend<'a> {
         let collapsed = ui
             .ctx()
             .data_mut(|data| data.get_temp::<bool>(id).unwrap_or(false));
-        let has_rows = self.show_volume || self.studies.iter().any(|study| study.is_overlay());
+        let on_pane = |index: usize| {
+            study_indices.map_or_else(
+                || self.studies[index].is_overlay(),
+                |indices| indices.contains(&index),
+            )
+        };
+        let has_rows = self.show_volume || (0..self.studies.len()).any(on_pane);
         if !collapsed {
             if self.show_volume
                 && !self
                     .studies
                     .iter()
-                    .any(|study| study.is_volume() && study.is_overlay())
+                    .enumerate()
+                    .any(|(idx, study)| study.is_volume() && on_pane(idx))
             {
                 layout.field(
                     &format!("{} ", l10n::text(ui.ctx(), "Vol")),
@@ -652,12 +686,12 @@ impl<'a> Legend<'a> {
                 .studies
                 .iter()
                 .enumerate()
-                .filter(|(_, study)| study.is_overlay())
+                .filter(|(idx, _)| on_pane(*idx))
             {
                 if study.is_volume() && !self.show_volume {
                     continue;
                 }
-                let row_start = layout.pos;
+                let (row_start, row_end) = (layout.pos, layout.row_end);
                 if self.show_indicator_titles {
                     layout.text(
                         if study.is_volume() {
@@ -683,7 +717,7 @@ impl<'a> Legend<'a> {
                         let up = study.values().value(0, self.bar_index);
                         let line = usize::from(up.is_none());
                         if let Some(value) = up.or_else(|| study.values().value(1, self.bar_index))
-                            && study.plot_style(line).visible
+                            && study.legend_visible(line)
                         {
                             // The column colour without its transparency.
                             let [r, g, b, _] = study
@@ -714,12 +748,11 @@ impl<'a> Legend<'a> {
                         );
                     }
                     let study_colors = study.colors();
-                    let names = study.line_names();
                     let precision = study.precision().or_else(|| {
                         (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
                     });
-                    for index in (0..study.line_count()).filter(|index| {
+                    for index in study.legend_lines().into_iter().filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
                             && study.legend_visible(*index)
@@ -737,22 +770,28 @@ impl<'a> Legend<'a> {
                         } else {
                             "∅".to_owned()
                         };
-                        // A fully transparent colour holds no RGB, so it has no opaque form.
-                        let color = study_colors
-                            .get(index)
-                            .filter(|color| color.a() != 0)
-                            .map_or(colors.text, |color| color.to_opaque());
-                        let text = if study.line_count() > 1 {
-                            format!("{}: {text}", names.get(index).map_or("", String::as_str))
-                        } else {
-                            text
-                        };
+                        // A fully transparent plot colour holds no RGB, so it has no opaque form.
+                        let color = crate::chart::indicators::plots::plot_value_color(
+                            study.as_ref(),
+                            index,
+                            Some(self.bar_index),
+                        )
+                        .filter(|color| color.a() != 0)
+                        .or_else(|| study_colors.get(index).copied())
+                        .filter(|color| color.a() != 0)
+                        .map_or(colors.text, |color| color.to_opaque());
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
-                let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
+                // The row and its outline keep to the end of the row it starts on, which is the
+                // shortened first row when nothing comes before it. Controls past that end take
+                // a row of their own.
+                layout.row_end = layout.row_end.min(row_end);
+                let controls = layout
+                    .reserve(Vec2::new(controls_width(study.as_ref()), 20.0))
+                    .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
-                    bounds.right()
+                    row_end
                 } else {
                     controls.right()
                 };
@@ -764,8 +803,9 @@ impl<'a> Legend<'a> {
                     ui,
                     row,
                     controls,
+                    false,
                     id.with(("study", index)),
-                    study.is_visible(),
+                    study.as_ref(),
                 );
                 for (response, intent) in responses.iter().zip([
                     StudyAction::ToggleVisibility(index),
@@ -870,6 +910,8 @@ impl<'a> Legend<'a> {
 enum StatusGlyph {
     Session(MarketSession),
     Text(Arc<egui::Galley>),
+    /// A rewind mark in this ink on a disc of the segment's colour.
+    Replay(Color32),
 }
 
 /// The tooltip and accessible name of a session state, and the colour of its glyph.
@@ -916,6 +958,15 @@ fn paint_status_glyph(
         StatusGlyph::Text(galley) => {
             painter.galley(center - galley.size() / 2.0, galley, color);
         }
+        StatusGlyph::Replay(ink) => {
+            painter.circle_filled(center, 8.0, color);
+            for tip in [-4.5, 0.0] {
+                let points = [(tip, 0.0), (tip + 4.5, -3.5), (tip + 4.5, 3.5)]
+                    .map(|(x, y)| center + Vec2::new(x, y))
+                    .to_vec();
+                painter.add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
+            }
+        }
     }
 }
 
@@ -923,34 +974,87 @@ struct Layout<'a> {
     painter: &'a egui::Painter,
     bounds: Rect,
     pos: Pos2,
+    /// Where the current row ends: `bounds` less what the first row leaves to another control.
+    row_end: f32,
     height: f32,
     background: egui::layers::ShapeIdx,
     /// Fill of the current row's background.
     backdrop: Color32,
+    /// The rects shaded as extended hours and the background as shaded there.
+    tint: (&'a [Rect], Color32),
     colors: &'a StyleColors,
 }
 
 impl<'a> Layout<'a> {
-    fn new(painter: &'a egui::Painter, bounds: Rect, colors: &'a StyleColors) -> Self {
+    fn new(
+        painter: &'a egui::Painter,
+        bounds: Rect,
+        colors: &'a StyleColors,
+        first_row_end: f32,
+        tint: (&'a [Rect], Color32),
+    ) -> Self {
         Self {
             painter,
             bounds,
             pos: bounds.min,
+            row_end: first_row_end,
             height: 24.0,
             background: painter.add(egui::Shape::Noop),
             backdrop: painter.ctx().active_theme().chart.bg,
+            tint,
             colors,
         }
     }
 
+    /// `rect` in `fill`, the chart background at some opacity, and over the extended hours shading
+    /// in the shaded background at the same opacity, so each part matches the plot beneath.
+    fn fill(&self, rect: Rect, fill: Color32) -> egui::Shape {
+        let (shaded, color) = self.tint;
+        let color = color.gamma_multiply_u8(fill.a());
+        let mut parts = Vec::new();
+        let mut left = rect.left();
+        // The parts are disjoint: a shaded part laid over a translucent fill would apply the
+        // opacity twice.
+        for part in shaded
+            .iter()
+            .map(|shaded| rect.intersect(*shaded))
+            .filter(Rect::is_positive)
+        {
+            parts.push((
+                Rect::from_x_y_ranges(left..=part.left(), rect.y_range()),
+                fill,
+            ));
+            parts.push((part, color));
+            left = part.right();
+        }
+        if parts.is_empty() {
+            return egui::Shape::rect_filled(rect, 0.0, fill);
+        }
+        parts.push((
+            Rect::from_x_y_ranges(left..=rect.right(), rect.y_range()),
+            fill,
+        ));
+        egui::Shape::Vec(
+            parts
+                .into_iter()
+                .filter(|(part, _)| part.is_positive())
+                .map(|(part, fill)| egui::Shape::rect_filled(part, 0.0, fill))
+                .collect(),
+        )
+    }
+
     fn new_row(&mut self) {
         self.pos = Pos2::new(self.bounds.left(), self.pos.y + self.height);
+        self.row_end = self.bounds.right();
         self.height = 22.0;
         self.background = self.painter.add(egui::Shape::Noop);
     }
 
     fn reserve_space(&mut self, size: Vec2) -> Rect {
-        if self.pos.x > self.bounds.left() && self.pos.x + size.x > self.bounds.right() {
+        // A shortened first row gives way even to its first item; a full row has nowhere better.
+        if (self.pos.x > self.bounds.left() || self.row_end < self.bounds.right())
+            && self.pos.x + size.x > self.row_end
+        {
             self.new_row();
         }
         self.height = self.height.max(size.y);
@@ -966,24 +1070,22 @@ impl<'a> Layout<'a> {
         let rect = self.reserve_space(size);
         self.painter.set(
             self.background,
-            egui::Shape::rect_filled(
+            self.fill(
                 Rect::from_min_max(
                     Pos2::new(self.bounds.left() - 2.0, self.pos.y),
                     Pos2::new(rect.right() + 4.0, self.pos.y + self.height),
                 )
                 .intersect(self.bounds.expand(2.0)),
-                0.0,
                 self.backdrop,
             ),
         );
         let background = self.painter.ctx().active_theme().chart.bg;
         if self.backdrop != background {
             // Profiles can be opaque or contain letters; protect the full content bounds.
-            self.painter.rect_filled(
+            self.painter.add(self.fill(
                 rect.expand(2.0).intersect(self.bounds.expand(2.0)),
-                0.0,
                 background,
-            );
+            ));
         }
         rect
     }
@@ -1228,12 +1330,12 @@ mod mark_tests {
                     Default::default(),
                 );
                 // Without image loaders the instrument's logo stays unreadable.
-                #[cfg(feature = "icons")]
+                #[cfg(feature = "ui")]
                 {
                     egui_extras::install_image_loaders(&ctx);
                     ctx.include_bytes("bytes://logo.svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="9" fill="blue"/></svg>"#);
                 }
-                let logo_ready = logo && cfg!(feature = "icons");
+                let logo_ready = logo && cfg!(feature = "ui");
                 let mut instrument = Instrument::new(symbol);
                 if logo {
                     instrument = instrument.with_logo("bytes://logo.svg");
@@ -1338,7 +1440,9 @@ mod tests {
                         let mut legend = Legend::new("SAMPLE", "1h", &bar);
                         legend.series_visible = series_visible;
                         let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0));
-                        action = legend.show_with_colors(ui, plot, &colors).4;
+                        action = legend
+                            .show_with_colors(ui, plot, &colors, None, f32::INFINITY)
+                            .4;
                     },
                 );
                 let title = output.shapes.iter().any(|shape| {
@@ -1449,7 +1553,7 @@ mod layout_tests {
 
     #[cfg(feature = "studies")]
     #[test]
-    fn overlay_values_keep_their_output_names_when_rows_wrap() {
+    fn overlay_values_stay_inside_the_plot_when_rows_wrap() {
         use crate::chart::rendering::Legend;
         use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
         let mut study = CustomIndicator::new("Levels", |_| {
@@ -1490,15 +1594,11 @@ mod layout_tests {
                     }
                 })
                 .collect();
-            for (index, name) in ["Ask levels", "Bid levels", "Total levels"]
-                .iter()
-                .enumerate()
-            {
-                let expected = format!("{name}: {:.2}", (index + 1) as f64);
+            for expected in ["1.00", "2.00", "3.00"] {
                 let text = texts
                     .iter()
                     .find(|text| text.galley.text() == expected)
-                    .expect(&expected);
+                    .expect(expected);
                 assert!(text.pos.x + text.galley.size().x <= width);
             }
             output.drop_without_applying_deltas();
@@ -1516,7 +1616,7 @@ mod layout_tests {
             for width in [160.0, 300.0, 387.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
                 let ctx = Context::default();
                 #[cfg(feature = "icons")]
-                egui_extras::install_image_loaders(&ctx);
+                crate::icons::install_loader(&ctx);
                 apply_to_egui(&ctx, &theme);
                 let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
                 let badge = ctx.load_texture(
@@ -1670,6 +1770,168 @@ mod layout_tests {
                 hovered.drop_without_applying_deltas();
                 output.drop_without_applying_deltas();
                 assert_eq!(idle, hovered_text, "hover moved readout at {width}");
+            }
+        }
+    }
+
+    /// A value in the price pane's legend takes the colour its plot shows for that value: a pivot
+    /// level keeps its colour on the first bar of a period, where only the segment from the
+    /// previous period is hidden, and a plot drawn one bar to the right of its source bar takes
+    /// the colour of the source bar its value comes from (`Indicator::plot_color`).
+    #[cfg(feature = "studies")]
+    #[test]
+    fn price_legend_colours_each_value_as_its_plot_shows_it() {
+        use crate::chart::rendering::Legend;
+        use crate::model::Timeframe;
+        use crate::studies::{
+            CustomIndicator, Indicator, IndicatorValue, PivotPoints, PivotTimeframe, palette,
+        };
+        use egui::Color32;
+        // Hourly bars from Monday 5 January 2026, UTC; Tuesday trades 10 higher.
+        let bars: Vec<Bar> = (0..72)
+            .map(|i| {
+                let c = 100.0 + if (24..48).contains(&i) { 10.0 } else { 0.0 } + (i % 5) as f64;
+                let time = Utc.timestamp_opt(1_767_571_200 + i * 3600, 0).unwrap();
+                Bar::new(time, c, c + 1.0, c - 1.0, c, 1.0)
+            })
+            .collect();
+        let mut pivots = PivotPoints::new().with_timeframe(PivotTimeframe::Daily);
+        pivots.set_timeframe(Timeframe::Hour1);
+        pivots.calculate(&bars);
+        // Wednesday's first bar, 48, starts the levels made from Tuesday.
+        assert_ne!(pivots.values().value(0, 47), pivots.values().value(0, 48));
+        let mut shifted = CustomIndicator::new("Shifted", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_offsets(vec![1])
+        .with_plot_color(|_, bar, _| Some([Color32::RED, Color32::BLUE][bar % 2]));
+        shifted.calculate(&bars);
+        let ctx = Context::default();
+        let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+        let shown = |study: Box<dyn Indicator>, bar: usize| -> Vec<(f64, Color32)> {
+            let studies = vec![study];
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1h", &bars[bar]);
+                legend.studies = &studies;
+                legend.instrument = Some(&instrument);
+                legend.show_indicator_inputs = false;
+                legend.show_volume = false;
+                legend.show_ohlc = false;
+                legend.show_change = false;
+                legend.show_change_percent = false;
+                legend.bar_index = bar;
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(3000.0, 400.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let values = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => {
+                        let value = text.galley.text().replace(',', "").parse::<f64>().ok()?;
+                        Some((value, text.galley.job.sections[0].format.color))
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            values
+        };
+        let levels: Vec<Color32> = shown(Box::new(pivots), 48)
+            .into_iter()
+            .map(|(_, color)| color)
+            .collect();
+        // Bar 5 shows source bar 4, coloured red.
+        let got = (levels, shown(Box::new(shifted), 5));
+        assert_eq!(
+            got,
+            (vec![palette::DARK_ORANGE; 11], vec![(14.0, Color32::RED)]),
+            "{got:?}"
+        );
+    }
+
+    /// Each part of a row's backdrop takes the background as shaded beneath it, opaque and at the
+    /// study opacity, so a row crossing the edge of the extended hours shading shows no box on
+    /// either side of it. The shaded colours are worked out by hand: the background times
+    /// (255 - 40) / 255 plus the tint, then 153 / 255 for the 60% study rows.
+    #[test]
+    fn legend_rows_take_the_extended_hours_tint_beneath_them() {
+        use crate::chart::rendering::Legend;
+        use egui::Color32;
+        fn unstroked(shape: &Shape, rects: &mut Vec<(Rect, Color32)>) {
+            match shape {
+                Shape::Rect(rect) if rect.stroke.width == 0.0 => rects.push((rect.rect, rect.fill)),
+                Shape::Vec(shapes) => shapes.iter().for_each(|shape| unstroked(shape, rects)),
+                _ => {}
+            }
+        }
+        for (theme, plain, plain_study, tinted, tinted_study) in [
+            (
+                crate::theme::Theme::light(),
+                Color32::WHITE,
+                Color32::from_rgba_premultiplied(153, 153, 153, 153),
+                Color32::from_rgb(215, 215, 255),
+                Color32::from_rgba_premultiplied(129, 129, 153, 153),
+            ),
+            (
+                crate::theme::Theme::dark(),
+                Color32::BLACK,
+                Color32::from_rgba_premultiplied(0, 0, 0, 153),
+                Color32::from_rgb(0, 0, 40),
+                Color32::from_rgba_premultiplied(0, 0, 24, 153),
+            ),
+        ] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 240.0);
+            let shaded = [Rect::from_min_max(Pos2::ZERO, Pos2::new(30.0, 600.0))];
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1m", &bar);
+                legend.extended_hours = (&shaded, Color32::from_rgba_premultiplied(0, 0, 40, 40));
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let mut rects = Vec::new();
+            for shape in &output.shapes {
+                unstroked(&shape.shape, &mut rects);
+            }
+            output.drop_without_applying_deltas();
+            let filled = |fill: Color32| -> Vec<Rect> {
+                rects
+                    .iter()
+                    .filter(|(_, color)| *color == fill)
+                    .map(|(rect, _)| *rect)
+                    .collect()
+            };
+            for (plain, tinted) in [(plain, tinted), (plain_study, tinted_study)] {
+                let (plain, tinted) = (filled(plain), filled(tinted));
+                for rect in &plain {
+                    assert!(
+                        rect.left() >= 30.0,
+                        "plain backdrop under the tint at {rect:?}"
+                    );
+                }
+                for rect in &tinted {
+                    assert!(
+                        rect.right() <= 30.0,
+                        "tinted backdrop past the tint at {rect:?}"
+                    );
+                }
+                assert!(
+                    tinted.iter().any(|tinted| tinted.right() == 30.0
+                        && plain.iter().any(
+                            |plain| plain.left() == 30.0 && plain.y_range() == tinted.y_range()
+                        )),
+                    "no row meets at the tint's edge: {plain:?} {tinted:?}"
+                );
             }
         }
     }

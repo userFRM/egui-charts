@@ -1,9 +1,11 @@
 //! A chart's state as a serializable snapshot, and named layouts of charts as versioned
 //! documents.
 
-use super::{Chart, ChartLayoutMode, PaneId, SeriesOptions};
+use super::{Chart, ChartLayoutMode, ChartLayoutSizing, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
-use crate::model::{ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, Timeframe};
+use crate::model::{
+    ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, SeriesStyle, Timeframe,
+};
 use crate::studies::{IndicatorFactory, StudyTemplate};
 use crate::widget::settings::{ChartSettingsState, WatermarkMode};
 use serde::{Deserialize, Serialize};
@@ -64,7 +66,7 @@ pub struct SavedSeries {
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedPane {
-    /// Whether it is the price pane.
+    /// Whether it is the original price pane. A layout may omit that pane.
     pub main: bool,
     /// Its share of the chart height; see [`Chart::pane_stretch_factor`].
     pub stretch: f32,
@@ -74,12 +76,20 @@ pub struct SavedPane {
     /// Keep the pane when its last study leaves.
     #[serde(default)]
     pub preserve: bool,
-    /// Saved study and series ids in legend order; empty in version 1 layouts.
+    /// Saved study and series ids in draw order, with the main series as id 0 in its assigned
+    /// pane. Older layouts leave the price pane empty for the default order.
+    /// Empty in version 1 layouts.
     #[serde(default)]
     pub members: Vec<usize>,
     /// The pane's price scale, including its manual range.
     #[serde(default)]
     pub scale: Option<crate::scales::PriceScale>,
+    /// Additional named scales in this pane, including options and manual ranges.
+    #[serde(default)]
+    pub scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
+    /// Axis placement and unused-axis visibility for this pane.
+    #[serde(default)]
+    pub axes: crate::model::PaneAxisOptions,
 }
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
@@ -88,6 +98,10 @@ pub struct SavedPane {
 /// of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChartSnapshot {
+    /// The main series' assignment within its saved pane. `None` in layouts saved before it was
+    /// recorded, which keep the restoring chart's assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_scale: Option<crate::model::SeriesScale>,
     /// The symbol shown.
     pub symbol: String,
     /// The interval shown, `None` for a chart without one.
@@ -103,6 +117,9 @@ pub struct ChartSnapshot {
     /// Visibility and style of the main series' alert levels; absent in older layouts.
     #[serde(default)]
     pub main_series_alerts: crate::model::SeriesAlerts,
+    /// Raw numeric display settings of the main series; absent in older layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_series_display_format: Option<crate::model::SeriesDisplayFormat>,
     /// The display settings of the settings dialog, the price scale's mode and margins included.
     pub settings: ChartSettingsState,
     /// Complete appearance settings; absent in version 1 layouts.
@@ -124,7 +141,8 @@ pub struct ChartSnapshot {
     /// The studies in the order they were added, including the volume study.
     pub studies: Vec<SavedStudy>,
     /// The bar series added to the chart in draw order, `None` in layouts saved before version
-    /// 3, which leave the chart's added series in place.
+    /// 3, which leave the chart's added series in place. When omitted, their saved main-pane
+    /// order references are ignored; the host retains ownership of those series.
     #[serde(default)]
     pub series: Option<Vec<SavedSeries>>,
     /// The markers and price lines of the main series, `None` in layouts saved before version 3.
@@ -134,11 +152,21 @@ pub struct ChartSnapshot {
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
     pub bar_spacing: f32,
+    /// Numeric key units per spacing unit. Absent in older layouts, on time charts and
+    /// before the numeric keys differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_unit: Option<f64>,
     /// The space after the last bar, in bars.
     pub right_offset: f32,
     /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
     /// Version 1 layouts may omit drawings kept in per-symbol storage.
     pub drawings: Option<serde_json::Value>,
+    /// The chart that took the snapshot, by an identifier no other chart has, also in another
+    /// run. [`Chart::restore`] keeps the data table column choices of the saved studies only on
+    /// that chart; on any other chart, and for `None` in layouts saved before it was recorded,
+    /// each restored study starts with its columns shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_by: Option<u64>,
 }
 
 /// Why [`Chart::restore`] did not show a snapshot.
@@ -225,7 +253,11 @@ impl Chart {
             .iter()
             .map(|item| SavedSeries {
                 id: item.id.0,
-                options: item.options.clone(),
+                options: {
+                    let mut options = item.options.clone();
+                    options.style = saved_style(options.style);
+                    options
+                },
                 visible: item.visible,
                 fed: self.is_fed(item.id),
                 price_scale: self.series_price_scale(item.id).cloned(),
@@ -239,6 +271,7 @@ impl Chart {
             .collect();
         let (bar_spacing, right_offset) = self.get_time_scale_state();
         let snapshot = ChartSnapshot {
+            main_scale: Some(self.main_series_scale),
             symbol: self.symbol.clone(),
             interval: self.timeframe,
             extended_hours: self.extended_hours,
@@ -246,6 +279,7 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
+            main_series_display_format: saved_style(self.main_series_style.clone()).display_format,
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
@@ -284,17 +318,55 @@ impl Chart {
                         stretch: pane.stretch,
                         collapsed: pane.collapsed,
                         preserve: pane.preserve,
-                        members: pane.members.iter().map(|id| id.0).collect(),
-                        scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
+                        members: if *id == PaneId::MAIN {
+                            self.main_pane_order(self.pane_layout.main.clone())
+                                .iter()
+                                .map(|id| id.0)
+                                .collect()
+                        } else {
+                            self.pane_series(*id).iter().map(|id| id.0).collect()
+                        },
+                        scale: (*id != PaneId::MAIN || *id != self.main_series_pane())
+                            .then(|| pane.scale.clone()),
+                        scales: if *id == PaneId::MAIN {
+                            let mut scales: Vec<(
+                                crate::model::SeriesScale,
+                                crate::scales::PriceScale,
+                            )> = Vec::new();
+                            for member in self.pane_series(*id) {
+                                if let Some(super::PaneScale::Named(key)) =
+                                    self.source_axis_key(*id, member)
+                                    && key != self.main_series_scale
+                                    && !scales.iter().any(|(other, _)| *other == key)
+                                {
+                                    // A study can change assignment before a frame creates the scale.
+                                    let scale =
+                                        self.series_scales.get(&key).cloned().unwrap_or_else(
+                                            || crate::scales::PriceScale::new(Default::default()),
+                                        );
+                                    scales.push((key, scale));
+                                }
+                            }
+                            scales
+                        } else {
+                            pane.scales.clone()
+                        },
+                        axes: pane.axes,
                     }
                 })
                 .collect(),
             bar_spacing,
+            numeric_unit: self
+                .state
+                .time_scale()
+                .numeric_positions()
+                .and_then(|positions| positions.unit),
             right_offset,
             drawings,
+            saved_by: Some(self.data_table_identity),
         };
         // A layout that restore would refuse is an error now rather than at the next load.
-        check(&snapshot, factory)
+        check(&snapshot, factory, self.main_series_scale)
             .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
         Ok(snapshot)
     }
@@ -310,6 +382,12 @@ impl Chart {
     /// without bars and under new ids: look each up with
     /// [`restored_series_id`](Self::restored_series_id) and supply its bars with
     /// [`set_data`](Self::set_data). Feed-backed series reconnect automatically.
+    ///
+    /// A snapshot of another symbol than the one the chart shows drops the chart's bars before
+    /// its studies are computed; a chart with no symbol keeps the bars it holds. Supply the new
+    /// bars with [`set_data`](Self::set_data) or let the feed load them. In a layout saved
+    /// without the main series and the original pane the series stays out of the panes and is
+    /// not drawn, and its bars come the same way, for the studies and the time axis.
     ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
@@ -328,8 +406,25 @@ impl Chart {
         snapshot: &ChartSnapshot,
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
-        let (studies, drawings) = check(snapshot, factory)?;
+        let (studies, drawings) = check(snapshot, factory, self.main_series_scale)?;
+        let next_series = self.next_series;
+        self.layout_identity = crate::model::next_revision();
+        let main_present = snapshot.panes.iter().any(|pane| pane.main);
+        let main_source_present =
+            main_present || snapshot.panes.iter().any(|pane| pane.members.contains(&0));
+        if !main_source_present {
+            self.remove_series(super::SeriesId::MAIN);
+        } else if !self.main_series_present {
+            self.main_series_present = true;
+            self.follow_feed_pause();
+        }
+        let other_symbol = !self.symbol.is_empty() && snapshot.symbol != self.symbol;
         self.set_symbol(snapshot.symbol.clone());
+        // The studies below must not read the previous symbol's bars. With a feed its reload
+        // would clear them only on the next frame, and without one nothing would.
+        if other_symbol {
+            self.replace_main_data(Vec::new());
+        }
         if let Some(interval) = snapshot.interval {
             self.set_timeframe(interval);
         } else {
@@ -342,10 +437,36 @@ impl Chart {
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
         self.main_series_style.alerts = snapshot.main_series_alerts;
-        snapshot
-            .settings
+        self.main_series_style.display_format = snapshot.main_series_display_format;
+        let mut settings = snapshot.settings.clone();
+        if settings.chart_type == crate::model::ChartType::HollowCandles {
+            // Settings saved before hollow candles had a style hold the switches of the candles.
+            let style = &snapshot.chart_type_params.styles.hollow;
+            settings.candle_colors.show_body = style.body_visible;
+            settings.candle_colors.show_border = style.border_visible;
+            settings.candle_colors.show_wick = style.wick_visible;
+        }
+        settings
             .apply_to_chart(self)
             .map_err(RestoreError::Settings)?;
+        if snapshot.chart_type == crate::model::ChartType::VolumeCandles
+            && settings.chart_type_params.is_none()
+            && snapshot
+                .chart_type_params
+                .styles
+                .volume_candles
+                .is_saved_without_style()
+        {
+            // Settings saved before they named a chart type apply as candle settings, of which
+            // volume candles drew only the body colours.
+            let colors = &settings.candle_colors;
+            let mut params = self.chart_type_params.clone();
+            params.styles.volume_candles = crate::model::VolumeCandlesStyle::drawn_before_style(
+                colors.body_up,
+                colors.body_down,
+            );
+            self.set_chart_type_params(params);
+        }
         if let Some(config) = &snapshot.config {
             self.config = config.clone();
             // Layouts saved before the description followed the symbol held it as fixed text.
@@ -358,8 +479,17 @@ impl Chart {
         if let Some(options) = &snapshot.options {
             self.set_chart_options(options.clone());
         }
+        if let Some(main_scale) = snapshot.main_scale {
+            self.main_series_scale = main_scale;
+            self.series_scales.remove(&main_scale);
+        }
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
+        }
+        if self.panes().contains(&PaneId::MAIN) {
+            self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+        } else {
+            self.leave_panes(super::SeriesId::MAIN);
         }
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
@@ -373,7 +503,18 @@ impl Chart {
         self.restored_studies.clear();
         self.pane_layout
             .panes
-            .retain(|pane| pane.id == PaneId::MAIN || !pane.members.is_empty());
+            .retain(|pane| (main_present && pane.id == PaneId::MAIN) || !pane.members.is_empty());
+        if main_present
+            && !self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| pane.id == PaneId::MAIN)
+        {
+            self.pane_layout
+                .panes
+                .push(super::pane::Pane::new(PaneId::MAIN));
+        }
         let mut panes: HashMap<usize, PaneId> = HashMap::new();
         for (at, pane) in snapshot.panes.iter().enumerate() {
             panes.insert(
@@ -381,9 +522,23 @@ impl Chart {
                 if pane.main {
                     PaneId::MAIN
                 } else {
-                    self.add_pane()
+                    let id = self.add_pane();
+                    self.pane_layout
+                        .panes
+                        .last_mut()
+                        .expect("pane was added")
+                        .preserve = true;
+                    id
                 },
             );
+        }
+        // Restore ownership before added-series ranges can write to the main scale.
+        if let Some(at) = snapshot
+            .panes
+            .iter()
+            .position(|pane| pane.members.contains(&0))
+        {
+            self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.add_indicator(study);
@@ -392,6 +547,44 @@ impl Chart {
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
+        // Only a snapshot this chart took names its columns by saved ids; a study of any other
+        // snapshot starts a new column.
+        let own = snapshot.saved_by == Some(self.data_table_identity);
+        let saved_columns: Vec<_> = snapshot
+            .studies
+            .iter()
+            .zip(self.indicators())
+            .map(|(saved, (_, study))| {
+                // An id this chart never gave out must not claim the column of a later study.
+                let column = if own && saved.id < next_series {
+                    self.study_column_ids
+                        .get(&saved.id)
+                        .copied()
+                        .unwrap_or(saved.id)
+                } else {
+                    self.restored_studies[&saved.id]
+                };
+                (column, study.name())
+            })
+            .collect();
+        // A snapshot this chart took and the host then edited can still give two studies of one
+        // title one column. The table keys a column by its id and title, so such a column is
+        // ambiguous, and each of them takes its own new id instead.
+        let column_ids: Vec<_> = snapshot
+            .studies
+            .iter()
+            .zip(&saved_columns)
+            .map(|(saved, column)| {
+                let id = self.restored_studies[&saved.id];
+                let shared = saved_columns
+                    .iter()
+                    .filter(|other| *other == column)
+                    .count()
+                    > 1;
+                (id, if shared { id } else { column.0 })
+            })
+            .collect();
+        self.study_column_ids.extend(column_ids);
         for saved in snapshot.series.iter().flatten() {
             let id = if saved.fed {
                 self.add_feed_series(saved.options.clone())
@@ -440,21 +633,53 @@ impl Chart {
                 .find(|pane| pane.id == id)
                 .expect("restored pane");
             pane.collapsed = saved.collapsed;
+            pane.axes = saved.axes;
             pane.preserve = saved.preserve;
-            if !saved.members.is_empty() {
+            if !saved.main && !saved.members.is_empty() {
                 pane.members.sort_by_key(|id| {
                     saved
                         .members
                         .iter()
-                        .position(|old| self.restored_studies.get(old) == Some(&id.0))
+                        .position(|old| {
+                            (*old == 0 && *id == super::SeriesId::MAIN)
+                                || self.restored_studies.get(old) == Some(&id.0)
+                        })
                         .unwrap_or(usize::MAX)
                 });
             }
             if let Some(scale) = &saved.scale {
                 pane.scale = scale.clone();
             }
+            for (key, scale) in &saved.scales {
+                if saved.main {
+                    self.series_scales.insert(*key, scale.clone());
+                } else {
+                    *pane.assigned_scale_mut(*key) = scale.clone();
+                }
+            }
+            if saved.main && !saved.members.is_empty() {
+                self.pane_layout.main = saved
+                    .members
+                    .iter()
+                    .filter_map(|id| {
+                        if *id == super::SeriesId::MAIN.0 {
+                            Some(super::SeriesId::MAIN)
+                        } else {
+                            self.restored_studies.get(id).copied().map(super::SeriesId)
+                        }
+                    })
+                    .collect();
+            }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
+        if self.state.time_scale().numeric_positions().is_some() {
+            let positions =
+                crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);
+            self.state
+                .time_scale_mut()
+                .set_numeric_positions(Some(positions));
+            self.refresh_time_scale_content();
+        }
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
             Some(json) => {
@@ -467,7 +692,12 @@ impl Chart {
             }
             None => Vec::new(),
         };
+        // A layout without the original pane has just left it: the main bars are live again.
+        self.follow_feed_pause();
         self.history.clear();
+        // Undone or redone before the restore, they belong to the state it replaced.
+        self.history.size_steps.clear();
+        self.history.link_steps.clear();
         Ok(skipped)
     }
 }
@@ -489,11 +719,29 @@ impl Chart {
     }
 }
 
+/// Finite equivalents of ignored values, without changing the live series' style.
+fn saved_style(mut style: SeriesStyle) -> SeriesStyle {
+    if let Some(format) = &mut style.display_format
+        && !format.min_move.is_finite()
+    {
+        format.min_move = 0.0;
+    }
+    if !style.base_line_width.is_finite() {
+        style.base_line_width = 0.0;
+    }
+    style
+}
+
 /// The studies of a checked snapshot, built in order, and its drawings document.
 type Checked = (Vec<Box<dyn crate::studies::Indicator>>, Option<String>);
 
 /// Checks `snapshot` as [`Chart::restore_with`] does before changing the chart.
-fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked, RestoreError> {
+fn check(
+    snapshot: &ChartSnapshot,
+    factory: &IndicatorFactory,
+    main_scale: crate::model::SeriesScale,
+) -> Result<Checked, RestoreError> {
+    let main_scale = snapshot.main_scale.unwrap_or(main_scale);
     let studies = snapshot
         .studies
         .iter()
@@ -506,6 +754,57 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         })
         .collect::<Result<Vec<_>, _>>()?;
     check_source_links(&snapshot.studies, &studies)?;
+    let main_pane = snapshot
+        .panes
+        .iter()
+        .position(|pane| pane.members.contains(&0))
+        .or_else(|| snapshot.panes.iter().position(|pane| pane.main));
+    if snapshot
+        .panes
+        .iter()
+        .flat_map(|pane| &pane.members)
+        .filter(|id| **id == 0)
+        .count()
+        > 1
+    {
+        return Err(RestoreError::Layout(
+            "Main series belongs to multiple panes",
+        ));
+    }
+    for (at, pane) in snapshot.panes.iter().enumerate() {
+        if pane.members.is_empty() {
+            continue;
+        }
+        let expected: std::collections::HashSet<_> = std::iter::once(super::SeriesId::MAIN.0)
+            .filter(|_| Some(at) == main_pane)
+            .chain(
+                snapshot
+                    .studies
+                    .iter()
+                    .filter(|study| study.pane == at)
+                    .map(|study| study.id),
+            )
+            .chain(
+                snapshot
+                    .series
+                    .iter()
+                    .flatten()
+                    .filter(|series| series.pane == at)
+                    .map(|series| series.id),
+            )
+            .collect();
+        let actual: std::collections::HashSet<_> = pane.members.iter().copied().collect();
+        if !expected.is_subset(&actual)
+            || (snapshot.series.is_some() && actual != expected)
+            || actual.len() != pane.members.len()
+            || snapshot
+                .studies
+                .iter()
+                .any(|study| study.pane != at && actual.contains(&study.id))
+        {
+            return Err(RestoreError::Layout("Invalid price pane draw order"));
+        }
+    }
     snapshot
         .settings
         .validate()
@@ -528,7 +827,12 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .price_scale
         .as_ref()
         .is_some_and(|scale| !valid_scale(scale))
-        || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
+        || snapshot.panes.is_empty()
+        || snapshot.panes.iter().filter(|pane| pane.main).count() > 1
+        || (main_pane.is_none() && snapshot.main_series_visible)
+        || snapshot.studies.iter().map(|study| study.id)
+            .chain(snapshot.series.iter().flatten().map(|series| series.id))
+            .any(|id| id == super::SeriesId::MAIN.0)
         || snapshot
             .studies
             .iter()
@@ -545,9 +849,16 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         || snapshot
             .panes
             .iter()
-            .filter_map(|pane| pane.scale.as_ref())
+            .flat_map(|pane| pane.scale.iter().chain(pane.scales.iter().map(|(_, scale)| scale)))
             .chain(snapshot.series.iter().flatten().filter_map(|series| series.price_scale.as_ref()))
             .any(|scale| !valid_scale(scale))
+        || snapshot.panes.iter().any(|pane| {
+            let keys: std::collections::HashSet<_> =
+                pane.scales.iter().map(|(key, _)| *key).collect();
+            (pane.main && keys.contains(&main_scale))
+                || (!pane.main && keys.contains(&crate::model::SeriesScale::Right))
+                || keys.len() != pane.scales.len()
+        })
         || snapshot
             .studies
             .iter()
@@ -565,6 +876,7 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
             .is_finite()
         || !snapshot.bar_spacing.is_finite()
         || snapshot.bar_spacing <= 0.0
+        || snapshot.numeric_unit.is_some_and(|unit| !unit.is_finite() || unit <= 0.0)
         || !snapshot.right_offset.is_finite()
         || snapshot
             .maximized
@@ -606,6 +918,13 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .chain(snapshot.config.iter().flat_map(|config| {
             std::iter::once(config.watermark_font_size).chain(config.axis_font_size)
         }))
+        .chain(
+            std::iter::once(&snapshot.chart_type_params)
+                .chain(snapshot.settings.chart_type_params.as_ref())
+                .map(|params| params.styles.high_low.label_font_size)
+                // Non-positive sizes hide the labels.
+                .filter(|size| *size > 0.0),
+        )
         .any(|size| !font_sizes.contains(&size))
     {
         return Err(RestoreError::Layout("Font sizes must be between 1 and 256"));
@@ -676,14 +995,20 @@ fn check_source_links(
     Ok(())
 }
 
-/// A named arrangement of charts: the [`ChartLayoutMode`] and a [`ChartSnapshot`] of each chart,
-/// as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts) documents.
+/// A named arrangement of charts: the [`ChartLayoutMode`], a [`ChartSnapshot`] of each chart and
+/// the chart sizes, as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts)
+/// documents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedLayout {
     /// How the charts are arranged.
     pub mode: ChartLayoutMode,
     /// The charts in the order of their slots.
     pub charts: Vec<ChartSnapshot>,
+    /// The chart sizes of the arrangement, as [`ChartLayout::sizes`](super::ChartLayout::sizes)
+    /// gives them; `None`, also read from documents saved before sizes were kept, stands for the
+    /// preset proportions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sizing: Option<ChartLayoutSizing>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -777,6 +1102,7 @@ mod tests {
         );
         chart.set_price_lines(extra, vec![PriceLine::new(12.5, egui::Color32::BLUE)]);
         chart.move_series_to_pane(extra, chart.series_pane(rsi).unwrap());
+        chart.reorder_indicator(spread, super::super::VisualOrder::SendToBack);
         assert!(
             chart.snapshot().is_err(),
             "the built-in factory cannot rebuild Bar range"
@@ -784,6 +1110,7 @@ mod tests {
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot_with(&factory).unwrap()],
+            sizing: None,
         }
         .to_json()
         .unwrap();
@@ -805,6 +1132,17 @@ mod tests {
             });
         assert!(restored.restore_with(&dangling, &factory).is_err());
         assert_eq!(restored.symbol(), "B");
+        for members in [vec![0, 0], vec![0, 999], vec![0], vec![spread.0]] {
+            let mut invalid = snapshot.clone();
+            invalid
+                .panes
+                .iter_mut()
+                .find(|pane| pane.main)
+                .unwrap()
+                .members = members;
+            assert!(restored.restore_with(&invalid, &factory).is_err());
+            assert_eq!(restored.symbol(), "B");
+        }
 
         restored.restore_with(&snapshot, &factory).unwrap();
         assert_eq!(restored.symbol(), "A");
@@ -814,6 +1152,10 @@ mod tests {
             .collect();
         assert_eq!(names, ["Bar range", "RSI"]);
         let new_spread = restored.restored_series_id(spread.0).unwrap();
+        assert_eq!(
+            restored.pane_layout.main,
+            [new_spread, super::super::SeriesId::MAIN]
+        );
         let new_rsi = restored.restored_series_id(rsi.0).unwrap();
         assert_eq!(
             restored.indicator_mut(new_rsi).unwrap().source(),
@@ -836,6 +1178,21 @@ mod tests {
         let lines = &restored.price_series[0].lines;
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].1.price, 12.5);
+
+        let mut legacy = snapshot.clone();
+        legacy
+            .panes
+            .iter_mut()
+            .find(|pane| pane.main)
+            .unwrap()
+            .members
+            .clear();
+        restored.restore_with(&legacy, &factory).unwrap();
+        let new_spread = restored.restored_series_id(spread.0).unwrap();
+        assert_eq!(
+            restored.pane_layout.main,
+            [super::super::SeriesId::MAIN, new_spread]
+        );
     }
 
     #[test]
@@ -904,6 +1261,7 @@ mod tests {
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot().unwrap()],
+            sizing: None,
         }
         .to_json()
         .unwrap();
@@ -977,10 +1335,16 @@ mod tests {
         restored.restore(&snapshot).unwrap();
         assert_eq!(restored.timeframe(), None);
         for bad in [0.0, f32::NAN, f32::INFINITY] {
-            snapshot.bar_spacing = bad;
-            snapshot.symbol = "Invalid".into();
-            assert!(restored.restore(&snapshot).is_err());
-            assert_eq!(restored.symbol(), "A");
+            for (spacing, unit) in [
+                (bad, None),
+                (layout.charts[0].bar_spacing, Some(f64::from(bad))),
+            ] {
+                snapshot.bar_spacing = spacing;
+                snapshot.numeric_unit = unit;
+                snapshot.symbol = "Invalid".into();
+                assert!(restored.restore(&snapshot).is_err());
+                assert_eq!(restored.symbol(), "A");
+            }
         }
         for key in ["price_scale", "panes"] {
             let mut invalid: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1048,7 +1412,7 @@ mod tests {
         assert_eq!(restored.config().watermark_text, None);
         assert!(restored.config().watermark_description);
         legacy["version"] = 1.into();
-        for key in ["config", "options", "price_scale", "maximized"] {
+        for key in ["config", "options", "price_scale", "maximized", "saved_by"] {
             legacy["charts"][0].as_object_mut().unwrap().remove(key);
         }
         let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
@@ -1094,10 +1458,542 @@ mod tests {
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,
             charts: vec![original.snapshot().unwrap()],
+            sizing: None,
         }
         .to_json()
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// Ignored style values save as finite equivalents, and the restored chart keeps their
+    /// labels and hidden base lines. Finite values keep their saved representation, including
+    /// negative zero.
+    #[test]
+    fn display_format_with_an_ignored_min_move_saves() {
+        use crate::model::SeriesDisplayFormat;
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::{chart, shapes};
+
+        for added in [false, true] {
+            for (min_move, base_line_width, expected) in [
+                (0.0, 1.0, "12.62"),
+                (f64::NAN, 1.0, "12.62"),
+                (f64::INFINITY, 1.0, "12.62"),
+                (f64::NEG_INFINITY, 1.0, "12.62"),
+                (f64::NAN, f32::NAN, "12.62"),
+                (0.0, f32::NAN, "12.62"),
+                (0.0, f32::INFINITY, "12.62"),
+                (0.0, f32::NEG_INFINITY, "12.62"),
+                (-0.0, -0.0, "12.62"),
+                (-0.25, -1.0, "12.62"),
+                (0.25, 2.0, "12.50"),
+            ] {
+                let mut live = chart(&[12.0], &[12.624]);
+                let ctx = egui::Context::default();
+                let data = live.bars(SeriesId::MAIN).to_vec();
+                let id = if added {
+                    let id = live.add_series(SeriesOptions::default());
+                    live.set_data(id, data.clone());
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                let style = live.series_style_mut(id).unwrap();
+                style.display_format = Some(SeriesDisplayFormat {
+                    min_move,
+                    ..Default::default()
+                });
+                style.base_line_width = base_line_width;
+                style.base_line_color = egui::Color32::MAGENTA;
+                shapes(&ctx, &mut live, 0.0, vec![]);
+                assert_eq!(
+                    live.format_series_price(id, 12.624).as_deref(),
+                    Some(expected)
+                );
+
+                let snapshot = live.snapshot().unwrap();
+                let saved_format = if added {
+                    let style = &snapshot.series.as_ref().unwrap()[0].options.style;
+                    let width = if base_line_width.is_finite() {
+                        base_line_width
+                    } else {
+                        0.0
+                    };
+                    assert_eq!(style.base_line_width.to_bits(), width.to_bits());
+                    style.display_format.unwrap()
+                } else {
+                    snapshot.main_series_display_format.unwrap()
+                };
+                let step = if min_move.is_finite() { min_move } else { 0.0 };
+                assert_eq!(saved_format.min_move.to_bits(), step.to_bits());
+
+                let json = SavedLayout {
+                    mode: ChartLayoutMode::Single,
+                    charts: vec![snapshot],
+                    sizing: None,
+                }
+                .to_json()
+                .unwrap();
+                let layout = SavedLayout::from_json(&json).unwrap();
+                let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored.restore(&layout.charts[0]).unwrap();
+                let saved_id = id;
+                let id = if added {
+                    restored.restored_series_id(id.0).unwrap()
+                } else {
+                    id
+                };
+                restored.set_data(id, data);
+                let painted = shapes(&ctx, &mut restored, 1.0, vec![]);
+                if !min_move.is_finite() || (added && !base_line_width.is_finite()) {
+                    let mut invalid = layout.charts[0].clone();
+                    if added {
+                        let style = &mut invalid.series.as_mut().unwrap()[0].options.style;
+                        style.display_format.as_mut().unwrap().min_move = min_move;
+                        style.base_line_width = base_line_width;
+                    } else {
+                        invalid
+                            .main_series_display_format
+                            .as_mut()
+                            .unwrap()
+                            .min_move = min_move;
+                    }
+                    assert!(matches!(
+                        restored.restore(&invalid),
+                        Err(RestoreError::Layout("Layout values must be finite"))
+                    ));
+                }
+                assert_eq!(
+                    restored.format_series_price(id, 12.624).as_deref(),
+                    Some(expected)
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == expected
+                    )),
+                    "added {added}, step {min_move}, width {base_line_width}"
+                );
+                if added {
+                    for (chart, id) in [(&mut live, saved_id), (&mut restored, id)] {
+                        chart.series_price_scale_mut(id).unwrap().options_mut().mode =
+                            crate::scales::PriceScaleMode::IndexedTo100;
+                        let painted = shapes(&ctx, chart, 2.0, vec![]);
+                        assert_eq!(
+                            painted.iter().any(|shape| matches!(shape,
+                                egui::Shape::LineSegment { stroke, .. }
+                                    if stroke.color == egui::Color32::MAGENTA
+                            )),
+                            base_line_width.is_finite() && base_line_width > 0.0,
+                            "base line width {base_line_width}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A layout that does not record the main series' assignment keeps the chart's, and series
+    /// saved on that scale share it again. A layout that records it restores it.
+    #[test]
+    fn layout_without_main_assignment_keeps_comparison_on_main_scale() {
+        use crate::model::SeriesScale::{self, Left, Right};
+        use crate::widget::SeriesId;
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                let price = 100.0 + i as f64;
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        let on = |scale: SeriesScale| {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.config.show_volume = false;
+            assert!(chart.set_series_scale(SeriesId::MAIN, scale));
+            chart
+        };
+        // The main series' scale when saved, that of the restoring chart, whether the layout
+        // records it, and the assignments of the main series and the comparison after restore.
+        for (saved_on, into, recorded, main, comparison) in [
+            (Left, Left, false, Left, Left),
+            (Right, Right, false, Right, Right),
+            (Left, Right, false, Right, Left),
+            (Right, Left, false, Left, Right),
+            (Left, Left, true, Left, Left),
+            (Right, Right, true, Right, Right),
+            (Left, Right, true, Left, Left),
+            (Right, Left, true, Right, Right),
+        ] {
+            let case = format!("{saved_on:?} into {into:?}, recorded {recorded}");
+            let mut saved_chart = on(saved_on);
+            let saved_id = saved_chart.add_comparison("Peer", egui::Color32::GOLD);
+            saved_chart.set_data(saved_id, bars.clone());
+            assert_eq!(saved_chart.series_scale(saved_id), Some(saved_on), "{case}");
+            let mut saved = serde_json::to_value(saved_chart.snapshot().unwrap()).unwrap();
+            let field = saved.as_object_mut().unwrap().remove("main_scale");
+            assert!(field.is_some(), "{case}: written");
+            if recorded {
+                saved["main_scale"] = field.unwrap();
+            }
+            let mut chart = on(into);
+            chart
+                .restore(&serde_json::from_value(saved).unwrap())
+                .unwrap();
+            let restored = chart.restored_series_id(saved_id.0).unwrap();
+            assert_eq!(
+                (
+                    chart.series_scale(SeriesId::MAIN),
+                    chart.series_scale(restored)
+                ),
+                (Some(main), Some(comparison)),
+                "{case}"
+            );
+            assert_eq!(
+                std::ptr::eq(
+                    chart.series_price_scale(SeriesId::MAIN).unwrap(),
+                    chart.series_price_scale(restored).unwrap(),
+                ),
+                main == comparison,
+                "{case}: one scale"
+            );
+        }
+    }
+
+    /// A layout saved after the original price pane was removed with the main series in
+    /// it restores with the bars the host supplies for its symbol, into a new chart and into a
+    /// chart showing another symbol. The SMA(3) of bar 70 where every close is `c` is
+    /// (c + c + c) / 3 = c.
+    #[test]
+    fn layout_without_price_pane_reads_the_supplied_bars() {
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::{chart, frame};
+
+        let bars = |close: f64| {
+            chart(&[close - 10.0], &[close])
+                .bars(SeriesId::MAIN)
+                .to_vec()
+        };
+        let sma_at_70 = |chart: &Chart, id: SeriesId| {
+            chart
+                .indicators()
+                .find(|(study, _)| *study == id)?
+                .1
+                .plot_value(0, 70)
+        };
+        let mut saved = Chart::new(BarData::from_bars(bars(200.0)));
+        saved.set_symbol("BBB");
+        let sma = saved.add_indicator(Box::new(SMA::new(3)));
+        assert!(saved.move_indicator_to_pane(sma, sma));
+        assert!(saved.remove_pane(PaneId::MAIN));
+        assert_eq!(
+            sma_at_70(&saved, sma),
+            Some(200.0),
+            "the saved chart reads its bars"
+        );
+        saved.set_data(SeriesId::MAIN, bars(300.0));
+        frame(&egui::Context::default(), &mut saved, 0.0, vec![]);
+        assert_eq!(
+            sma_at_70(&saved, sma),
+            Some(300.0),
+            "the chart that lost the pane still takes bars"
+        );
+        let snapshot = saved.snapshot().unwrap();
+
+        let mut other = Chart::new(BarData::from_bars(bars(100.0)));
+        other.set_symbol("AAA");
+        let mut observed = Vec::new();
+        for mut restored in [Chart::new(BarData::new()), other] {
+            restored.restore(&snapshot).unwrap();
+            let id = restored.restored_series_id(sma.0).unwrap();
+            assert_eq!(sma_at_70(&restored, id), None, "no bars before the host's");
+            restored.set_data(SeriesId::MAIN, bars(200.0));
+            frame(&egui::Context::default(), &mut restored, 0.0, vec![]);
+            assert_eq!(restored.series_pane(SeriesId::MAIN), None);
+            assert!(!restored.is_main_series_visible());
+            observed.push(sma_at_70(&restored, id));
+        }
+        assert_eq!(observed, [Some(200.0), Some(200.0)]);
+    }
+
+    /// A chart built with a feed from a layout saved without the original price pane
+    /// requests its symbol's history, as one built from the same layout before the removal does.
+    /// A chart whose feed runs keeps it when the pane goes: no reload, and the next bar arrives.
+    #[test]
+    fn layout_without_price_pane_loads_its_feed() {
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Sink, Subscription};
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::{chart, frame};
+        use std::sync::{Arc, Mutex};
+
+        struct Requests(Mutex<Vec<String>>, Vec<Bar>, Mutex<Option<Sink>>);
+        impl Datafeed for Requests {
+            fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+                self.0.lock().unwrap().push(request.symbol);
+                reply.send(Ok(HistoryPage::new(self.1.clone(), true)));
+            }
+            fn subscribe(&self, subscription: Subscription) {
+                *self.2.lock().unwrap() = Some(subscription.sink);
+            }
+        }
+        let data = chart(&[100.0], &[110.0]).bars(SeriesId::MAIN).to_vec();
+        let feed = || Arc::new(Requests(Mutex::default(), data.clone(), Mutex::default()));
+        let mut saved = chart(&[100.0], &[110.0]);
+        saved.set_symbol("BBB");
+        saved.add_indicator(Box::new(RSI::new(3)));
+        let with_price_pane = saved.snapshot().unwrap();
+        assert!(saved.remove_pane(PaneId::MAIN));
+        let without_price_pane = saved.snapshot().unwrap();
+        let requested = |snapshot: &ChartSnapshot| {
+            let feed = feed();
+            let (mut chart, _) = crate::widget::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .build_restored(snapshot)
+                .unwrap();
+            let ctx = egui::Context::default();
+            for step in 0..3 {
+                frame(&ctx, &mut chart, f64::from(step), vec![]);
+            }
+            feed.0.lock().unwrap().first().cloned()
+        };
+        assert_eq!(
+            [requested(&with_price_pane), requested(&without_price_pane)],
+            [Some("BBB".to_owned()), Some("BBB".to_owned())]
+        );
+        let feed = feed();
+        let (mut live, _) = crate::widget::ChartBuilder::new()
+            .with_feed(feed.clone())
+            .build_restored(&with_price_pane)
+            .unwrap();
+        let ctx = egui::Context::default();
+        for step in 0..3 {
+            frame(&ctx, &mut live, f64::from(step), vec![]);
+        }
+        assert!(live.remove_pane(PaneId::MAIN));
+        let mut next = data[data.len() - 1].clone();
+        next.time += chrono::Duration::days(1);
+        feed.2.lock().unwrap().as_ref().unwrap().push_bar(next);
+        frame(&ctx, &mut live, 3.0, vec![]);
+        assert_eq!(
+            (
+                feed.0.lock().unwrap().len(),
+                live.bars(SeriesId::MAIN).len()
+            ),
+            (1, 101),
+            "one history request, and the bar after the 100 it sent"
+        );
+    }
+
+    /// The main bars that stay live without the original pane stay under their limit: after the
+    /// removal of the pane holding the main series, its undo and redo, the removal of the pane
+    /// emptied by removing the series, and in a chart restoring a layout without the pane.
+    /// A limit of 80 keeps 80 - 80 / 8 = 70 of 100 bars.
+    #[test]
+    fn main_bar_limit_holds_without_price_pane() {
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::chart;
+
+        let limit = std::num::NonZeroUsize::new(80);
+        let data = chart(&[100.0], &[110.0]).bars(SeriesId::MAIN).to_vec();
+        let limited = || {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.add_indicator(Box::new(RSI::new(3)));
+            chart.set_bar_limit(SeriesId::MAIN, limit);
+            chart
+        };
+        let kept = |chart: &mut Chart| {
+            chart.set_data(SeriesId::MAIN, data.clone());
+            (
+                chart.bar_limit(SeriesId::MAIN),
+                chart.bars(SeriesId::MAIN).len(),
+            )
+        };
+        let mut live = limited();
+        assert!(live.user_action(|chart| chart.remove_pane(PaneId::MAIN)));
+        let removed = kept(&mut live);
+        assert!(live.undo());
+        assert!(live.redo());
+        let redone = kept(&mut live);
+        let mut emptied = limited();
+        assert!(emptied.remove_series(SeriesId::MAIN));
+        assert!(emptied.remove_pane(PaneId::MAIN));
+        let mut restored = limited();
+        restored.restore(&live.snapshot().unwrap()).unwrap();
+        assert_eq!(
+            [removed, redone, kept(&mut emptied), kept(&mut restored)],
+            [(limit, 70); 4],
+            "removed, redone, emptied, restored"
+        );
+    }
+
+    /// Missing axis label switches inherit their saved lines through restore and resave.
+    #[test]
+    fn layout_saved_with_hidden_crosshair_lines_restores_without_labels() {
+        use crate::config::CrosshairOptions;
+        use crate::widget::{ChartLayoutMode, SavedLayout};
+        use serde::Deserialize;
+
+        for (vertical, horizontal, switches) in [
+            (true, true, (None, None)),
+            (false, false, (None, None)),
+            (false, true, (None, None)),
+            (true, false, (None, None)),
+            (false, false, (Some(true), Some(true))),
+            (true, true, (Some(false), Some(false))),
+            (false, true, (Some(true), Some(false))),
+            (false, false, (Some(true), None)),
+            (false, false, (None, Some(true))),
+        ] {
+            let expected = CrosshairOptions {
+                vert_line_visible: vertical,
+                horz_line_visible: horizontal,
+                horz_line_width: 3.0,
+                vert_label_visible: switches.0.unwrap_or(vertical),
+                horz_label_visible: switches.1.unwrap_or(horizontal),
+                ..Default::default()
+            };
+            let mut fields = vec![
+                ("vert_line_visible", vertical),
+                ("horz_line_visible", horizontal),
+            ];
+            if let Some(visible) = switches.0 {
+                fields.push(("vert_label_visible", visible));
+            }
+            if let Some(visible) = switches.1 {
+                fields.push(("horz_label_visible", visible));
+            }
+            // These values distinguish booleans from optional booleans, unlike JSON.
+            let fields = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(
+                fields.into_iter(),
+            );
+            assert_eq!(
+                CrosshairOptions::deserialize(fields).unwrap(),
+                CrosshairOptions {
+                    horz_line_width: 1.0,
+                    ..expected
+                },
+            );
+            let mut saved = serde_json::to_value(expected).unwrap();
+            let fields = saved.as_object_mut().unwrap();
+            if switches.0.is_none() {
+                fields.remove("vert_label_visible");
+            }
+            if switches.1.is_none() {
+                fields.remove("horz_label_visible");
+            }
+            assert_eq!(
+                serde_json::from_value::<CrosshairOptions>(saved.clone()).unwrap(),
+                expected
+            );
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let layout = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
+            };
+            let mut document: serde_json::Value =
+                serde_json::from_str(&layout.to_json().unwrap()).unwrap();
+            document["charts"][0]["options"]["crosshair"] = saved;
+            let restored = SavedLayout::from_json(&document.to_string()).unwrap();
+            chart.restore(&restored.charts[0]).unwrap();
+            assert_eq!(chart.chart_options().crosshair, expected);
+            let saved_again = chart.snapshot().unwrap();
+            assert_eq!(saved_again.options.as_ref().unwrap().crosshair, expected);
+        }
+        assert_eq!(
+            serde_json::from_str::<CrosshairOptions>("{}").unwrap(),
+            CrosshairOptions::default()
+        );
+    }
+
+    /// An HLC area layout or template saved before the style held each line and fill restores as
+    /// it was drawn: fills in the saved candle colours at alpha round(0.5 * 255) = 128, the close
+    /// line in the rising colour at width 4, and no line in the current default colours.
+    #[test]
+    fn hlc_area_layout_saved_before_its_style_restores_as_drawn() {
+        use egui::epaint::ColorMode;
+        use egui::{Color32, Shape};
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let bars: Vec<_> = [
+            (10.0, 18.0, 8.0, 16.0),
+            (16.0, 20.0, 11.0, 12.0),
+            (12.0, 15.0, 9.0, 14.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close))| {
+            let time = Utc
+                .timestamp_opt(1_700_000_000 + i as i64 * 86_400, 0)
+                .unwrap();
+            Bar::new(time, open, high, low, close, 0.0)
+        })
+        .collect();
+        let mut saved = Chart::new(BarData::from_bars(bars.clone()));
+        saved.set_chart_type(ChartType::HlcArea);
+        saved.config_mut().show_volume = false;
+        saved.config_mut().bullish_color = up;
+        saved.config_mut().bearish_color = down;
+        let former = serde_json::json!({"fill_opacity": 0.5, "line_width": 4.0});
+        for template in [false, true] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            if template {
+                let mut json =
+                    serde_json::to_value(ChartSettingsState::from_chart(&saved)).unwrap();
+                json["chart_type_params"]["styles"]["hlc_area"] = former.clone();
+                let settings: ChartSettingsState = serde_json::from_value(json).unwrap();
+                chart.set_chart_type(ChartType::HlcArea);
+                chart.config_mut().show_volume = false;
+                settings.apply_to_chart(&mut chart).unwrap();
+            } else {
+                let mut json = serde_json::to_value(saved.snapshot().unwrap()).unwrap();
+                json["chart_type_params"]["styles"]["hlc_area"] = former.clone();
+                json["settings"]["chart_type_params"]["styles"]["hlc_area"] = former.clone();
+                let snapshot: ChartSnapshot = serde_json::from_value(json).unwrap();
+                chart.restore(&snapshot).unwrap();
+            }
+            let ctx = egui::Context::default();
+            crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+            let filled = |color| {
+                painted
+                    .iter()
+                    .any(|s| matches!(s, Shape::Path(p) if p.fill == color))
+            };
+            let widths = |color| -> Vec<f32> {
+                painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Path(p)
+                            if p.stroke.width > 0.0
+                                && p.stroke.color == ColorMode::Solid(color) =>
+                        {
+                            Some(p.stroke.width)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            assert!(filled(Color32::from_rgba_unmultiplied(1, 100, 2, 128)));
+            assert!(filled(Color32::from_rgba_unmultiplied(101, 2, 3, 128)));
+            assert!(widths(up).contains(&4.0));
+            for default in [
+                Color32::from_rgb(8, 153, 129),
+                Color32::from_rgb(242, 54, 69),
+                Color32::from_rgb(134, 137, 147),
+            ] {
+                assert_eq!(widths(default), Vec::<f32>::new());
+            }
+            // The Symbol settings show what is drawn.
+            let settings = ChartSettingsState::from_chart(&chart);
+            let style = settings.chart_type_params.unwrap().styles.hlc_area;
+            assert!(!style.high_line_visible && !style.low_line_visible);
+            assert_eq!((style.close_line.color, style.close_line.width), (up, 4.0));
+            assert_eq!(style.close_to_low_fill.a(), 128);
+        }
     }
 }

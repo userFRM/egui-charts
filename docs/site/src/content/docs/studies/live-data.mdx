@@ -1,0 +1,93 @@
+---
+title: History and live studies
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/studies.rs?raw';
+
+Connect a [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html)
+when the chart should request history and accept streaming updates. This scene
+uses a finite in-memory sample and emits synthetic ticks from the egui frame
+clock. It needs no network connection or producer thread and runs in the browser.
+Your application supplies the data service in production.
+
+## Try paging and a forming candle
+
+Select **Load older**, or drag the chart right to reveal earlier bars. The
+history page counter increases as the chart requests data. Select **Latest**
+to return to the current candle. Its close and high/low change as ticks arrive;
+the EMA recalculates with it. Every 7.5 seconds of playback, a new candle starts.
+
+<Example scene="live-data" title="Local history and a streaming candle"
+  task="Load older pages, return to Latest and watch the current candle and EMA for at least eight seconds."
+  code={source.slice(0, source.indexOf('///')) + source.slice(source.indexOf('struct LocalFeed'), source.indexOf('#[cfg(test)]')).trim()} />
+
+Create the `(chart, live)` pair with `LiveData::new()` once. Call
+`live.show(ui, &mut chart)` before `chart.show(ui)` on each frame. The first
+`show` starts the feed; subsequent frames emit at most one tick every 250 ms.
+Each emitted tick has volume 1. The synthetic clock advances two market seconds
+per quarter second of elapsed frame time, so a one-minute candle takes 7.5
+seconds of continuous playback. Late frames and background tabs may skip ticks;
+this is an integration sample, not a market
+clock or a recording.
+
+## Answer a history request
+
+[`Datafeed::history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#tymethod.history)
+receives a [`HistoryRequest`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryRequest.html).
+Answer through its [`Reply`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Reply.html)
+with a [`HistoryPage`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryPage.html).
+The sample returns at most 200 bars per page from its 1,200-bar history.
+
+- `since` includes its boundary; `before` excludes its boundary.
+- Return the newest `count` bars within that range, or fewer when a page is smaller.
+- `end_of_history` is true only when the oldest available bar has been reached.
+  An empty page also ends paging unless it declares `continue_before`.
+
+The chart merges pages and recalculates studies after prepending bars. In your
+host, fetch asynchronously and send the reply when ready. Do not block the UI
+while waiting for a remote response. See the [datafeed guide](../data.mdx)
+for errors, retries, symbol metadata and lifecycle.
+
+## Stream into the subscription
+
+[`Datafeed::subscribe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.subscribe)
+supplies a [`Sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html).
+[`push_tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_tick)
+aggregates trades into the requested interval. The ticks in this scene begin at
+the minute after the last historical bar. Repeated ticks in one interval update
+its forming candle; a tick in the next interval starts a new one. Stop emitting
+when [`is_active`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.is_active)
+is false. Hosts with complete OHLCV snapshots can use
+[`push_bar`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_bar)
+instead, replacing the same open time as that candle develops.
+
+Keep the chart and its studies alive while feeding them. Returning to the latest
+bar changes the viewport without clearing the loaded history. Try the
+[custom study](/egui-charts/docs/studies/custom/) or return to the
+[built-in study scene](../studies.mdx).
+
+## Example download size
+
+These pages reuse the guide's shared widget bundle. Its `studies` feature is
+enabled for EMA and RSI and adds no crates. Measured on 2026-11-03 with
+Rust 1.99.1, Trunk 0.21.14, the committed lockfile, the `wasm-release` profile
+and `wasm-opt -Oz`:
+
+| Asset | Before these scenes | With these scenes | gzip level 9, before / after |
+| --- | ---: | ---: | ---: |
+| WebAssembly | 4,855,666 bytes | 4,996,997 bytes | 2,016,078 / 2,071,686 bytes |
+| JavaScript loader | 73,804 bytes | 73,804 bytes | 11,524 / 11,524 bytes |
+
+The additional compressed WebAssembly is 55,608 bytes, about 2.8%, so these
+scenes use the existing cached download rather than a second bundle. Compression
+was measured per file with Python 3.14.3 and zlib 1.3.1; transfer size depends on
+the server. The table excludes the HTML page and font licence. Reproduce the
+optimized build from `examples/docs` with:
+
+```sh
+trunk build --release --locked --public-url /egui-charts/docs/examples/widget/
+```
+
+Each embedded scene starts loading only when it approaches the viewport; guide
+pages without a running example do not request this bundle.

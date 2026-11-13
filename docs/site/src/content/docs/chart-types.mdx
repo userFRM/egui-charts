@@ -2,11 +2,63 @@
 title: Chart types and series
 ---
 
-`ChartType` selects the main series renderer. The available types include
-candlesticks, OHLC bars, line and area charts, Heikin Ashi, Renko, Kagi,
-Point & Figure, Line Break, range bars, Market Profile (TPO), Volume Footprint and Session Volume Profile.
+Choose a renderer for the data your application has. A renderer changes how a
+series is drawn; it does not fetch history, subscribe to a market or change the
+feed's interval. Start with the [series guide](series.mdx) for data, styling,
+identity and lifecycle, then try a family:
 
-The two execution chart types use retained and incoming feed trades on time-based intervals and require the instrument's tick size. Without those inputs they draw candles, as do bars before the first bar whose executions are all retained; the bar of the oldest retained trade counts only once the feed reports that no older trades exist. Session Volume Profile also requires the `studies` feature.
+- [Candles and bars](/egui-charts/docs/series/candles-and-bars/): OHLC, hollow and volume candles, and high-low.
+- [Line](/egui-charts/docs/series/line/): straight, stepped and marked scalar plots.
+- [Area](/egui-charts/docs/series/area/): scalar fills and high-low-close bands.
+- [Baseline](/egui-charts/docs/series/baseline/): separate colours and fills around a reference.
+- [Histogram and columns](/egui-charts/docs/series/histogram/): one value per column and an explicit base.
+- [Transforms](/egui-charts/docs/chart-types/transforms/): Heikin-Ashi, Renko, Kagi, Line Break, Point and Figure, and range bars.
+
+## Inputs for every main chart type
+
+All bar series use [`Bar`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html).
+For a scalar, [`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
+sets all four prices to that value and volume to zero. For OHLC, pass valid
+open, high, low and close prices to [`Bar::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.new);
+use zero volume when it is unavailable. Every ordinary bar still needs finite
+prices, consistent high/low bounds and finite, nonnegative volume, even if its
+renderer reads fewer fields.
+
+The names below are the exact [`ChartType`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html)
+variants. “Added” describes `SeriesOptions::chart_type` on a normal time-based main chart.
+
+| Main type | Required input and interpretation | Added series |
+| --- | --- | --- |
+| `Candles` | OHLC; body from open to close, wick from low to high | Supported |
+| `Bars` | OHLC; high-low stem with open/close ticks | Supported |
+| `HollowCandles` | OHLC; hollow when close is above open | Supported |
+| `VolumeCandles` | OHLC plus meaningful bar volume for body width | Supported |
+| `HighLow` | High and low; supply a valid OHLC bar | Supported |
+| `Line` | Scalar, or selected price of an OHLC bar; close by default | Supported; uses close |
+| `LineWithMarkers` | Same as `Line`, with a marker at each point | Supported; uses close |
+| `StepLine` | Same as `Line`, joined horizontally then vertically | Supported; uses close |
+| `Area` | Scalar, or selected price of an OHLC bar; close by default | Supported; uses close |
+| `HlcArea` | High, low and close; supply a valid OHLC bar | Supported |
+| `Baseline` | Scalar, or selected price of an OHLC bar, and a reference level | Supported; close, base at 50% of pane |
+| `Columns` | Scalar in `close`; bar volume is not the plotted value | Supported |
+| `Heikin` | Original OHLC history; computes smoothed candles over the full history | Supported |
+| `Renko` | Close or high/low history, brick size and size method | Converted to `Line` |
+| `Kagi` | Close or high/low history, reversal size and size method | Converted to `Line` |
+| `LineBreak` | Close or high/low history and reversal lookback | Converted to `Line` |
+| `PointAndFigure` | High/low by default, or close; box size, size method and reversal count | Converted to `Line` |
+| `Range` | Executions when retained; otherwise an OHLC path approximation; range size | Converted to `Line` |
+| `TimePriceOpportunity` | Timestamped OHLC ranges, session rules and TPO row/period settings; counts time at price | Converted to `Line` |
+| `VolumeFootprint` | Executions with aggressor side and instrument tick size, plus bars | Candles only |
+| `SessionVolumeProfile` | Same execution inputs as footprint, session rules and the `studies` feature | Candles only |
+
+The [order-flow guide](../../../../order-flow.md) explains execution history,
+aggressor sides, tick sizes, session profiles and TPO. OHLCV totals do not contain
+executions at each price. The execution renderers draw candles without the
+required inputs and for bars before complete execution coverage. The oldest
+retained trade's bar is complete only when the feed reports that no older trades
+exist. Session Volume Profile also draws candles without `studies`.
+
+## Select the main renderer
 
 ```rust
 use egui_charts::{Chart, ChartType, model::BarData};
@@ -15,19 +67,27 @@ let mut chart = Chart::new(BarData::new());
 chart.set_chart_type(ChartType::Line);
 ```
 
-Price transforms use the supplied history and the chart type's parameters. Choose
-parameters with `Chart::set_chart_type_params`; use the
-[API reference](api-reference.mdx) for `ChartTypeParams` and each transform's definition.
-Execution-based intervals and price-transform renderers are separate concepts:
-selecting a renderer does not acquire trades or replace the feed's interval.
+[`Chart::set_chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type)
+keeps the source bars. Change parameters with
+[`Chart::set_chart_type_params`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type_params)
+and [`ChartTypeParams`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html).
+Keep the chart alive between frames; see [your first chart](first-chart.mdx).
 
-## Add a series
+## Added-series restrictions
 
-`Chart::add_series` adds another series; retain its returned `SeriesId` for updates
-and removal. `SeriesOptions` controls its appearance and scale. Update each series
-through its own id, and use `SeriesScale` to select shared or independent pricing.
-The main series remains `SeriesId::MAIN`.
+[`Chart::add_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_series)
+adds a host-fed bar series. Its
+[`SeriesOptions::chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.chart_type)
+converts Renko, Kagi, Range, Line Break, Point and Figure, and TPO to `Line`.
+Read the effective settings back with
+[`Chart::series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series).
+Footprint and Session Volume Profile are accepted as options but the added-series
+renderer draws their bars as candles; it does not build a second execution view.
 
-[Scales and navigation](scales.mdx) explains coordinate sharing. The repository's
-[basic chart example](https://github.com/userFRM/egui-charts/blob/main/examples/basic_chart.rs)
-shows data, chart events and an additional price line.
+Added series share the main time axis, including its whitespace slots. Supply
+the main history, or explicit whitespace, to cover their timestamps. On Renko,
+Kagi, Line Break, Point and Figure and Range charts the axis holds one slot per
+element, and each bar of an added series is placed by its time on that axis, so
+the series is drawn. [Transforms](/egui-charts/docs/chart-types/transforms/)
+describes that placement and the other overlays on those types. Use the [series lifecycle](series.mdx#lifecycle)
+to retain and update each series by id, and [scales](scales.mdx) to choose its price scale.

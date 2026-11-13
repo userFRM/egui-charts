@@ -8,8 +8,11 @@
 //! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
 //! A fourth prints the frame of a zoomed-out daily TPO chart at 400 and at 1,600 sessions;
 //! `-- tpo` runs it alone.
-//! A fifth draws a host-supplied footprint with executions on all 100,000 visible bars;
+//! A fifth draws a host-supplied footprint with studies and executions on all 100,000 visible bars;
 //! `-- footprint-host` runs it alone.
+//! A sixth streams a new bar every frame into 100,000 bars held at their bar limit, with three
+//! built-in and three host studies, and prints the median and worst frame; `-- bar-limit` runs
+//! it alone.
 //! `-- comparisons` measures moving-pointer frames with zero, one, two and five comparisons.
 //! `--regression <scenario>` runs a compact workload for `benches/check-regressions.sh`.
 
@@ -291,6 +294,8 @@ fn main() {
     tpo(&filters, frames);
     println!();
     footprint(&filters, frames);
+    println!();
+    bar_limit(&filters, frames);
     comparisons::run(&filters, frames);
 }
 
@@ -321,7 +326,10 @@ fn footprint(filters: &[String], frames: usize) {
     options.time_scale.min_bar_spacing = 0.0;
     let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
     chart.set_visible_bars(100_000);
-    let config = FootprintConfig::default();
+    let config = FootprintConfig {
+        studies: Some(Default::default()),
+        ..Default::default()
+    };
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             chart.show_footprint(ui, &flow, &config);
@@ -344,6 +352,95 @@ fn footprint(filters: &[String], frames: usize) {
         samples.last().map_or(0, |s| s.vertices),
         median(|s| s.frame),
         median(|s| s.tessellate),
+    );
+}
+
+/// The bar limit of the `bar-limit` scenarios. Their charts start `frame::WARMUP` bars below it
+/// and take a new bar every frame, so the warm-up frames fill the series and the first measured
+/// frame evicts the oldest `BAR_LIMIT / 8 + 1` bars, which restarts every study.
+const BAR_LIMIT: usize = 100_000;
+
+/// The chart of the `bar-limit` scenarios, with SMA 20, EMA 20 and RSI 14 and, with `host`,
+/// three host moving averages, which the chart never updates incrementally.
+fn limited_chart(host: bool) -> Chart {
+    use egui_charts::studies::{CustomIndicator, IndicatorValue};
+
+    let bars = (0..BAR_LIMIT - frame::WARMUP)
+        .map(|i| example::sample_bar(i, 0))
+        .collect();
+    let mut chart = Chart::new(BarData::from_bars(bars));
+    chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(BAR_LIMIT));
+    chart.set_visible_bars(200);
+    let mut config = chart.config().clone();
+    config.show_volume = false;
+    chart.update_config(config);
+    chart.add_indicator(Box::new(SMA::new(20)));
+    chart.add_indicator(Box::new(EMA::new(20)));
+    chart.add_indicator(Box::new(RSI::new(14)));
+    if host {
+        for length in [10, 50, 200] {
+            chart.add_indicator(Box::new(CustomIndicator::new(
+                format!("Host mean {length}"),
+                move |bars| {
+                    let mut sum = 0.0;
+                    bars.iter()
+                        .enumerate()
+                        .map(|(i, bar)| {
+                            sum += bar.close;
+                            if i >= length {
+                                sum -= bars[i - length].close;
+                            }
+                            if i + 1 >= length {
+                                IndicatorValue::Single(sum / length as f64)
+                            } else {
+                                IndicatorValue::None
+                            }
+                        })
+                        .collect()
+                },
+            )));
+        }
+    }
+    chart
+}
+
+/// Bars streaming into a series held at its bar limit: the median and the worst frame, which
+/// includes the eviction and the first full recompute after it.
+fn bar_limit(filters: &[String], frames: usize) {
+    let name = "bar-limit, 100,000 bars, 6 studies, a new bar every frame";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let mut chart = limited_chart(true);
+    let mut last = example::sample_bar(BAR_LIMIT - frame::WARMUP - 1, 0);
+    let mut evictions = 0;
+    let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 350.0), frames, |ui| {
+        // A frame whose first pass is discarded runs this twice but takes one bar.
+        if ui.ctx().current_pass_index() == 0 {
+            last.time += chrono::Duration::minutes(1);
+            let before = chart.bars(SeriesId::MAIN).len();
+            chart.update(SeriesId::MAIN, last.clone());
+            evictions += usize::from(chart.bars(SeriesId::MAIN).len() < before);
+        }
+        egui::CentralPanel::default().show(ui, |ui| {
+            chart.show(ui);
+        });
+    });
+    assert!(
+        frames == 0 || evictions > 0,
+        "the measured frames include an eviction"
+    );
+    let mut times: Vec<_> = samples
+        .iter()
+        .map(|s| s.frame.as_secs_f64() * 1e3)
+        .collect();
+    times.sort_by(f64::total_cmp);
+    println!("| bar limit | evictions | frame ms (median) | frame ms (worst) |");
+    println!("|---|---:|---:|---:|");
+    println!(
+        "| {name} | {evictions} | {:.3} | {:.3} |",
+        times.get(times.len() / 2).copied().unwrap_or(0.0),
+        times.last().copied().unwrap_or(0.0),
     );
 }
 

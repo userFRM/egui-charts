@@ -36,6 +36,8 @@ pub struct CandleDataContext<'a> {
     pub clock: &'a crate::model::BarClock,
     /// The instrument's minimum price increment, if known.
     pub tick_size: Option<f64>,
+    /// Host formatting of the price labels a chart type prints beside its bars.
+    pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
 }
 
 /// Bar/candle rendering dimensions

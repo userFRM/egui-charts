@@ -14,7 +14,7 @@ use egui::Color32;
 /// Type of source in the tree
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceType {
-    /// Main data source (chart symbol and timeframe)
+    /// Main or added bar series.
     DataSource,
     /// Technical indicator (SMA, RSI, MACD, etc.)
     Indicator,
@@ -130,6 +130,9 @@ pub struct SourceItem {
     /// Drawing folder path, copied from [`crate::drawings::Drawing::folder`].
     /// Non-drawing rows ignore this field.
     pub folder: Vec<String>,
+    /// Synchronization the drawing follows, copied from
+    /// [`crate::drawings::Drawing::folder_sync_mode`]. Non-drawing rows ignore this field.
+    pub folder_sync: Option<crate::drawings::FolderSync>,
 }
 
 impl SourceItem {
@@ -161,6 +164,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
@@ -189,6 +193,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
@@ -230,10 +235,11 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
-    /// Create a new data source (main chart symbol)
+    /// Create a main or added bar-series data source.
     ///
     /// # Arguments
     ///
@@ -257,6 +263,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
@@ -304,6 +311,14 @@ impl SourceItem {
         self.source_type == SourceType::Drawing
     }
 
+    /// Check if this is a bar series added to the chart, not the main series
+    pub(super) fn is_added_series(&self) -> bool {
+        self.source_type == SourceType::DataSource
+            && self
+                .series_id
+                .is_some_and(|id| id != crate::widget::SeriesId::MAIN)
+    }
+
     /// Check if this is an indicator
     pub fn is_indicator(&self) -> bool {
         self.source_type == SourceType::Indicator
@@ -341,6 +356,12 @@ pub struct DataWindowInfo {
     pub prev_close: f64,
     /// Instrument price decimals; `None` keeps magnitude-based formatting.
     pub price_decimals: Option<u8>,
+    /// Host-formatted open, high, low and close values, or `None` for instrument formatting.
+    pub formatted_prices: Option<[String; 4]>,
+    /// Host-formatted volume, or `None` for instrument formatting.
+    pub formatted_volume: Option<String>,
+    /// Host-formatted absolute and percentage change, or `None` for instrument formatting.
+    pub formatted_change: Option<String>,
     /// Visible study plots at the same bar as the OHLCV values.
     pub studies: Vec<crate::chart::rendering::StudyValue>,
 }

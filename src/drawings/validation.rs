@@ -8,6 +8,9 @@ pub(crate) const MAX_STROKE_WIDTH: f32 = 100.0;
 /// Largest side of an image frame, in points.
 pub(crate) const MAX_IMAGE_SIDE: f32 = 10_000.0;
 
+/// Widest line of wrapped annotation text, in points.
+pub(crate) const MAX_TEXT_WRAP_WIDTH: f32 = 10_000.0;
+
 /// The largest pitchfork level, as a multiple of the tines' distance from the median, that is
 /// drawn. Larger levels lie far outside the chart, and near `f32::MAX` overflow its geometry.
 pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;

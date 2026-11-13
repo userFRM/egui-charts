@@ -565,7 +565,9 @@ fn over_finite_bars(
 }
 
 mod trade_profile;
-pub use trade_profile::{TradeProfile, TradeProfileRanges, trade_profiles};
+pub use trade_profile::{
+    TradeProfile, TradeProfileRanges, trade_profiles, trade_profiles_with_rows,
+};
 
 mod order_flow;
 pub use order_flow::OrderFlowStudy;

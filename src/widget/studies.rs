@@ -38,11 +38,11 @@ impl Chart {
         Ok(self.add_indicator(indicator))
     }
 
-    /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
-    /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
-    /// study's id, which stays valid when other studies are removed. Host code adds past the
-    /// cap; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
-    pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
+    /// `indicator` set to this chart's interval, instrument and events, not yet computed.
+    pub(super) fn configure_indicator(
+        &self,
+        mut indicator: Box<dyn Indicator>,
+    ) -> Box<dyn Indicator> {
         if !indicator.has_settings() {
             indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
         }
@@ -58,6 +58,12 @@ impl Chart {
             self.frozen_source_events,
         ));
         indicator.set_bar_clock(&self.bar_clock());
+        indicator
+    }
+
+    /// `indicator` set to this chart's interval, instrument and events and computed from its bars.
+    pub(super) fn prepare_indicator(&self, indicator: Box<dyn Indicator>) -> Box<dyn Indicator> {
+        let mut indicator = self.configure_indicator(indicator);
         if let Some(crate::studies::StudySource::Study { id, plot }) = indicator.source() {
             let source = self
                 .study_ids
@@ -78,17 +84,47 @@ impl Chart {
             );
             indicator.update_data(&self.state.data().bars, 0, &sources);
         }
+        indicator
+    }
+
+    /// Adds a study, computed at once from the bars. An [`Indicator::is_overlay`] study uses
+    /// the original price pane or, after its removal, the surviving main series' pane. Other
+    /// studies start in new panes, as do overlays with neither destination. Returns the study's
+    /// id, which stays valid when other studies are removed. Host code adds past the cap; the
+    /// interface goes through
+    /// [`try_add_indicator`](Self::try_add_indicator).
+    pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
+        let indicator = self.prepare_indicator(indicator);
         let id = SeriesId(self.next_series);
         self.next_series += 1;
         self.record_study(id);
-        let overlay = indicator.is_overlay();
+        let original = self.panes().contains(&super::PaneId::MAIN);
+        let target = (!original && indicator.is_overlay())
+            .then(|| self.series_pane(SeriesId::MAIN))
+            .flatten();
+        let overlay = indicator.is_overlay() && original;
         self.studies.add(indicator);
+        self.readout_revision = crate::model::next_revision();
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
         self.pending_from.push(None);
+        self.stale.push(false);
         self.next_refresh.push(f64::NEG_INFINITY);
-        if !overlay {
+        if let Some(pane) = target {
+            self.studies
+                .indicators_mut()
+                .last_mut()
+                .expect("study was added")
+                .set_overlay(false);
+            self.pane_layout
+                .panes
+                .iter_mut()
+                .find(|item| item.id == pane)
+                .expect("main series belongs to pane")
+                .members
+                .push(id);
+        } else if !overlay {
             self.add_study_pane(id);
         }
         id
@@ -122,10 +158,12 @@ impl Chart {
             self.volume_setting = false;
         }
         let indicator = self.studies.remove_indicator(at);
+        self.readout_revision = crate::model::next_revision();
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.study_inputs.remove(at);
         self.pending_from.remove(at);
+        self.stale.remove(at);
         self.next_refresh.remove(at);
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
             self.selection.deselect();
@@ -140,8 +178,27 @@ impl Chart {
             return false;
         };
         self.record_study(id);
+        self.readout_revision = crate::model::next_revision();
         self.studies.indicators_mut()[at].set_visible(visible);
         true
+    }
+
+    /// Whether an existing study permits user edits. Unknown ids return false.
+    pub fn indicator_user_edit_enabled(&self, id: SeriesId) -> bool {
+        self.indicators()
+            .any(|(candidate, study)| candidate == id && study.user_edit_enabled())
+    }
+
+    /// Enable or disable user editing, retaining the choice in study snapshots and saved state.
+    /// User undo and redo retain the host's latest permission.
+    /// Host APIs can still update the study. Returns false for an unknown id or rejected settings.
+    pub fn set_indicator_user_edit_enabled(&mut self, id: SeriesId, enabled: bool) -> bool {
+        let Some(study) = self.indicator_mut(id) else {
+            return false;
+        };
+        let mut settings = study.settings();
+        settings.user_edit_enabled = Some(enabled);
+        study.apply_settings(&[], settings).is_ok()
     }
 
     /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
@@ -174,8 +231,13 @@ impl Chart {
     /// [`add_indicator`](Self::add_indicator). A study that is not updated incrementally can lag
     /// the bars by its wait between full recomputes, at least 0.25 s; after the bars changed from
     /// the first one on, as when `set_data` loads other bars or older bars are loaded in front, it
-    /// has no values until it is recomputed. On price-based types these remain the source-bar
-    /// results; [`Self::study_values_at`] returns the displayed element results.
+    /// has no values until it is recomputed. After a bar limit or
+    /// [`remove_oldest_bars`](Self::remove_oldest_bars) evicts the oldest bars, it keeps its
+    /// values on the bars that remain until its next full recompute, with none for the bars added
+    /// since, unless it draws candles, zones, markers, labels, projections, provisional segments
+    /// or drawings; so it does when its order-flow input drops its oldest bars, or when live bars
+    /// change only the last bar of a history it reads. On price-based types these remain the
+    /// source-bar results; [`Self::study_values_at`] returns the displayed element results.
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
         self.study_ids.iter().copied().zip(studies)
@@ -188,6 +250,7 @@ impl Chart {
         self.record_study(id);
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
+        self.readout_revision = crate::model::next_revision();
         Some(self.studies.indicators_mut()[at].as_mut())
     }
 
@@ -198,7 +261,10 @@ impl Chart {
     /// is earliest. Its next full recompute then waits, from the end of this one,
     /// the longer of a quarter second and four times what this one took. Until its turn, a
     /// study whose change starts at the first bar has no values, since its values belong to
-    /// other bars. Returns how long until the next waiting study is due, zero if one is due now.
+    /// other bars. A study whose values still hold, after an eviction, a drop of its order-flow
+    /// input's oldest bars or a live bar of a history it reads, keeps them and waits for its
+    /// `next_refresh` like a tail update instead. Returns how long until the next waiting study
+    /// is due, zero if one is due now.
     pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
         let instrument = self.instrument().cloned();
         let clock = self.bar_clock();
@@ -211,6 +277,7 @@ impl Chart {
             if instrument_changed || clock_changed || events_changed {
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
+                self.readout_revision = crate::model::next_revision();
             }
         }
         let requests = self
@@ -227,6 +294,7 @@ impl Chart {
             &self.study_ids,
             bars,
             &mut self.pending_from,
+            &mut self.stale,
             &mut self.next_refresh,
             now,
             &sources,
@@ -250,6 +318,7 @@ impl Chart {
             &self.study_ids,
             &cache.bars,
             &mut cache.pending_from,
+            &mut cache.stale,
             &mut cache.next_refresh,
             now,
             &sources,
@@ -265,6 +334,7 @@ impl Chart {
     }
 
     pub(super) fn recalculate_studies(&mut self) {
+        self.readout_revision = crate::model::next_revision();
         let requests = self
             .studies
             .indicators()
@@ -329,6 +399,7 @@ impl Chart {
         edited.set_input("source", InputValue::Source(source))?;
         self.record_study(id);
         self.studies.indicators_mut()[at] = edited;
+        self.readout_revision = crate::model::next_revision();
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         self.element_studies.dirty = true;
@@ -418,6 +489,7 @@ pub(super) fn refresh_values(
     ids: &[SeriesId],
     bars: &[Bar],
     pending_from: &mut [Option<usize>],
+    stale: &mut [bool],
     next_refresh: &mut [f64],
     now: f64,
     sources: &[crate::studies::StudyData<'_>],
@@ -427,6 +499,7 @@ pub(super) fn refresh_values(
         if !order.contains(&at) {
             studies[at].update_source(bars, 0, &[]);
             pending_from[at] = None;
+            stale[at] = false;
         }
     }
     let mut recomputed = false;
@@ -437,12 +510,13 @@ pub(super) fn refresh_values(
             }
             _ => None,
         };
-        // Retained parent values can feed a waiting consumer while another tail update is pending.
-        // Replaced histories and edited sources must finish their full invalidation first.
+        // Retained parent values can feed a waiting consumer while another tail update is pending,
+        // and so can values kept for a full recompute, which a stream can keep pending on every
+        // frame. Replaced histories and edited sources must finish their full invalidation first.
         if parent.is_some_and(|parent| pending_from[parent] == Some(0)) {
             continue;
         }
-        let Some(from) = pending_from[at] else {
+        let Some(from) = pending(pending_from, stale, at) else {
             continue;
         };
         let len = studies[at].values().len();
@@ -463,14 +537,16 @@ pub(super) fn refresh_values(
                             .is_some_and(|parent| pending_from[parent] != Some(0)),
                         _ => true,
                     };
+                    // Only a start at the first bar whose values belong to other bars is due at
+                    // once; kept values wait like a tail update.
                     parent_ready
-                        && pending_from[at].is_some_and(|from| {
+                        && pending(pending_from, stale, at).is_some_and(|from| {
                             let len = studies[at].values().len();
                             !(studies[at].is_incremental()
                                 && len > 0
                                 && from + 1 >= len
                                 && bars.len() >= len)
-                                && (from == 0 || now >= next_refresh[at])
+                                && (pending_from[at] == Some(0) || now >= next_refresh[at])
                         })
                 })
                 .min_by(|&a, &b| next_refresh[a].total_cmp(&next_refresh[b]));
@@ -489,8 +565,11 @@ pub(super) fn refresh_values(
                 previous.push((plot, studies[at].values().line(plot).to_vec()));
             }
         }
+        // The consumers of values kept for a full recompute keep theirs until their own turn.
+        let kept = stale[at] && pending_from[at] != Some(0);
         super::studies::update(studies, ids, at, bars, from, sources);
         pending_from[at] = None;
+        stale[at] = false;
         if !incremental {
             recomputed = true;
             let cost = started.elapsed().as_secs_f64();
@@ -509,18 +588,23 @@ pub(super) fn refresh_values(
             for (child, study) in studies.iter().enumerate() {
                 if matches!(study.source(), Some(StudySource::Study { id, plot: source_plot }) if id == ids[at].0 && source_plot == plot)
                 {
-                    pending_from[child] =
-                        Some(pending_from[child].map_or(from, |old| old.min(from)));
+                    if kept {
+                        stale[child] = true;
+                    } else {
+                        pending_from[child] =
+                            Some(pending_from[child].map_or(from, |old| old.min(from)));
+                    }
                 }
             }
         }
     }
     let mut wait = None::<f64>;
     for (at, study) in studies.iter_mut().enumerate() {
-        let Some(from) = pending_from[at] else {
+        if pending(pending_from, stale, at).is_none() {
             continue;
-        };
-        let left = if from == 0 {
+        }
+        // Values kept for a full recompute stay drawn until it runs.
+        let left = if pending_from[at] == Some(0) {
             if !study.values().is_empty() {
                 study.update(&[], 0);
             }
@@ -531,6 +615,12 @@ pub(super) fn refresh_values(
         wait = Some(wait.map_or(left, |wait| wait.min(left)));
     }
     wait
+}
+
+/// The first bar study `at` must be updated from: the first one while it draws values kept for
+/// a full recompute.
+fn pending(pending_from: &[Option<usize>], stale: &[bool], at: usize) -> Option<usize> {
+    if stale[at] { Some(0) } else { pending_from[at] }
 }
 
 /// Least time in seconds between two full recomputes of a study while bars stream; a study
@@ -806,8 +896,11 @@ mod tests {
             ),
             Err(StudyError::CyclicSource)
         ));
-        let csv = chart.export_csv().unwrap();
-        assert!(csv.contains(",41.67"), "{csv}");
+        #[cfg(feature = "csv")]
+        {
+            let csv = chart.export_csv().unwrap();
+            assert!(csv.contains(",41.67"), "{csv}");
+        }
         chart.user_action(|chart| chart.remove_series(rsi));
         settle(&mut chart);
         assert_eq!(output(&chart, 3), None);
@@ -864,8 +957,9 @@ mod tests {
     }
 
     /// A replaced series gets one full recompute per frame, even while every wait is still
-    /// running; waiting studies have no stale values and request another frame until the last
-    /// study is current.
+    /// running, and waiting studies request another frame until the last study is current. They
+    /// have no values after the bars are replaced. After a bar limit evicts the oldest bars they
+    /// keep the values of the bars that remain, and wait for their next full recompute.
     #[test]
     fn full_recomputes_run_one_per_frame() {
         let mut chart = Chart::new(BarData::from_bars(
@@ -880,8 +974,24 @@ mod tests {
             )));
             counter.store(0, Ordering::Relaxed);
         }
-        // The second round replaces the bars while the waits of the first are still running.
-        for (round, close) in [(0, 200.0), (1, 300.0)] {
+        let counts = || -> Vec<_> {
+            calls
+                .iter()
+                .map(|counter| counter.load(Ordering::Relaxed))
+                .collect()
+        };
+        // The second round replaces the bars while the waits of the first are still running. The
+        // third appends a bar past a limit of 100, which keeps 100 - 100 / 8 = 88 bars: the oldest
+        // 13 go, and a waiting study keeps the values of bars 13 to 99 as those of bars 0 to 86,
+        // with none yet for the new bar 87.
+        let mut evicted = RSI::new(14);
+        let kept = |study: &dyn Indicator, evicted: &RSI| {
+            // What the chart draws on bars 0 to 87: old bars 13 to 100.
+            let drawn: Vec<_> = (0..88).map(|bar| study.plot_value(0, bar)).collect();
+            let kept: Vec<_> = (13..101).map(|bar| evicted.plot_value(0, bar)).collect();
+            study.values().len() == 87 && drawn == kept
+        };
+        for round in 0..3 {
             if round == 1 {
                 // Model unequal measured costs without depending on the runner clock.
                 chart.next_refresh.copy_from_slice(&[3.0, 2.0, 1.0]);
@@ -889,27 +999,46 @@ mod tests {
             for counter in &calls {
                 counter.store(0, Ordering::Relaxed);
             }
-            chart.set_data(
-                SeriesId::MAIN,
-                (0..100)
-                    .map(|i| bar(i * 60, close + (i * 7 % 13) as f64))
-                    .collect(),
-            );
+            if round < 2 {
+                let close = [200.0, 300.0][round];
+                chart.set_data(
+                    SeriesId::MAIN,
+                    (0..100)
+                        .map(|i| bar(i * 60, close + (i * 7 % 13) as f64))
+                        .collect(),
+                );
+            } else {
+                evicted.calculate(chart.bars(SeriesId::MAIN));
+                chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(100));
+                chart.update(SeriesId::MAIN, bar(100 * 60, 400.0));
+                assert_eq!(chart.bars(SeriesId::MAIN).len(), 88);
+                // Before the waits of the second round end, every study draws what it kept.
+                let wait = chart.refresh_studies(3.0 / 60.0);
+                assert_eq!(counts(), [0, 0, 0]);
+                assert!(chart.indicators().all(|(_, study)| kept(study, &evicted)));
+                assert!(wait.is_some_and(|wait| wait > 0.0), "{wait:?}");
+                // Old bar 14, by hand: the first 14 changes of 300 + 7i mod 13 gain 7 seven times
+                // and lose 6 seven times, so RSI = 100 * 49 / (49 + 42).
+                let (_, study) = chart.indicators().next().unwrap();
+                let rsi = study.plot_value(0, 1).unwrap();
+                assert!((rsi - 100.0 * 49.0 / 91.0).abs() < 1e-9, "{rsi}");
+            }
             for k in 1..=3 {
-                let now = if round == 0 { k as f64 } else { 3.0 } / 60.0;
+                let now = [k as f64 / 60.0, 3.0 / 60.0, 1.0][round];
                 let wait = chart.refresh_studies(now);
-                let counts: Vec<_> = calls
-                    .iter()
-                    .map(|counter| counter.load(Ordering::Relaxed))
-                    .collect();
+                let counts = counts();
                 assert_eq!(counts.iter().sum::<usize>(), k, "round {round}, call {k}");
                 for (j, (_, study)) in chart.indicators().enumerate() {
                     assert!(counts[j] <= 1, "round {round}, call {k}, study {j}");
-                    assert_eq!(
-                        study.values().is_empty(),
-                        counts[j] == 0,
-                        "round {round}, call {k}, study {j}"
-                    );
+                    if round < 2 || counts[j] == 1 {
+                        assert_eq!(
+                            study.values().is_empty(),
+                            counts[j] == 0,
+                            "round {round}, call {k}, study {j}"
+                        );
+                    } else {
+                        assert!(kept(study, &evicted), "round {round}, call {k}, study {j}");
+                    }
                 }
                 assert_eq!(wait, if k < 3 { Some(0.0) } else { None });
             }
@@ -1084,6 +1213,186 @@ mod tests {
         chart.set_study_limit(None);
         assert!(chart.try_add_indicator(Box::new(SMA::new(8))).is_ok());
     }
+    /// History restores user settings while retaining the host's latest edit permission.
+    #[test]
+    fn undo_keeps_host_study_lock() {
+        for enabled in [false, true] {
+            let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart.add_indicator(Box::new(SMA::new(1)));
+            assert!(chart.set_indicator_user_edit_enabled(id, !enabled));
+            let before = chart.indicators().next().unwrap().1.settings();
+            let mut edited = before.clone();
+            edited.precision = Some(4);
+            edited.show_legend_values = false;
+            edited.plots[0].width = 3.0;
+            chart.user_action(|chart| {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .apply_settings(&[], edited.clone())
+                    .unwrap();
+            });
+            // The host changes the permission again before each step.
+            for (redo, expected, host) in [(false, &before, enabled), (true, &edited, !enabled)] {
+                assert!(chart.set_indicator_user_edit_enabled(id, host));
+                assert!(if redo { chart.redo() } else { chart.undo() });
+                assert_eq!(chart.indicator_user_edit_enabled(id), host, "redo={redo}");
+                let restored = chart.indicators().next().unwrap().1.settings();
+                assert_eq!(restored.precision, expected.precision);
+                assert_eq!(restored.show_legend_values, expected.show_legend_values);
+                assert_eq!(restored.plots, expected.plots);
+            }
+        }
+    }
+
+    /// Saved study presentation hides only legend values and keeps edit permissions across history.
+    #[test]
+    fn study_metadata_keeps_values_and_blocks_user_settings() {
+        use crate::studies::{IndicatorFactory, StudySettings};
+        let custom = crate::studies::CustomIndicator::new("SMA", |_| Vec::new());
+        assert!(
+            serde_json::to_value(custom.settings()).unwrap()["help_url"].is_null(),
+            "a shared name does not identify a built-in"
+        );
+        assert!(serde_json::to_value(SMA::new(1).settings()).unwrap()["help_url"].is_string());
+        let articles: [(Box<dyn Indicator>, &str); 10] = [
+            (
+                Box::new(crate::studies::SMIErgodicIndicator::default()),
+                "SMIErgodicIndicator",
+            ),
+            (
+                Box::new(crate::studies::SMIErgodicOscillator::default()),
+                "SMIErgodicOscillator",
+            ),
+            (
+                Box::new(crate::studies::RisingWedge::default()),
+                "RisingWedge",
+            ),
+            (
+                Box::new(crate::studies::FallingWedge::default()),
+                "FallingWedge",
+            ),
+            (Box::new(crate::studies::Ratio::default()), "Ratio"),
+            (Box::new(crate::studies::Spread::default()), "Spread"),
+            (
+                Box::new(crate::studies::Correlation::default()),
+                "Correlation",
+            ),
+            (
+                Box::new(crate::studies::AdvanceDeclineRatio::default()),
+                "AdvanceDeclineRatio",
+            ),
+            (
+                Box::new(crate::studies::AdvanceDeclineLine::default()),
+                "AdvanceDeclineLine",
+            ),
+            (
+                Box::new(crate::studies::CumulativeVolumeIndex::default()),
+                "CumulativeVolumeIndex",
+            ),
+        ];
+        for (study, article) in articles {
+            assert!(
+                study
+                    .help_url()
+                    .unwrap()
+                    .ends_with(&format!("/type.{article}.html"))
+            );
+        }
+
+        let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(SMA::new(1)));
+        let study = chart.indicator_mut(id).unwrap();
+        let mut saved = serde_json::to_value(study.settings()).unwrap();
+        saved["show_legend_values"] = false.into();
+        saved["user_edit_enabled"] = false.into();
+        saved["help_url"] = "https://example.org/studies/average".into();
+        let settings: StudySettings = serde_json::from_value(saved).unwrap();
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .apply_settings(&[], settings)
+                .unwrap();
+        });
+        let study = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1;
+        assert!(!study.legend_visible(0), "only the status value is hidden");
+        assert!(study.plot_style(0).visible);
+        assert!(study.plot_tagged(0));
+        assert_eq!(study.plot_value(0, 0), Some(110.0));
+        let copy = chart.copy_indicator(id).unwrap();
+        let pasted = chart
+            .paste_indicator(&copy, &IndicatorFactory::new())
+            .unwrap();
+        let copied = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == pasted)
+            .unwrap()
+            .1;
+        assert!(!copied.legend_visible(0));
+        let copied_settings = serde_json::to_value(copied.settings()).unwrap();
+        assert_eq!(copied_settings["user_edit_enabled"], false);
+        assert_eq!(
+            copied_settings["help_url"],
+            "https://example.org/studies/average"
+        );
+        #[cfg(feature = "ui")]
+        {
+            let mut dialog =
+                crate::ui::dialogs::indicator_dialog::IndicatorSettingsDialog::default();
+            assert!(!dialog.open_for_chart(&chart, id));
+            let saved = chart.snapshot().unwrap();
+            let saved = serde_json::to_string(&saved).unwrap();
+            let mut restored = super::super::test_frames::chart(&[100.0], &[110.0]);
+            restored
+                .restore(&serde_json::from_str(&saved).unwrap())
+                .unwrap();
+            for (_, study) in restored.indicators() {
+                let settings = serde_json::to_value(study.settings()).unwrap();
+                assert_eq!(settings["show_legend_values"], false);
+                assert_eq!(settings["user_edit_enabled"], false);
+                assert_eq!(settings["help_url"], "https://example.org/studies/average");
+            }
+        }
+        let mut legacy = copied_settings;
+        for field in ["show_legend_values", "user_edit_enabled", "help_url"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        let legacy: StudySettings = serde_json::from_value(legacy).unwrap();
+        let legacy = serde_json::to_value(legacy).unwrap();
+        assert_eq!(legacy["show_legend_values"], true);
+        assert!(legacy["user_edit_enabled"].is_null());
+        assert!(legacy["help_url"].is_null());
+        // The metadata is part of the same presentation snapshot as the plot styles.
+        chart.user_action(|chart| {
+            chart.remove_series(pasted);
+        });
+        assert!(chart.undo());
+        assert!(chart.undo());
+        assert!(chart.undo());
+        assert!(
+            chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .legend_visible(0)
+        );
+        assert!(chart.redo());
+        assert!(
+            !chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .legend_visible(0)
+        );
+    }
+
     #[test]
     fn api_errors_are_std_errors() {
         fn needs_error<E: std::error::Error + Send + Sync + 'static>() {}

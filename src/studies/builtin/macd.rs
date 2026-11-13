@@ -305,6 +305,11 @@ impl Indicator for MACD {
         ]
     }
 
+    /// The histogram, then the MACD and signal lines.
+    fn legend_lines(&self) -> Vec<usize> {
+        vec![2, 0, 1]
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }

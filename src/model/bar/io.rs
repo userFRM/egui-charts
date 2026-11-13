@@ -1,17 +1,23 @@
 //! Bar Data I/O Operations
 //!
 //! CSV and JSON import/export for bar data. Errors are `Send + Sync` so imports
-//! and exports can return their results across worker-thread boundaries.
+//! and exports can return their results across worker-thread boundaries. CSV methods
+//! require the `csv` feature; JSON methods are always available.
 
 use super::bar::Bar;
 use super::bar_data::BarData;
-use chrono::{DateTime, Utc};
+#[cfg(feature = "csv")]
+use chrono::DateTime;
+#[cfg(any(feature = "csv", test))]
+use chrono::Utc;
 
 /// The time column of a bar CSV file, UTC. `%.f` writes the fraction of a second only when the
 /// time has one and reads a time with or without it.
+#[cfg(feature = "csv")]
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 
 /// The header row of a bar CSV file, written by every writer and required by `from_csv`.
+#[cfg(feature = "csv")]
 const HEADER: [&str; 6] = ["ts", "open", "high", "low", "close", "volume"];
 
 impl BarData {
@@ -30,6 +36,8 @@ impl BarData {
     ///
     /// let data = BarData::from_csv("data.csv").expect("Failed to load CSV");
     /// ```
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn from_csv(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut rdr = csv::Reader::from_path(path)?;
         let header = rdr.headers()?;
@@ -103,6 +111,8 @@ impl BarData {
     /// let data = BarData::new();
     /// data.to_csv("output.csv").expect("Failed to export CSV");
     /// ```
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn to_csv(&self, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::fs::File;
 
@@ -143,6 +153,8 @@ impl BarData {
     /// let csv = data.to_csv_string().expect("Failed to export CSV");
     /// assert!(csv.starts_with("ts,"));
     /// ```
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn to_csv_string(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut wtr = csv::Writer::from_writer(Vec::new());
 
@@ -187,6 +199,8 @@ impl BarData {
     ///     .expect("Failed to export CSV with indicators");
     /// assert!(csv.starts_with("ts,"));
     /// ```
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn to_csv_with_indicators(
         &self,
         indicators: &[(String, Vec<f64>)],
@@ -314,27 +328,64 @@ mod tests {
         assert_eq!(parsed.bars[0], bar);
         // JSON writes NaN as null, which reads back as NaN.
         assert!(parsed.bars[1].is_whitespace());
-
-        // A date alone is midnight UTC, and a time alone is a whitespace bar.
-        let parsed = BarData::from_json_string(
-            r#"[{"time":"2024-03-15","open":1,"high":2,"low":0.5,"close":1.5,"volume":10},
-                {"time":"2024-03-16"}]"#,
-        )
-        .unwrap();
-        let midnight = |day| {
-            format!("2024-03-{day}T00:00:00Z")
-                .parse::<DateTime<Utc>>()
-                .unwrap()
-        };
-        assert_eq!(
-            parsed.bars[0],
-            Bar::new(midnight(15), 1.0, 2.0, 0.5, 1.5, 10.0)
-        );
-        assert_eq!(parsed.bars[1].time, midnight(16));
-        assert!(parsed.bars[1].is_whitespace());
     }
 
     #[test]
+    fn calendar_date_constructors_match_date_only_imports() {
+        #[cfg(feature = "csv")]
+        let path = temp_csv("calendar-dates");
+        for (year, month, day, midnight) in [
+            (1969, 12, 31, -86_400),
+            (2024, 2, 28, 1_709_078_400),
+            (2024, 2, 29, 1_709_164_800),
+            (2024, 3, 1, 1_709_251_200),
+        ] {
+            let date = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
+            let typed = [
+                Bar::from_date(date, 1.0, 2.0, 0.5, 1.5, 10.0),
+                Bar::from_value_on_date(date, 3.0),
+                Bar::whitespace_on_date(date),
+            ];
+            let json = format!(
+                r#"[{{"time":"{date}","open":1,"high":2,"low":0.5,"close":1.5,"volume":10}},
+                    {{"time":"{date}","open":3,"high":3,"low":3,"close":3,"volume":0}},
+                    {{"time":"{date}"}}]"#
+            );
+            let json = BarData::from_json_string(&json).unwrap();
+            #[cfg(feature = "csv")]
+            let csv = {
+                std::fs::write(
+                    &path,
+                    format!(
+                        "ts,open,high,low,close,volume\n{date},1,2,0.5,1.5,10\n\
+                         {date},3,3,3,3,0\n{date},NaN,NaN,NaN,NaN,NaN\n"
+                    ),
+                )
+                .unwrap();
+                BarData::from_csv(&path).unwrap()
+            };
+            for bars in [
+                &typed[..],
+                &json.bars[..],
+                #[cfg(feature = "csv")]
+                &csv.bars[..],
+            ] {
+                assert_eq!(bars.len(), 3, "{date}");
+                for bar in bars {
+                    assert_eq!(bar.time.timestamp(), midnight, "{date}");
+                    assert_eq!(bar.time.timestamp_subsec_nanos(), 0, "{date}");
+                }
+                assert_eq!(bars[0], typed[0], "{date}");
+                assert_eq!(bars[1], typed[1], "{date}");
+                assert!(bars[2].is_whitespace(), "{date}");
+            }
+        }
+        #[cfg(feature = "csv")]
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "csv")]
     fn test_csv_string_empty() {
         let data = BarData::new();
         let csv = data.to_csv_string().unwrap();
@@ -346,6 +397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "csv")]
     fn test_csv_with_indicators() {
         let now = Utc::now();
         let data = BarData::from_bars(vec![
@@ -378,6 +430,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "csv")]
     fn test_csv_with_no_indicators() {
         let now = Utc::now();
         let data = BarData::from_bars(vec![Bar::new(now, 100.0, 110.0, 95.0, 105.0, 1000.0)]);
@@ -391,12 +444,14 @@ mod tests {
     }
 
     /// A path in the temporary directory, unique to this process and `name`.
+    #[cfg(feature = "csv")]
     fn temp_csv(name: &str) -> String {
         let file = format!("egui-charts-{}-{name}.csv", std::process::id());
         std::env::temp_dir().join(file).to_str().unwrap().to_owned()
     }
 
     #[test]
+    #[cfg(feature = "csv")]
     fn bar_csv_round_trips_sub_second_times() {
         let start = DateTime::parse_from_rfc3339("2024-03-15T10:00:00Z")
             .unwrap()
@@ -434,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "csv")]
     fn from_csv_checks_the_header_and_reads_date_only_times() {
         let refused = Err("Invalid CSV header: expected ts,open,high,low,close,volume".to_string());
         let cases = [

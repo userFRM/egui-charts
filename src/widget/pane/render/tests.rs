@@ -4,6 +4,111 @@ use crate::ui::context_menu::ChartMenus;
 use crate::widget::test_frames::chart;
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
+#[cfg(feature = "drawings")]
+#[test]
+fn position_tags_in_a_series_pane_follow_its_display_format() {
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::model::{SeriesDisplayFormat, SeriesFormat};
+    use crate::scales::CustomPriceFormatter;
+    use crate::widget::test_frames::{frame, shapes};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use std::sync::Arc;
+
+    for (theme, width) in [
+        (crate::theme::Theme::light(), 760.0),
+        (crate::theme::Theme::dark(), 320.0),
+    ] {
+        for host in ["empty", "none", "series", "chart"] {
+            let ctx = Context::default();
+            let mut chart = chart(&[90.0], &[90.0, 110.0]);
+            chart.set_theme(&ctx, &theme);
+            chart.set_size(Some(Vec2::new(width, 580.0)));
+            let id = chart.add_series(SeriesOptions::default());
+            chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+            chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+                kind: SeriesFormat::Price,
+                precision: 2,
+                min_move: 0.25,
+            });
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+            if host != "none" {
+                let formatter = Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("host {value:.2}")
+                }));
+                if host == "series" {
+                    chart.set_series_formatter(id, Some(formatter));
+                } else {
+                    chart.set_price_formatter(Some(formatter));
+                }
+            }
+            if host == "empty" {
+                chart.set_preserve_empty_pane(pane, true);
+                chart.remove_series(id);
+                let mut options = chart.pane_axis_options(pane).unwrap();
+                options.hide_unused = false;
+                chart.set_pane_axis_options(pane, options);
+                let scale = chart.pane_price_scale_mut(pane, crate::model::SeriesScale::Right);
+                scale.set_range(90.0, 110.0);
+            }
+            let mut drawing = Drawing::new(1, DrawingToolType::LongPos);
+            drawing.chart_points = vec![ChartPoint::new(30.0, 100.1), ChartPoint::new(60.0, 106.0)];
+            drawing.completed = true;
+            drawing.pane = Some(pane.0);
+            chart.drawings_mut().drawings.push(drawing);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let panel = chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == pane)
+                .unwrap()
+                .rect;
+            let tag_texts = |painted: &[egui::Shape]| -> Vec<String> {
+                painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text.pos.x >= plot.right()
+                                && panel.y_range().contains(text.pos.y)
+                                && painted.iter().any(|shape| {
+                                    matches!(shape,
+                                        egui::Shape::Rect(tag) if tag.rect.contains(text.pos)
+                                            && tag.rect.right() > plot.right()
+                                            && tag.rect.height() <= text.galley.size().y * 2.0
+                                    )
+                                }) =>
+                        {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let visible = tag_texts(&painted);
+            chart.drawings_mut().drawings[0].price_axis_label = false;
+            let hidden = tag_texts(&shapes(&ctx, &mut chart, 0.2, vec![]));
+            for (price, expected) in [(100.1, "100.00"), (106.0, "106.00"), (94.2, "94.25")] {
+                let expected = if host != "none" {
+                    format!("host {price:.2}")
+                } else {
+                    expected.into()
+                };
+                assert!(
+                    visible.contains(&expected),
+                    "{host}: {expected}: {visible:?}"
+                );
+                assert!(
+                    !hidden.contains(&expected),
+                    "disabled tag {expected}: {hidden:?}"
+                );
+            }
+        }
+    }
+}
+
 fn pointer(
     ctx: &Context,
     chart: &mut crate::widget::Chart,
@@ -81,7 +186,7 @@ fn maximized_panes_keep_pointer_navigation() {
         for event in [
             Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, -20.0),
+                delta: egui::vec2(0.0, 20.0),
                 phase: egui::TouchPhase::Move,
                 source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
@@ -1200,4 +1305,109 @@ fn merged_pane_legends_reserve_their_wrapped_height() {
             }
         }
     }
+}
+
+#[test]
+fn collapsed_price_pane_keeps_pointer_navigation_in_the_visible_pane() {
+    use crate::widget::PaneId;
+    let mut results = Vec::new();
+    for layout in ["maximized", "collapsed"] {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        let study = chart.add_indicator(Box::new(RSI::new(14)));
+        let study_pane = chart.series_pane(study).unwrap();
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+        // Either way the study fills the chart and the price frame has no height.
+        if layout == "maximized" {
+            chart.pane_layout.maximized = Some(study_pane);
+        } else {
+            for pane in &mut chart.pane_layout.panes {
+                if pane.id == PaneId::MAIN {
+                    pane.collapsed = Some(true);
+                }
+            }
+        }
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.1, Vec::new());
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.2, Vec::new());
+        let pos = chart.get_rendered_indicator_panes()[0].chart_rect.center();
+        assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
+        let before = chart.state.time_scale().right_offset_precise();
+        drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 0.0));
+        let moved = chart.state.time_scale().right_offset_precise() - before;
+        // Forty pixels at six pixels per bar move history by 6 2/3 bars.
+        assert!((moved + 20.0 / 3.0).abs() < 1e-5, "{layout}: moved {moved}");
+        let time = ctx.input(|input| input.time) + 1.0;
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            time,
+            vec![
+                Event::PointerMoved(pos),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 20.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        // Let the eased zoom finish before reading where it ends.
+        for step in 1..=60 {
+            let time = time + f64::from(step) * 0.1;
+            crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
+        }
+        let spacing = chart.state.time_scale().bar_spacing();
+        assert!(spacing > 6.0, "{layout}: spacing {spacing}");
+        let offset = chart.state.time_scale().right_offset_precise();
+        results.push((moved, spacing));
+        if layout == "collapsed" {
+            // Restoring the price pane keeps the scroll and zoom reached without it.
+            let header = chart.pane_layout.panes[0].rect.center();
+            click(&ctx, &mut chart, header);
+            assert!(chart.pane_height(PaneId::MAIN).unwrap() > 24.0);
+            assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+            assert_eq!(chart.state.time_scale().right_offset_precise(), offset);
+        }
+    }
+    assert_eq!(results[0], results[1]);
+}
+
+#[test]
+fn collapsing_the_price_pane_of_a_short_chart_leaves_no_blank_area() {
+    use crate::widget::PaneId;
+    let ctx = Context::default();
+    let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+    chart.set_size(Some(Vec2::new(800.0, 150.0)));
+    let study = chart.add_indicator(Box::new(RSI::new(14)));
+    let study_pane = chart.series_pane(study).unwrap();
+    for time in [0.0, 0.1, 0.2] {
+        crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
+    }
+    let heights = |chart: &crate::widget::Chart| {
+        [
+            chart.pane_height(PaneId::MAIN).unwrap(),
+            chart.pane_height(study_pane).unwrap(),
+        ]
+    };
+    // Beside the price pane the study is too short to expand and shows only its header.
+    assert_eq!(heights(&chart), [90.0, 24.0]);
+    let set_collapsed = |chart: &mut crate::widget::Chart, collapsed| {
+        for pane in &mut chart.pane_layout.panes {
+            if pane.id == PaneId::MAIN {
+                pane.collapsed = collapsed;
+            }
+        }
+    };
+    set_collapsed(&mut chart, Some(true));
+    for time in [0.3, 0.4] {
+        crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
+    }
+    // The price header takes 24 px of the 114 px pane area; the study fills the rest.
+    assert_eq!(heights(&chart), [24.0, 90.0]);
+    set_collapsed(&mut chart, Some(false));
+    for time in [0.5, 0.6] {
+        crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
+    }
+    assert_eq!(heights(&chart), [90.0, 24.0]);
 }

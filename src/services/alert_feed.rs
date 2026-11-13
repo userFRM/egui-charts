@@ -166,11 +166,15 @@ impl AlertFeed {
 
     #[cfg(feature = "studies")]
     pub(super) fn matches(&self, data: &AlertData<'_>) -> bool {
+        data.request.timeframe == self.request.timeframe && self.matches_view(data)
+    }
+
+    #[cfg(feature = "studies")]
+    pub(super) fn matches_view(&self, data: &AlertData<'_>) -> bool {
         self.metric.is_none()
             && self.instrument.is_some()
             && data.request.symbol == self.request.symbol
-            && data.request.timeframe == self.request.timeframe
-            && data.request.clock == self.request.clock
+            && data.request.clock == self.request.clock.for_timeframe(data.request.timeframe)
             && data.request.extended_hours == self.request.extended_hours
             && data.request.adjusted == self.request.adjusted
             && data.request.conversion == self.request.conversion
@@ -220,6 +224,12 @@ impl AlertFeed {
     #[cfg(feature = "studies")]
     pub(super) fn ready(&self) -> bool {
         self.ready
+    }
+
+    /// Whether a request failed for good, so this reader sends no further request.
+    #[cfg(feature = "studies")]
+    pub(super) fn stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Calendar shared by history, streaming aggregation and study calculation.

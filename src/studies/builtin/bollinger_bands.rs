@@ -232,6 +232,11 @@ impl Indicator for BollingerBands {
         ]
     }
 
+    /// The basis, then the upper and lower band.
+    fn legend_lines(&self) -> Vec<usize> {
+        vec![1, 0, 2]
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }

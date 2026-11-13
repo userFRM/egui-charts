@@ -116,8 +116,8 @@ struct PaintedDrawing {
     id: usize,
     points: Vec<Pos2>,
     shapes: Vec<ClippedShape>,
-    /// A regression trend's fitted endpoints, where its handles sit.
-    regression_ends: Option<[Pos2; 2]>,
+    /// Where the handles of a drawing that fits itself to the bars sit.
+    handle_points: Option<Vec<Pos2>>,
     /// The tessellation of `shapes`, made once a second frame paints the same shapes.
     tessellated: Option<Tessellated>,
 }
@@ -132,6 +132,8 @@ pub(crate) struct TextEditState {
     pub placed: bool,
     /// Paint the draft on the drawing and put the editor over its text.
     pub inline: bool,
+    /// A retracement level whose custom text is being edited.
+    pub fib_level: Option<usize>,
 }
 
 impl TextEditState {
@@ -147,6 +149,14 @@ impl TextEditState {
     /// The drawing with its draft, or a neutral placeholder while it is empty.
     pub(crate) fn preview(&self, drawing: &Drawing, ctx: &egui::Context) -> Drawing {
         let mut shown = drawing.clone();
+        if let Some(index) = self.fib_level {
+            let mut config = drawing.fibonacci_config().into_owned();
+            if let Some(level) = config.levels.get_mut(index) {
+                level.text = self.shown_text(ctx);
+            }
+            shown.fib_config = Some(config);
+            return shown;
+        }
         if self.draft.is_empty() {
             shown.text_color = Some(
                 ctx.global_style()
@@ -225,7 +235,7 @@ pub struct DrawingManager {
     pane_rect: Rect,
     pane: Option<usize>,
     pane_members: Vec<Option<usize>>,
-    pane_clips: std::collections::HashMap<Option<usize>, Rect>,
+    pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     pub(crate) text_editor: Option<TextEditState>,
     /// A completed text placement whose add command may already be in chart history.
     pub(crate) finished_text_placement: Option<usize>,
@@ -487,21 +497,46 @@ impl DrawingManager {
         for &id in self.history.affected_ids() {
             let was = before.iter().find(|&&(i, _)| i == id);
             match (was, self.drawings.iter().any(|d| d.id == id && d.saveable)) {
-                (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
+                (Some(_), true) => self.notify(DrawingSyncAction::UpdateDrawing(id)),
                 (Some((_, stored_id)), false) => {
-                    self.queue(DrawingSyncAction::Delete(stored_id.clone()))
+                    self.notify(DrawingSyncAction::Delete(stored_id.clone()))
                 }
-                (None, true) => self.queue(DrawingSyncAction::SaveDrawing(id)),
+                (None, true) => self.notify(DrawingSyncAction::SaveDrawing(id)),
                 (None, false) => {}
             }
+        }
+        // A state recorded before the drawing's first edit comes back without an edit time.
+        let now = chrono::Utc::now().timestamp_millis();
+        let affected = self.history.affected_ids().to_vec();
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .filter(|d| affected.contains(&d.id))
+        {
+            drawing.modified_at.get_or_insert(now);
         }
         self.selection
             .prune(&self.drawings.iter().map(|d| d.id).collect());
         true
     }
 
+    /// Puts the time of an edit on the drawing with the given ID.
+    fn stamp(&mut self, id: usize) {
+        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+            drawing.modified_at = Some(chrono::Utc::now().timestamp_millis());
+        }
+    }
+
+    /// Records an edit for the host to save and puts its time on the drawing.
+    fn queue(&mut self, action: DrawingSyncAction) {
+        if let DrawingSyncAction::SaveDrawing(id) | DrawingSyncAction::UpdateDrawing(id) = &action {
+            self.stamp(*id);
+        }
+        self.notify(action);
+    }
+
     /// Queues a change for the host to save.
-    fn queue(&self, action: DrawingSyncAction) {
+    fn notify(&self, action: DrawingSyncAction) {
         if !self.sync_enabled {
             return;
         }
@@ -584,18 +619,19 @@ impl DrawingManager {
         )
     }
 
-    fn queue_edit(&self, old: &Drawing) {
+    fn queue_edit(&mut self, old: &Drawing) {
         if let Some(drawing) = self.drawings.iter().find(|d| d.id == old.id) {
-            self.queue(match (old.saveable, drawing.saveable) {
+            let action = match (old.saveable, drawing.saveable) {
                 (true, false) => DrawingSyncAction::Delete(sync_id(old)),
                 (false, true) => DrawingSyncAction::SaveDrawing(old.id),
                 _ => DrawingSyncAction::UpdateDrawing(old.id),
-            });
+            };
+            self.queue(action);
         }
     }
 
     /// Queues an update of the drawing with the given ID, if there is one.
-    fn queue_update(&self, id: usize) {
+    fn queue_update(&mut self, id: usize) {
         if self.drawings.iter().any(|d| d.id == id) {
             self.queue(DrawingSyncAction::UpdateDrawing(id));
         }

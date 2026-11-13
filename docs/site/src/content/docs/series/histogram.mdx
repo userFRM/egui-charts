@@ -1,0 +1,57 @@
+---
+title: Histogram and columns
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/series.rs?raw';
+
+Use columns for one scalar per timestamp, such as volume, counts or a signed
+measurement. The bar-series renderer is named
+[`ChartType::Columns`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.Columns);
+there is no `ChartType::Histogram`. Computed study plots have a separate
+[`PlotType::Histogram`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.PlotType.html#variant.Histogram).
+See the [series overview](../series.mdx) for bar-series lifecycle and
+[studies](../studies.mdx) for computed plots.
+
+## Data
+
+Use [`Bar::from_value(time, value)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value).
+The column height uses `close`, or on the main chart the price chosen in
+[`ChartTypeStyles::columns`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.columns),
+not the `volume` field. To plot volume, explicitly
+map each source bar's volume into the scalar, as this scene does. Negative scalar
+values are valid; negative bar volume is not.
+
+The default base is the pane bottom. For columns rising or falling from zero, set
+[`ChartTypeParams::columns_base`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.columns_base)
+to `Some(0.0)`. Values 3 and -2 then extend
+three units above and two below zero. The default colours compare each close
+with the previous close, not with zero. Set per-bar colours if sign should decide.
+
+## Style and running result
+
+This scene turns the volume of the [shared synthetic bars](../first-chart.mdx)
+into scalar values and sets an explicit zero base. It fixes the price range at
+0 to 1,500 with
+[`PriceScale::set_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScale.html#method.set_range)
+so zero is visible. Main-series autoscale fits the values without including the
+column base; added column series include their base in the fit.
+
+<Example scene="series-histogram" title="Volume values as columns from zero"
+  task="Inspect the scalar values: these are source volumes copied into close."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn histogram\b[^]*?\n\}/)[0]} />
+
+The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
+Main columns use the bullish/bearish colours in
+[`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.bullish_color).
+Added columns use
+[`SeriesOptions::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.up_color),
+`down_color` and
+[`columns_base`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.columns_base).
+[`BarColors::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarColors.html#structfield.color)
+overrides an individual column. Width follows bar spacing.
+
+Columns can be [added series](../chart-types.mdx#added-series-restrictions).
+Use a separate scale or pane for volume beside prices; see
+[`Chart::move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
+and [scales](../scales.mdx).

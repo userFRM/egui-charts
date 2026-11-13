@@ -5,13 +5,14 @@ use crate::chart::series::SeriesId;
 use crate::model::AlertSource;
 
 impl Chart {
-    /// Lend loaded live bars to the alert evaluator. A paused or replaying chart cannot take
-    /// over an alert's live subscription, and loading history keeps its background reader.
+    /// Lend loaded live bars to the alert evaluator. A paused chart, or one in candle or market
+    /// replay, cannot take over an alert's live subscription, and loading history keeps its
+    /// background reader.
     #[cfg(feature = "alert-engine")]
     pub fn alert_data(&self) -> Option<crate::services::AlertData<'_>> {
         let link = self.feed_link.as_ref()?;
         if link.paused
-            || self.replay.is_some()
+            || self.replay_time().is_some()
             || self.feed.loading_history
             || self.feed.last_error.is_some()
             || self.bars(SeriesId::MAIN).is_empty()
@@ -423,5 +424,54 @@ mod tests {
             chart.alert_value(&AlertSource::Drawing("8".into()), 1),
             None
         );
+    }
+
+    /// A chart in market replay lends no recorded bars to alerts, as in candle replay, and lends
+    /// its live bars again after the exit.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn market_replay_lends_no_alert_data() {
+        use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        use crate::model::{Instrument, Tick, Timeframe};
+        use std::sync::Arc;
+        let minute = |m: i64| DateTime::from_timestamp(60 * m, 0).unwrap();
+        let driver = || {
+            let events = (0..3)
+                .map(|m| {
+                    ReplayEvent::new(
+                        "A",
+                        minute(m),
+                        m as u64,
+                        MarketEvent::Trade(Tick::new(minute(m), 10.0, 1.0, None)),
+                    )
+                })
+                .collect();
+            Arc::new(
+                ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap(),
+            )
+        };
+        let live = driver();
+        live.seek(minute(2));
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(live)
+            .with_symbol("A")
+            .with_timeframe(Timeframe::Min1)
+            .build();
+        let ctx = egui::Context::default();
+        let lent = |chart: &mut Chart| {
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            chart.alert_data().map(|data| data.bars.len())
+        };
+        assert_eq!(lent(&mut chart), Some(3), "live");
+        let replay = driver();
+        replay.set_speed(0.0).unwrap();
+        replay.seek(minute(1));
+        chart.set_market_replay(Some(replay));
+        assert_eq!(lent(&mut chart), None, "market replay");
+        assert_eq!(chart.bars(SeriesId::MAIN).len(), 2);
+        chart.set_market_replay(None);
+        assert_eq!(lent(&mut chart), Some(3), "after the exit");
     }
 }

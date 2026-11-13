@@ -13,11 +13,13 @@ use egui::{Pos2, Rect};
 /// - Prices ↔ Y screen coordinates
 ///
 /// Share the mapping with overlays and hit tests to keep them aligned with the pane.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ChartMapping {
+    /// Numeric row positions shared with the time scale; `None` keeps ordinal spacing.
+    pub numeric_positions: Option<crate::model::NumericPositions>,
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Spacing between bars in egui logical points.
+    /// Points per ordinal slot, or per initial mean numeric key gap.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
@@ -31,6 +33,17 @@ pub struct ChartMapping {
 }
 
 impl ChartMapping {
+    /// Automatic bar widths share the closest numeric key slots without changing coordinates.
+    pub(crate) fn bar_spacing_for_width(&self) -> f32 {
+        self.numeric_positions
+            .as_ref()
+            .map_or(self.bar_spacing, |positions| {
+                let right = self.base_idx as f64 + self.right_offset + 0.5;
+                let left = right - f64::from(self.rect.width() - 1.0) / f64::from(self.bar_spacing);
+                self.bar_spacing * positions.min_gap(left, right) as f32
+            })
+    }
+
     /// Create a new ChartMapping with all parameters.
     pub fn new(
         rect: Rect,
@@ -41,6 +54,7 @@ impl ChartMapping {
         price: PriceMap,
     ) -> Self {
         Self {
+            numeric_positions: None,
             rect,
             bar_spacing,
             start_idx,
@@ -59,7 +73,16 @@ impl ChartMapping {
     /// This is the canonical formula used everywhere.
     #[inline]
     pub fn idx_to_x(&self, bar_idx: usize) -> f32 {
-        let delta_from_right = (self.base_idx as f64 - bar_idx as f64) + self.right_offset;
+        self.index_to_x(bar_idx as f64)
+    }
+
+    /// Convert a fractional row index to X, including numeric sample positions.
+    pub fn index_to_x(&self, index: f64) -> f32 {
+        let position = self
+            .numeric_positions
+            .as_ref()
+            .map_or(index, |positions| positions.position(index));
+        let delta_from_right = (self.base_idx as f64 - position) + self.right_offset;
         (f64::from(self.rect.min.x) + f64::from(self.rect.width())
             - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
             - 1.0) as f32
@@ -98,7 +121,10 @@ impl ChartMapping {
         let relative_x = f64::from(x) - f64::from(self.rect.min.x);
         let delta_from_right =
             (f64::from(self.rect.width()) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
-        self.base_idx as f64 + (self.right_offset - delta_from_right)
+        let position = self.base_idx as f64 + (self.right_offset - delta_from_right);
+        self.numeric_positions
+            .as_ref()
+            .map_or(position, |positions| positions.index(position))
     }
 
     /// Check if an X coordinate is within the visible chart bounds.
@@ -131,10 +157,10 @@ impl ChartMapping {
         Some((global_idx as usize) - self.start_idx)
     }
 
-    /// Calculate the bar width based on spacing.
+    /// Calculate the bar width based on spacing, capped by the closest numeric keys in view.
     #[inline]
     pub fn bar_width(&self) -> f32 {
-        (self.bar_spacing * 0.6).max(1.0)
+        (self.bar_spacing_for_width() * 0.6).max(1.0)
     }
 
     // =========================================================================
@@ -189,8 +215,11 @@ impl ChartMapping {
     ///
     /// Only the x mapping and the bounds checks follow the new rect: `price`
     /// still maps onto its own pane.
-    pub fn with_rect(self, rect: Rect) -> Self {
-        Self { rect, ..self }
+    pub fn with_rect(&self, rect: Rect) -> Self {
+        Self {
+            rect,
+            ..self.clone()
+        }
     }
 }
 
@@ -246,7 +275,7 @@ mod tests {
                 base_idx: 999_999,
                 bar_spacing: 200.0,
                 right_offset,
-                ..mapping
+                ..mapping.clone()
             };
             assert_eq!(large.idx_to_x(index), 800.0);
             assert_eq!(large.x_to_idx(800.0), index);

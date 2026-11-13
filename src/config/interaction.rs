@@ -1,10 +1,21 @@
 //! Scroll, zoom, and tracking interaction options.
 //!
 //! Controls how mouse/touch gestures are interpreted: which gestures
-//! pan the chart, which zoom it, and how the tracking-mode (crosshair
-//! following) behaves.
+//! pan the chart, which zoom it, and how live-edge following and touch
+//! crosshair tracking behave.
 
-/// How tracking mode (crosshair auto-follow) is exited.
+/// How a touch crosshair activated by a long press is exited.
+/// This does not control live-edge following.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum TouchTrackingExitMode {
+    /// Hide the crosshair and readout when the touch ends.
+    #[default]
+    OnTouchEnd,
+    /// Keep the crosshair and readout after release until the next tap.
+    OnNextTap,
+}
+
+/// How tracking mode (live-edge following) is exited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TrackingModeExitMode {
     /// Exit tracking mode when touch/click ends
@@ -31,7 +42,12 @@ pub struct TrackingModeOptions {
 /// Controls how scrolling/panning interactions work
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct HandleScrollOptions {
+    /// Enable scroll gestures and their momentum without changing individual options.
+    /// Default: true
+    pub enabled: bool,
+
     /// Scroll with mouse wheel (horizontal)
     /// Default: true
     pub mouse_wheel: bool,
@@ -52,6 +68,7 @@ pub struct HandleScrollOptions {
 impl Default for HandleScrollOptions {
     fn default() -> Self {
         Self {
+            enabled: true,
             mouse_wheel: true,
             pressed_mouse_move: true,
             horz_touch_drag: true,
@@ -106,7 +123,12 @@ impl Default for AxisDoubleClickResetOptions {
 /// Controls how zoom/scale interactions work
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct HandleScaleOptions {
+    /// Enable wheel, pinch, axis drag and axis reset gestures without changing individual options.
+    /// Default: true
+    pub enabled: bool,
+
     /// Zoom with mouse wheel (vertical scroll)
     /// Default: true
     pub mouse_wheel: bool,
@@ -125,6 +147,7 @@ pub struct HandleScaleOptions {
 impl Default for HandleScaleOptions {
     fn default() -> Self {
         Self {
+            enabled: true,
             mouse_wheel: true,
             pinch: true,
             axis_pressed_mouse_move: AxisPressedMouseMoveOptions::default(),
@@ -141,5 +164,25 @@ mod tests {
     fn test_tracking_mode_exit_mode_default() {
         let mode = TrackingModeExitMode::default();
         assert_eq!(mode, TrackingModeExitMode::OnNextTap);
+    }
+
+    /// Layouts saved before group switches retain their individual permissions and stay enabled.
+    #[test]
+    fn saved_handler_options_default_missing_group_switches_to_enabled() {
+        let scroll: HandleScrollOptions = serde_json::from_value(serde_json::json!({
+            "mouse_wheel": false, "pressed_mouse_move": true,
+            "horz_touch_drag": false, "vert_touch_drag": true
+        }))
+        .unwrap();
+        let scale: HandleScaleOptions = serde_json::from_value(serde_json::json!({
+            "mouse_wheel": true, "pinch": false,
+            "axis_pressed_mouse_move": {"time": false, "price": true},
+            "axis_double_click_reset": {"time": true, "price": false}
+        }))
+        .unwrap();
+        assert!(scroll.enabled && scale.enabled);
+        assert!(!scroll.mouse_wheel && !scroll.horz_touch_drag);
+        assert!(!scale.pinch && !scale.axis_pressed_mouse_move.time);
+        assert!(!scale.axis_double_click_reset.price);
     }
 }

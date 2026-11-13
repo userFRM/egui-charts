@@ -1,9 +1,12 @@
 use super::clamp_param;
 use super::smoothing::Smoothing;
 use crate::model::Bar;
+use crate::studies::inputs::input_spec;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyError, StudyInput,
+};
 use egui::Color32;
 
 /// The moving average in the middle of [`Envelopes`].
@@ -78,11 +81,54 @@ impl Indicator for Envelopes {
         ))
     }
 
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        percent: number("Percent", 0.0, f64::MAX),
-        ma_type: choice("Average", [EnvelopeAverage::Simple, EnvelopeAverage::Exponential])
-    ; {});
+    fn inputs(&self) -> Vec<StudyInput> {
+        let defaults = Self::default();
+        vec![
+            input_spec!("period", self.period, length("Period", 1, usize::MAX))
+                .with_default(InputValue::Length(defaults.period)),
+            input_spec!("percent", self.percent, number("Percent", 0.0, f64::MAX))
+                .with_default(InputValue::Number(defaults.percent)),
+            StudyInput::new(
+                "ma_type",
+                "Exponential basis",
+                InputValue::Toggle(self.ma_type == EnvelopeAverage::Exponential),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(
+                defaults.ma_type == EnvelopeAverage::Exponential,
+            )),
+        ]
+    }
+
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
+        let value = match (id, value) {
+            ("ma_type", InputValue::Choice(0)) => InputValue::Toggle(false),
+            ("ma_type", InputValue::Choice(1)) => InputValue::Toggle(true),
+            (_, value) => value,
+        };
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| StudyError::UnknownInput(id.into()))?;
+        if !schema.accepts(&value) {
+            return Err(StudyError::invalid_input(id));
+        }
+        match (id, value) {
+            ("period", InputValue::Length(value)) => self.period = value,
+            ("percent", InputValue::Number(value)) => self.percent = value,
+            ("ma_type", InputValue::Toggle(value)) => {
+                self.ma_type = if value {
+                    EnvelopeAverage::Exponential
+                } else {
+                    EnvelopeAverage::Simple
+                }
+            }
+            _ => unreachable!("validated study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
         vec![crate::studies::StudyFill {

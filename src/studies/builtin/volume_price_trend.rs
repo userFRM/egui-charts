@@ -116,8 +116,8 @@ impl Indicator for VolumePriceTrend {
     }
 }
 
-/// Length of the NVI and PVI signal line, the published one-year EMA of the index.
-const SIGNAL_LEN: f64 = 255.0;
+/// Default length of the NVI and PVI signal line, the published one-year EMA of the index.
+const DEFAULT_SIGNAL_LENGTH: usize = 255;
 
 /// Resume the volume-gated index and its first-value-seeded signal.
 fn volume_index(
@@ -125,8 +125,10 @@ fn volume_index(
     values: &mut IndicatorValues,
     data: &[Bar],
     from: usize,
+    length: usize,
     counts: fn(f64, f64) -> bool,
 ) {
+    let alpha = 2.0 / (length as f64 + 1.0);
     stepper.run(data, from, values, |state, bar| {
         if !bar.close.is_finite() || !bar.volume.is_finite() {
             return IndicatorValue::None;
@@ -135,7 +137,7 @@ fn volume_index(
             if counts(bar.volume, volume) && close != 0.0 {
                 state.1 += state.1 * ((bar.close - close) / close);
             }
-            state.2 += (state.1 - state.2) * (2.0 / (SIGNAL_LEN + 1.0));
+            state.2 += (state.1 - state.2) * alpha;
         } else {
             state.1 = 1000.0;
             state.2 = 1000.0;
@@ -148,14 +150,16 @@ fn volume_index(
 /// Negative Volume Index (NVI)
 ///
 /// Starts at 1000 and moves by the close's percentage change only on bars whose volume fell.
-/// Outputs `Multiple([index, signal])`: the signal line is the 255-bar EMA of the index, seeded
-/// with the first index value so that it starts at bar 0 like the index.
+/// Outputs `Multiple([index, signal])`: the signal line is the EMA of the index over the EMA
+/// length, 255 by default, seeded with the first index value so that it starts at bar 0 like the
+/// index.
 #[derive(Clone)]
 pub struct NegativeVolumeIndex {
     values: IndicatorValues,
     stepper: Stepper<(Option<[f64; 2]>, f64, f64)>,
     color: Color32,
     signal_color: Color32,
+    signal_length: usize,
     visible: bool,
 }
 
@@ -167,6 +171,7 @@ impl NegativeVolumeIndex {
             stepper: Stepper::default(),
             color: palette::BLUE,
             signal_color: palette::WARM_ORANGE,
+            signal_length: DEFAULT_SIGNAL_LENGTH,
             visible: true,
         }
     }
@@ -174,6 +179,12 @@ impl NegativeVolumeIndex {
     /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Set the signal EMA length in bars, clamped to at least one.
+    pub fn with_signal_length(mut self, length: usize) -> Self {
+        self.signal_length = length.max(1);
         self
     }
 }
@@ -190,6 +201,10 @@ impl Indicator for NegativeVolumeIndex {
             crate::model::PriceSource::Close,
         ))
     }
+
+    crate::studies::inputs::study_inputs!(self;
+        signal_length: length("EMA length", 1, usize::MAX)
+    ; {});
 
     fn name(&self) -> &str {
         "NVI"
@@ -209,6 +224,7 @@ impl Indicator for NegativeVolumeIndex {
             &mut self.values,
             data,
             from,
+            self.signal_length,
             |volume, prev| volume < prev,
         );
     }
@@ -262,14 +278,16 @@ impl Indicator for NegativeVolumeIndex {
 /// Positive Volume Index (PVI)
 ///
 /// Starts at 1000 and moves by the close's percentage change only on bars whose volume rose.
-/// Outputs `Multiple([index, signal])`: the signal line is the 255-bar EMA of the index, seeded
-/// with the first index value so that it starts at bar 0 like the index.
+/// Outputs `Multiple([index, signal])`: the signal line is the EMA of the index over the EMA
+/// length, 255 by default, seeded with the first index value so that it starts at bar 0 like the
+/// index.
 #[derive(Clone)]
 pub struct PositiveVolumeIndex {
     values: IndicatorValues,
     stepper: Stepper<(Option<[f64; 2]>, f64, f64)>,
     color: Color32,
     signal_color: Color32,
+    signal_length: usize,
     visible: bool,
 }
 
@@ -281,6 +299,7 @@ impl PositiveVolumeIndex {
             stepper: Stepper::default(),
             color: palette::BLUE,
             signal_color: palette::WARM_ORANGE,
+            signal_length: DEFAULT_SIGNAL_LENGTH,
             visible: true,
         }
     }
@@ -288,6 +307,12 @@ impl PositiveVolumeIndex {
     /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Set the signal EMA length in bars, clamped to at least one.
+    pub fn with_signal_length(mut self, length: usize) -> Self {
+        self.signal_length = length.max(1);
         self
     }
 }
@@ -304,6 +329,10 @@ impl Indicator for PositiveVolumeIndex {
             crate::model::PriceSource::Close,
         ))
     }
+
+    crate::studies::inputs::study_inputs!(self;
+        signal_length: length("EMA length", 1, usize::MAX)
+    ; {});
 
     fn name(&self) -> &str {
         "PVI"
@@ -323,6 +352,7 @@ impl Indicator for PositiveVolumeIndex {
             &mut self.values,
             data,
             from,
+            self.signal_length,
             |volume, prev| volume > prev,
         );
     }
@@ -376,6 +406,7 @@ impl Indicator for PositiveVolumeIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::studies::InputValue;
     use chrono::Utc;
 
     fn make_bar(close: f64, volume: f64) -> Bar {
@@ -410,6 +441,12 @@ mod tests {
             panic!("no value: {:?}", vpt.values.to_rows()[0]);
         };
         assert_eq!(v, 0.0);
+        // Hand VPT: 1200*(105-100)/100 = 60;
+        // then 60 + 800*(102-105)/105 = 260/7.
+        for (bar, want) in [(1, 60.0), (2, 260.0 / 7.0)] {
+            let got = vpt.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
     }
 
     /// Index and signal line against the published definition. On a bar whose volume fell (NVI)
@@ -418,6 +455,14 @@ mod tests {
     /// trading year, seeded with its first value as the crate's EMA is. Expected values were
     /// computed independently in exact rational arithmetic. Hand check, NVI bar 1: the index
     /// rises 5% to 1050 and the signal is 1000 + (1050 - 1000) * 2 / 256 = 1000.390625.
+    ///
+    /// Second pass with an EMA length of 2 (weight 2 / 3), with a bar whose close is NaN
+    /// (no value, the state is kept), an equal-volume bar and a correction. Hand check, NVI
+    /// bar 1: the index is 1050 and the signal 1000 + 50 * 2 / 3 = 3100 / 3; the NaN bar
+    /// leaves both untouched, so bar 3 (volume up) gives 3100 / 3 + (1050 - 3100 / 3) * 2 / 3
+    /// = 9400 / 9. PVI bar 3 multiplies 1000 by 108 / 105 = 7200 / 7, and its signal is
+    /// 1000 + (7200 / 7 - 1000) * 2 / 3 = 21400 / 21. Bar 5 (volume down) takes the NVI index to
+    /// 1050 * 99 / 110 = 945.
     #[test]
     fn nvi_pvi_match_published_definition() {
         // Volume down, up, unchanged with a zero close, down after a zero close, unchanged, up after
@@ -484,6 +529,89 @@ mod tests {
                     study.name()
                 );
             }
+        }
+
+        let closes = [
+            Some(100.0),
+            Some(105.0),
+            None,
+            Some(108.0),
+            Some(110.0),
+            Some(99.0),
+            Some(120.0),
+        ];
+        let volumes = [1000.0, 800.0, 700.0, 1200.0, 1200.0, 1000.0, 1500.0];
+        let bars = |closes: &[Option<f64>]| -> Vec<Bar> {
+            closes
+                .iter()
+                .zip(volumes)
+                .map(|(close, volume)| make_bar(close.unwrap_or(f64::NAN), volume))
+                .collect()
+        };
+        let nvi = [
+            Some((1000.0, 1000.0)),
+            Some((1050.0, 3100.0 / 3.0)),
+            None,
+            Some((1050.0, 9400.0 / 9.0)),
+            Some((1050.0, 28300.0 / 27.0)),
+            Some((945.0, 79330.0 / 81.0)),
+            Some((945.0, 232420.0 / 243.0)),
+        ];
+        let pvi = [
+            Some((1000.0, 1000.0)),
+            Some((1000.0, 1000.0)),
+            None,
+            Some((7200.0 / 7.0, 21400.0 / 21.0)),
+            Some((7200.0 / 7.0, 64600.0 / 63.0)),
+            Some((7200.0 / 7.0, 194200.0 / 189.0)),
+            Some((96000.0 / 77.0, 7320200.0 / 6237.0)),
+        ];
+        // Bar 6 corrected to a close of 90: the NVI keeps 945 and its signal, the PVI index is
+        // 7200 / 7 * 90 / 99 = 72000 / 77 and its signal 194200 / 189 + (72000 / 77 - 194200 / 189)
+        // * 2 / 3 = 860600 / 891.
+        let cases = [
+            (
+                Box::new(NegativeVolumeIndex::new()) as Box<dyn Indicator>,
+                nvi,
+                [945.0, 232420.0 / 243.0],
+            ),
+            (
+                Box::new(PositiveVolumeIndex::new()),
+                pvi,
+                [72000.0 / 77.0, 860600.0 / 891.0],
+            ),
+        ];
+        let rows = |study: &dyn Indicator| study.values().to_rows();
+        for (mut study, expected, corrected_last) in cases {
+            study
+                .set_input("signal_length", InputValue::Length(2))
+                .unwrap();
+            study.calculate(&bars(&closes));
+            for (bar, (value, want)) in rows(&*study).iter().zip(&expected).enumerate() {
+                match (value, want) {
+                    (IndicatorValue::None, None) => {}
+                    (IndicatorValue::Multiple(lines), Some((index, signal))) => assert!(
+                        (lines[0] - index).abs() < 1e-9 && (lines[1] - signal).abs() < 1e-9,
+                        "{} bar {bar}: got {lines:?}, expected [{index}, {signal}]",
+                        study.name()
+                    ),
+                    _ => panic!("{} bar {bar}: got {value:?}", study.name()),
+                }
+            }
+
+            // Correcting the last bar resumes from the state kept before it.
+            let mut corrected = closes;
+            corrected[6] = Some(90.0);
+            study.update(&bars(&corrected), 6);
+            let IndicatorValue::Multiple(lines) = &rows(&*study)[6] else {
+                panic!("{} correction: got {:?}", study.name(), rows(&*study)[6]);
+            };
+            assert!(
+                (lines[0] - corrected_last[0]).abs() < 1e-9
+                    && (lines[1] - corrected_last[1]).abs() < 1e-9,
+                "{} correction: got {lines:?}, expected {corrected_last:?}",
+                study.name()
+            );
         }
     }
 }

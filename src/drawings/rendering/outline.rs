@@ -65,13 +65,11 @@ impl Drawing {
         }
         let &second = p.get(1)?;
         match self.tool_type {
-            T::TrendLine | T::Ray | T::ExtendedLine => {
+            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle => {
                 let (left, right) = self.trend_line_ends(rect)?;
                 outline.lines = vec![[left, right]];
             }
-            T::TrendAngle
-            | T::InfoLine
-            | T::Arrow
+            T::Arrow
             | T::Path
             | T::XABCDPattern
             | T::CypherPattern
@@ -218,7 +216,9 @@ impl Drawing {
             }
             T::FlatTopBottom | T::DisjointChannel => return self.wedge_channel_outline(rect),
             T::ParallelChannel => return self.parallel_channel_outline(rect),
-            T::FibonacciTimeZones => outline.lines = self.fibonacci_time_zone_lines(rect),
+            T::FibonacciTimeZones | T::TrendBasedFibTime => {
+                outline.lines = self.fibonacci_time_zone_lines(rect);
+            }
             T::FibonacciWedge => return self.fibonacci_wedge_outline(clip),
             T::FibonacciSpeedFan => outline.lines = self.fibonacci_speed_fan_lines(rect),
             _ => return None,

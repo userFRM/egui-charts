@@ -214,22 +214,14 @@ fn draw_rail_button(
         let inner_rect = rect.shrink2(margin);
 
         let selected_fill = if latched {
-            if theme.dark {
-                theme.ui.text
-            } else {
-                Color32::from_gray(26)
-            }
+            theme.ui.text
         } else if theme.dark {
             theme.ui.btn_bg_active
         } else {
-            Color32::from_gray(235)
+            crate::ui::top_toolbar::buttons::rule_color(&theme)
         };
         let selected_ink = if latched {
-            if theme.dark {
-                theme.ui.panel_bg
-            } else {
-                Color32::WHITE
-            }
+            theme.ui.panel_bg
         } else {
             rail_icon_color(ui)
         };

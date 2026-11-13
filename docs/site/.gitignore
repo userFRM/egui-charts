@@ -1,7 +1,7 @@
 node_modules/
 .astro/
 dist/
-# Generated from the single sources in docs/ by prepare-guides.mjs.
+# Generated from the single sources listed in guides.mjs by prepare-guides.mjs.
 src/content/docs/builder-guide.md
 src/content/docs/study-data.md
 src/content/docs/order-flow.md
@@ -9,3 +9,9 @@ src/content/docs/replay.md
 src/content/docs/strategy-report.md
 src/content/docs/host-services.md
 src/content/docs/performance.md
+src/content/docs/release-notes.md
+src/content/docs/study-data.mdx
+src/content/docs/order-flow.mdx
+src/content/docs/replay.mdx
+src/content/docs/strategy-report.mdx
+src/content/docs/host-services.mdx

@@ -1,6 +1,37 @@
 use super::Chart;
 use crate::chart::rendering;
-use crate::scales::TimeFormatterBuilder;
+use crate::model::{SeriesDisplayFormat, SeriesFormat};
+use crate::scales::{PriceFormatter, TimeFormatterBuilder};
+
+#[derive(Clone)]
+struct DisplayFormatLabels {
+    format: SeriesDisplayFormat,
+    thousands_sep: Option<char>,
+}
+
+impl PriceFormatter for DisplayFormatLabels {
+    fn format(&self, value: f64) -> String {
+        let text = self.format.format(value);
+        if self.format.kind == SeriesFormat::Volume {
+            text
+        } else {
+            crate::scales::group_thousands(text, self.thousands_sep)
+        }
+    }
+
+    fn format_change(&self, change: f64) -> String {
+        let text = self.format(change);
+        if text.starts_with(['-', '+']) || change < 0.0 {
+            text
+        } else {
+            format!("+{text}")
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn PriceFormatter> {
+        Box::new(self.clone())
+    }
+}
 
 impl Chart {
     /// Formats a timestamp with the chart's zone, clock visibility and interval, or the median
@@ -172,16 +203,20 @@ impl Chart {
         self.date_format = date_format;
     }
 
-    /// Formats time axis marks with [`TimeFormatter::format`], which receives the
-    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip, forecast
-    /// date and [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    /// Formats time axis marks with [`TimeFormatter::format_tick`], whose default calls
+    /// [`TimeFormatter::format`], and crosshair, tooltip, forecast date and
+    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
     ///
-    /// The formatter replaces the built-in one, the locale and the date format. It receives
+    /// `format_tick` receives the chart's locale in a
+    /// [`TickMarkContext`](crate::scales::TickMarkContext) and can return `None` to use the
+    /// built-in locale-aware text for that tick. Otherwise the
+    /// formatter replaces the built-in one, the locale and the date format. It receives
     /// wall-clock times in the chart's time zone, and the time scale's
     /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
     /// `None` restores the built-in formatter.
     ///
     /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
+    /// [`TimeFormatter::format_tick`]: crate::scales::TimeFormatter::format_tick
     /// [`TimeFormatter::format_crosshair`]: crate::scales::TimeFormatter::format_crosshair
     pub fn set_time_formatter(
         &mut self,
@@ -192,13 +227,14 @@ impl Chart {
 
     /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
     /// price tags with [`PriceFormatter::format`], and the axis ticks with
-    /// [`PriceFormatter::format_tick`]. The formatter receives prices and replaces the
-    /// instrument's decimals. It applies to every price scale and to the prices drawings print;
-    /// studies keep their own formats.
+    /// [`PriceFormatter::format_ticks`], which receives the complete ordered list for each
+    /// axis, separately for layout and painting. The formatter receives prices and replaces
+    /// the instrument's decimals. It applies to every price scale and to the prices drawings
+    /// print; studies keep their own formats.
     /// `None` restores the built-in labels.
     ///
     /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
-    /// [`PriceFormatter::format_tick`]: crate::scales::PriceFormatter::format_tick
+    /// [`PriceFormatter::format_ticks`]: crate::scales::PriceFormatter::format_ticks
     pub fn set_price_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -208,8 +244,10 @@ impl Chart {
 
     /// Formats price scale labels in the percentage and indexed-to-100 modes, as
     /// [`set_price_formatter`](Self::set_price_formatter) does in the others. The formatter
-    /// receives the percentage or index value the axis shows. `None` restores signed
-    /// percentages and index values.
+    /// receives the percentage or index values the axis shows, its ticks as one list through
+    /// [`PriceFormatter::format_ticks`]. `None` restores signed percentages and index values.
+    ///
+    /// [`PriceFormatter::format_ticks`]: crate::scales::PriceFormatter::format_ticks
     pub fn set_percentage_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -239,8 +277,9 @@ impl Chart {
     /// Overrides raw-price formatting for one bar series, including `MAIN`. This affects
     /// readouts, price tags, ticks and the prices drawings in its pane print; percentage and
     /// indexed scales retain the chart's percentage formatter. `None` restores chart-wide
-    /// formatting. Returns false for an unknown series. A shared axis uses the first visible
-    /// series' formatter.
+    /// formatting, then the saved [`SeriesStyle::display_format`](crate::model::SeriesStyle::display_format).
+    /// Returns false for an unknown series. A shared axis uses the first visible series'
+    /// formatter. Custom text does not replace the declaration's tick spacing.
     pub fn set_series_formatter(
         &mut self,
         id: super::SeriesId,
@@ -267,28 +306,70 @@ impl Chart {
         match mode {
             crate::scales::PriceScaleMode::Percentage
             | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
-            _ => self
-                .series_formatters
-                .get(&id)
-                .cloned()
-                .or_else(|| self.price_formatter.clone()),
+            _ => {
+                self.series_formatters
+                    .get(&id)
+                    .cloned()
+                    .or_else(|| self.price_formatter.clone())
+                    .or_else(|| {
+                        Some(std::sync::Arc::new(DisplayFormatLabels {
+                            format: self.series_style(id)?.display_format?,
+                            thousands_sep: self.config.thousands_sep.filter(|separator| {
+                                *separator != '.' && !separator.is_ascii_digit()
+                            }),
+                        }))
+                    })
+            }
         }
     }
 
-    /// The host's formatter for raw prices of series `id`: its own, else the chart's.
-    pub(super) fn series_price_formatter(
+    /// Raw-value formatting: the series' host hook, the chart's, then the saved declaration.
+    pub(crate) fn series_price_formatter(
         &self,
         id: super::SeriesId,
-    ) -> Option<&dyn crate::scales::PriceFormatter> {
-        self.series_formatters
-            .get(&id)
-            .or(self.price_formatter.as_ref())
-            .map(|formatter| formatter.as_ref())
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        self.series_label_formatter(id, crate::scales::PriceScaleMode::Normal)
     }
 
-    pub(super) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
+    /// First visible bar series owning an axis. The main series precedes added series.
+    pub(super) fn series_axis_owner(&self, id: super::SeriesId) -> super::SeriesId {
+        let (pane, scale) = if id == super::SeriesId::MAIN {
+            // Removing the main series leaves its axis in the price pane.
+            (Some(self.main_series_pane()), Some(self.main_series_scale))
+        } else {
+            (self.series_pane(id), self.series_scale(id))
+        };
+        if pane == Some(self.main_series_pane())
+            && scale == Some(self.main_series_scale)
+            && self.main_series_present
+            && self.main_series_visible
+        {
+            return super::SeriesId::MAIN;
+        }
+        pane.and_then(|pane| {
+            self.pane_series(pane)
+                .into_iter()
+                .find(|item| self.is_series_visible(*item) && self.series_scale(*item) == scale)
+        })
+        .unwrap_or(id)
+    }
+
+    pub(super) fn series_display_map(
+        &self,
+        id: super::SeriesId,
+        map: crate::scales::PriceMap,
+    ) -> crate::scales::PriceMap {
+        self.series_style(self.series_axis_owner(id))
+            .and_then(|style| style.display_format)
+            .map_or(map, |format| map.with_display_format(format))
+    }
+
+    pub(crate) fn value_formatters<'a>(
+        &'a self,
+        price: Option<&'a dyn crate::scales::PriceFormatter>,
+    ) -> rendering::ValueFormatters<'a> {
         rendering::ValueFormatters {
-            price: self.series_price_formatter(super::SeriesId::MAIN),
+            price,
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),
         }
@@ -504,6 +585,99 @@ mod tests {
                 "{left}..{right}"
             );
         }
+    }
+
+    #[test]
+    fn tick_context_tracks_locale_and_falls_back_without_changing_crosshair() {
+        use crate::model::{BarData, Timeframe};
+        use crate::scales::{TickMarkContext, TickMarkType, TimeFormatter, TimezoneMode};
+        use chrono::{DateTime, Utc};
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                "legacy tick".into()
+            }
+            fn format_tick(&self, context: TickMarkContext<'_>) -> Option<String> {
+                match context.mark_type {
+                    TickMarkType::Year => Some(format!(
+                        "{} {}",
+                        context.locale.unwrap_or("default"),
+                        context.time.format("%Y-%m-%d %H:%M:%S%.3f")
+                    )),
+                    TickMarkType::TimeWithMilliseconds => Some(String::new()),
+                    _ => None,
+                }
+            }
+            fn format_crosshair(&self, time: DateTime<Utc>, _: i64) -> String {
+                format!("hover {}", time.format("%H:%M"))
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(self.clone())
+            }
+        }
+
+        let time = "2024-02-29T19:00:01.123Z".parse().unwrap();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(vec![]));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.chart_options.time_scale.timezone = TimezoneMode::Timezone("+05:45".parse().unwrap());
+        chart.set_time_formatter(Some(Arc::new(Host)));
+        chart.set_date_format(Some("%d.%m.%Y".into()));
+        // Add 5h45m by hand: leap day 19:00 UTC becomes March 1, 00:45 display time.
+        for (locale, prefix, month) in [
+            (Some("en-US"), "en-US", "Mar"),
+            (
+                Some("de-DE"),
+                "de-DE",
+                if cfg!(feature = "locales") {
+                    "Mär"
+                } else {
+                    "Mar"
+                },
+            ),
+            (Some("unknown"), "unknown", "Mar"),
+            (None, "default", "Mar"),
+        ] {
+            chart.set_locale(locale.map(str::to_owned));
+            let formatter = chart.build_time_formatter();
+            for formatter in [formatter.clone_box(), formatter] {
+                for (kind, expected) in [
+                    (
+                        TickMarkType::Year,
+                        format!("{prefix} 2024-03-01 00:45:01.123"),
+                    ),
+                    (TickMarkType::Month, month.into()),
+                    (TickMarkType::DayOfMonth, "01".into()),
+                    (TickMarkType::Time, "00:45".into()),
+                    (TickMarkType::TimeWithSeconds, "00:45:01".into()),
+                    (TickMarkType::TimeWithMilliseconds, String::new()),
+                ] {
+                    assert_eq!(
+                        formatter.format(time, kind),
+                        expected,
+                        "{locale:?}, {kind:?}"
+                    );
+                }
+                assert_eq!(formatter.format_crosshair(time, 60), "hover 00:45");
+            }
+            assert_eq!(chart.format_time(time), "hover 00:45");
+        }
+        chart.chart_options.time_scale.seconds_visible = false;
+        assert_eq!(
+            chart
+                .build_time_formatter()
+                .format(time, TickMarkType::TimeWithSeconds),
+            "00:45"
+        );
+        chart.chart_options.time_scale.time_visible = false;
+        assert_eq!(
+            chart
+                .build_time_formatter()
+                .format(time, TickMarkType::Time),
+            "hover 00:45"
+        );
     }
 
     #[test]

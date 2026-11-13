@@ -156,6 +156,10 @@ mod tests {
                 chart.add_indicator(Box::new(tpo));
             } else {
                 chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(crate::model::ChartTypeParams {
+                    tpo_single_prints: true,
+                    ..Default::default()
+                });
             }
             let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
             let highlighted = painted
@@ -163,6 +167,35 @@ mod tests {
                 .filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == single_print))
                 .count();
             assert_eq!(highlighted, 2, "study {study}");
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn tpo_study_draws_the_table_of_its_statistics_input() {
+        use crate::model::{Bar, BarData, Timeframe};
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T02:00:00Z".parse().unwrap();
+        for (statistics, tables) in [(false, 0), (true, 1)] {
+            // One session wide enough to leave the table room before the plot's edge.
+            let bars = (0..40)
+                .map(|i| {
+                    let time = start + chrono::Duration::minutes(30 * i);
+                    Bar::new(time, 100.0, 102.0, 99.0, 101.0, 1.0)
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            let mut tpo = TimePriceOpportunity::default();
+            tpo.set_input("statistics", InputValue::Toggle(statistics))
+                .unwrap();
+            chart.add_indicator(Box::new(tpo));
+            let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+            let drawn = painted
+                .iter()
+                .filter(|s| matches!(s, Shape::Text(t) if t.galley.text() == "Rotation"))
+                .count();
+            assert_eq!(drawn, tables, "statistics {statistics}");
         }
     }
 

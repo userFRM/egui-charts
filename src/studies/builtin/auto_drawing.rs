@@ -65,31 +65,10 @@ impl AutoDrawingKind {
 
     /// The Fibonacci levels and options a study of this kind starts with.
     fn default_fibonacci(self) -> FibonacciConfig {
-        let mut fibonacci = if self == Self::FibonacciExtension {
-            FibonacciConfig::extension_default()
-        } else {
-            FibonacciConfig::default()
-        };
-        for level in &mut fibonacci.levels {
-            let hex = match level.value {
-                0.0 | 1.0 => [120, 123, 134, 255],
-                0.236 | 2.618 => [244, 67, 54, 255],
-                0.382 => [129, 199, 132, 255],
-                0.5 => [76, 175, 80, 255],
-                0.618 => [0, 150, 136, 255],
-                0.786 => [100, 181, 246, 255],
-                1.618 => [41, 98, 255, 255],
-                _ => level.color,
-            };
-            level.color = hex;
-            if level.value == 1.272 || level.value == 2.0 {
-                level.visible = false;
-            }
+        FibonacciConfig {
+            extend_right: true,
+            ..FibonacciConfig::for_tool(self.tool())
         }
-        fibonacci.show_background = true;
-        fibonacci.background_opacity = 38;
-        fibonacci.extend_right = true;
-        fibonacci
     }
 
     fn tool(self) -> DrawingToolType {
@@ -125,6 +104,7 @@ pub struct AutoDrawing {
     atr: ATR,
     fibonacci: FibonacciConfig,
     fork_colors: [Color32; 2],
+    fork_transparency: usize,
     drawings: Vec<Drawing>,
     values: IndicatorValues,
 }
@@ -153,6 +133,7 @@ impl AutoDrawing {
                 crate::studies::palette::GREEN,
                 crate::studies::palette::BLUE,
             ],
+            fork_transparency: 85,
             drawings: Vec::new(),
             values: IndicatorValues::new(),
         }
@@ -190,7 +171,8 @@ impl AutoDrawing {
             }]
             .to_srgba_unmultiplied();
         }
-        config.background_opacity = 38;
+        // Convert percent transparency to the nearest byte of opacity.
+        config.background_opacity = (((100 - self.fork_transparency) * 255 + 50) / 100) as u8;
         config
     }
 
@@ -225,7 +207,7 @@ impl Indicator for AutoDrawing {
 
     /// The swing size, ATR multiple and period, the Zig Zag deviation and depth and, for a
     /// Fibonacci construction, its options, its number of levels and each level's visibility,
-    /// ratio, label, colour and price label.
+    /// ratio, label, colour and price label, or the pitchfork's background transparency.
     fn inputs(&self) -> Vec<StudyInput> {
         let mut inputs = vec![
             StudyInput::new(
@@ -256,6 +238,17 @@ impl Indicator for AutoDrawing {
                 .into_iter()
                 .filter(|input| matches!(input.id.as_str(), "deviation_percent" | "depth")),
         );
+        if self.kind == AutoDrawingKind::Pitchfork {
+            inputs.push(
+                StudyInput::new(
+                    "fork_transparency",
+                    "Background transparency",
+                    InputValue::Length(self.fork_transparency),
+                    InputKind::Length(0, 100),
+                )
+                .with_default(InputValue::Length(85)),
+            );
+        }
         if !self.kind.fibonacci() {
             return inputs;
         }
@@ -420,6 +413,9 @@ impl Indicator for AutoDrawing {
         let config = &mut self.fibonacci;
         match (id, value) {
             ("swing_size", InputValue::Choice(index)) => self.atr_swings = index == 0,
+            ("fork_transparency", InputValue::Length(transparency)) => {
+                self.fork_transparency = transparency;
+            }
             ("atr_multiple", InputValue::Number(multiple)) => self.atr_multiple = multiple,
             ("atr_period", InputValue::Length(period)) => {
                 self.atr_period = period;
@@ -675,6 +671,22 @@ mod tests {
                 .set_input("swing_size", InputValue::Choice(1))
                 .unwrap();
             study.set_input("depth", InputValue::Length(3)).unwrap();
+            if kind == AutoDrawingKind::Pitchfork {
+                let input = study
+                    .inputs()
+                    .into_iter()
+                    .find(|i| i.id == "fork_transparency")
+                    .unwrap();
+                assert_eq!(input.value, InputValue::Length(85));
+                assert!(
+                    study
+                        .set_input("fork_transparency", InputValue::Length(101))
+                        .is_err()
+                );
+                study
+                    .set_input("fork_transparency", InputValue::Length(50))
+                    .unwrap();
+            }
             let check = |study: &ConfiguredStudy, expected: &[(usize, f64)]| {
                 assert_eq!(study.drawings().len(), 1, "{name}");
                 let drawing = &study.drawings()[0];
@@ -685,6 +697,24 @@ mod tests {
                     .map(|p| (p.bar_idx as usize, p.price))
                     .collect();
                 assert_eq!(points, expected, "{name}");
+                if kind == AutoDrawingKind::Pitchfork {
+                    assert_eq!(drawing.pitchfork.as_ref().unwrap().background_opacity, 128);
+                }
+                if kind.fibonacci() {
+                    let config = drawing.fib_config.as_ref().unwrap();
+                    assert_eq!(config.levels.len(), 24, "{name}: listed levels");
+                    assert_eq!(
+                        config
+                            .visible_levels()
+                            .map(|level| level.value)
+                            .collect::<Vec<_>>(),
+                        [
+                            0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.618, 2.618, 3.618, 4.236
+                        ]
+                    );
+                    assert!(config.show_background);
+                    assert_eq!(config.background_opacity, 51);
+                }
                 if kind == AutoDrawingKind::FibonacciRetracement {
                     let mut drawing = drawing.clone();
                     drawing.update_screen_coords(|b| b, |p| p as f32);
@@ -920,6 +950,59 @@ mod tests {
                 reaches,
                 "{visible:?}"
             );
+        }
+    }
+
+    /// A study's trend line, ray, extended line, info line or trend angle extends past the anchor each side
+    /// names. Drawn right to left from bar 9 to bar 3, Right runs on past bar 3 towards bar 0
+    /// and Left past bar 9 towards later bars, so its prices count in a view over bars 0..2 or
+    /// in one over bars 20..30, never both, and always in bars 4..6 between its anchors. A
+    /// vertical one at bar 5 extends along the price axis and reaches neither view. A rectangle
+    /// extends towards the pane's sides whichever way it was drawn.
+    #[test]
+    fn study_lines_drawn_right_to_left_scale_to_the_side_they_extend() {
+        use crate::drawings::DrawingToolType as T;
+        let (reversed, forward) = ([(9.0, 118.0), (3.0, 113.0)], [(3.0, 113.0), (9.0, 118.0)]);
+        let vertical = [(5.0, 113.0), (5.0, 118.0)];
+        let (right, left) = ((false, true), (true, false));
+        // Counted in bars 0..2 and in bars 20..30: for the lines, then for the rectangle.
+        for (anchors, flags, lines, sides) in [
+            (reversed, right, (true, false), (false, true)),
+            (reversed, left, (false, true), (true, false)),
+            (forward, right, (false, true), (false, true)),
+            (forward, left, (true, false), (true, false)),
+            (vertical, right, (false, false), (false, true)),
+            (vertical, left, (false, false), (true, false)),
+        ] {
+            for tool in [
+                T::TrendLine,
+                T::Ray,
+                T::ExtendedLine,
+                T::InfoLine,
+                T::TrendAngle,
+                T::Rect,
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.chart_points = anchors
+                    .iter()
+                    .map(|&(bar, price)| ChartPoint::new(bar, price))
+                    .collect();
+                (drawing.extend_left, drawing.extend_right) = flags;
+                drawing.completed = true;
+                let mut study = AutoDrawing::new(AutoDrawingKind::TrendLine, 5.0, 3);
+                study.drawings = vec![drawing];
+                let (before, after) = if tool == T::Rect { sides } else { lines };
+                for (bars, visible) in [(0..2, before), (4..6, true), (20..30, after)] {
+                    let prices: Vec<_> =
+                        crate::studies::plots::drawing_prices(&study, bars.clone()).collect();
+                    let want = if visible {
+                        anchors.map(|(_, price)| price).to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(prices, want, "{tool:?} {anchors:?} {flags:?} {bars:?}");
+                }
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::Bar;
 use crate::model::math::{LinearFit, Moments};
 use crate::painting::span_cache::SpanCache;
-use crate::styles::typography;
+use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::cell::RefCell;
@@ -44,7 +44,7 @@ impl Drawing {
                     painter,
                     a,
                     b,
-                    Stroke::new(self.stroke_width, self.color32()),
+                    Stroke::new(stroke::HAIRLINE, self.color32()),
                     8.0,
                     4.0,
                 );
@@ -337,6 +337,13 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use crate::drawings::rendering::sample_bars;
 
+    fn collect(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => out.push(shape.clone()),
+        }
+    }
+
     /// Reflect y = 100 - x about y = 85: the other line is y = 70 + x,
     /// through (50, 120), with the same bars in either anchor order.
     #[test]
@@ -458,6 +465,58 @@ mod tests {
         assert!(restored.outline(rect).unwrap().areas.is_empty());
     }
 
+    /// A new parallel channel draws its middle line dashed in the line colour at 1 px, whatever
+    /// width its two lines take.
+    #[test]
+    fn parallel_channel_middle_line_stays_one_pixel_at_any_line_width() {
+        let mut drawing = Drawing::new(1, DrawingToolType::ParallelChannel);
+        drawing.points = vec![
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 100.0),
+            Pos2::new(100.0, 200.0),
+        ];
+        drawing.stroke_width = 3.0;
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(pane),
+                ..Default::default()
+            },
+            |ui| drawing.render_channel(ui.painter(), pane),
+        );
+        let mut shapes = Vec::new();
+        for shape in &output.shapes {
+            collect(&shape.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        let on_line = |y: f32| -> Vec<_> {
+            shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::LineSegment { points, stroke }
+                        if points.iter().all(|p| p.y == y) =>
+                    {
+                        Some(*stroke)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        for y in [100.0, 200.0] {
+            assert_eq!(
+                on_line(y),
+                [Stroke::new(3.0, drawing.color32())],
+                "outer line at {y}"
+            );
+        }
+        let middle = on_line(150.0);
+        assert!(middle.len() > 1, "the middle line is dashed");
+        for stroke in middle {
+            assert_eq!(stroke, Stroke::new(1.0, drawing.color32()));
+        }
+    }
+
     /// Reference: ordinary least squares of the closes of bars 0..=5 against
     /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot,
     /// Pearson r = Sxy / sqrt(Sxx Syy). The moments give the same fit computed
@@ -557,12 +616,6 @@ mod tests {
                             );
                         },
                     );
-                    fn collect(shape: &Shape, out: &mut Vec<Shape>) {
-                        match shape {
-                            Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
-                            _ => out.push(shape.clone()),
-                        }
-                    }
                     let mut shapes = Vec::new();
                     for shape in &output.shapes {
                         collect(&shape.shape, &mut shapes);

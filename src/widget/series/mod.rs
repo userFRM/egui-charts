@@ -4,11 +4,13 @@ mod options;
 mod paint;
 mod scales;
 
-pub use options::SeriesOptions;
+pub use options::{PaneScale, SeriesOptions};
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
+pub(super) use paint::paint_last_price_pulse;
+pub(super) use scales::axis_label_rect;
 
 use super::change_marks::ChangeMarks;
-use super::{Chart, ChartElementId, SeriesId};
+use super::{Chart, ChartElementId, DataOperation, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
 use crate::model::{
@@ -18,29 +20,79 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
-/// Which bar [`Chart::bar_index_at`] finds for a time no bar opens at.
+/// The index in time-ordered `bars` of the bar at `time`, or else of its nearest neighbour in
+/// `direction`. An exact match returns the first of several bars with that time.
+pub(super) fn index_at_time(
+    bars: &[Bar],
+    time: DateTime<Utc>,
+    direction: MismatchDirection,
+) -> Option<usize> {
+    index_of_key(bars, |bar| bar.time, time, direction)
+}
+
+/// [`index_at_time`] over any items in time order.
+pub(super) fn index_of_key<T>(
+    items: &[T],
+    key: impl Fn(&T) -> DateTime<Utc>,
+    time: DateTime<Utc>,
+    direction: MismatchDirection,
+) -> Option<usize> {
+    let at = items.partition_point(|item| key(item) < time);
+    if items.get(at).is_some_and(|item| key(item) == time) {
+        return Some(at);
+    }
+    match direction {
+        MismatchDirection::Exact => None,
+        MismatchDirection::NearestLeft => at.checked_sub(1),
+        MismatchDirection::NearestRight => (at < items.len()).then_some(at),
+    }
+}
+
+/// How discrete time and series queries resolve a missing timestamp or logical position.
+///
+/// Every direction returns an exact match when present. A neighbour search returns `None`
+/// when no point lies on the requested side, without falling back to the opposite side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MismatchDirection {
-    /// Only a bar opened at the time.
+    /// Only the requested timestamp or logical position.
     Exact,
-    /// The latest bar opened before the time.
+    /// The greatest timestamp or logical position below the requested one.
     NearestLeft,
-    /// The earliest bar opened after the time.
+    /// The smallest timestamp or logical position above the requested one.
     NearestRight,
 }
 
 /// The bars of a series inside a range of logical indices, from
-/// [`Chart::bars_in_logical_range`].
+/// [`Chart::bars_in_logical_range`], or the points of a custom series, from
+/// [`Chart::custom_points_in_logical_range`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct BarsInRange {
-    /// Indices into [`Chart::bars`] of the bars inside the range, empty when none is.
+    /// Indices into [`Chart::bars`] or [`Chart::custom_points`] of the items inside the range,
+    /// empty when none is.
     pub bars: std::ops::Range<usize>,
-    /// The number of bars before the range. When there are none, the logical distance from
-    /// the range's left edge to the first bar, negated: zero or less.
+    /// The logical distance from the series' first bar to the first selected bar. If no bars
+    /// are selected, or the series' first bar is selected, measured to the unrounded left
+    /// edge instead. Negative when that edge lies before the first bar.
     pub bars_before: f64,
-    /// The number of bars after the range. When there are none, the logical distance from the
-    /// last bar to the range's right edge, negated: zero or less.
+    /// The logical distance from the last selected bar to the series' last bar. If no bars
+    /// are selected, or the series' last bar is selected, measured from the unrounded right
+    /// edge instead. Negative when that edge lies after the last bar.
     pub bars_after: f64,
+}
+
+/// A valued bar selected by [`Chart::series_last_value`], on its series' price scale.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesLastValue {
+    /// The selected bar's close in raw price units.
+    pub value: f64,
+    /// Its logical position on the shared horizontal scale, including gaps.
+    pub index: f64,
+    /// Its y coordinate in the chart's [`Ui`](egui::Ui), possibly outside the pane.
+    pub coordinate: f32,
+    /// Its last-value tag colour, including any per-bar override.
+    pub color: egui::Color32,
+    /// The value formatted as [`Chart::format_series_price`] formats it, without a name.
+    pub text: String,
 }
 
 /// Handle of a price line added with [`Chart::add_price_line`].
@@ -48,11 +100,33 @@ pub struct BarsInRange {
 pub struct PriceLineId(u64);
 
 impl Chart {
+    /// Closest visible numeric key gap in spacing units, capped at one nominal slot.
+    pub(super) fn series_slot_gap(&self, bars: &[Bar]) -> f64 {
+        let scale = self.state.time_scale();
+        scale.numeric_positions().map_or(1.0, |positions| {
+            let (left, right) = scale.visible_positions();
+            let start = bars
+                .partition_point(|bar| positions.position_at(bar.time) < left)
+                .saturating_sub(1);
+            let end = (bars.partition_point(|bar| positions.position_at(bar.time) <= right) + 1)
+                .min(bars.len());
+            bars[start.min(end)..end]
+                .windows(2)
+                .map(|pair| {
+                    positions.position_at(pair[1].time) - positions.position_at(pair[0].time)
+                })
+                .filter(|gap| *gap > 0.0)
+                .fold(1.0_f64, f64::min)
+        })
+    }
+
     /// Take the settings request from a legend button or a double-click in a pane: a study, a
     /// bar series shown in a pane other than the main one, or [`SeriesId::MAIN`] from the main
     /// series' legend button.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
-        self.indicator_settings_request.take()
+        self.indicator_settings_request
+            .take()
+            .filter(|id| !self.study_ids.contains(id) || self.indicator_user_edit_enabled(*id))
     }
 
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
@@ -63,15 +137,20 @@ impl Chart {
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
+    /// A view scrolled back stays on its bars when older or newer bars arrive, and stops with the
+    /// oldest bar in view once the replacement no longer holds them.
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// Bar series accept data; unknown ids and study ids are ignored with a warning, and so is
+    /// the main series while it is removed from a chart that keeps the original pane.
+    /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
+    /// observe every accepted call, including empty and unchanged replacements.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
-        if (series == SeriesId::MAIN && self.main_series_present
+        if (series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series))
-            && self.replay.is_some()
+            && self.replay_retains(series)
         {
             self.replay_set_data(series, bars);
-            self.data_loaded(series);
+            self.data_set(series);
             return;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
@@ -84,18 +163,19 @@ impl Chart {
                 marks.clear();
             }
             item.feed.rejected_bars += rejected;
-            self.data_loaded(series);
+            self.data_set(series);
             return;
         }
-        if !self.main_series_present || !holds_bars(series, "set_data") {
+        if !self.main_bars_live() || !holds_bars(series, "set_data") {
             return;
         }
         self.replace_main_data(bars);
-        self.data_loaded(series);
+        self.data_set(series);
     }
 
     pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
-        let (mut bars, rejected) = clean(bars, &self.clock());
+        let clock = self.clock();
+        let (mut bars, rejected) = clean(bars, &clock);
         retain_bars(&mut bars, self.bar_limit(SeriesId::MAIN));
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
@@ -112,7 +192,7 @@ impl Chart {
         let first_changed = self.state.set_data(BarData::from_bars(bars));
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
-        self.bars_changed(before, first_changed);
+        self.bars_changed(before, first_changed, &clock);
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)
@@ -120,14 +200,37 @@ impl Chart {
     /// a bar that matches a stored bar replaces it, a newer one is appended and an older one is
     /// inserted in order. An invalid bar is dropped and counted in
     /// [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow them on the
-    /// next [`show`](Self::show), and near the live edge the view follows a new last bar. A merged
-    /// bar is reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
+    /// next [`show`](Self::show), and near the live edge the view follows a new last bar. A view
+    /// scrolled back stays on its bars, also when the bars of an added series lay out the time
+    /// scale of a chart without main bars, from the next [`show`](Self::show), and stops with the
+    /// oldest bar in view once a bar limit has evicted them. A merged bar is
+    /// reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
+    /// observe every accepted call, including unchanged updates.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
-        let changed = if (series == SeriesId::MAIN && self.main_series_present
+        let operation = if self.host_events.data_operations && valid(&bar) {
+            let clock = self.clock();
+            let slot = clock.bar_open(bar.time);
+            let bars = self
+                .replay_window()
+                .filter(|_| self.replay_retains(series))
+                .and_then(|replay| replay.bars.get(&series))
+                .map_or_else(|| self.bars(series), Vec::as_slice);
+            Some(
+                match bars.binary_search_by_key(&slot, |bar| clock.bar_open(bar.time)) {
+                    Ok(_) => DataOperation::Update(bar.time),
+                    Err(at) if at == bars.len() => DataOperation::Append(bar.time),
+                    Err(_) => DataOperation::Insert(bar.time),
+                },
+            )
+        } else {
+            None
+        };
+        let changed = if (series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series))
-            && self.replay.is_some()
+            && self.replay_retains(series)
         {
             self.replay_update(series, bar)
         } else if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
@@ -147,15 +250,18 @@ impl Chart {
             let changed = merged.first_changed.is_some();
             self.enforce_bar_limit(series);
             changed
-        } else if self.main_series_present && holds_bars(series, "update") {
+        } else if self.main_bars_live() && holds_bars(series, "update") {
             self.apply(vec![(bar, Origin::Live)])
                 .first_changed
                 .is_some()
         } else {
-            false
+            return;
         };
         if changed {
             self.data_updated(series);
+        }
+        if let Some(operation) = operation {
+            self.data_operation(series, operation);
         }
     }
 
@@ -166,14 +272,19 @@ impl Chart {
     ///
     /// Bar series accept this; unknown ids and study ids are ignored with a warning.
     pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
-        let present = series == SeriesId::MAIN && self.main_series_present
+        let clock = self.clock();
+        let present = series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series);
-        let removed = if present && self.replay.is_some() {
+        let removed = if present && self.replay_retains(series) {
             self.replay_pop(series, count)
         } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.revision = crate::model::next_revision();
-            item.bars.split_off(item.bars.len().saturating_sub(count))
-        } else if self.main_series_present && holds_bars(series, "pop_bars") {
+            let removed = item.bars.split_off(item.bars.len().saturating_sub(count));
+            if let Some(marks) = &mut item.change_marks {
+                marks.retain_bars(&item.bars, &clock);
+            }
+            removed
+        } else if self.main_bars_live() && holds_bars(series, "pop_bars") {
             let before = self.edge();
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
@@ -188,7 +299,10 @@ impl Chart {
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
-            self.bars_changed(before, first_changed);
+            if let Some(marks) = &mut self.change_marks {
+                marks.retain_bars(&self.state.data().bars, &clock);
+            }
+            self.bars_changed(before, first_changed, &clock);
             removed
         } else {
             return Vec::new();
@@ -223,22 +337,26 @@ impl Chart {
                 self.bar_limits.remove(&series);
             }
         }
-        if self.replay.is_some() {
-            self.apply_replay_window();
-        } else if self.enforce_bar_limit(series) > 0 {
+        self.apply_replay_window();
+        if !self.replay_windows(series) && self.enforce_bar_limit(series) > 0 {
             self.data_updated(series);
         }
     }
 
-    /// The retained-bar limit of `series`, or `None` when unlimited or absent.
+    /// The retained-bar limit of `series`, or `None` when unlimited or absent. The main bars keep
+    /// their limit while they stay live without the original pane, as
+    /// [`remove_pane`](Self::remove_pane) describes.
     pub fn bar_limit(&self, series: SeriesId) -> Option<NonZeroUsize> {
-        self.bar_limits.get(&series).copied()
+        let limit = self.bar_limits.get(&series).copied();
+        // A removed main series keeps its limit for when its bars take data again.
+        limit.filter(|_| series != SeriesId::MAIN || self.main_bars_live())
     }
 
     /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies
     /// restart on the retained window; drawings keep their timestamps and the view keeps its
     /// time position where possible. During replay this removes from the full retained history
-    /// and its matching finer-source slots.
+    /// and its matching finer-source slots; in market replay the main series and the series a
+    /// feed supplies lose the bars the driver built instead.
     /// Emits [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated) when bars are removed.
     /// Unknown ids and study ids are ignored with a warning.
     pub fn remove_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
@@ -253,10 +371,13 @@ impl Chart {
         if !self.bar_series_present(series, "remove_oldest_bars") || count == 0 {
             return Vec::new();
         }
+        let merge_clock = self.clock();
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
-        let removed = if let Some(replay) = &mut self.replay {
+        let removed = if self.replay_windows(series)
+            && let Some(replay) = self.replay_window_mut()
+        {
             let removed = replay.remove_oldest_bars(series, count, &clock);
             self.apply_replay_window();
             removed
@@ -267,13 +388,14 @@ impl Chart {
                 item.revision = crate::model::next_revision();
                 shrink_bars(&mut item.bars);
                 if let Some(marks) = &mut item.change_marks {
-                    marks.clear();
+                    marks.retain_bars(&item.bars, &merge_clock);
                 }
             }
             removed
         } else {
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
+            let right_edge = self.right_edge();
             let mut removed = Vec::new();
             self.state.edit_bars(|bars| {
                 let count = count.min(bars.len());
@@ -288,13 +410,22 @@ impl Chart {
                     self.from_ticks.clear();
                 }
                 if let Some(marks) = &mut self.change_marks {
-                    marks.clear();
+                    marks.retain_bars(&self.state.data().bars, &merge_clock);
                 }
-                self.pending_from.fill(Some(0));
+                // A study that keeps the values of the remaining bars draws them until its turn.
+                for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
+                    if self.pending_from[at] != Some(0) && study.remove_oldest_bars(removed.len()) {
+                        self.pending_from[at] = None;
+                        self.stale[at] = true;
+                    } else {
+                        self.pending_from[at] = Some(0);
+                    }
+                }
                 if let Some(start) = &mut self.pending_start_idx {
                     *start = start.saturating_sub(removed.len());
                 }
                 self.scroll_animation = None;
+                self.stop_at_oldest_bar(right_edge);
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
@@ -308,7 +439,14 @@ impl Chart {
 
     fn bar_series_present(&self, series: SeriesId, call: &str) -> bool {
         self.price_series.iter().any(|item| item.id == series)
-            || self.main_series_present && holds_bars(series, call)
+            || self.main_bars_live() && holds_bars(series, call)
+    }
+
+    /// Whether the main bars take data. A main series removed with the original pane stays out
+    /// of the layout, but its bars still supply the surviving panes' studies and time axis, and
+    /// without that pane nothing brings the series back to supply them later.
+    pub(super) fn main_bars_live(&self) -> bool {
+        self.main_series_present || self.pane_index(super::PaneId::MAIN).is_none()
     }
 
     fn enforce_bar_limit(&mut self, series: SeriesId) -> usize {
@@ -323,9 +461,10 @@ impl Chart {
 
     /// The bars of `series`, oldest first, with their colours and payloads: `bars(id).get(index)`
     /// is the bar at an index and `bars(id).last()` the last bar, which can be a
-    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars.
+    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars, except
+    /// the main series on a chart without the original pane, whose bars stay live.
     pub fn bars(&self, series: SeriesId) -> &[Bar] {
-        if series == SeriesId::MAIN && self.main_series_present {
+        if series == SeriesId::MAIN && self.main_bars_live() {
             &self.state.data().bars
         } else {
             self.price_series
@@ -336,56 +475,104 @@ impl Chart {
     }
 
     /// The index in [`bars`](Self::bars) of the bar of `series` opened at `time`, or else of its
-    /// nearest neighbour in `direction`. `None` when there is no such bar.
+    /// nearest neighbour in `direction`. `None` when there is no such bar. This is a stored-row
+    /// offset; use [`bar_at_index`](Self::bar_at_index) to query by shared logical position.
     pub fn bar_index_at(
         &self,
         series: SeriesId,
         time: DateTime<Utc>,
         direction: MismatchDirection,
     ) -> Option<usize> {
+        index_at_time(self.bars(series), time, direction)
+    }
+
+    /// The bar of `series` at a logical position on the shared horizontal scale, or its nearest
+    /// neighbour in `direction`. This includes stored [whitespace](Bar::whitespace) bars.
+    ///
+    /// Unlike an offset into [`bars`](Self::bars), the position counts gaps: a series at logical
+    /// indices 0, 2 and 4 returns its second stored bar for index 2. Fractional positions can
+    /// select neighbours without rounding. `None` for a non-finite index, an absent series, an
+    /// empty time scale or when there is no bar in the requested direction.
+    pub fn bar_at_index(
+        &self,
+        series: SeriesId,
+        index: f64,
+        direction: MismatchDirection,
+    ) -> Option<&Bar> {
         let bars = self.bars(series);
-        let at = bars.partition_point(|bar| bar.time < time);
-        if bars.get(at).is_some_and(|bar| bar.time == time) {
-            return Some(at);
+        bars.get(self.key_at_index(bars, |bar| bar.time, index, direction)?)
+    }
+
+    /// The position in `items`, in time order, at a logical position on the shared scale.
+    pub(super) fn key_at_index<T>(
+        &self,
+        items: &[T],
+        key: impl Fn(&T) -> DateTime<Utc>,
+        index: f64,
+        direction: MismatchDirection,
+    ) -> Option<usize> {
+        if !index.is_finite() {
+            return None;
         }
+        self.state.shown().first()?;
+        if let Some(time) = self.index_to_time(index) {
+            return index_of_key(items, key, time, direction);
+        }
+        // Extrapolation beyond the timestamp domain still has a neighbour on one side.
         match direction {
-            MismatchDirection::Exact => None,
-            MismatchDirection::NearestLeft => at.checked_sub(1),
-            MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
+            MismatchDirection::NearestLeft if index > 0.0 => items.len().checked_sub(1),
+            MismatchDirection::NearestRight if index < 0.0 => (!items.is_empty()).then_some(0),
+            _ => None,
         }
     }
 
     /// The bars of `series` inside `range`, a range of logical indices of the time scale such as
-    /// [`visible_logical_range`](Self::visible_logical_range) returns, with the bars before and
-    /// after it, for example to request older history before the user scrolls to its start. The range's edges are rounded to whole indices; a bar's logical index is
-    /// the position of its open time on the time scale. `None` for a series without bars or a
-    /// chart without a time scale.
+    /// [`visible_logical_range`](Self::visible_logical_range) returns, with the distances to the
+    /// ends of the series, for example to request older history before the user scrolls to its
+    /// start. A bar's logical index is the position of its open time on the time scale, so a
+    /// series that skips positions counts them. The range's edges are rounded to whole indices
+    /// to select the bars. An empty intersection returns an empty slice at the insertion point,
+    /// with `bars_before = range.left - first_index` and `bars_after = last_index - range.right`.
+    /// Distances at either end of the series also retain the unrounded requested edge.
+    /// `None` for a series without bars or a chart without a time scale.
     pub fn bars_in_logical_range(
         &self,
         series: SeriesId,
         range: LogicalRange,
     ) -> Option<BarsInRange> {
-        let bars = self.bars(series);
+        self.keys_in_logical_range(self.bars(series), |bar| bar.time, range)
+    }
+
+    /// [`bars_in_logical_range`](Self::bars_in_logical_range) over any items in time order.
+    pub(super) fn keys_in_logical_range<T>(
+        &self,
+        items: &[T],
+        key: impl Fn(&T) -> DateTime<Utc>,
+        range: LogicalRange,
+    ) -> Option<BarsInRange> {
         let shown = self.state.shown();
-        let (first, last) = (bars.first()?, bars.last()?);
-        let index = |bar: &Bar| crate::model::index_at(shown, bar.time).unwrap_or(f64::NAN);
-        let left = f64::from(range.left).round();
-        let right = f64::from(range.right).round();
+        let (first, last) = (items.first()?, items.last()?);
+        let index = |item: &T| crate::model::index_at(shown, key(item)).unwrap_or(f64::NAN);
+        let (left, right) = (f64::from(range.left), f64::from(range.right));
         shown.first()?;
-        let start = bars.partition_point(|bar| index(bar) < left);
-        let end = bars.partition_point(|bar| index(bar) <= right).max(start);
+        let start = items.partition_point(|item| index(item) < left.round());
+        let end = items
+            .partition_point(|item| index(item) <= right.round())
+            .max(start);
+        let from = if start > 0 && start < end {
+            index(&items[start])
+        } else {
+            left
+        };
+        let to = if end < items.len() && start < end {
+            index(&items[end - 1])
+        } else {
+            right
+        };
         Some(BarsInRange {
             bars: start..end,
-            bars_before: if start > 0 {
-                start as f64
-            } else {
-                left - index(first)
-            },
-            bars_after: if end < bars.len() {
-                (bars.len() - end) as f64
-            } else {
-                index(last) - right
-            },
+            bars_before: from - index(first),
+            bars_after: index(last) - to,
         })
     }
 
@@ -409,6 +596,17 @@ impl Chart {
             &self.marks
         } else {
             &[]
+        }
+    }
+
+    /// Marker fitting and layering of a bar series, or `None` for an absent series.
+    pub fn marker_options(&self, series: SeriesId) -> Option<MarkerOptions> {
+        if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
+            Some(item.marker_options)
+        } else if series == SeriesId::MAIN && self.main_series_present {
+            Some(self.marker_options)
+        } else {
+            None
         }
     }
 
@@ -447,6 +645,26 @@ impl Chart {
             .push((id, line));
         self.next_price_line += 1;
         Some(id)
+    }
+
+    /// The price lines of a bar series in drawing order, with their handles for
+    /// [`price_line`](Self::price_line), [`update_price_line`](Self::update_price_line) and
+    /// [`remove_price_line`](Self::remove_price_line). The order is that of
+    /// [`set_price_lines`](Self::set_price_lines) followed by later
+    /// [`add_price_line`](Self::add_price_line) calls; an update keeps a line's place.
+    /// A series without lines, a study, an unknown id and a removed series yield no lines.
+    pub fn price_lines(&self, series: SeriesId) -> impl Iterator<Item = (PriceLineId, &PriceLine)> {
+        let lines = self
+            .price_series
+            .iter()
+            .find(|item| item.id == series)
+            .map(|item| item.lines.as_slice())
+            .or_else(|| {
+                (series == SeriesId::MAIN && self.main_series_present)
+                    .then_some(self.price_lines.as_slice())
+            })
+            .unwrap_or_default();
+        lines.iter().map(|(id, line)| (*id, line))
     }
 
     /// The price line of `id`, or `None` once it is removed, replaced by
@@ -494,15 +712,18 @@ impl Chart {
     }
 
     /// What the chart knows about the feed of `series`, such as the bars dropped as invalid.
-    /// `Some` for every present bar series.
+    /// `Some` for every present bar series and custom data series, whose invalid points count
+    /// as `rejected_bars`, and for the main series while its bars are live without the original
+    /// pane.
     pub fn feed_state(&self, series: SeriesId) -> Option<&FeedState> {
-        if series == SeriesId::MAIN && self.main_series_present {
+        if series == SeriesId::MAIN && self.main_bars_live() {
             Some(&self.feed)
         } else {
             self.price_series
                 .iter()
                 .find(|item| item.id == series)
                 .map(|item| &item.feed)
+                .or_else(|| self.custom_feed_state(series))
         }
     }
 
@@ -516,7 +737,6 @@ impl Chart {
     /// [`apply`](Self::apply) with the slots of `clock`, the chart's.
     pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
         let before = self.edge();
-        let tail = before.tail.as_ref().map(|bar| bar.time);
         #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
         let from_ticks = &mut self.from_ticks;
@@ -535,32 +755,20 @@ impl Chart {
         self.feed.rejected_bars += merged.rejected;
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
-        if !self.bars_changed(before, merged.first_changed)
-            && !self.state.shows_elements()
-            && let Some(tail) = tail
-        {
-            // The right edge is the last bar plus the right offset: without this a view scrolled
-            // back would move one bar left per appended bar. A bar stamped later in the slot of
-            // the last bar replaces it and appends nothing.
-            let bars = &self.state.data().bars;
-            let tail = clock.bar_open(tail);
-            let appended =
-                bars.len() - bars.partition_point(|bar| clock.bar_open(bar.time) <= tail);
-            let time_scale = self.state.time_scale_mut();
-            time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
-        }
+        self.bars_changed(before, merged.first_changed, clock);
         if self.enforce_bar_limit(SeriesId::MAIN) > 0 {
             merged.first_changed = Some(0);
         }
         merged
     }
 
-    /// Removes a bar series or study and clears its selection. Removing the main series pauses
-    /// its feed and retains the time axis for the remaining series and drawings. Undo of the
-    /// [`user_action`](Self::user_action) that removed a bar series restores it with its
-    /// markers, price lines, formatter and bar limit, and for the main series the feed follows
-    /// [`set_feed_paused`](Self::set_feed_paused) again. Returns `false` for an unknown or
-    /// already removed id.
+    /// Removes a bar series or study and clears its selection. Removing the main series retains
+    /// the time axis for the remaining series and drawings and pauses its feed; on a chart without
+    /// the original pane its bars stay live instead, as [`remove_pane`](Self::remove_pane)
+    /// describes. Undo of the [`user_action`](Self::user_action) that removed a bar series
+    /// restores it with its markers, price lines, formatter and bar limit, and for the main
+    /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
+    /// for an unknown or already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         if id == SeriesId::MAIN {
             if !self.main_series_present {
@@ -608,15 +816,16 @@ impl Chart {
 
     /// Keeps studies and the view in step after the main bars changed. `first_changed` is the
     /// index of the first bar inserted, changed or removed. The studies are updated once on the
-    /// next frame, for all changes since the previous one. Returns whether the view followed the
-    /// live edge.
-    fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>) -> bool {
+    /// next frame, for all changes since the previous one.
+    fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>, clock: &BarClock) {
         if let Some(from) = first_changed {
             for pending in &mut self.pending_from {
                 *pending = Some(pending.map_or(from, |pending| pending.min(from)));
             }
+            // The history revision leaves out edits of the last bar, which change the table too.
+            self.readout_revision = crate::model::next_revision();
         }
-        self.follow_live_edge(before)
+        self.follow_live_edge(before, clock);
     }
 
     fn edge(&self) -> Edge {
@@ -625,7 +834,7 @@ impl Chart {
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
             // to <= 0, so near means no farther than 1.5 bars to the left of the edge.
             near_live: self.state.time_scale().is_near_live_edge(),
-            len: bars.len(),
+            right_edge: self.right_edge(),
             tail: bars.last().cloned(),
         }
     }
@@ -672,45 +881,138 @@ impl Chart {
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        self.refresh_time_scale_content();
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
     }
 
-    /// Scrolls to the live edge when the view was near it and a bar was appended, or the last
-    /// bar replaced while the options allow shifting on whitespace replacement. Returns whether
-    /// it did.
-    fn follow_live_edge(&mut self, before: Edge) -> bool {
+    /// Scrolls to the live edge when the view was near it and a bar was appended, or a
+    /// whitespace tail gained a value while the options allow shifting on whitespace
+    /// replacement. Any other view stays on its bars.
+    fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
-        // Appended only if the last bar moved forward in time: older bars loaded in front make
+        // Appended only if the last bar moved to a later slot, whatever the length: a rolling
+        // window or a bar limit keeps the series from growing. Older bars loaded in front make
         // the series longer and keep its last bar. They need no change of the right offset
         // either, since the bar indices and the base index both grow by their count.
         let appended =
-            bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
-        // Bitwise, so that the NaN close of an unchanged whitespace bar is unchanged.
-        let tail_changed = tail.is_some_and(|(old, new)| {
-            old.time != new.time || old.close.to_bits() != new.close.to_bits()
+            tail.is_some_and(|(old, new)| clock.bar_open(new.time) > clock.bar_open(old.time));
+        let whitespace_replaced = tail.is_some_and(|(old, new)| {
+            old.is_whitespace()
+                && !new.is_whitespace()
+                && clock.bar_open(new.time) == clock.bar_open(old.time)
         });
         let options = &self.chart_options.time_scale;
-        let shift_for_whitespace = tail_changed
-            && !appended
-            && options.allow_shift_visible_range_on_whitespace_replacement;
+        let shift_for_whitespace =
+            whitespace_replaced && options.allow_shift_visible_range_on_whitespace_replacement;
         let follow = options.shift_visible_range_on_new_bar
             && before.near_live
             && (appended || shift_for_whitespace);
         if follow {
-            self.state.time_scale_mut().scroll_to_realtime();
-            // A pending start index would move the view away from the edge again.
-            self.pending_start_idx = None;
+            self.scroll_to_live_edge();
+        } else if !self.state.shows_elements()
+            && let Some(tail) = before.tail
+        {
+            self.keep_bars_in_view(clock, tail.time, before.right_edge);
         }
-        follow
     }
+
+    /// [`follow_live_edge`](Self::follow_live_edge) for the slots an added series gave a chart
+    /// without main bars after `tail`, the last slot before the refresh, when the view's
+    /// [right edge](Self::right_edge) was at `right_edge`.
+    pub(super) fn added_slots_arrived(
+        &mut self,
+        tail: DateTime<Utc>,
+        right_edge: ViewEdge,
+        near_live: bool,
+    ) {
+        if !self.state.shows_fallback() {
+            return;
+        }
+        if self.state.shown().last().is_none_or(|bar| bar.time <= tail) {
+            self.stop_at_oldest_bar(right_edge);
+            return;
+        }
+        if self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
+            self.scroll_to_live_edge();
+        } else {
+            self.keep_bars_in_view(&self.clock(), tail, right_edge);
+        }
+    }
+
+    fn scroll_to_live_edge(&mut self) {
+        self.state.time_scale_mut().scroll_to_realtime();
+        // A pending start index would move the view away from the edge again.
+        self.pending_start_idx = None;
+    }
+
+    /// Moves the right offset against the slots after the one of `tail`. The right edge is the
+    /// last slot plus the right offset: without this a view scrolled back would move one bar
+    /// forward per appended bar. A bar stamped later in the slot of the last bar replaces it
+    /// and appends nothing. `right_edge` is the view's [right edge](Self::right_edge) before the
+    /// bars changed.
+    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>, right_edge: ViewEdge) {
+        // Numeric refresh already preserves the view by key, including gaps and insertions.
+        if self.state.time_scale().numeric_positions().is_none() {
+            let tail = clock.bar_open(tail);
+            let shown = self.state.shown();
+            let appended =
+                shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= tail);
+            let time_scale = self.state.time_scale_mut();
+            time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
+        }
+        self.stop_at_oldest_bar(right_edge);
+    }
+
+    /// Retain the view's right edge and oldest key across data updates.
+    pub(super) fn right_edge(&self) -> ViewEdge {
+        let scale = self.state.time_scale();
+        ViewEdge {
+            right: scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0),
+            first: self.state.shown().first().map(|bar| bar.time),
+        }
+    }
+
+    /// Stops a time-based view with the oldest bar in view when older bars left it, given its
+    /// right edge `before` they did: a plot that was full of bars stays full, and any other view
+    /// keeps its range until it would show no bars. A view that showed no bars before stays in
+    /// the whitespace where the user left it.
+    fn stop_at_oldest_bar(&mut self, before: ViewEdge) {
+        if self.state.shows_elements() || self.state.shown().is_empty() {
+            return;
+        }
+        // A numeric refresh cannot evict keys that are still loaded.
+        if self.state.time_scale().numeric_positions().is_some()
+            && before
+                .first
+                .is_some_and(|first| self.state.shown()[0].time <= first)
+        {
+            return;
+        }
+        let right = self.right_edge().right;
+        let scale = self.state.time_scale_mut();
+        let full = (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing()) - 1.0;
+        let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
+        let stop = full.clamp(0.0, last);
+        // The right edge a stop leaves at `full` can read back a rounding error short of it.
+        let was_full = before.right + 1e-6 >= full;
+        if right < stop && (was_full || right < 0.0 && before.right + 1e-6 >= 0.0) {
+            scale.set_right_offset(scale.right_offset_precise() + stop - right);
+        }
+    }
+}
+
+/// The viewport and oldest loaded key before bars change.
+pub(super) struct ViewEdge {
+    right: f64,
+    first: Option<DateTime<Utc>>,
 }
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {
     near_live: bool,
-    len: usize,
+    right_edge: ViewEdge,
     tail: Option<Bar>,
 }
 

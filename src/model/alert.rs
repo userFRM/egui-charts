@@ -25,16 +25,32 @@ pub struct Alert {
     /// `None` for an alert the user is creating; the host assigns the id.
     #[serde(default)]
     pub id: Option<AlertId>,
+    /// Creation time assigned by the host. `None` means an older record has no known time.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    /// Most recent firing time, including firings while the application was closed.
+    /// Hosts retain it on every trigger, even for alerts that remain active.
+    #[serde(default)]
+    pub last_triggered_at: Option<DateTime<Utc>>,
+    /// Draw the threshold across the pane in addition to its marker. Enabled by default.
+    #[serde(default = "alert_display_enabled")]
+    pub extend_line: bool,
+    /// Blink the marker for a minute after a firing. Enabled by default; independent of the line
+    /// extension.
+    #[serde(default = "alert_display_enabled")]
+    pub blink_on_trigger: bool,
     /// The symbol whose bars supply the sources, unless `watchlist` names the subject.
     pub symbol: String,
-    /// User-facing name, independent of the notification message.
+    /// User-facing name, independent of the notification message. The alert dialog takes at most
+    /// [`Alert::MAX_NAME_CHARS`] characters.
     #[serde(default)]
     pub name: String,
     /// Host watchlist identifier. When present, evaluate independently on each member symbol.
     #[serde(default)]
     pub watchlist: Option<String>,
-    /// The timeframe whose bars the alert is evaluated on. `None` for an alert that has not been
-    /// fixed to one yet; `AlertEngine` fixes it to the first timeframe it evaluates the alert on.
+    /// Calculation interval of the first condition. `None` until selected;
+    /// `AlertEngine` selects it from primary-series input. An explicit
+    /// additional interval does not select the first condition's interval.
     #[serde(default)]
     pub timeframe: Option<Timeframe>,
     /// Independent creation inputs, retained through edits, copies and storage. Legacy alerts
@@ -44,14 +60,25 @@ pub struct Alert {
     /// Value tested by the first condition.
     #[serde(default)]
     pub source: AlertSource,
-    /// Additional conditions, all required on the same bar as the first condition.
+    /// Additional conditions, all required at the same event time as the first condition.
+    /// An alert accepts at most five conditions including the first. Independent intervals need
+    /// time-based bars; conditions on one execution-based interval remain supported.
     #[serde(default)]
     pub additional_conditions: Vec<AlertRule>,
+    /// Optional interval overrides in `additional_conditions` order. Missing entries and `None`
+    /// follow `timeframe`. Keep entries aligned when removing or reordering additional rules.
+    #[serde(default)]
+    pub additional_timeframes: Vec<Option<Timeframe>>,
     /// When the alert fires.
     pub condition: AlertCondition,
     /// Whether the alert fires once or on every occurrence.
     #[serde(default)]
     pub frequency: AlertFrequency,
+    /// The alert starts monitoring at this time; `None` monitors from the moment it is saved.
+    /// Before it, evaluation ignores the alert, so its first evaluation after the start compares
+    /// with the value one bar earlier, as for a new alert. Earlier than `expires` when both are set.
+    #[serde(default)]
+    pub starts: Option<DateTime<Utc>>,
     /// The alert expires at this time; `None` never expires.
     #[serde(default)]
     pub expires: Option<DateTime<Utc>>,
@@ -59,8 +86,12 @@ pub struct Alert {
     /// observing values for crossings without firing or consuming an occurrence.
     #[serde(default)]
     pub schedule: Option<Box<NotificationSchedule>>,
-    /// Text the host shows or sends when the alert fires. [`Alert::expand_message`] fills in the
-    /// placeholders `{{symbol}}`, `{{close}}` and so on when it fires.
+    /// Where a firing is delivered.
+    #[serde(default)]
+    pub delivery: AlertDelivery,
+    /// Text the host shows or sends when the alert fires. The alert dialog takes at most
+    /// [`Alert::MAX_MESSAGE_CHARS`] characters. [`Alert::expand_message`] fills in the placeholders
+    /// `{{symbol}}`, `{{close}}` and so on when it fires.
     #[serde(default)]
     pub message: String,
     /// Where the alert stands, as the host reports it.
@@ -68,8 +99,57 @@ pub struct Alert {
     pub status: AlertStatus,
 }
 
+fn alert_display_enabled() -> bool {
+    true
+}
+
+/// Where a firing is delivered. The alerts panel honours `popup` and `sound`; the host sends the
+/// others itself, reading them from the saved alert. The trigger log records every firing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct AlertDelivery {
+    /// Show a popup. Enabled by default.
+    pub popup: bool,
+    /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
+    pub sound: bool,
+    /// Ask the host to send an email.
+    pub email: bool,
+    /// Ask the host to send a push notification to the user's mobile app.
+    pub push: bool,
+    /// Ask the host to post to [`webhook_url`](Self::webhook_url).
+    pub webhook: bool,
+    /// Where the host posts, as an `http` or `https` URL.
+    pub webhook_url: String,
+}
+
+impl Default for AlertDelivery {
+    fn default() -> Self {
+        Self {
+            popup: true,
+            sound: true,
+            email: false,
+            push: false,
+            webhook: false,
+            webhook_url: String::new(),
+        }
+    }
+}
+
+impl AlertDelivery {
+    /// Whether an enabled webhook has an `http` or `https` URL.
+    pub fn is_valid(&self) -> bool {
+        let url = self.webhook_url.trim();
+        !self.webhook
+            || url.split_once("://").is_some_and(|(scheme, rest)| {
+                (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http"))
+                    && !rest.is_empty()
+            })
+    }
+}
+
 /// The source view and study definitions captured when an alert is created. The alert's
-/// symbol and timeframe select its main series; auxiliary requests follow these saved studies.
+/// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertInputs {
     /// Calendar zone; `None` follows the system's local calendar.
@@ -156,6 +236,10 @@ impl Alert {
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
+            created_at: None,
+            last_triggered_at: None,
+            extend_line: true,
+            blink_on_trigger: true,
             symbol: symbol.into(),
             name: String::new(),
             watchlist: None,
@@ -163,14 +247,17 @@ impl Alert {
             inputs: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
+            additional_timeframes: Vec::new(),
             frequency: if matches!(condition, AlertCondition::StrategyFills(_)) {
                 AlertFrequency::EveryTime
             } else {
                 AlertFrequency::default()
             },
             condition,
+            starts: None,
             expires: None,
             schedule: None,
+            delivery: AlertDelivery::default(),
             message: String::new(),
             status: AlertStatus::default(),
         }
@@ -178,6 +265,49 @@ impl Alert {
 }
 
 impl Alert {
+    #[cfg(any(feature = "ui", feature = "alert-engine"))]
+    pub(crate) fn same_monitoring(&self, other: &Self) -> bool {
+        let mut copy = self.clone();
+        copy.created_at = other.created_at;
+        copy.last_triggered_at = other.last_triggered_at;
+        copy.extend_line = other.extend_line;
+        copy.blink_on_trigger = other.blink_on_trigger;
+        copy.delivery.clone_from(&other.delivery);
+        copy == *other
+    }
+
+    /// Distinct calculation intervals, shortest nominal duration first, preserving condition
+    /// order for ties. An unset first interval uses one minute
+    /// until the engine fixes it to its first input. Additional unset intervals follow it.
+    pub fn timeframes(&self) -> Vec<Timeframe> {
+        let mut intervals = Vec::new();
+        for (_, _, interval) in self.rules() {
+            if !intervals.contains(&interval) {
+                intervals.push(interval);
+            }
+        }
+        intervals.sort_by_key(Timeframe::duration_ms);
+        intervals
+    }
+
+    pub(crate) fn rules(&self) -> impl Iterator<Item = (&AlertSource, &AlertCondition, Timeframe)> {
+        let first = self.timeframe.unwrap_or_default();
+        std::iter::once((&self.source, &self.condition, first)).chain(
+            self.additional_conditions
+                .iter()
+                .enumerate()
+                .map(move |(index, rule)| {
+                    let interval = self
+                        .additional_timeframes
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .unwrap_or(first);
+                    (&rule.source, &rule.condition, interval)
+                }),
+        )
+    }
+
     /// Every input tested by the alert, including comparison outputs and additional rules.
     pub fn sources(&self) -> impl Iterator<Item = &AlertSource> {
         std::iter::once((&self.source, &self.condition))
@@ -191,78 +321,143 @@ impl Alert {
             })
     }
 
+    /// The most characters, counted as Unicode scalar values, an edited name may have.
+    pub const MAX_NAME_CHARS: usize = 300;
+    /// The most characters, counted as Unicode scalar values, an edited message may have.
+    pub const MAX_MESSAGE_CHARS: usize = 4000;
+
     /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
-    /// `{{timeframe}}` as given, `{{time}}` the open time of `bar` in RFC 3339, `{{open}}`,
-    /// `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of `bar`, `{{value}}` the value of the
-    /// alert's source and `{{output_N}}` the value of output `N` of the study the source names,
-    /// empty if the source is not a study. `value` gives the value of a source at the bar. A value
-    /// that is missing or not finite becomes empty text, a number is written in the shortest form
-    /// that reads back the same, and a placeholder the alert does not know stays as written.
+    /// `{{timeframe}}` (also `{{interval}}`) as given, `{{exchange}}` the `exchange` the feed
+    /// reports for the symbol ([`Instrument::exchange`](super::Instrument::exchange)), or without
+    /// one the text before the first `:` of the symbol, and `{{ticker}}` the text after that `:`
+    /// (the whole symbol without one),
+    /// `{{time}}` the open time of `bar` and `{{trigger_time}}` the instant `trigger` the alert
+    /// fired, both in RFC 3339, `{{open}}`, `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of
+    /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
+    /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
+    /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the label
+    /// that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
+    /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
+    /// joined by `, `, and empty if it tests no drawing. `value` gives the value of a source at
+    /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
+    /// shortest form that reads back the same, and a placeholder the alert does not know stays as
+    /// written.
     ///
     /// ```
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
     ///
-    /// let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
-    /// alert.message = "{{symbol}} closed at {{close}} on {{timeframe}}".into();
+    /// let mut alert = Alert::new("NYSE:IBM", AlertCondition::Above(100.0));
+    /// alert.message = "{{ticker}} on {{exchange}} closed at {{close}} on {{interval}}".into();
     /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
     /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
     /// assert_eq!(
-    ///     alert.expand_message("AAPL", Timeframe::Min5, &bar, |_| None),
-    ///     "AAPL closed at 101.5 on 5min"
+    ///     alert.expand_message("NYSE:IBM", None, Timeframe::Min5, &bar, time, |_| None),
+    ///     "IBM on NYSE closed at 101.5 on 5min"
     /// );
     /// ```
     pub fn expand_message(
         &self,
         symbol: &str,
+        exchange: Option<&str>,
         timeframe: Timeframe,
         bar: &Bar,
+        trigger: DateTime<Utc>,
         value: impl Fn(&AlertSource) -> Option<f64>,
     ) -> String {
         let number = |number: Option<f64>| {
             number
                 .filter(|number| number.is_finite())
-                .map(|number| number.to_string())
-                .unwrap_or_default()
+                .map_or_else(|| "NaN".to_owned(), |number| number.to_string())
+        };
+        let (prefix, ticker) = symbol.split_once(':').unwrap_or(("", symbol));
+        let exchange = exchange.filter(|name| !name.is_empty()).unwrap_or(prefix);
+        let study = |id: &str, output| {
+            number(value(&AlertSource::Study {
+                id: id.to_owned(),
+                output,
+            }))
         };
         let field = |name: &str| -> Option<String> {
             Some(match name {
                 "symbol" => symbol.to_owned(),
-                "timeframe" => timeframe.to_string(),
+                "exchange" => exchange.to_owned(),
+                "ticker" => ticker.to_owned(),
+                "timeframe" | "interval" => timeframe.to_string(),
                 "time" => bar.time.to_rfc3339(),
+                "trigger_time" => trigger.to_rfc3339(),
                 "open" => number(Some(bar.open)),
                 "high" => number(Some(bar.high)),
                 "low" => number(Some(bar.low)),
                 "close" => number(Some(bar.close)),
                 "volume" => number(Some(bar.volume)),
                 "value" => number(value(&self.source)),
+                "level" => {
+                    let tested = if matches!(self.source, AlertSource::Drawing(_)) {
+                        [Some(&self.source), None]
+                    } else {
+                        self.condition.partners()
+                    };
+                    let saved = self.inputs.as_ref().map_or(&[][..], |i| &i.sources);
+                    let labels: Vec<_> = tested
+                        .into_iter()
+                        .flatten()
+                        .filter(|source| matches!(source, AlertSource::Drawing(_)))
+                        .filter_map(|source| saved.iter().find(|(s, _)| s == source))
+                        .map(|(_, label)| label.as_str())
+                        .collect();
+                    labels.join(", ")
+                }
                 _ => {
+                    if let Some((id, output)) = plot_placeholder(name) {
+                        return Some(study(id, output));
+                    }
                     let output = name.strip_prefix("output_")?.parse().ok()?;
                     match &self.source {
-                        AlertSource::Study { id, .. } => number(value(&AlertSource::Study {
-                            id: id.clone(),
-                            output,
-                        })),
+                        AlertSource::Study { id, .. } => study(id, output),
                         _ => String::new(),
                     }
                 }
             })
         };
-        let mut text = String::new();
-        let mut rest = self.message.as_str();
-        while let Some(start) = rest.find("{{")
-            && let Some(length) = rest[start + 2..].find("}}")
-        {
-            let end = start + 2 + length;
-            text.push_str(&rest[..start]);
-            match field(&rest[start + 2..end]) {
-                Some(filled) => text.push_str(&filled),
-                None => text.push_str(&rest[start..end + 2]),
-            }
-            rest = &rest[end + 2..];
-        }
-        text.push_str(rest);
-        text
+        fill_placeholders(&self.message, field)
     }
+
+    /// The study identifiers that `{{plot_ID_N}}` placeholders of the message name.
+    #[cfg(all(feature = "alert-engine", feature = "studies"))]
+    pub(crate) fn plot_studies(&self) -> Vec<usize> {
+        let mut ids = Vec::new();
+        fill_placeholders(&self.message, |name| {
+            ids.extend(plot_placeholder(name).and_then(|(id, _)| id.parse::<usize>().ok()));
+            None
+        });
+        ids
+    }
+}
+
+/// The study identifier and output number of the placeholder `plot_ID_N`.
+fn plot_placeholder(name: &str) -> Option<(&str, usize)> {
+    let (id, output) = name.strip_prefix("plot_")?.rsplit_once('_')?;
+    Some((id, output.parse().ok()?))
+}
+
+/// `message` with each `{{name}}` replaced by what `field` gives for it, or left as written if
+/// `field` gives nothing.
+fn fill_placeholders(message: &str, mut field: impl FnMut(&str) -> Option<String>) -> String {
+    let mut text = String::new();
+    let mut rest = message;
+    while let Some(start) = rest.find("{{")
+        && let Some(length) = rest[start + 2..].find("}}")
+    {
+        let end = start + 2 + length;
+        text.push_str(&rest[..start]);
+        match field(&rest[start + 2..end]) {
+            Some(filled) => text.push_str(&filled),
+            None => text.push_str(&rest[start..end + 2]),
+        }
+        rest = &rest[end + 2..];
+    }
+    text.push_str(rest);
+    text
 }
 
 /// When an alert fires, judged on its source for each subject symbol.
@@ -345,7 +540,7 @@ pub enum AlertCondition {
     /// previous evaluation, just as a crossing does.
     Channel {
         /// Stable sources of the two boundary lines, retained through drawing edits and storage.
-        boundaries: [AlertSource; 2],
+        boundaries: Box<[AlertSource; 2]>,
         /// State or transition to test.
         comparison: AlertChannelComparison,
     },
@@ -416,7 +611,7 @@ impl std::fmt::Display for AlertChannelComparison {
     }
 }
 
-/// One additional condition of an alert; all rules must hold on the same bar.
+/// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertRule {
     /// The value to test.
@@ -439,9 +634,7 @@ impl AlertCondition {
     pub(crate) fn partners(&self) -> [Option<&AlertSource>; 2] {
         match self {
             Self::Compare { other, .. } => [Some(other), None],
-            Self::Channel {
-                boundaries: [a, b], ..
-            } => [Some(a), Some(b)],
+            Self::Channel { boundaries, .. } => [Some(&boundaries[0]), Some(&boundaries[1])],
             _ => [None, None],
         }
     }
@@ -466,9 +659,9 @@ impl AlertCondition {
                 percent.is_finite() && *percent != 0.0 && *bars > 0
             }
             Self::Compare { other, .. } => other.is_valid(),
-            Self::Channel {
-                boundaries: [a, b], ..
-            } => a != b && a.is_valid() && b.is_valid(),
+            Self::Channel { boundaries, .. } => {
+                boundaries[0] != boundaries[1] && boundaries.iter().all(AlertSource::is_valid)
+            }
             Self::VolumeAboveAverage { multiplier, bars } => {
                 multiplier.is_finite() && *multiplier > 0.0 && *bars > 0
             }
@@ -516,7 +709,9 @@ impl std::fmt::Display for AlertCondition {
 }
 
 impl Alert {
-    /// Validate user input before handing it to host storage or evaluation.
+    /// Validate user input before handing it to host storage or evaluation. The length limits of
+    /// the name and the message are not part of it: they bind whoever edits the text, as the
+    /// alert dialog does, and an alert stored with a longer text keeps working.
     pub fn is_valid(&self) -> bool {
         (!self.symbol.trim().is_empty()
             || self
@@ -538,6 +733,12 @@ impl Alert {
                 .additional_conditions
                 .iter()
                 .all(|rule| !matches!(rule.condition, AlertCondition::StrategyFills(_)))
+            && self.additional_conditions.len() < 5
+            && self.additional_timeframes.len() <= self.additional_conditions.len()
+            && {
+                let intervals = self.timeframes();
+                intervals.len() == 1 || intervals.iter().all(|interval| !interval.is_trade_based())
+            }
             && self.source.is_valid()
             && self.condition.is_valid()
             && self
@@ -548,6 +749,11 @@ impl Alert {
                 .schedule
                 .as_ref()
                 .is_none_or(|schedule| schedule.is_valid())
+            && self.delivery.is_valid()
+            && self
+                .starts
+                .zip(self.expires)
+                .is_none_or(|(starts, expires)| starts < expires)
     }
 }
 
@@ -565,21 +771,21 @@ pub struct NotificationSchedule {
 }
 
 /// A window of the day, from `start` up to but excluding `end`, in the schedule's zone. A window
-/// whose `end` is before `start` crosses midnight and belongs to the weekday it starts on.
+/// whose `end` is before `start` crosses midnight and belongs to the weekday it starts on. A
+/// window whose `end` equals `start` covers the 24 hours from `start`, ending at `start` of the
+/// next day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationWindow {
     /// First clock time inside the window.
     pub start: NaiveTime,
-    /// First clock time after the window; different from `start`.
+    /// First clock time after the window; equal to `start` for a full day.
     pub end: NaiveTime,
 }
 
 impl NotificationSchedule {
-    /// Whether at least one weekday and one window are selected and no window is empty.
+    /// Whether at least one weekday and one window are selected.
     pub fn is_valid(&self) -> bool {
-        !self.days.is_empty()
-            && !self.windows.is_empty()
-            && self.windows.iter().all(|w| w.start != w.end)
+        !self.days.is_empty() && !self.windows.is_empty()
     }
 
     /// Whether a notification raised at `at` may be delivered.
@@ -663,6 +869,9 @@ mod tests {
     fn stored_named_compound_alert_round_trips() {
         let stored = serde_json::json!({
             "symbol": "AAPL", "name": "Momentum", "message": "Check momentum",
+            "timeframe": "Hour1", "additional_timeframes": ["Min5"],
+            "created_at": "2026-10-01T10:00:00Z", "last_triggered_at": "2026-10-02T11:30:00Z",
+            "extend_line": true, "blink_on_trigger": false,
             "watchlist": "technology", "source": {"Study": {"id": "rsi", "output": 0}},
             "condition": {"Above": 70.0}, "frequency": "OncePerBarClose",
             "additional_conditions": [{"source": "Price", "condition": {"EnteringChannel": {"lower": 100.0, "upper": 110.0}}}]
@@ -689,20 +898,34 @@ mod tests {
             AlertSource::Price => Some(101.5),
             _ => None,
         };
+        let drawing = AlertSource::Drawing("d#1".into());
+        let trigger = DateTime::from_timestamp(1_704_067_260, 0).unwrap();
         for (message, source, expected) in [
             (
                 "{{symbol}} closed at {{close}}",
                 AlertSource::Price,
-                "AAPL closed at 101.5",
+                "NASDAQ:AAPL closed at 101.5",
             ),
             (
-                "{{timeframe}} {{time}} {{open}} {{high}} [{{low}}] {{volume}}",
+                "{{timeframe}}={{interval}} {{time}} {{open}} {{high}} [{{low}}] {{volume}}",
                 AlertSource::Price,
-                "5min 2024-01-01T00:00:00+00:00 99 102.5 [] 1000",
+                "5min=5min 2024-01-01T00:00:00+00:00 99 102.5 [NaN] 1000",
+            ),
+            (
+                "{{ticker}} on {{exchange}} at {{trigger_time}}",
+                AlertSource::Price,
+                "AAPL on NASDAQ at 2024-01-01T00:01:00+00:00",
             ),
             ("{{value}}/{{output_1}}", study.clone(), "70.25/3"),
-            ("{{output_2}}.", study.clone(), "."),
+            ("{{output_2}}.", study.clone(), "NaN."),
             ("{{value}}{{output_1}}", AlertSource::Price, "101.5"),
+            (
+                "{{plot_3_1}} {{plot_3_0}} {{plot_3_2}} {{plot_9_0}} {{plot_3}}",
+                AlertSource::Price,
+                "3 70.25 NaN NaN {{plot_3}}",
+            ),
+            ("{{level}} at {{value}}", drawing, "Upper at NaN"),
+            ("[{{level}}]", AlertSource::Price, "[]"),
             (
                 "{{ close }} {{nope}} {{output_x}} {{close",
                 AlertSource::Price,
@@ -710,11 +933,15 @@ mod tests {
             ),
             ("{{{{close}}}}", AlertSource::Price, "{{{{close}}}}"),
         ] {
-            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            let mut alert = Alert::new("NASDAQ:AAPL", AlertCondition::Above(100.0));
             alert.source = source;
             alert.message = message.into();
+            alert.inputs = Some(Box::new(AlertInputs {
+                sources: vec![(AlertSource::Drawing("d#1".into()), "Upper".into())],
+                ..AlertInputs::default()
+            }));
             assert_eq!(
-                alert.expand_message("AAPL", Timeframe::Min5, &bar, value),
+                alert.expand_message("NASDAQ:AAPL", None, Timeframe::Min5, &bar, trigger, value),
                 expected,
                 "{message}"
             );
@@ -722,9 +949,104 @@ mod tests {
     }
 
     #[test]
+    fn exchange_placeholder_prefers_the_reported_exchange_over_the_symbol_prefix() {
+        let time = DateTime::from_timestamp(0, 0).unwrap();
+        let bar = Bar::new(time, 1.0, 1.0, 1.0, 1.0, 1.0);
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(0.0));
+        alert.message = "{{exchange}}/{{ticker}}".into();
+        for (symbol, exchange, expected) in [
+            ("NYSE:IBM", None, "NYSE/IBM"),
+            ("NYSE:IBM", Some(""), "NYSE/IBM"),
+            ("NYSE:IBM", Some("ARCA"), "ARCA/IBM"),
+            ("AAPL", Some("NASDAQ"), "NASDAQ/AAPL"),
+            ("AAPL", None, "/AAPL"),
+        ] {
+            assert_eq!(
+                alert.expand_message(symbol, exchange, Timeframe::Min1, &bar, time, |_| None),
+                expected
+            );
+        }
+    }
+
+    /// The drawing menu and the floating toolbar create the price crossing a drawing level
+    /// (`DrawingContextMenu::open_on`), the dialog a channel between two levels, and
+    /// `prepare_alert` stores each level's label in the inputs.
+    #[test]
+    fn level_names_the_drawing_level_a_price_alert_compares_with() {
+        let drawing = |id: &str| AlertSource::Drawing(id.into());
+        let time = DateTime::from_timestamp(0, 0).unwrap();
+        let bar = Bar::new(time, 123.0, 124.0, 122.0, 123.6, 10.0);
+        for (condition, expected) in [
+            (
+                AlertCondition::Compare {
+                    other: drawing("fib#1"),
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236",
+            ),
+            (
+                AlertCondition::Channel {
+                    boundaries: Box::new([drawing("fib#1"), drawing("fib#2")]),
+                    comparison: AlertChannelComparison::Entering,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236, Fib Retracement 7: 0.382",
+            ),
+            (
+                AlertCondition::Compare {
+                    other: AlertSource::Volume,
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed ",
+            ),
+        ] {
+            let mut alert = Alert::new("SAMPLE", condition);
+            alert.inputs = Some(Box::new(AlertInputs {
+                sources: vec![
+                    (drawing("fib#1"), "Fib Retracement 7: 0.236".into()),
+                    (drawing("fib#2"), "Fib Retracement 7: 0.382".into()),
+                ],
+                ..AlertInputs::default()
+            }));
+            alert.message = "{{ticker}} crossed {{level}}".into();
+            assert_eq!(
+                alert.expand_message("SAMPLE", None, Timeframe::Min1, &bar, time, |_| Some(123.6)),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 22] = [
+        let rows: [(Edit, bool); 33] = [
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "HTTPS://hooks.example.com/alert".into();
+                },
+                true,
+            ),
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "Http://10.0.0.2/hook".into();
+                },
+                true,
+            ),
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "ftp://hooks.example.com".into();
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "https://".into();
+                },
+                false,
+            ),
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,
@@ -746,6 +1068,65 @@ mod tests {
                         source: AlertSource::Price,
                         condition: AlertCondition::StrategyFills("run".into()),
                     });
+                },
+                false,
+            ),
+            (
+                |a| {
+                    let rule: AlertRule = serde_json::from_value(
+                        serde_json::json!({"source":"Price", "condition":{"Above":1.0}}),
+                    )
+                    .unwrap();
+                    a.additional_conditions = vec![rule; 4];
+                },
+                true,
+            ),
+            (
+                |a| {
+                    let rule: AlertRule = serde_json::from_value(
+                        serde_json::json!({"source":"Price", "condition":{"Above":1.0}}),
+                    )
+                    .unwrap();
+                    a.additional_conditions = vec![rule; 5];
+                },
+                false,
+            ),
+            (
+                |a| {
+                    *a = serde_json::from_value(serde_json::json!({
+                    "symbol":"SAMPLE", "condition":{"Above":1.0}, "additional_timeframes":["Min5"]
+                })).unwrap()
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::StrategyFills("run".into());
+                    a.additional_conditions.push(AlertRule {
+                        source: AlertSource::Price,
+                        condition: AlertCondition::Above(1.0),
+                    });
+                },
+                false,
+            ),
+            (
+                |a| {
+                    *a = serde_json::from_value(serde_json::json!({
+                        "symbol":"SAMPLE", "timeframe":{"Ticks":2}, "condition":{"Above":1.0},
+                        "additional_conditions":[{"source":"Volume","condition":{"Above":1.0}}]
+                    }))
+                    .unwrap()
+                },
+                true,
+            ),
+            (
+                |a| {
+                    *a = serde_json::from_value(serde_json::json!({
+                        "symbol":"SAMPLE", "timeframe":"Min1", "condition":{"Above":1.0},
+                        "additional_timeframes":[{"Ticks":2}],
+                        "additional_conditions":[{"source":"Volume","condition":{"Above":1.0}}]
+                    }))
+                    .unwrap()
                 },
                 false,
             ),
@@ -796,6 +1177,14 @@ mod tests {
                             end: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                         }],
                     }))
+                },
+                true,
+            ),
+            (
+                |a| {
+                    let time = DateTime::from_timestamp(1_000, 0);
+                    a.starts = time;
+                    a.expires = time;
                 },
                 false,
             ),
@@ -896,17 +1285,24 @@ mod tests {
             alert,
             Alert {
                 id: None,
+                created_at: None,
+                last_triggered_at: None,
+                extend_line: true,
+                blink_on_trigger: true,
                 name: String::new(),
                 source: AlertSource::Price,
                 watchlist: None,
                 timeframe: None,
                 inputs: None,
                 additional_conditions: Vec::new(),
+                additional_timeframes: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),
                 frequency: AlertFrequency::Once,
+                starts: None,
                 expires: None,
                 schedule: None,
+                delivery: AlertDelivery::default(),
                 message: String::new(),
                 status: AlertStatus::Active,
             }
@@ -940,5 +1336,17 @@ mod tests {
         assert!(schedule.allows(at("2026-03-14T02:30:00Z")));
         assert!(schedule.allows(at("2026-03-14T05:59:00Z")));
         assert!(!schedule.allows(at("2026-03-14T06:00:00Z")));
+        // Equal bounds cover 24 hours from the start: Friday 09:00 EST up to Saturday 09:00.
+        let full_day = NotificationSchedule {
+            windows: vec![NotificationWindow {
+                start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                end: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            }],
+            ..*schedule
+        };
+        assert!(full_day.allows(at("2026-03-06T14:00:00Z")));
+        assert!(full_day.allows(at("2026-03-07T13:59:00Z")));
+        assert!(!full_day.allows(at("2026-03-07T14:00:00Z")));
+        assert!(!full_day.allows(at("2026-03-06T13:59:00Z")));
     }
 }

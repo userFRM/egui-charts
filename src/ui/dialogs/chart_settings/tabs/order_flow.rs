@@ -235,6 +235,7 @@ impl SettingsDialog {
                         (BubbleScalingMode::Linear, "Linear"),
                         (BubbleScalingMode::SquareRoot, "Square root"),
                         (BubbleScalingMode::Logarithmic, "Logarithmic"),
+                        (BubbleScalingMode::Area, "Area"),
                     ];
                     let selected = choices.iter().find(|(value, _)| value == mode).unwrap().1;
                     styled_dropdown(ui, "bubble_scaling", 180.0, theme.ui.text, selected, |ui| {

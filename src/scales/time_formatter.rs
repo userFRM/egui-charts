@@ -15,6 +15,19 @@ use std::sync::Arc;
 #[cfg(test)]
 use chrono::Datelike;
 
+/// Display time and chart locale for one time-axis tick.
+#[derive(Debug, Clone, Copy)]
+pub struct TickMarkContext<'a> {
+    /// Wall-clock fields in the chart's display zone, carried in a UTC value.
+    /// This is not a UTC instant and must not be converted to the display zone again.
+    pub time: DateTime<Utc>,
+    /// Calendar or clock precision selected for this tick.
+    pub mark_type: TickMarkType,
+    /// Active chart locale, such as `"de-DE"`; `None` uses English names.
+    /// Unknown identifiers and builds without `locales` also use English names.
+    pub locale: Option<&'a str>,
+}
+
 /// Trait for custom time formatting
 /// Allows users to customize how time labels are displayed on the axis
 pub trait TimeFormatter: Send + Sync {
@@ -27,6 +40,17 @@ pub trait TimeFormatter: Send + Sync {
     /// # Returns
     /// Formatted string to display on the time axis
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String;
+
+    /// Formats one axis tick with the active chart locale and display-time fields.
+    ///
+    /// Return `None` to use the chart's normal locale and clock settings for this tick.
+    /// `Some(String::new())` keeps an empty label. The default calls [`format`](Self::format),
+    /// preserving existing formatters. Builders and the chart call this after time-zone
+    /// conversion; hidden intraday clocks still use date labels instead.
+    /// This hook does not change [`format_crosshair`](Self::format_crosshair).
+    fn format_tick(&self, context: TickMarkContext<'_>) -> Option<String> {
+        Some(self.format(context.time, context.mark_type))
+    }
 
     /// Clock-face time used to identify calendar boundaries. The returned UTC value
     /// holds local fields, not another instant.
@@ -336,6 +360,37 @@ impl TimeFormatter for CustomTimeFormatter {
     }
 }
 
+/// Keeps per-tick fallback separate from the host's crosshair formatting.
+struct TickContextFormatter {
+    formatter: Box<dyn TimeFormatter>,
+    fallback: Box<dyn TimeFormatter>,
+    locale: Option<String>,
+}
+
+impl TimeFormatter for TickContextFormatter {
+    fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
+        self.formatter
+            .format_tick(TickMarkContext {
+                time,
+                mark_type,
+                locale: self.locale.as_deref(),
+            })
+            .unwrap_or_else(|| self.fallback.format(time, mark_type))
+    }
+
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        self.formatter.format_crosshair(time, bar_seconds)
+    }
+
+    fn clone_box(&self) -> Box<dyn TimeFormatter> {
+        Box::new(Self {
+            formatter: self.formatter.clone_box(),
+            fallback: self.fallback.clone_box(),
+            locale: self.locale.clone(),
+        })
+    }
+}
+
 /// Relative time formatter (e.g., "2h ago", "yesterday")
 #[derive(Debug, Clone)]
 pub struct RelativeTimeFormatter {
@@ -575,12 +630,13 @@ impl TimeFormatterBuilder {
         self
     }
 
-    /// Format with `formatter` instead of the default or locale formatter.
+    /// Format with `formatter`, with per-tick access to the locale and default text.
     ///
     /// The time zone and clock visibility still apply: `formatter` receives
     /// wall-clock times in the chosen zone, and dates in place of intraday
     /// clocks when the time is hidden. Its own options replace the 24-hour,
-    /// seconds, locale and date format settings.
+    /// seconds, locale and date format settings, unless
+    /// [`format_tick`](TimeFormatter::format_tick) returns `None` for a tick.
     pub fn with_formatter(mut self, formatter: Box<dyn TimeFormatter>) -> Self {
         self.formatter = Some(formatter);
         self
@@ -594,11 +650,9 @@ impl TimeFormatterBuilder {
 
     /// Build the formatter
     pub fn build(self) -> Box<dyn TimeFormatter> {
-        let base: Box<dyn TimeFormatter> = if let Some(formatter) = self.formatter {
-            formatter
-        } else if let Some(locale) = self.locale {
+        let base: Box<dyn TimeFormatter> = if let Some(locale) = &self.locale {
             Box::new(LocaleTimeFormatter {
-                locale,
+                locale: locale.clone(),
                 use_24_hour: self.use_24_hour,
                 show_seconds: self.show_seconds,
                 date_format: self.date_format,
@@ -610,6 +664,14 @@ impl TimeFormatterBuilder {
                 date_format: self.date_format,
             }
             .into_box()
+        };
+        let base: Box<dyn TimeFormatter> = match self.formatter {
+            Some(formatter) => Box::new(TickContextFormatter {
+                formatter,
+                fallback: base,
+                locale: self.locale,
+            }),
+            None => base,
         };
 
         // UTC and system-local formatters need no storage for a selected zone.

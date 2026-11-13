@@ -10,14 +10,28 @@
 
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
-    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, PitchforkConfig,
-    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
+    NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
 use crate::model::{AlertSource, LineStyle, PostLink};
 use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
+
+/// How a top-level object-tree folder shares its drawings with the other charts of a layout.
+///
+/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions).
+/// Charts on one drawing storage read each other's saved drawings whichever is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FolderSync {
+    /// Keep the drawings on this chart, even with layout-wide drawing sync on.
+    Chart,
+    /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
+    Layout,
+}
 
 /// A drawing on the chart
 ///
@@ -54,6 +68,11 @@ pub struct Drawing {
     /// from; `None` for a drawing never stored, which is saved with the time of the save
     #[serde(skip)]
     pub created_at: Option<i64>,
+    /// Time of the last edit, in Unix milliseconds: read from the stored record, set by the edits
+    /// of a [`DrawingManager`](crate::drawings::DrawingManager) and put back by their undo.
+    /// `None` for a drawing no edit reached, which is saved with the time of the save.
+    #[serde(skip)]
+    pub modified_at: Option<i64>,
     /// User notes, saved with the drawing and restored from its stored record
     #[serde(skip)]
     pub notes: Option<String>,
@@ -80,6 +99,13 @@ pub struct Drawing {
     /// Independent of host-defined groups. Older saved drawings start at the root.
     #[serde(default)]
     pub folder: Vec<String>,
+    /// Synchronization set on each folder of [`Self::folder`], by position; a missing entry or
+    /// `None` is unset. The outermost folder decides, as [`Self::folder_sync_mode`] reads; inner
+    /// entries wait for their folder to reach the root. Use
+    /// [`DrawingManager::move_to_folder`](crate::drawings::DrawingManager::move_to_folder) to keep
+    /// this aligned with the path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_sync: Vec<Option<FolderSync>>,
     /// Stable id of a host-registered tool; `None` uses the built-in renderer.
     #[serde(default)]
     pub custom_tool: Option<String>,
@@ -154,12 +180,37 @@ pub struct Drawing {
     /// Whether an annotation's box has a 1 px border. Older drawings have it on.
     #[serde(default = "enabled")]
     pub border: bool,
-    /// Border colour of annotation boxes; `None` uses the drawing colour.
+    /// Border colour of annotation boxes; `None` uses the drawing colour, except on a price label,
+    /// which then has no border, as price labels saved before they had one.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
-    /// Extend line to left edge
+    /// Whether a Text, Anchored text or Callout breaks its text into lines no wider than
+    /// `text_wrap_width`. Older drawings keep each line of their text whole.
+    #[serde(default)]
+    pub text_wrap: bool,
+    /// Widest line of wrapped text, in points.
+    #[serde(default = "default_text_wrap_width")]
+    pub text_wrap_width: f32,
+    /// Whether a Text or Anchored text grows and shrinks with the bar spacing instead of keeping
+    /// its font size at every zoom: the text, its wrap width and its box scale together. Older
+    /// drawings keep their size.
+    #[serde(default)]
+    pub text_follows_zoom: bool,
+    /// Bar spacing, in points, at which text that follows the zoom has its set font size. `None`
+    /// adopts the spacing a Text or Anchored text is first displayed at, including for older
+    /// saved drawings.
+    #[serde(default)]
+    pub text_zoom_spacing: Option<f32>,
+    /// Colour, size and emphasis of the text typed on a price note. `None` draws it as the price
+    /// beside it, in the label's text settings, as price notes saved before this setting do. Other
+    /// tools ignore it.
+    #[serde(default)]
+    pub note_text_style: Option<NoteTextStyle>,
+    /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
+    /// extends past its first anchor, whichever way it was drawn
     pub extend_left: bool,
-    /// Extend line to right edge
+    /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
+    /// extends past its second anchor, whichever way it was drawn
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -167,8 +218,8 @@ pub struct Drawing {
     pub arrow_end_style: ArrowStyle,
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
-    /// Whether a horizontal line, horizontal ray or cross line shows its price as a tag on the
-    /// price axis. Other tools ignore it. Drawings saved without it show the tag.
+    /// Whether a horizontal line, horizontal ray, cross line or position shows its prices as
+    /// tags on the price axis. Other drawings ignore it. Saved drawings without it show tags.
     #[serde(default = "enabled")]
     pub price_axis_label: bool,
     /// Whether a vertical line or cross line shows its time as a tag on the time axis. Other
@@ -177,17 +228,30 @@ pub struct Drawing {
     pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
+    /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
+    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
+    /// line, and the reach of a vertical line. Other tools ignore these settings.
+    #[serde(default = "LineMeasurements::left_out")]
+    pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
     pub position_size: Option<PositionSize>,
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
     pub position_sizing: PositionSizing,
-    /// Target zone and level colour of position tools; `None` keeps the default green.
+    /// Statistics, account currency and quantity precision of position tools.
+    #[serde(default = "PositionReadout::legacy")]
+    pub position_readout: PositionReadout,
+    /// Target zone and level colour of position tools, whose alpha is the zone's opacity while
+    /// labels and tags stay opaque; `None` keeps the default green at 20% opacity.
     #[serde(default)]
     pub position_target_color: Option<[u8; 4]>,
-    /// Stop zone and level colour of position tools; `None` keeps the default red.
+    /// Stop zone and level colour of position tools, whose alpha is the zone's opacity while
+    /// labels and tags stay opaque; `None` keeps the default red at 20% opacity.
     #[serde(default)]
     pub position_stop_color: Option<[u8; 4]>,
+    /// Lines, labels, zone fill and border of position tools.
+    #[serde(default)]
+    pub position_style: PositionStyle,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
@@ -236,6 +300,29 @@ fn enabled() -> bool {
     true
 }
 
+fn default_text_wrap_width() -> f32 {
+    200.0
+}
+
+/// Points between neighbouring bars around screen `x`, starting the search at `bar`; `None` when
+/// the mapping does not advance. Screen coordinates are single precision, which rounds one bar's
+/// step coarsely far from the view, so the step is averaged over 64 bars and measured again
+/// nearer `x`.
+fn bar_spacing_near(bar_to_x: impl Fn(f32) -> f32, mut bar: f32, x: f32) -> Option<f32> {
+    let mut spacing = None;
+    for _ in 0..3 {
+        bar = bar.round();
+        let at = bar_to_x(bar);
+        let step = (bar_to_x(bar + 64.0) - at) / 64.0;
+        if !(step.is_finite() && step > 0.0) {
+            return None;
+        }
+        spacing = Some(step);
+        bar += (x - at) / step;
+    }
+    spacing
+}
+
 pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
 pub(super) const RED: [u8; 4] = [242, 54, 69, 255];
 pub(super) const ORANGE: [u8; 4] = [255, 152, 0, 255];
@@ -244,7 +331,7 @@ pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
 pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
 pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
-const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
+pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
@@ -299,9 +386,9 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
         T::Circle | T::Ellipse => filled(RED, 51),
-        // Polylines and arcs start unfilled.
-        T::Polyline | T::Brush => colored(CYAN),
-        T::Arc => colored(PINK),
+        T::Polyline => filled(CYAN, 51),
+        T::Brush => colored(CYAN),
+        T::Arc => filled(PINK, 51),
         T::Sector => DefaultStyle {
             color: [156, 156, 156, 255],
             width: 1.0,
@@ -353,6 +440,9 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
+        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        // The colour of the range tint, the same cyan as the rows of rising volume.
+        T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
         T::HeadAndShoulders => filled(TEAL, 38),
         T::ABCDPattern | T::SineLine => colored(TEAL),
@@ -368,10 +458,9 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             fill: Some([106, 168, 79, 128]),
             ..LINE
         },
-        // Measure keeps its fill unset, which tints it by the direction of the move.
         T::Measure | T::PriceRange => DefaultStyle {
             font_size: 12.0,
-            ..LINE
+            ..filled(BLUE, 38)
         },
         T::DateRange | T::DateAndPriceRange => DefaultStyle {
             font_size: 12.0,
@@ -406,6 +495,15 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
 }
 
 impl Drawing {
+    /// The synchronization this drawing follows: that of its top-level folder, or `None` when
+    /// unset or at the root.
+    pub fn folder_sync_mode(&self) -> Option<FolderSync> {
+        if self.folder.is_empty() {
+            return None;
+        }
+        self.folder_sync.first().copied().flatten()
+    }
+
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         let style = default_style(tool_type);
@@ -418,6 +516,7 @@ impl Drawing {
             id,
             stored_id: None,
             created_at: None,
+            modified_at: None,
             notes: None,
             label: None,
             selectable: true,
@@ -425,6 +524,7 @@ impl Drawing {
             listed: true,
             group: None,
             folder: Vec::new(),
+            folder_sync: Vec::new(),
             tool_type,
             custom_tool: None,
             custom_settings: serde_json::Value::Null,
@@ -450,11 +550,35 @@ impl Drawing {
                 FontWeight::Normal
             },
             italic: false,
-            text_color: matches!(tool_type, DrawingToolType::Note | DrawingToolType::Callout)
-                .then_some(WHITE),
+            text_color: match tool_type {
+                DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
+                // Independent of the line, which can change colour without its text.
+                DrawingToolType::TrendLine
+                | DrawingToolType::Ray
+                | DrawingToolType::ExtendedLine
+                | DrawingToolType::InfoLine
+                | DrawingToolType::HorizontalLine
+                | DrawingToolType::HorizontalRay
+                | DrawingToolType::VerticalLine => Some(BLUE),
+                // As is the text of a shape, which starts in the shape's own colour.
+                DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse => {
+                    Some(style.color)
+                }
+                _ => None,
+            },
             background: !plain_text,
             border: !plain_text,
-            border_color: plain_text.then_some([112, 112, 112, 255]),
+            border_color: match tool_type {
+                _ if plain_text => Some([112, 112, 112, 255]),
+                // Its own colour, which the badge keeps when its background changes.
+                DrawingToolType::PriceLabel => Some(style.color),
+                _ => None,
+            },
+            text_wrap: false,
+            text_wrap_width: default_text_wrap_width(),
+            text_follows_zoom: false,
+            text_zoom_spacing: None,
+            note_text_style: None,
             extend_left: tool_type == DrawingToolType::ExtendedLine,
             extend_right: matches!(
                 tool_type,
@@ -470,10 +594,13 @@ impl Drawing {
             timeframe_visibility: TimeframeVisibility::all(),
             price_axis_label: true,
             time_axis_label: true,
+            line_measurements: LineMeasurements::for_tool(tool_type),
             position_size: None,
             position_sizing: PositionSizing::default(),
+            position_readout: PositionReadout::default(),
             position_target_color: None,
             position_stop_color: None,
+            position_style: PositionStyle::default(),
             fib_config: matches!(
                 tool_type,
                 DrawingToolType::FibonacciRetracement
@@ -485,6 +612,7 @@ impl Drawing {
                     | DrawingToolType::TrendBasedFibTime
                     | DrawingToolType::FibonacciCircles
                     | DrawingToolType::FibonacciSpeedResistanceArcs
+                    | DrawingToolType::FibonacciSpiral
             )
             .then(|| FibonacciConfig::for_tool(tool_type)),
             volume_profile: matches!(
@@ -500,8 +628,9 @@ impl Drawing {
                     | DrawingToolType::SchiffPitchfork
                     | DrawingToolType::ModifiedSchiffPitchfork
                     | DrawingToolType::InsidePitchfork
+                    | DrawingToolType::Pitchfan
             )
-            .then(PitchforkConfig::default),
+            .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             image: None,
@@ -522,18 +651,55 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; a fill tinted from the tool's default
-    /// line colour takes the same tint of `color`.
+    /// Create a new drawing with a specific line colour; fills, borders and pitchfork levels
+    /// sharing the tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
-        // A fill tinted from the tool's line colour follows the new one; other fills stay.
-        if let Some(fill) = &mut drawing.fill_color
-            && fill[..3] == drawing.color[..3]
-        {
-            fill[..3].copy_from_slice(&color[..3]);
-        }
-        drawing.color = color;
+        drawing.set_line_color(color);
         drawing
+    }
+
+    /// Set the line colour and retint fills, borders and pitchfork levels sharing its current
+    /// RGB, keeping each one's opacity. Independently coloured fills, borders and levels keep
+    /// their colours.
+    pub fn set_line_color(&mut self, color: [u8; 4]) {
+        for shared in [&mut self.fill_color, &mut self.border_color] {
+            if let Some(shared) = shared
+                && shared[..3] == self.color[..3]
+            {
+                shared[..3].copy_from_slice(&color[..3]);
+            }
+        }
+        if let Some(config) = &mut self.pitchfork {
+            for level in &mut config.levels {
+                if level.color[..3] == self.color[..3] {
+                    level.color[..3].copy_from_slice(&color[..3]);
+                }
+            }
+        }
+        self.color = color;
+    }
+
+    /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
+    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    #[cfg(feature = "ui")]
+    pub(crate) fn recolor(&mut self, color: [u8; 4]) {
+        if self.tool_type == DrawingToolType::PriceLabel {
+            self.set_line_color(color);
+        } else {
+            self.color = color;
+        }
+    }
+
+    /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
+    /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%.
+    #[cfg(feature = "ui")]
+    pub(crate) fn first_fill(tool: DrawingToolType, line: [u8; 4]) -> [u8; 4] {
+        let style = default_style(tool);
+        match style.fill {
+            Some(fill) if fill[..3] != style.color[..3] => fill,
+            _ => tint(line, 51),
+        }
     }
 
     /// Create a new text label drawing
@@ -542,6 +708,12 @@ impl Drawing {
         drawing.text = Some(text);
         drawing.arrow_end_style = ArrowStyle::None;
         drawing
+    }
+
+    /// Whether the line colour is still the tool's default, which rendering may shade to read on
+    /// the theme, rather than one chosen for this drawing.
+    pub(crate) fn has_default_color(&self) -> bool {
+        self.color == default_style(self.tool_type).color
     }
 
     /// Update screen coordinates from chart_points using current transforms
@@ -558,6 +730,15 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
+        if self.text_zoom_spacing.is_none()
+            && matches!(
+                self.tool_type,
+                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+            )
+            && let (Some(anchor), Some(pos)) = (self.chart_points.first(), self.points.first())
+        {
+            self.text_zoom_spacing = bar_spacing_near(&bar_to_x, anchor.bar_idx, pos.x);
+        }
         self.level_ys = match (self.tool_type, &self.chart_points[..]) {
             // Five of the first units in price, which a logarithmic scale does not keep linear.
             (DrawingToolType::GannFixed, [a, b, ..]) => {
@@ -570,6 +751,19 @@ impl Drawing {
                 .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
                 .unwrap_or_default(),
         };
+    }
+
+    /// The factor that scales text drawn at screen `x` from its set size: the bar spacing over
+    /// `text_zoom_spacing` for text that follows the zoom, and 1 otherwise.
+    pub(crate) fn text_zoom(&self, bar_to_x: impl Fn(f32) -> f32, x: f32) -> f32 {
+        let (true, Some(reference), Some(anchor)) = (
+            self.text_follows_zoom,
+            self.text_zoom_spacing,
+            self.chart_points.first(),
+        ) else {
+            return 1.0;
+        };
+        bar_spacing_near(bar_to_x, anchor.bar_idx, x).map_or(1.0, |spacing| spacing / reference)
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
@@ -887,16 +1081,21 @@ impl Drawing {
     }
 
     /// Whether drawings of `tool` can tag their price on the price axis and their time on the
-    /// time axis: horizontal lines and rays their price, vertical lines their time, cross
-    /// lines both.
+    /// time axis: horizontal lines, rays and positions their prices, vertical lines their time,
+    /// cross lines both.
     pub(crate) fn axis_labels_of(tool: DrawingToolType) -> (bool, bool) {
         use DrawingToolType as T;
         match tool {
-            T::HorizontalLine | T::HorizontalRay => (true, false),
+            T::HorizontalLine | T::HorizontalRay | T::LongPos | T::ShortPos => (true, false),
             T::VerticalLine => (false, true),
             T::CrossLine => (true, true),
             _ => (false, false),
         }
+    }
+
+    /// Whether the drawing also paints its line in the chart's other panes.
+    pub(crate) fn reaches_other_panes(&self) -> bool {
+        self.tool_type == DrawingToolType::VerticalLine && self.line_measurements.across_panes
     }
 
     /// Get the z-order of this drawing
@@ -965,7 +1164,9 @@ impl<'de> Deserialize<'de> for Drawing {
     /// drawing's tool, which a drawing without one draws.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
+        LineMeasurements::forget_left_out();
         let mut drawing = Self::deserialize(deserializer)?;
+        drawing.line_measurements.fill_left_out(drawing.tool_type);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
         }
@@ -976,6 +1177,34 @@ impl<'de> Deserialize<'de> for Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text that follows the zoom keeps the bar spacing it is first shown at and is drawn at the
+    /// ratio of the current spacing to it. The widget maps bars in double precision and hands
+    /// out single-precision coordinates, which are rounded to a quarter of a point or more four
+    /// million bars from the view, so the spacing is read near the text.
+    #[test]
+    fn text_scales_by_the_bar_spacing_it_was_sized_at() {
+        let x = |spacing: f64| move |bar: f32| ((f64::from(bar) - 4e6) * spacing) as f32;
+        let mut text = Drawing::new(1, DrawingToolType::AnchoredText);
+        text.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
+        text.update_screen_coords(x(0.73), |price| price as f32);
+        let sized_at = text.text_zoom_spacing.unwrap();
+        assert!((sized_at - 0.73).abs() < 1e-5, "{sized_at}");
+        text.update_screen_coords(x(1.46), |price| price as f32);
+        assert_eq!(text.text_zoom_spacing, Some(sized_at));
+        assert_eq!(text.text_zoom(x(1.46), 100.0), 1.0);
+
+        text.text_follows_zoom = true;
+        // Anchored text keeps the bar it was placed on, here far left of where it is drawn.
+        text.chart_points[0].bar_idx = 0.0;
+        let zoom = text.text_zoom(x(1.46), 100.0);
+        assert!((zoom - 2.0).abs() < 1e-4, "{zoom}");
+
+        let mut line = Drawing::new(2, DrawingToolType::TrendLine);
+        line.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
+        line.update_screen_coords(x(0.73), |price| price as f32);
+        assert_eq!(line.text_zoom_spacing, None);
+    }
 
     #[test]
     fn test_shift_bar_indices() {
@@ -1025,7 +1254,7 @@ mod tests {
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
         let mut config = FibonacciConfig {
             levels_as_percent: true,
-            ..Default::default()
+            ..FibonacciConfig::legacy()
         };
         config.levels[1].visible = false;
         config.levels[2].label = "100%".into();

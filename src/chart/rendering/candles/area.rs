@@ -4,14 +4,14 @@
 
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
+use egui::{Painter, Pos2, Rect, Shape, Stroke};
 
 use super::helpers::valued_runs;
-use super::line::{draw_bar_line, with_line_type};
+use super::line::{draw_bar_line, draw_point_marker, line_color, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{
-    AreaStyle, Bar, BaselineLevel, BaselineStyle, HlcAreaStyle, LinePlotStyle, LineStyle,
+    AreaStyle, Bar, BaselineLevel, BaselineStyle, HlcAreaStyle, LinePlotStyle, LineType,
     PriceSource,
 };
 
@@ -52,6 +52,16 @@ pub(super) fn render_area(
     }
     draw_area_fill(painter, &fill_points, price_rect, style);
     draw_bar_line(painter, visible_data, &line_points, &style.line, false);
+    for (point, bar) in line_points.iter().zip(visible_data) {
+        if !bar.is_whitespace() {
+            draw_point_marker(
+                painter,
+                *point,
+                style.marker_radius,
+                line_color(bar, &style.line),
+            );
+        }
+    }
 
     if show_volume {
         render_volume_bars(
@@ -66,8 +76,7 @@ pub(super) fn render_area(
     }
 }
 
-/// HLC Area: fills high to close in the bullish colour and close to low in the bearish colour,
-/// with the close line
+/// HLC Area: fills high to close and close to low, with the high, low and close lines on top
 pub(super) fn render_hlc_area(
     painter: &Painter,
     volume_ctx: &RenderContext,
@@ -79,8 +88,6 @@ pub(super) fn render_hlc_area(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
     style: &HlcAreaStyle,
     price_source: PriceSource,
 ) {
@@ -98,22 +105,25 @@ pub(super) fn render_hlc_area(
         price_source,
     );
 
-    draw_hlc_fill(
-        painter,
-        visible_data,
-        &points,
-        bullish_color,
-        bearish_color,
-        style.fill_opacity,
-    );
-    let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
-    let close_line = LinePlotStyle {
-        color: bullish_color,
-        width: style.line_width,
-        style: LineStyle::Solid,
-        ..Default::default()
-    };
-    draw_bar_line(painter, visible_data, &close_points, &close_line, false);
+    draw_hlc_fill(painter, visible_data, &points, style);
+    for (visible, line, y) in [
+        (
+            style.high_line_visible,
+            &style.high_line,
+            (|p| p.y_high) as fn(&HlcPoint) -> f32,
+        ),
+        (style.low_line_visible, &style.low_line, |p| p.y_low),
+        (true, &style.close_line, |p| p.y_close),
+    ] {
+        if visible {
+            let line_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, y(p))).collect();
+            let line = LinePlotStyle {
+                line_type: LineType::Simple,
+                ..line.clone()
+            };
+            draw_bar_line(painter, visible_data, &line_points, &line, false);
+        }
+    }
 
     if show_volume {
         render_volume_bars(
@@ -281,36 +291,36 @@ fn draw_area_fill(painter: &Painter, points: &[Pos2], rect: Rect, style: &AreaSt
     painter.add(mesh);
 }
 
-fn draw_hlc_fill(
-    painter: &Painter,
-    bars: &[Bar],
-    points: &[HlcPoint],
-    bullish: Color32,
-    bearish: Color32,
-    opacity: f32,
-) {
-    // `as u8` saturates and maps NaN to 0.
-    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
-    let (up, down) = (tint(bullish), tint(bearish));
-
+fn draw_hlc_fill(painter: &Painter, bars: &[Bar], points: &[HlcPoint], style: &HlcAreaStyle) {
     // Both quads are convex: high >= close >= low at both ends of a segment.
     for pair in valued_runs(bars).flat_map(|run| points[run].windows(2)) {
         let (p1, p2) = (&pair[0], &pair[1]);
-        let above = vec![
-            Pos2::new(p1.x, p1.y_high),
-            Pos2::new(p2.x, p2.y_high),
-            Pos2::new(p2.x, p2.y_close),
-            Pos2::new(p1.x, p1.y_close),
-        ];
-        let below = vec![
-            Pos2::new(p1.x, p1.y_close),
-            Pos2::new(p2.x, p2.y_close),
-            Pos2::new(p2.x, p2.y_low),
-            Pos2::new(p1.x, p1.y_low),
-        ];
-        painter.add(Shape::convex_polygon(above, up, Stroke::NONE));
-        painter.add(Shape::convex_polygon(below, down, Stroke::NONE));
+        if style.high_to_close_fill_visible {
+            let quad = vec![
+                Pos2::new(p1.x, p1.y_high),
+                Pos2::new(p2.x, p2.y_high),
+                Pos2::new(p2.x, p2.y_close),
+                Pos2::new(p1.x, p1.y_close),
+            ];
+            painter.add(Shape::convex_polygon(
+                quad,
+                style.high_to_close_fill,
+                Stroke::NONE,
+            ));
+        }
+        if style.close_to_low_fill_visible {
+            let quad = vec![
+                Pos2::new(p1.x, p1.y_close),
+                Pos2::new(p2.x, p2.y_close),
+                Pos2::new(p2.x, p2.y_low),
+                Pos2::new(p1.x, p1.y_low),
+            ];
+            painter.add(Shape::convex_polygon(
+                quad,
+                style.close_to_low_fill,
+                Stroke::NONE,
+            ));
+        }
     }
 }
 
@@ -379,19 +389,67 @@ fn draw_baseline_segments(
     let mut fill = egui::Mesh::default();
     for &(a, b, _, bar) in &parts {
         let own = data[bar].colors.as_deref();
-        let color = if above(a, b) {
-            own.and_then(|colors| colors.top_fill)
-                .unwrap_or(style.above_fill)
+        let (edge, outer, at_base) = if above(a, b) {
+            (
+                coords.scale_to_y(coords.range().max),
+                own.and_then(|colors| colors.top_fill)
+                    .unwrap_or(style.above_fill),
+                own.and_then(|colors| colors.top_fill_at_base)
+                    .or(style.above_fill_at_base),
+            )
         } else {
-            own.and_then(|colors| colors.bottom_fill)
-                .unwrap_or(style.below_fill)
+            (
+                coords.scale_to_y(coords.range().min),
+                own.and_then(|colors| colors.bottom_fill)
+                    .unwrap_or(style.below_fill),
+                own.and_then(|colors| colors.bottom_fill_at_base)
+                    .or(style.below_fill_at_base),
+            )
         };
-        let n = fill.vertices.len() as u32;
-        for point in [a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)] {
-            fill.colored_vertex(point, color);
+        let at_base = at_base.unwrap_or(outer);
+        let color_at = |y: f32| {
+            let span = baseline_y - edge;
+            let fraction = if span.abs() > f32::EPSILON {
+                ((y - edge) / span).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            outer.lerp_to_gamma(at_base, fraction)
+        };
+        let mut polygon = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
+        // Clip before colouring: saturating an offscreen vertex's colour would distort the
+        // interpolated gradient inside the pane.
+        let (top, bottom) = coords.extent();
+        for (bound, keep_below) in [(top, true), (bottom, false)] {
+            let inside = |point: &Pos2| {
+                if keep_below {
+                    point.y >= bound
+                } else {
+                    point.y <= bound
+                }
+            };
+            if polygon.iter().all(inside) {
+                continue;
+            }
+            let mut clipped = Vec::new();
+            for (a, b) in polygon.iter().zip(polygon.iter().cycle().skip(1)) {
+                if inside(a) {
+                    clipped.push(*a);
+                }
+                if inside(a) != inside(b) {
+                    let t = (bound - a.y) / (b.y - a.y);
+                    clipped.push(Pos2::new(a.x + (b.x - a.x) * t, bound));
+                }
+            }
+            polygon = clipped;
         }
-        fill.add_triangle(n, n + 1, n + 2);
-        fill.add_triangle(n, n + 2, n + 3);
+        let n = fill.vertices.len() as u32;
+        for point in &polygon {
+            fill.colored_vertex(*point, color_at(point.y));
+        }
+        for i in 2..polygon.len() as u32 {
+            fill.add_triangle(n, n + i - 1, n + i);
+        }
     }
     painter.add(fill);
     for &(a, b, distance, bar) in &parts {
@@ -406,6 +464,20 @@ fn draw_baseline_segments(
             ..line.clone()
         };
         draw_baseline_line_part(painter, a, b, &line, distance);
+    }
+    for (point, bar) in points.iter().zip(data) {
+        if bar.is_whitespace() {
+            continue;
+        }
+        let own = bar.colors.as_deref();
+        let color = if above(*point, *point) {
+            own.and_then(|colors| colors.top_line)
+                .unwrap_or(style.above.color)
+        } else {
+            own.and_then(|colors| colors.bottom_line)
+                .unwrap_or(style.below.color)
+        };
+        draw_point_marker(painter, *point, style.marker_radius, color);
     }
 }
 
@@ -440,7 +512,138 @@ fn draw_baseline_line_part(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Context, LayerId, RawInput, pos2, vec2};
+    use egui::{Color32, Context, LayerId, RawInput, pos2, vec2};
+
+    #[test]
+    fn baseline_gradients_keep_endpoints_crossings_and_point_overrides() {
+        use crate::model::BarColors;
+        use crate::scales::{PriceRange, PriceTransform};
+        // On a 0..100 pane with base 50, prices 75 and 25 are halfway along each
+        // gradient: (200 + 40) / 2 = 120. The point override fades 160 to 0, halfway 80.
+        let style: BaselineStyle = serde_json::from_value(serde_json::json!({
+            "above_fill": [0, 200, 0, 200], "above_fill_at_base": [0, 40, 0, 40],
+            "below_fill": [200, 0, 0, 200], "below_fill_at_base": [40, 0, 0, 40]
+        }))
+        .unwrap();
+        let own: BarColors = serde_json::from_value(serde_json::json!({
+            "top_fill": [0, 0, 160, 160], "top_fill_at_base": [0, 0, 0, 0],
+            "bottom_fill": [160, 160, 0, 160], "bottom_fill_at_base": [0, 0, 0, 0]
+        }))
+        .unwrap();
+        let mut bars: Vec<_> = [
+            100.0,
+            75.0,
+            50.0,
+            25.0,
+            0.0,
+            f64::NAN,
+            150.0,
+            75.0,
+            25.0,
+            -50.0,
+        ]
+        .into_iter()
+        .map(|price| {
+            if price.is_nan() {
+                Bar::whitespace(chrono::DateTime::UNIX_EPOCH)
+            } else {
+                Bar::from_value(chrono::DateTime::UNIX_EPOCH, price)
+            }
+        })
+        .collect();
+        bars[7].colors = Some(Box::new(own));
+        for inverted in [false, true] {
+            for line_type in [
+                crate::model::LineType::Simple,
+                crate::model::LineType::Curved,
+            ] {
+                let mut style = style.clone();
+                style.above.line_type = line_type;
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(0.0, 100.0),
+                    0.0,
+                    100.0,
+                    inverted,
+                );
+                let ctx = Context::default();
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    draw_baseline_segments(
+                        ui.painter(),
+                        &bars,
+                        0,
+                        &map,
+                        50.0,
+                        0.0,
+                        |i, _| i as f32 * 10.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                });
+                let mesh = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) => Some(mesh.clone()),
+                        _ => None,
+                    })
+                    .unwrap();
+                output.drop_without_applying_deltas();
+                for triangle in mesh.indices.as_chunks::<3>().0 {
+                    let vertices = triangle.map(|i| &mesh.vertices[i as usize]);
+                    if vertices.iter().all(|v| v.pos.y == 50.0) {
+                        continue;
+                    }
+                    let xs = vertices.map(|v| v.pos.x);
+                    assert!(xs.iter().all(|x| *x <= 40.0) || xs.iter().all(|x| *x >= 60.0));
+                    let point_override = xs.iter().all(|x| (70.0..=80.0).contains(x));
+                    let price = |y| if inverted { y } else { 100.0 - y };
+                    let above = vertices.iter().map(|v| price(v.pos.y)).sum::<f32>() / 3.0 >= 50.0;
+                    for vertex in vertices {
+                        assert!(vertex.pos.is_finite());
+                        assert!((0.0..=100.0).contains(&vertex.pos.y));
+                        let distance = (price(vertex.pos.y) - 50.0).abs();
+                        let alpha = if point_override {
+                            3.2 * distance
+                        } else {
+                            40.0 + 3.2 * distance
+                        }
+                        .round() as u8;
+                        let expected = match (point_override, above) {
+                            (true, true) => [0, 0, alpha, alpha],
+                            (true, false) => [alpha, alpha, 0, alpha],
+                            (false, true) => [0, alpha, 0, alpha],
+                            (false, false) => [alpha, 0, 0, alpha],
+                        };
+                        assert_eq!(
+                            vertex.color.to_array(),
+                            expected,
+                            "{inverted} {line_type:?} {:?}",
+                            vertex.pos
+                        );
+                    }
+                }
+                for (x, price, expected) in [
+                    (0.0, 100.0, [0, 200, 0, 200]),
+                    (10.0, 75.0, [0, 120, 0, 120]),
+                    (10.0, 50.0, [0, 40, 0, 40]),
+                    (30.0, 50.0, [40, 0, 0, 40]),
+                    (30.0, 25.0, [120, 0, 0, 120]),
+                    (40.0, 0.0, [200, 0, 0, 200]),
+                    (70.0, 75.0, [0, 0, 80, 80]),
+                    (80.0, 25.0, [80, 80, 0, 80]),
+                ] {
+                    assert!(
+                        mesh.vertices
+                            .iter()
+                            .any(|v| v.pos == pos2(x, map.price_to_y(price))
+                                && v.color.to_array() == expected),
+                        "missing endpoint or midpoint at {x}, {price}, {inverted}, {line_type:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn baseline_dashes_keep_phase_across_short_segments_and_crossings() {
@@ -672,11 +875,10 @@ mod tests {
         }
     }
 
-    /// The fills take the style's opacity as an alpha of 0 to 255 and the close line its width;
-    /// opacities outside 0 to 1 are clamped, a non-finite opacity draws no fill, and a
-    /// non-positive width hides the line.
+    /// Every line and fill paints its own price band of an asymmetric bar from its own setting,
+    /// and each can go without the others.
     #[test]
-    fn hlc_area_fill_opacity_and_close_line_width_follow_the_style() {
+    fn hlc_area_paints_each_line_and_fill_from_its_own_setting() {
         use crate::scales::{PriceRange, PriceTransform};
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
         let map = PriceMap::new(
@@ -696,19 +898,79 @@ mod tests {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
+        // Close is nearer the high: at price 100 the y is 0, so high 70, close 60, low 20.
         let bars: Vec<_> = (0..2)
-            .map(|_| Bar::new(chrono::DateTime::UNIX_EPOCH, 50.0, 60.0, 40.0, 55.0, 1.0))
+            .map(|_| Bar::new(chrono::DateTime::UNIX_EPOCH, 50.0, 70.0, 20.0, 60.0, 1.0))
             .collect();
-        for (fill_opacity, line_width, alphas, widths) in [
+        let line = |r, width| LinePlotStyle {
+            color: Color32::from_rgb(r, 1, 1),
+            width,
+            line_type: LineType::Curved,
+            ..Default::default()
+        };
+        let (upper, lower) = (
+            Color32::from_rgba_unmultiplied(9, 0, 0, 77),
+            Color32::from_rgba_unmultiplied(0, 9, 0, 128),
+        );
+        let style = HlcAreaStyle {
+            high_line: line(10, 1.0),
+            low_line: line(20, 2.0),
+            close_line: line(30, 3.0),
+            high_to_close_fill: upper,
+            close_to_low_fill: lower,
+            ..Default::default()
+        };
+        let high = (10, 1.0, 30.0);
+        let low = (20, 2.0, 80.0);
+        let close = (30, 3.0, 40.0);
+        let upper_band = (upper, 30.0, 40.0);
+        let lower_band = (lower, 40.0, 80.0);
+        for (style, fills, lines) in [
             (
-                HlcAreaStyle::default().fill_opacity,
-                2.0,
-                vec![30, 30],
-                vec![2.0],
+                style.clone(),
+                vec![upper_band, lower_band],
+                vec![high, low, close],
             ),
-            (0.5, 4.0, vec![128, 128], vec![4.0]),
-            (2.0, 1.0, vec![255, 255], vec![1.0]),
-            (f32::NAN, 0.0, vec![], vec![]),
+            (
+                HlcAreaStyle {
+                    high_line_visible: false,
+                    ..style.clone()
+                },
+                vec![upper_band, lower_band],
+                vec![low, close],
+            ),
+            (
+                HlcAreaStyle {
+                    low_line_visible: false,
+                    ..style.clone()
+                },
+                vec![upper_band, lower_band],
+                vec![high, close],
+            ),
+            (
+                HlcAreaStyle {
+                    high_to_close_fill_visible: false,
+                    ..style.clone()
+                },
+                vec![lower_band],
+                vec![high, low, close],
+            ),
+            (
+                HlcAreaStyle {
+                    close_to_low_fill_visible: false,
+                    ..style.clone()
+                },
+                vec![upper_band],
+                vec![high, low, close],
+            ),
+            (
+                HlcAreaStyle {
+                    close_line: line(30, 0.0),
+                    ..style.clone()
+                },
+                vec![upper_band, lower_band],
+                vec![high, low],
+            ),
         ] {
             let ctx = Context::default();
             let output = ctx.run_ui(RawInput::default(), |_| {
@@ -725,29 +987,37 @@ mod tests {
                     &map,
                     0.0,
                     |i, _| 10.0 + i as f32 * 50.0,
-                    Color32::GREEN,
-                    Color32::RED,
-                    &HlcAreaStyle {
-                        fill_opacity,
-                        line_width,
-                    },
+                    &style,
                     PriceSource::Close,
                 );
             });
-            let mut fills = Vec::new();
-            let mut lines = Vec::new();
+            let mut painted_fills = Vec::new();
+            let mut painted_lines = Vec::new();
             for shape in &output.shapes {
                 if let Shape::Path(path) = &shape.shape {
+                    let ys = || path.points.iter().map(|p| p.y);
                     if path.fill != Color32::TRANSPARENT {
-                        fills.push(path.fill.a());
-                    } else if path.stroke.width > 0.0 {
-                        lines.push(path.stroke.width);
+                        let top = ys().fold(f32::INFINITY, f32::min).round();
+                        let bottom = ys().fold(f32::NEG_INFINITY, f32::max).round();
+                        painted_fills.push((path.fill, top, bottom));
+                    } else {
+                        let stroke = path.stroke.color.clone();
+                        let egui::epaint::ColorMode::Solid(color) = stroke else {
+                            panic!("lines take one colour");
+                        };
+                        // A curve would add points between the two bars.
+                        assert_eq!(path.points.len(), 2);
+                        painted_lines.push((
+                            color.r(),
+                            path.stroke.width,
+                            path.points[0].y.round(),
+                        ));
                     }
                 }
             }
             output.drop_without_applying_deltas();
-            assert_eq!(fills, alphas, "{fill_opacity}");
-            assert_eq!(lines, widths, "{line_width}");
+            assert_eq!(painted_fills, fills);
+            assert_eq!(painted_lines, lines);
         }
     }
 }

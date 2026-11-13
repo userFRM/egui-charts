@@ -2,7 +2,7 @@
 
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Rect, Sense, Ui, Vec2};
+use egui::{Rect, Sense, Ui, Vec2};
 
 /// Draw a horizontal separator line.
 ///
@@ -71,11 +71,7 @@ pub fn draw_separator_styled(ui: &mut Ui, toolbar_width: f32) {
         ui.cursor().min + Vec2::new(LEFT_INSET, 0.0),
         Vec2::new(sep_width, 1.0),
     );
-    let color = if ui.active_theme().dark {
-        Color32::from_gray(74)
-    } else {
-        Color32::from_gray(235)
-    };
+    let color = crate::ui::top_toolbar::buttons::rule_color(&ui.active_theme());
     ui.painter().rect_filled(sep_rect, 0.0, color);
 
     // Allocate space for the separator line

@@ -384,17 +384,15 @@ impl CompareSymbolsDialog {
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let query = self.search_query.to_lowercase();
-                for symbol in symbols.iter().filter(|symbol| {
-                    self.search.connected()
-                        || symbol.symbol.to_lowercase().contains(&query)
-                        || symbol
-                            .description
-                            .as_deref()
-                            .unwrap_or(&symbol.symbol)
-                            .to_lowercase()
-                            .contains(&query)
-                }) {
+                let listed: Vec<_> = if self.search.connected() {
+                    symbols.iter().collect()
+                } else {
+                    let mut ranked =
+                        crate::services::SymbolQuery::new(&self.search_query).ranked(symbols);
+                    ranked.sort_by_key(|&(rank, _)| rank);
+                    ranked.into_iter().map(|(_, symbol)| symbol).collect()
+                };
+                for symbol in listed {
                     next_page |= ui.clip_rect().contains(ui.cursor().min)
                         && symbols
                             .last()

@@ -62,8 +62,9 @@ pub use chats::{
 #[cfg(feature = "detectors")]
 #[cfg_attr(docsrs, doc(cfg(feature = "detectors")))]
 pub use detectors::{
-    AbsorptionRule, BigTradeRule, DetectionKind, Detector, DetectorSettings, IcebergRule,
-    LiquidityRule, OrderFlowDetectors, StopRunRule, StopSweepRule, Threshold,
+    AbsorptionRule, BigTradeRule, CountAlert, CountWindow, DetectionAlert, DetectionCounts,
+    DetectionKind, Detector, DetectorSettings, IcebergRule, LiquidityRule, OrderFlowDetectors,
+    StopRunRule, StopSweepRule, Threshold,
 };
 pub use events::Events;
 #[cfg(feature = "widget")]

@@ -292,6 +292,12 @@ impl PriceScale {
         self.price_precision = decimals;
     }
 
+    /// The decimals [`Self::set_price_precision`] set, whatever the scale's mode shows.
+    #[cfg(feature = "widget")]
+    pub(crate) fn price_precision(&self) -> Option<u8> {
+        self.price_precision
+    }
+
     /// The instrument's default price grid, separate from the host's tick-mark override.
     #[cfg(feature = "widget")]
     pub(crate) fn set_tick_size(&mut self, tick_size: Option<f64>) {
@@ -417,8 +423,12 @@ impl PriceScale {
         };
         // The data fills the rest of the pane, so the whole range is that share's inverse.
         let total = span / (1.0 - top - bottom);
-        let range = PriceRange::new(min - total * bottom, max + total * top);
-        if range.min.is_finite() && range.max.is_finite() {
+        let mut range = PriceRange::new(min - total * bottom, max + total * top);
+        // Flat data still needs a drawable, saveable range when margins are zero.
+        if range.min == range.max {
+            range = PriceRange::new(min - span / 2.0, max + span / 2.0);
+        }
+        if range.min.is_finite() && range.max.is_finite() && range.min < range.max {
             self.range = range;
         }
     }
@@ -529,6 +539,9 @@ pub struct PriceMap {
     price_precision: Option<u8>,
     tick_marks: PriceMarkGeneratorConfig,
     thousands_sep: Option<char>,
+    /// Smallest tick step of a volume display format on a logarithmic axis's evenly
+    /// spaced fallback; the 1/2/5 marks of wide ranges keep their low decades.
+    volume_step: Option<f64>,
 }
 
 impl PriceMap {
@@ -550,6 +563,7 @@ impl PriceMap {
             price_precision: None,
             tick_marks: PriceMarkGeneratorConfig::default(),
             thousands_sep: None,
+            volume_step: None,
         }
     }
 
@@ -563,6 +577,53 @@ impl PriceMap {
     /// Sets the price precision for this frame.
     pub fn with_price_precision(mut self, decimals: Option<u8>) -> Self {
         self.price_precision = decimals;
+        self
+    }
+
+    /// Applies a series' raw display units without changing the range or transform.
+    #[cfg(feature = "widget")]
+    pub(crate) fn with_display_format(mut self, format: crate::model::SeriesDisplayFormat) -> Self {
+        if matches!(
+            self.transform.mode,
+            PriceScaleMode::Normal | PriceScaleMode::Logarithmic
+        ) {
+            self.price_precision = Some(format.precision);
+            let unit = 10f64.powi(-i32::from(format.precision));
+            let step_for = |unit: f64| {
+                if format.min_move.is_finite() && format.min_move > 0.0 {
+                    let step = (unit / format.min_move).ceil().max(1.0) * format.min_move;
+                    if step.is_finite() { step } else { unit }
+                } else {
+                    unit
+                }
+            };
+            self.tick_marks.min_price_step = Some(step_for(unit));
+            if format.kind == crate::model::SeriesFormat::Volume {
+                let magnitude = self
+                    .transform
+                    .to_price(self.range.min)
+                    .abs()
+                    .max(self.transform.to_price(self.range.max).abs());
+                // Volume decimals belong to the abbreviated unit, so adjacent ticks must
+                // still have distinguishable labels after applying its suffix.
+                let volume_step = step_for(
+                    unit * if magnitude >= 1e9 {
+                        1e9
+                    } else if magnitude >= 1e6 {
+                        1e6
+                    } else if magnitude >= 1e3 {
+                        1e3
+                    } else {
+                        1.0
+                    },
+                );
+                if self.transform.mode == PriceScaleMode::Normal {
+                    self.tick_marks.min_price_step = Some(volume_step);
+                } else {
+                    self.volume_step = Some(volume_step);
+                }
+            }
+        }
         self
     }
 
@@ -585,6 +646,11 @@ impl PriceMap {
     /// The separator that groups the thousands of the built-in labels, if any.
     pub(crate) fn thousands_sep(&self) -> Option<char> {
         self.thousands_sep
+    }
+
+    /// The smallest tick step a volume format sets for a logarithmic axis's evenly spaced ticks.
+    pub(crate) fn volume_step(&self) -> Option<f64> {
+        self.volume_step
     }
 
     /// Formats a scale value as [`PriceTransform::label`] does and groups the thousands of a
@@ -662,6 +728,12 @@ impl PriceMap {
     /// Returns the pane's vertical extent `(top, bottom)` in points.
     pub(crate) fn extent(&self) -> (f32, f32) {
         (self.top, self.bottom)
+    }
+
+    /// Whether scale values increase down the pane.
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_inverted(&self) -> bool {
+        self.inverted
     }
 
     /// Converts a price to a y coordinate.
@@ -839,17 +911,21 @@ mod tests {
     /// leave no room for the data are ignored.
     #[test]
     fn autoscale_margins_are_shares_of_the_pane() {
-        for (top, bottom, expected) in [
-            (0.2, 0.1, (90.0, 190.0)),
-            (0.0, 0.0, (100.0, 170.0)),
-            (0.6, 0.4, (100.0, 170.0)),
-            (f64::NAN, 0.1, (100.0, 170.0)),
+        for ((low, high), top, bottom, expected) in [
+            ((100.0, 170.0), 0.2, 0.1, (90.0, 190.0)),
+            ((100.0, 170.0), 0.0, 0.0, (100.0, 170.0)),
+            ((100.0, 170.0), 0.6, 0.4, (100.0, 170.0)),
+            ((100.0, 170.0), f64::NAN, 0.1, (100.0, 170.0)),
+            // Flat prices use a 1% span (1 at zero), centred on the sole value.
+            ((1000.0, 1000.0), 0.0, 0.0, (995.0, 1005.0)),
+            ((-1000.0, -1000.0), 0.0, 0.0, (-1005.0, -995.0)),
+            ((0.0, 0.0), 0.0, 0.0, (-0.5, 0.5)),
         ] {
             let mut scale = PriceScale::new(PriceScaleOptions {
                 scale_margins: PriceScaleMargins { top, bottom },
                 ..Default::default()
             });
-            scale.autoscale(100.0, 170.0);
+            scale.autoscale(low, high);
             let PriceRange { min, max } = scale.range();
             assert!(
                 (min - expected.0).abs() < 1e-9 && (max - expected.1).abs() < 1e-9,
