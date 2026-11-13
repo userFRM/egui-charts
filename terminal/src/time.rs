@@ -593,8 +593,8 @@ mod tests {
             restored.top_toolbar.chart_type_selector.preferences(),
             chart_types
         );
-        let mut older = UserSettings::from_json(r#"{"version":1,"interval_favorites":["Min5"]}"#)
-            .unwrap();
+        let mut older =
+            UserSettings::from_json(r#"{"version":1,"interval_favorites":["Min5"]}"#).unwrap();
         restored.time_settings(&mut older, Direction::Load);
         assert_eq!(
             restored.top_toolbar.timeframe_selector.preferences(),
