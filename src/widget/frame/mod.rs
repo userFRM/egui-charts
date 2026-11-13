@@ -589,8 +589,10 @@ impl Chart {
         });
         // A button owns the whole gesture, including a drag that leaves the row. The chart's
         // own response goes back to the caller; the gesture handlers see a hover-only one.
-        let mut shown =
-            shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
+        // The other panes stand in for a price frame without height in what the caller gets.
+        let mut shown = shared_plot
+            .filter(|_| rect.height() == 0.0)
+            .map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         if self.pane_collapse_click(ui.ctx()) {
             response.flags.remove(egui::response::Flags::CLICKED);
             shown.flags.remove(egui::response::Flags::CLICKED);
@@ -684,21 +686,16 @@ impl Chart {
                                 .or(input.pointer.hover_pos())
                                 .is_some_and(|pos| axis_corner.contains(pos))
                     })));
-        let hover_rect = shared_plot.map_or_else(
-            || {
-                Rect::from_min_max(
-                    Pos2::new(
-                        chart_rect.left(),
-                        self.pane_layout
-                            .panes
-                            .iter()
-                            .map(|pane| pane.rect.top())
-                            .fold(chart_rect.top(), f32::min),
-                    ),
-                    Pos2::new(chart_rect.right(), time_axis_top),
-                )
-            },
-            |plot| plot.rect,
+        let hover_rect = Rect::from_min_max(
+            Pos2::new(
+                chart_rect.left(),
+                self.pane_layout
+                    .panes
+                    .iter()
+                    .map(|pane| pane.rect.top())
+                    .fold(chart_rect.top(), f32::min),
+            ),
+            Pos2::new(chart_rect.right(), time_axis_top),
         );
         let touch_readout_interaction = self.handle_touch_crosshair(
             ui,
@@ -747,7 +744,7 @@ impl Chart {
             response.rect = rect;
         }
 
-        // The visible pane drives time navigation even while the price pane has no height.
+        // The plots of the other panes drive time navigation as the price plot does.
         let mut time_response =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         time_response.flags.remove(readout_flags);

@@ -139,6 +139,16 @@ impl Chart {
         gestures
     }
 
+    /// Whether `pos` is in a pane other than the price pane. A gesture there moves the shared
+    /// time scale and leaves the prices of the price pane alone.
+    fn in_other_pane(&self, pos: Pos2) -> bool {
+        let main = self.main_series_pane();
+        self.pane_layout
+            .panes
+            .iter()
+            .any(|pane| pane.id != main && pane.rect.contains(pos))
+    }
+
     /// Handle mouse wheel events for time-axis zoom and horizontal pan. The wheel over the
     /// price axis is left to [`Self::price_axis_gestures`].
     pub(crate) fn handle_mouse_wheel(
@@ -322,6 +332,7 @@ impl Chart {
                 && self.last_rendered_price_rect.height() > 0.0
                 && self.state.price_scale().is_manual()
                 && translation_delta.y != 0.0
+                && anchor.is_none_or(|pos| !self.in_other_pane(pos))
             {
                 let y = anchor.map_or(0.0, |pos| pos.y);
                 let map = self.last_price_map;
@@ -336,9 +347,9 @@ impl Chart {
 
     /// Handle drag-to-pan and time-axis drag-zoom.
     ///
-    /// When the drag starts on the main chart area, horizontal movement pans
-    /// the time axis and, while auto-scale is off, vertical movement pans the
-    /// price axis. A drag that starts on the price axis is left to
+    /// When the drag starts on a plot, horizontal movement pans the time axis
+    /// and, in the price pane while auto-scale is off, vertical movement pans
+    /// the price axis. A drag that starts on the price axis is left to
     /// [`Self::price_axis_gestures`]. Starting on the time axis enables
     /// drag-to-zoom the time scale. Also tracks velocity for kinetic scrolling
     /// continuation after release.
@@ -512,6 +523,7 @@ impl Chart {
                 if vertical
                     && self.last_rendered_price_rect.height() > 0.0
                     && self.state.price_scale().is_manual()
+                    && !self.in_other_pane(origin)
                 {
                     let map = self.last_price_map;
                     let dy = response.drag_delta().y;
