@@ -112,25 +112,25 @@ pub fn fuzzy_match(query: &str, target: &str) -> Option<FuzzyMatch> {
 
 /// Rank a command for `query`: its `label` counts above `other` text (description, category,
 /// keywords). From the top: the label is or has a word equal to the query, a label word starts
-/// with it, the label contains it, `other` contains it contiguously, then letters in order
-/// anywhere. The indices point into `label`, and are empty when `other` made the match.
+/// with it, the label contains it, `other` contains it contiguously, then letters in order over
+/// the label and `other` as one text. The indices point into `label`, and are empty when `other`
+/// made the match.
 pub(super) fn rank(query: &str, label: &str, other: &str) -> Option<FuzzyMatch> {
     let query = lowercase(query);
-    let in_label = locate(&query, &lowercase(label));
-    let in_other = locate(&query, &lowercase(other));
+    let (label, other) = (lowercase(label), lowercase(other));
     // Levels 5, 4, 3 are a label tier of 4, 3, 2; level 2 is `other` at tier 2 or above.
-    let (level, mut m) = match (in_label, in_other) {
+    let (level, mut m) = match (locate(&query, &label), locate(&query, &other)) {
         (Some((tier, m)), _) if tier >= 2 => (tier + 1, m),
         (_, Some((tier, mut m))) if tier >= 2 => {
             m.matched_indices.clear();
             (2, m)
         }
-        (Some((_, m)), _) => (1, m),
-        (None, Some((_, mut m))) => {
-            m.matched_indices.clear();
+        _ => {
+            // A query may run from the label into the other text, as the row reads.
+            let (_, mut m) = locate(&query, &[&label[..], &[' '], &other[..]].concat())?;
+            m.matched_indices.retain(|&i| i < label.len());
             (1, m)
         }
-        (None, None) => return None,
     };
     m.score += level * TIER;
     Some(m)
@@ -254,5 +254,12 @@ mod tests {
         assert_eq!(m.matched_indices, [7, 8, 9]);
         let m = rank("log", "Chart", "Show logarithmic prices").unwrap();
         assert!(m.matched_indices.is_empty());
+    }
+
+    #[test]
+    fn letters_in_order_may_run_from_the_label_into_the_other_text() {
+        // The space after "grid" is the one before the category; the indices stop at the label.
+        let m = rank("grid ", "Toggle grid", "Chart").unwrap();
+        assert_eq!(m.matched_indices, [7, 8, 9, 10]);
     }
 }
