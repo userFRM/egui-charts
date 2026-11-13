@@ -335,10 +335,13 @@ impl PriceMarkGenerator {
         // Pixels per unit of the natural logarithm of the price.
         let pixels = f64::from(height_pixels) / (max_price.ln() - min_price.ln());
         let min_step = map.volume_step().or(self.min_step());
+        let decade = |price: f64| price.log10().floor() as i32;
         let mut ends: Vec<f64> = marks.iter().map(|mark| mark.price).collect();
         ends.insert(0, min_price);
         ends.push(max_price);
         let mut filled = marks;
+        // The finest decimals the added marks of each decade need.
+        let mut decimals = std::collections::BTreeMap::new();
         let mut budget = self.config.max_marks * 10;
         for pair in ends.windows(2) {
             let (low, high) = (pair[0], pair[1]);
@@ -359,19 +362,33 @@ impl PriceMarkGenerator {
                 let price = index * step;
                 index += 1.0;
                 budget -= 1;
+                let finest = decimals.entry(decade(price)).or_insert(precision);
+                *finest = precision.max(*finest);
                 filled.push(PriceMark {
                     price,
-                    label: super::price_formatter::group_thousands(
-                        self.format_price(price, precision, map.price_precision().is_none()),
-                        map.thousands_sep(),
-                    ),
+                    label: String::new(),
                     y_coord: map.price_to_y(price),
                     // Below the 60 of a 2 times power of ten.
                     weight: self.calculate_weight(price, step) / 2,
                 });
             }
         }
-        self.apply_spacing_constraints(filled, self.config.min_spacing)
+        let mut filled = self.apply_spacing_constraints(filled, self.config.min_spacing);
+        // One decade reads with one count of decimals, that of its finest mark.
+        for mark in &mut filled {
+            let order = decade(mark.price);
+            let precision = map.price_precision().unwrap_or_else(|| {
+                let base = self.calculate_precision(10f64.powi(order)).max(2);
+                decimals
+                    .get(&order)
+                    .map_or(base, |finest| base.max(*finest))
+            });
+            mark.label = super::price_formatter::group_thousands(
+                self.format_price(mark.price, precision, map.price_precision().is_none()),
+                map.thousands_sep(),
+            );
+        }
+        filled
     }
 
     /// Decimals of marks `step` apart: the map's precision, or enough for the step, and for a
@@ -844,6 +861,7 @@ mod tests {
         // On 849 pixels at 2.5 marks per 100 pixels, neighbouring labels lie between the
         // 20-pixel minimum and twice the 40 pixels the density asks for, below a decade, over
         // about one and over several, and the 1, 2 and 5 times powers of ten in view stay.
+        // The labels of one decade have one count of decimals.
         for (low, high, decade) in [
             (90.0, 520.0, &[100.0, 200.0, 500.0][..]),
             (0.9, 5.5, &[1.0, 2.0, 5.0]),
@@ -869,7 +887,15 @@ mod tests {
                     "{low}..{high}: {price} missing from {labels:?}"
                 );
             }
+            let decimals = |label: &str| label.split_once('.').map_or(0, |(_, part)| part.len());
             for pair in marks.windows(2) {
+                if pair[0].price.log10().floor() == pair[1].price.log10().floor() {
+                    assert_eq!(
+                        decimals(&pair[0].label),
+                        decimals(&pair[1].label),
+                        "{low}..{high}: {labels:?}"
+                    );
+                }
                 let gap = pair[0].y_coord - pair[1].y_coord;
                 assert!(
                     (20.0..=80.0).contains(&gap),
