@@ -36,10 +36,20 @@
 //! input offers none, SMA, SMA with Bollinger Bands, EMA, SMMA (RMA), WMA and VWMA, with the length
 //! and the band deviation as inputs of their own. [`RSI::new`] starts without it.
 //!
+//! # Divergences
+//!
+//! With its divergence input on, the RSI also marks the regular divergences between its swings
+//! and the price's, found as [`RsiDivergence`](super::RsiDivergence) finds them with its default
+//! pivots: 5 bars on each side of a pivot and 5 to 60 bars between two pivots. A pivot low of the
+//! RSI above the previous one, on a bar whose low is below that pivot's, is bullish; a pivot high
+//! below the previous one, on a bar whose high is above, is bearish. Each is a segment of the RSI
+//! between the two pivots and a "Bull" or "Bear" mark on the second. A source other than the
+//! close changes the RSI and leaves the highs and lows compared. The input is off by default.
+//!
 //! # Default colour
 //!
 //! Purple (#7E57C2), with a one-pixel line, the average yellow (#FDD835) and its bands green
-//! (#4CAF50).
+//! (#4CAF50). Bullish divergences are green (#4CAF50) and bearish ones red (#F23645).
 //!
 //! # Example
 //!
@@ -54,6 +64,7 @@
 //! assert!(matches!(rsi.values().to_rows()[14], IndicatorValue::Single(_)));
 //! ```
 
+use super::rsi_divergence::{Confirmed, MARKS, Pivots, Search};
 use super::smoothing::{SMOOTHING_COLORS, Smoothed, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
@@ -71,19 +82,26 @@ pub struct RSI {
     smoothing: SmoothingType,
     smoothing_length: usize,
     smoothing_deviation: f64,
+    divergence: bool,
     values: IndicatorValues,
     stepper: Stepper<Averaged>,
+    confirmed: Confirmed,
     color: Color32,
     smoothing_colors: [Color32; 3],
     fill_color: Color32,
+    /// The colours of the four divergence plots: the bullish and the bearish segment, then the
+    /// bullish and the bearish mark.
+    divergence_colors: [Color32; 4],
     visible: bool,
 }
 
-/// The RSI and the average of its values.
+/// The RSI, the average of its values and the pivots its divergences compare.
 #[derive(Clone, Default)]
 struct Averaged {
     rsi: State,
     smoothed: Smoothed,
+    bar: usize,
+    pivots: Pivots,
 }
 
 #[derive(Clone)]
@@ -156,13 +174,29 @@ impl RSI {
             smoothing: SmoothingType::None,
             smoothing_length: 14,
             smoothing_deviation: 2.0,
+            divergence: false,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
+            confirmed: Confirmed::default(),
             color: palette::PURPLE,
             smoothing_colors: SMOOTHING_COLORS,
             fill_color: palette::PURPLE.gamma_multiply_u8(26),
+            divergence_colors: [palette::GREEN, palette::RED, palette::GREEN, palette::RED],
             visible: true,
         }
+    }
+
+    /// Whether to mark the regular divergences between the RSI and price (builder pattern).
+    pub fn with_divergence(mut self, divergence: bool) -> Self {
+        self.divergence = divergence;
+        self
+    }
+
+    /// Which of the four divergence outputs `line` is: the bullish segment, the bearish segment,
+    /// the bullish mark or the bearish mark.
+    fn divergence_output(&self, line: usize) -> Option<usize> {
+        line.checked_sub(1 + self.smoothing.lines())
+            .filter(|&output| self.divergence && output < 4)
     }
 
     /// Set a custom line colour (builder pattern).
@@ -193,13 +227,28 @@ impl Indicator for RSI {
         ))
     }
 
+    /// A source stands in for the close and leaves each bar's high and low, which the
+    /// divergences compare.
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        let bars: Vec<_> = data
+            .iter()
+            .enumerate()
+            .map(|(at, bar)| Bar {
+                close: source.get(at).copied().unwrap_or(f64::NAN),
+                ..bar.clone()
+            })
+            .collect();
+        self.update(&bars, from);
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         smoothing: choice("Smoothing", SmoothingType::ALL),
         smoothing_length: length("Smoothing length", 1, usize::MAX)
             if smoothing in SmoothingType::WITH_LENGTH,
         smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
-            if smoothing in SmoothingType::WITH_BANDS
+            if smoothing in SmoothingType::WITH_BANDS,
+        divergence: toggle("Calculate divergence")
     ; {});
 
     fn name(&self) -> &str {
@@ -219,22 +268,56 @@ impl Indicator for RSI {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        if !self.confirmed.begin(&mut self.values, data.len(), from) {
+            return;
+        }
         let (period, kind, length, deviation) = (
             self.period,
             self.smoothing,
             self.smoothing_length,
             self.smoothing_deviation,
         );
+        let first = 1 + kind.lines();
+        let search = self.divergence.then(|| Search::regular(first));
+        let mut found = Vec::new();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                match state.rsi.next(bar, period) {
+                let value = match state.rsi.next(bar, period) {
                     // Without an average the value passes through, so skip the call on every bar.
                     IndicatorValue::Single(rsi) if kind != SmoothingType::None => state
                         .smoothed
                         .next(kind, length, deviation, rsi, bar.volume),
                     other => other,
+                };
+                let Some(search) = &search else {
+                    return value;
+                };
+                let source = state.bar;
+                state.bar += 1;
+                let mut row = match value {
+                    IndicatorValue::None => Vec::new(),
+                    IndicatorValue::Single(rsi) => vec![rsi],
+                    IndicatorValue::Multiple(row) => row,
+                };
+                if [bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
+                    let rsi = row.first().copied().filter(|v| v.is_finite());
+                    state.pivots.next(
+                        search,
+                        source,
+                        rsi.unwrap_or(f64::NAN),
+                        bar.high,
+                        bar.low,
+                        &mut found,
+                    );
                 }
+                if row.is_empty() {
+                    return IndicatorValue::None;
+                }
+                // The divergence outputs are empty until a later bar confirms one.
+                row.resize(first + 4, f64::NAN);
+                IndicatorValue::Multiple(row)
             });
+        self.confirmed.draw(&mut self.values, found, data.len());
     }
 
     fn is_incremental(&self) -> bool {
@@ -245,17 +328,37 @@ impl Indicator for RSI {
         &self.values
     }
 
-    /// The RSI, the average, its upper and lower band, and the band between the levels.
+    /// The RSI, the average, its upper and lower band, the band between the levels, the bullish
+    /// and bearish segments, and the bullish and bearish marks. While the divergences are drawn,
+    /// the colours of their four plots also follow those of the average's plots, so that the
+    /// list starts with each plot's colour in turn.
     fn colors(&self) -> Vec<Color32> {
         let [average, upper, lower] = self.smoothing_colors;
-        vec![self.color, average, upper, lower, self.fill_color]
+        let mut colors = vec![self.color, average, upper, lower, self.fill_color];
+        colors.extend(self.divergence_colors);
+        if self.divergence {
+            let first = 1 + self.smoothing.lines();
+            colors.splice(first..first, self.divergence_colors);
+        }
+        colors
     }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
         self.smoothing.fills()
     }
 
-    fn set_colors(&mut self, colors: Vec<Color32>) {
+    /// The two colours after the band between the levels colour each kind's segment and mark,
+    /// the two after them the marks alone, and the four divergence plots, where the list names
+    /// them, then take their own.
+    fn set_colors(&mut self, mut colors: Vec<Color32>) {
+        let plots: Vec<_> = if self.divergence {
+            // The colours of the four divergence plots, where `colors` lists them.
+            let first = colors.len().min(1 + self.smoothing.lines());
+            let end = colors.len().min(first + 4);
+            colors.drain(first..end).collect()
+        } else {
+            Vec::new()
+        };
         if !colors.is_empty() {
             self.color = colors[0];
             for (slot, color) in self.smoothing_colors.iter_mut().zip(&colors[1..]) {
@@ -264,7 +367,62 @@ impl Indicator for RSI {
             self.fill_color = colors.get(4).copied().unwrap_or_else(|| {
                 Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 16)
             });
+            for (kind, color) in colors.iter().skip(5).take(2).enumerate() {
+                self.divergence_colors[kind] = *color;
+                self.divergence_colors[kind + 2] = *color;
+            }
+            let marks = self.divergence_colors[2..].iter_mut();
+            for (slot, color) in marks.zip(colors.iter().skip(7)) {
+                *slot = *color;
+            }
         }
+        for (slot, color) in self.divergence_colors.iter_mut().zip(plots) {
+            *slot = color;
+        }
+    }
+
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        use crate::studies::PlotType;
+        let (color, width, plot_type) = match self.divergence_output(line) {
+            Some(output) => (
+                self.divergence_colors[output],
+                2.0,
+                match output {
+                    2 => PlotType::TriangleUp,
+                    3 => PlotType::TriangleDown,
+                    _ => PlotType::Line,
+                },
+            ),
+            None => (
+                self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+                self.line_style(line).width,
+                PlotType::Line,
+            ),
+        };
+        crate::studies::PlotStyle {
+            color,
+            width,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type,
+            visible: true,
+        }
+    }
+
+    /// The RSI and its average keep their tags on the scale beside the divergence outputs.
+    fn plot_tagged(&self, line: usize) -> bool {
+        line < 1 + self.smoothing.lines()
+    }
+
+    fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
+        let output = self.divergence_output(line).filter(|&output| output >= 2)?;
+        Some((self.divergence_colors[output], Color32::WHITE))
+    }
+
+    fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        let output = self.divergence_output(line).filter(|&output| output >= 2)?;
+        // Each regular mark is listed before its hidden one.
+        let mark = MARKS[(output % 2) * 2];
+        self.values.value(line, bar).map(|_| mark.to_string())
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
@@ -297,12 +455,23 @@ impl Indicator for RSI {
     }
 
     fn line_count(&self) -> usize {
-        1 + self.smoothing.lines()
+        1 + self.smoothing.lines() + 4 * usize::from(self.divergence)
     }
 
     fn line_names(&self) -> Vec<String> {
         let mut names = vec![format!("RSI({})", self.period)];
         names.extend(self.smoothing.line_names("RSI-based MA"));
+        if self.divergence {
+            names.extend(
+                [
+                    "Regular Bullish",
+                    "Regular Bearish",
+                    "Regular Bullish Label",
+                    "Regular Bearish Label",
+                ]
+                .map(String::from),
+            );
+        }
         names
     }
 }
@@ -405,5 +574,185 @@ mod tests {
             .set_input("smoothing", crate::studies::InputValue::Choice(0))
             .unwrap();
         assert_eq!(study.line_count(), 1);
+    }
+
+    /// Closes step by 1 from 100, so each rise moves an RSI(2) halfway to 100 and each fall
+    /// halves it: 100 on bar 2, five falls to 100/32 on bar 7, five rises to 100 * 993/1024 on
+    /// bar 13, four falls to 100 * 993/16384 on bar 17 and three rises to 100 * 115681/131072 on
+    /// bar 20. Bar 10 has no close and takes no place among them. Bar 21 falls by 2^-40, which
+    /// lowers the RSI by under 1e-10: a tie, so the later bar 21 is the pivot high, not bar 20.
+    /// Five falls follow, the last on bar 26.
+    ///
+    /// Every bar reaches 0.5 above and 0.25 below its close, but bar 17 falls to 90 and bar 21
+    /// rises to 110. Pivot lows 7 and 17: the RSI rose and the low fell from 96.75 to 90 while
+    /// the close rose, which is bullish over ten usable bars, bar 11 a third of the way along.
+    /// Pivot highs 13 and 21: the RSI fell and the high rose from 102.5 to 110 while the close
+    /// fell, which is bearish once bar 26 confirms the pivot. A close of 1000 on bar 26 lifts its
+    /// RSI over the pivot's and withdraws that divergence.
+    #[test]
+    fn divergences_follow_the_wicks_through_a_gap_a_tie_and_a_correction() {
+        use crate::studies::InputValue;
+        let tie = 2f64.powi(-40);
+        let runs = [
+            (1.0, 2),
+            (-1.0, 5),
+            (1.0, 2),
+            (f64::NAN, 1),
+            (1.0, 3),
+            (-1.0, 4),
+            (1.0, 3),
+            (-tie, 1),
+            (-1.0, 5),
+        ];
+        let (mut last, mut closes) = (100.0, vec![100.0]);
+        for (step, count) in runs {
+            for _ in 0..count {
+                if step.is_nan() {
+                    closes.push(f64::NAN);
+                } else {
+                    last += step;
+                    closes.push(last);
+                }
+            }
+        }
+        let mut bars = bars_from_closes(&closes);
+        for bar in &mut bars {
+            let near = if bar.close.is_nan() { 100.0 } else { bar.close };
+            (bar.high, bar.low) = (near + 0.5, near - 0.25);
+        }
+        bars[17].low = 90.0;
+        bars[21].high = 110.0;
+        let (low, high) = (100.0 * 993.0 / 16384.0, 100.0 * 993.0 / 1024.0);
+        let tied = 100.0 * 115681.0 / 131072.0 / (1.0 + tie);
+
+        // The four outputs follow the RSI, or the average and its bands.
+        for (smoothing, first) in [(0, 1), (2, 4)] {
+            let mut study = RSI::new(2);
+            study
+                .set_input("smoothing", InputValue::Choice(smoothing))
+                .unwrap();
+            study
+                .set_input("divergence", InputValue::Toggle(true))
+                .unwrap();
+            study.calculate(&bars);
+            assert_eq!(study.line_count(), first + 4);
+            let value =
+                |study: &RSI, output: usize, bar: usize| study.values().value(first + output, bar);
+            let drawn = |study: &RSI, output: usize| -> Vec<usize> {
+                (0..bars.len())
+                    .filter(|&bar| value(study, output, bar).is_some())
+                    .collect()
+            };
+            assert_eq!(drawn(&study, 0), [7, 8, 9, 11, 12, 13, 14, 15, 16, 17]);
+            assert_eq!(value(&study, 0, 7), Some(3.125));
+            let third = value(&study, 0, 11).unwrap();
+            assert!((third - (3.125 + (low - 3.125) / 3.0)).abs() < 1e-12);
+            assert_eq!(value(&study, 0, 17), Some(low));
+            assert_eq!(drawn(&study, 2), [17]);
+            assert_eq!(value(&study, 2, 17), Some(low));
+            assert_eq!(study.plot_text(first + 2, 17).as_deref(), Some("Bull"));
+
+            assert_eq!(drawn(&study, 1), [13, 14, 15, 16, 17, 18, 19, 20, 21]);
+            assert_eq!(value(&study, 1, 13), Some(high));
+            assert_eq!(drawn(&study, 3), [21]);
+            assert!((value(&study, 3, 21).unwrap() - tied).abs() < 1e-11);
+            assert_eq!(study.plot_text(first + 3, 21).as_deref(), Some("Bear"));
+
+            // A source takes the place of the close alone, so the wicks still decide.
+            let mut sourced = study.clone();
+            sourced.update_source(&bars, 0, &closes);
+            assert_eq!(
+                format!("{:?}", sourced.values()),
+                format!("{:?}", study.values())
+            );
+
+            // An update that changes nothing leaves the correction after it able to withdraw.
+            let mut corrected = bars.clone();
+            corrected[26].close = 1000.0;
+            study.update(&bars, bars.len());
+            study.update(&corrected, 26);
+            assert!(drawn(&study, 1).is_empty() && drawn(&study, 3).is_empty());
+            assert_eq!(drawn(&study, 0).len(), 10);
+        }
+    }
+
+    /// The divergence plots follow the average's, so an average with bands puts three plots
+    /// before them and no average takes those away again. Each divergence plot keeps the style
+    /// set for it and stays off the scale, and the average's plots start with their own.
+    #[test]
+    fn divergence_styles_stay_with_their_plots_when_the_average_changes() {
+        use crate::studies::{ConfiguredStudy, InputValue, PlotType};
+        let mut study = ConfiguredStudy::new(Box::new(RSI::new(14).with_divergence(true)));
+        let mut settings = study.settings();
+        settings.plots[1].color = Color32::BLUE;
+        for (smoothing, first) in [(2, 4), (0, 1)] {
+            let inputs = [("smoothing".to_owned(), InputValue::Choice(smoothing))];
+            study.apply_settings(&inputs, settings).unwrap();
+            assert_eq!(study.line_count(), first + 4);
+            assert!(first == 1 || study.plot_style(1).color == palette::YELLOW);
+            assert_eq!(study.plot_style(first).color, Color32::BLUE);
+            assert_eq!(study.plot_style(first + 1).color, palette::RED);
+            let marks = [first + 2, first + 3].map(|line| study.plot_style(line).plot_type);
+            assert_eq!(marks, [PlotType::TriangleUp, PlotType::TriangleDown]);
+            let tagged: Vec<_> = (0..first + 4).filter(|&l| study.plot_tagged(l)).collect();
+            assert_eq!(tagged, (0..first).collect::<Vec<_>>());
+            settings = study.settings();
+        }
+        assert_eq!(settings.plots[0].color, palette::PURPLE);
+    }
+
+    /// A colour list names each plot in turn, so on a chart a new RSI colour leaves each
+    /// divergence plot the colour last set for it, a segment styled apart from its mark
+    /// included, and a colour for each of the eight plots reaches every one.
+    #[test]
+    fn a_colour_list_names_the_divergence_plots_in_turn() {
+        use crate::studies::{InputValue, StudyTemplate};
+        let (green, red) = (palette::GREEN, palette::RED);
+        // Saved while the RSI kept one colour for both plots of a divergence, with the bullish
+        // segment styled light blue and the bearish mark brown, apart from their kind's other
+        // plot. It restores as it was saved.
+        let saved = r#"{"name":"RSI","inputs":[["period",{"Length":14}],["smoothing",{"Choice":1}],["smoothing_length",{"Length":14}],["smoothing_deviation",{"Number":2.0}],["divergence",{"Toggle":true}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RSI.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[253,216,53,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[173,216,230,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[242,54,69,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":2.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[165,42,42,255],"width":2.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[13,9,20,26],"untagged_plots":[2,3,4,5],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut study = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        let (average, segment, mark) = (palette::YELLOW, Color32::LIGHT_BLUE, Color32::BROWN);
+        assert_eq!(
+            study.colors(),
+            [palette::PURPLE, average, segment, red, green, mark]
+        );
+        study.set_colors(vec![Color32::BLUE]);
+        assert_eq!(
+            study.colors(),
+            [Color32::BLUE, average, segment, red, green, mark]
+        );
+        // Recoloured while its divergences are off, the RSI brings each plot back in its colour.
+        let mut settings = study.settings();
+        settings.plots[0].color = Color32::WHITE;
+        let off = [("divergence".to_owned(), InputValue::Toggle(false))];
+        study.apply_settings(&off, settings).unwrap();
+        let on = [("divergence".to_owned(), InputValue::Toggle(true))];
+        let settings = study.settings();
+        study.apply_settings(&on, settings).unwrap();
+        assert_eq!(
+            study.colors(),
+            [Color32::WHITE, average, segment, red, green, mark]
+        );
+        let banded = [("smoothing".to_owned(), InputValue::Choice(2))];
+        let settings = study.settings();
+        study.apply_settings(&banded, settings).unwrap();
+        let (bullish, bearish) = (Color32::GOLD, Color32::KHAKI);
+        let plots = [
+            Color32::BLUE,
+            average,
+            green,
+            green,
+            bullish,
+            bearish,
+            bullish,
+            bearish,
+        ];
+        study.set_colors(plots.to_vec());
+        assert_eq!(study.colors(), plots);
     }
 }

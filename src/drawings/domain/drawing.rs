@@ -177,11 +177,11 @@ pub struct Drawing {
     /// drawings have it on.
     #[serde(default = "enabled")]
     pub background: bool,
-    /// Whether an annotation's box has a 1 px border. Older drawings have it on.
+    /// Whether an annotation's box has a 1 px border. Older drawings have it on, except price
+    /// labels saved before they had a border.
     #[serde(default = "enabled")]
     pub border: bool,
-    /// Border colour of annotation boxes; `None` uses the drawing colour, except on a price label,
-    /// which then has no border, as price labels saved before they had one.
+    /// Border colour of annotation boxes; `None` uses the drawing colour.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
     /// Whether a Text, Anchored text or Callout breaks its text into lines no wider than
@@ -568,12 +568,7 @@ impl Drawing {
             },
             background: !plain_text,
             border: !plain_text,
-            border_color: match tool_type {
-                _ if plain_text => Some([112, 112, 112, 255]),
-                // Its own colour, which the badge keeps when its background changes.
-                DrawingToolType::PriceLabel => Some(style.color),
-                _ => None,
-            },
+            border_color: plain_text.then_some([112, 112, 112, 255]),
             text_wrap: false,
             text_wrap_width: default_text_wrap_width(),
             text_follows_zoom: false,

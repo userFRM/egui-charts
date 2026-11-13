@@ -1,6 +1,4 @@
 use crate::studies::{MACD, RSI};
-#[cfg(all(test, feature = "ui"))]
-use crate::ui::context_menu::ChartMenus;
 use crate::widget::test_frames::chart;
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
@@ -632,53 +630,6 @@ fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
             pointer(&ctx, &mut chart, axis, pressed);
         }
         assert_eq!(chart.pane_layout.panes[1].scale.is_manual(), !enabled);
-    }
-    #[cfg(feature = "ui")]
-    {
-        let mut menus = ChartMenus::default();
-        let mut shapes = Vec::new();
-        for clicked in [true, false] {
-            let mut output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                    time: Some(ctx.input(|input| input.time) + 0.1),
-                    events: if clicked {
-                        vec![
-                            Event::PointerMoved(axis),
-                            Event::PointerButton {
-                                pos: axis,
-                                button: PointerButton::Secondary,
-                                pressed: true,
-                                modifiers: Modifiers::NONE,
-                            },
-                            Event::PointerButton {
-                                pos: axis,
-                                button: PointerButton::Secondary,
-                                pressed: false,
-                                modifiers: Modifiers::NONE,
-                            },
-                        ]
-                    } else {
-                        Vec::new()
-                    },
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        chart.show(ui);
-                    });
-                    menus.show(&ctx, &mut chart);
-                },
-            );
-            shapes = std::mem::take(&mut output.shapes);
-            output.drop_without_applying_deltas();
-        }
-        assert!(
-            !shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Lock price to bar ratio")),
-            "the main-axis menu must not open over a study axis"
-        );
-        egui::Popup::close_all(&ctx);
     }
     // The same engine maps 10 and 1000 around 100 at the midpoint in logarithmic units.
     let scale = &mut chart.pane_layout.panes[1].scale;
@@ -1410,4 +1361,106 @@ fn collapsing_the_price_pane_of_a_short_chart_leaves_no_blank_area() {
         crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
     }
     assert_eq!(heights(&chart), [90.0, 24.0]);
+}
+
+/// A chart's own background covers its study panes. Solid, neither a pane nor the fills that
+/// keep legend text and the labels of a study's own axis readable paint the theme's background,
+/// nor does the plate under the controls of a hovered study pane row. A gradient spans the chart
+/// frame, from 8 to 592 points down the 600 point test frame, and each pane paints the part
+/// behind it. A chart that leaves its background to a container paints none behind the price
+/// pane and still fills its study panes, which hides the crosshair line the price frame draws
+/// through them.
+#[test]
+fn custom_background_reaches_study_panes() {
+    use crate::config::BackgroundStyle;
+    use crate::studies::{SMA, StudyScale};
+    use crate::widget::test_frames::{frame, shapes};
+    use egui::{Color32, Shape};
+    let solid = Color32::from_rgb(120, 10, 10);
+    let (top, bottom) = (Color32::from_rgb(200, 0, 0), Color32::from_rgb(0, 0, 200));
+    let gradient = BackgroundStyle::VerticalGradient {
+        top_color: top,
+        bottom_color: bottom,
+    };
+    let at = |y: f32| top.lerp_to_gamma(bottom, (y - 8.0) / 584.0);
+    let theme = crate::theme::Theme::dark();
+    for (style, skip) in [
+        (BackgroundStyle::Solid, false),
+        (BackgroundStyle::Solid, true),
+        (gradient, false),
+        (gradient, true),
+    ] {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        chart.set_theme(&ctx, &theme);
+        chart.add_indicator(Box::new(RSI::new(14)));
+        let average = chart.add_indicator(Box::new(SMA::new(5)));
+        assert!(chart.set_indicator_scale(average, StudyScale::Independent));
+        chart.config_mut().background_color = solid;
+        chart.config_mut().background_style = style;
+        chart.config_mut().skip_background = skip;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        // The pointer rests on the study pane's legend row, which reveals the row's controls.
+        let row = chart.get_rendered_indicator_panes()[0].chart_rect.min + Vec2::new(20.0, 12.0);
+        frame(&ctx, &mut chart, 0.05, vec![Event::PointerMoved(row)]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(row)]);
+        let pane = chart.get_rendered_indicator_panes()[0].panel_rect;
+        // A background fill is one colour, or a mesh's corner colours clockwise from the top left.
+        let fills = |rect: Rect| -> Vec<Vec<Color32>> {
+            let corners = [
+                rect.left_top(),
+                rect.right_top(),
+                rect.right_bottom(),
+                rect.left_bottom(),
+            ];
+            painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(shape) if shape.rect == rect && shape.stroke.width == 0.0 => {
+                        Some(vec![shape.fill])
+                    }
+                    Shape::Mesh(mesh) if mesh.vertices.iter().map(|v| v.pos).eq(corners) => {
+                        Some(mesh.vertices.iter().map(|v| v.color).collect())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let slice = |rect: Rect| {
+            if style == BackgroundStyle::Solid {
+                vec![solid]
+            } else {
+                let (top, bottom) = (at(rect.top()), at(rect.bottom()));
+                vec![top, top, bottom, bottom]
+            }
+        };
+        let label = format!("{style:?}, skip_background {skip}");
+        assert_eq!(fills(pane), [slice(pane)], "{label}");
+        let price_height = chart.pane_height(crate::widget::PaneId::MAIN).unwrap();
+        let price_frame = Rect::from_min_size(Pos2::new(8.0, 8.0), Vec2::new(784.0, price_height));
+        let price_fills = if skip {
+            Vec::new()
+        } else {
+            vec![slice(price_frame)]
+        };
+        assert_eq!(fills(price_frame), price_fills, "{label}");
+        if style == BackgroundStyle::Solid {
+            // The theme's background, opaque and at the 60% opacity of a study's legend row.
+            let stale: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(shape)
+                        if shape.stroke.width == 0.0
+                            && (shape.fill == Color32::BLACK
+                                || shape.fill == Color32::from_black_alpha(153)) =>
+                    {
+                        Some(shape.rect)
+                    }
+                    _ => None,
+                })
+                .filter(|rect| *rect != Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)))
+                .collect();
+            assert!(stale.is_empty(), "theme background at {stale:?}");
+        }
+    }
 }

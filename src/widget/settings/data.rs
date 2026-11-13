@@ -257,11 +257,14 @@ pub struct MarginsSettings {
 }
 
 impl Default for MarginsSettings {
+    /// The margins of a new chart, read as the settings read a chart's.
     fn default() -> Self {
+        let price = crate::scales::PriceScaleMargins::default();
         Self {
-            top_percent: 10.0,
-            bottom_percent: 8.0,
-            right_bars: 10,
+            top_percent: (price.top * 100.0) as f32,
+            bottom_percent: (price.bottom * 100.0) as f32,
+            // Whole bars: resetting a chart whose right margin was edited gives 2 bars, not 2.5.
+            right_bars: crate::config::TimeScaleOptions::default().right_offset as u32,
         }
     }
 }

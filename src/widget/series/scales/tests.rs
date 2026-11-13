@@ -150,11 +150,12 @@ fn fit_content_includes_added_series_across_panes() {
         };
         let margin = if case == "fixed edges" { 0.0 } else { 3.0 };
         let pixels = if case == "pixels" { 60.0 } else { 0.0 };
-        let expected =
-            ((plot.width() - pixels) / (slots + if pixels > 0.0 { 0.0 } else { margin })).clamp(
-                if case == "minimum" { 100.0 } else { 0.5 },
-                if case == "maximum" { 4.0 } else { f32::MAX },
-            );
+        let expected = ((plot.width() - 1.0 - pixels)
+            / (slots + if pixels > 0.0 { 0.0 } else { margin }))
+        .clamp(
+            if case == "minimum" { 100.0 } else { 0.5 },
+            if case == "maximum" { 4.0 } else { f32::MAX },
+        );
         assert!(
             (chart.get_time_scale_state().0 - expected).abs() < 0.001,
             "{case}: spacing {:?} != {expected}",
@@ -237,7 +238,7 @@ fn fit_content_includes_added_series_across_panes() {
             };
             assert!(
                 (chart.get_time_scale_state().0
-                    - chart.get_rendered_price_rect().width() / (slots + 3.0))
+                    - (chart.get_rendered_price_rect().width() - 1.0) / (slots + 3.0))
                     .abs()
                     < 0.001,
                 "{case}: fit after replacing the fallback domain"
@@ -4054,11 +4055,11 @@ fn series_data_is_queried_popped_and_reported() {
     assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 4.0)));
     frame(&ctx, &mut chart, 0.1, vec![]);
     let plot = chart.get_rendered_price_rect();
-    let spacing = plot.width() / 5.0;
+    let spacing = (plot.width() - 1.0) / 5.0;
     for index in 0..5 {
         let time = minute(index);
         let x = chart.time_to_x(time).unwrap();
-        let expected = plot.left() + (index as f32 + 0.5) * spacing - 1.0;
+        let expected = plot.left() + (index as f32 + 0.5) * spacing;
         assert!(
             (x - expected).abs() < 0.001,
             "centre {index}: {x} != {expected}"

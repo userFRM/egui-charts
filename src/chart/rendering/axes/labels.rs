@@ -248,14 +248,15 @@ pub(crate) fn time_axis_marks(
     // The logical indices at the right and left edges of the plot; the left one is negative
     // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
-    let left = right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing);
+    let left = right + 1.0 - f64::from((context.rect.width() - 1.0) / coords.bar_spacing);
     let (left, right) =
         coords
             .numeric_positions
             .as_ref()
             .map_or((left.floor(), right), |positions| {
                 let right = right + 0.5;
-                let left = right - f64::from(context.rect.width()) / f64::from(coords.bar_spacing);
+                let left =
+                    right - f64::from(context.rect.width() - 1.0) / f64::from(coords.bar_spacing);
                 (
                     (positions.index(left) + 0.5).floor(),
                     positions.index(right) - 0.5,

@@ -124,6 +124,93 @@ mod tests {
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
 
+    /// Guards #2927: on another interval or symbol the study averages its own bars that share
+    /// time with the chart bars in view, not those at the chart's indices, through a pan and a
+    /// streamed bar.
+    #[test]
+    fn visible_average_on_another_interval_uses_the_bars_in_view() {
+        use crate::model::{BarClock, Timeframe};
+        let start = Utc.with_ymd_and_hms(2026, 3, 6, 0, 0, 0).unwrap();
+        let bar = |minute: i64, c: f64| {
+            Bar::new(start + chrono::Duration::minutes(minute), c, c, c, c, 1.0)
+        };
+        let mut chart: Vec<_> = (0..15).map(|i| bar(i, 100.0 + i as f64)).collect();
+        let mut five: Vec<_> = [104.0, 109.0, 114.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| bar(5 * i as i64, c))
+            .collect();
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Visible Average Price")
+                .expect("Visible Average Price study"),
+        );
+        study.set_timeframe(Timeframe::Min1);
+        study.set_bar_clock(&BarClock::new(Timeframe::Min1));
+        study
+            .set_input(
+                "calculation_timeframe",
+                InputValue::Timeframe(Some(Timeframe::Min5)),
+            )
+            .unwrap();
+        let update = |study: &mut ConfiguredStudy, chart: &[Bar], five: &[Bar], from| {
+            let source = StudyData {
+                request: study.data_requests()[0].clone(),
+                bars: five,
+                clock: BarClock::new(Timeframe::Min5),
+                instrument: None,
+                timeframe: Timeframe::Min5,
+            };
+            study.update_data(chart, from, &[source]);
+        };
+        // Chart bars 5 to 9 cover 00:05 to 00:09, the second five-minute bar, closing at 00:10
+        // with chart bar 9.
+        study.set_visible_range(5..10);
+        update(&mut study, &chart, &five, 0);
+        assert_eq!(study.values().value(0, 9), Some(109.0));
+        // A pan within the second five-minute bar asks for no recalculation.
+        assert!(!study.set_visible_range(6..10));
+        // Panning to the third five-minute bar recalculates the mean.
+        assert!(study.set_visible_range(10..15));
+        update(&mut study, &chart, &five, 0);
+        assert_eq!(study.values().value(0, 9), Some(114.0));
+        // A streamed five-minute bar after the view keeps the mean of the bars in view.
+        chart.push(bar(15, 115.0));
+        five.push(bar(15, 119.0));
+        update(&mut study, &chart, &five, 15);
+        assert_eq!(study.values().value(0, 9), Some(114.0));
+        // The chart empties a study that waits for a full recompute; the same view asks for none.
+        study.update(&[], 0);
+        assert!(!study.set_visible_range(10..15));
+
+        // Another symbol at the chart's interval whose history starts at 00:05 averages its
+        // closes from 00:05 to 00:09: 200 to 204.
+        let other: Vec<_> = (5..15).map(|i| bar(i, 195.0 + i as f64)).collect();
+        study
+            .set_input("calculation_timeframe", InputValue::Timeframe(None))
+            .unwrap();
+        study
+            .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+            .unwrap();
+        study.set_visible_range(5..10);
+        let source = StudyData {
+            request: study.data_requests()[0].clone(),
+            bars: &other,
+            clock: BarClock::new(Timeframe::Min1),
+            instrument: None,
+            timeframe: Timeframe::Min1,
+        };
+        study.update_data(&chart, 0, &[source]);
+        assert_eq!(study.values().value(0, 9), Some(202.0));
+
+        // Back on the chart's bars it averages chart bars 5 to 9 again: 105 to 109.
+        study
+            .set_input("calculation_symbol", InputValue::Symbol(String::new()))
+            .unwrap();
+        study.calculate(&chart);
+        assert_eq!(study.values().value(0, 9), Some(107.0));
+    }
+
     /// The visible mean uses exactly the supplied bars and changes with the viewport. A corrected
     /// visible bar moves it on every bar, and a bar streamed in past the range carries it.
     #[test]
