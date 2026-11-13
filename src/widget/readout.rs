@@ -11,6 +11,25 @@ impl Chart {
         (self.state.revision(), self.readout_revision)
     }
 
+    /// What the table lists of each visible added series: its id, title, bar revision and last
+    /// bar, which the revision leaves out. The table is current while this is unchanged too.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_series(&self) -> Vec<(usize, String, u64, Option<(i64, u64)>)> {
+        self.price_series
+            .iter()
+            .filter(|item| item.visible)
+            .map(|item| {
+                let last = item.bars.last().map(|bar| {
+                    (
+                        bar.time.timestamp_nanos_opt().unwrap_or_default(),
+                        bar.close.to_bits(),
+                    )
+                });
+                (item.id.0, item.options.name.clone(), item.revision, last)
+            })
+            .collect()
+    }
+
     /// Tells this chart from the others a host shows one data table over, through a restore of
     /// its saved state, which adds its studies again under new ids.
     #[cfg(feature = "ui")]

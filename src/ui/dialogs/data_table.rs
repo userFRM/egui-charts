@@ -38,10 +38,11 @@ pub enum DataTableAction {
 }
 
 /// Inputs to the table, without copying bars, study settings or the instrument, whose changes
-/// move the chart's table revision.
+/// move the chart's table revision, and the added series, which it reads by their own revisions.
 #[derive(PartialEq)]
 struct Source {
     revision: (u64, u64),
+    series: Vec<(usize, String, u64, Option<(i64, u64)>)>,
     symbol: String,
     timeframe: Option<Timeframe>,
     len: usize,
@@ -53,6 +54,7 @@ impl Source {
     fn of(chart: &Chart) -> Self {
         Self {
             revision: chart.data_table_revision(),
+            series: chart.data_table_series(),
             symbol: chart.symbol().to_owned(),
             timeframe: chart.timeframe(),
             len: chart.bars(SeriesId::MAIN).len(),
