@@ -328,11 +328,13 @@ impl Indicator for RSI {
     }
 
     /// The RSI, the average, its upper and lower band, the band between the levels, and the
-    /// bullish and bearish divergences.
+    /// bullish and bearish divergences. While the divergences are drawn, the colours of their
+    /// four plots also follow those of the average's plots, so that the list starts with each
+    /// plot's colour in turn.
     fn colors(&self) -> Vec<Color32> {
         let [average, upper, lower] = self.smoothing_colors;
         let [bullish, bearish] = self.divergence_colors;
-        vec![
+        let mut colors = vec![
             self.color,
             average,
             upper,
@@ -340,14 +342,27 @@ impl Indicator for RSI {
             self.fill_color,
             bullish,
             bearish,
-        ]
+        ];
+        if self.divergence {
+            let first = 1 + self.smoothing.lines();
+            colors.splice(first..first, [bullish, bearish, bullish, bearish]);
+        }
+        colors
     }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
         self.smoothing.fills()
     }
 
-    fn set_colors(&mut self, colors: Vec<Color32>) {
+    fn set_colors(&mut self, mut colors: Vec<Color32>) {
+        if self.divergence {
+            // The colours of the four divergence plots, where `colors` lists them.
+            let first = colors.len().min(1 + self.smoothing.lines());
+            let end = colors.len().min(first + 4);
+            for (output, color) in colors.drain(first..end).enumerate() {
+                self.divergence_colors[output % 2] = color;
+            }
+        }
         if !colors.is_empty() {
             self.color = colors[0];
             for (slot, color) in self.smoothing_colors.iter_mut().zip(&colors[1..]) {
@@ -693,5 +708,35 @@ mod tests {
             settings = study.settings();
         }
         assert_eq!(settings.plots[0].color, palette::PURPLE);
+    }
+
+    /// A colour list names each plot in turn, so on a chart a new RSI colour leaves the
+    /// divergence plots theirs, and a colour for each of the eight plots reaches every one.
+    #[test]
+    fn a_colour_list_names_the_divergence_plots_in_turn() {
+        use crate::studies::{ConfiguredStudy, InputValue};
+        let (green, red) = (palette::GREEN, palette::RED);
+        let mut study = ConfiguredStudy::new(Box::new(RSI::default().with_divergence(true)));
+        study.set_colors(vec![Color32::BLUE]);
+        let average = palette::YELLOW;
+        assert_eq!(
+            study.colors(),
+            [Color32::BLUE, average, green, red, green, red]
+        );
+        let banded = [("smoothing".to_owned(), InputValue::Choice(2))];
+        study.apply_settings(&banded, study.settings()).unwrap();
+        let (bullish, bearish) = (Color32::GOLD, Color32::KHAKI);
+        let plots = [
+            Color32::BLUE,
+            average,
+            green,
+            green,
+            bullish,
+            bearish,
+            bullish,
+            bearish,
+        ];
+        study.set_colors(plots.to_vec());
+        assert_eq!(study.colors(), plots);
     }
 }
