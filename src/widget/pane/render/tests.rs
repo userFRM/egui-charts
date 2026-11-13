@@ -1413,10 +1413,11 @@ fn collapsing_the_price_pane_of_a_short_chart_leaves_no_blank_area() {
 }
 
 /// A chart's own background covers its study panes. Solid, neither a pane nor the fills that
-/// keep legend text and the labels of a study's own axis readable paint the theme's background.
-/// A gradient spans the chart frame, from 8 to 592 points down the 600 point test frame, and
-/// each pane paints the part behind it. A chart that leaves its background to a container
-/// paints none behind a study pane either.
+/// keep legend text and the labels of a study's own axis readable paint the theme's background,
+/// nor does the plate under the controls of a hovered study pane row. A gradient spans the chart
+/// frame, from 8 to 592 points down the 600 point test frame, and each pane paints the part
+/// behind it. A chart that leaves its background to a container paints none behind a study pane
+/// either.
 #[test]
 fn custom_background_reaches_study_panes() {
     use crate::config::BackgroundStyle;
@@ -1447,7 +1448,10 @@ fn custom_background_reaches_study_panes() {
         chart.config_mut().background_style = style;
         chart.config_mut().skip_background = skip;
         frame(&ctx, &mut chart, 0.0, vec![]);
-        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        // The pointer rests on the study pane's legend row, which reveals the row's controls.
+        let row = chart.get_rendered_indicator_panes()[0].chart_rect.min + Vec2::new(20.0, 12.0);
+        frame(&ctx, &mut chart, 0.05, vec![Event::PointerMoved(row)]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(row)]);
         let pane = chart.get_rendered_indicator_panes()[0].panel_rect;
         // A background fill is one colour, or a mesh's corner colours clockwise from the top left.
         let fills = |rect: Rect| -> Vec<Vec<Color32>> {

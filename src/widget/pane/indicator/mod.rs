@@ -684,7 +684,7 @@ impl IndicatorPane {
                 ui,
                 row,
                 controls,
-                true,
+                Some(self.background_at(ui.ctx(), controls.center())),
                 response.id.with("study_controls"),
                 indicator,
             )

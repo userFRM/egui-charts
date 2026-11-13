@@ -803,7 +803,7 @@ impl<'a> Legend<'a> {
                     ui,
                     row,
                     controls,
-                    false,
+                    None,
                     id.with(("study", index)),
                     study.as_ref(),
                 );
