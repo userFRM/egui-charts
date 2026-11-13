@@ -1,0 +1,258 @@
+{
+  "version": 9,
+  "symbol": "AAPL",
+  "timeframe": null,
+  "drawings": [
+    {
+      "id": "1",
+      "points": [
+        {
+          "ts_ms": 1704074040000,
+          "price": 108.0
+        }
+      ],
+      "drawing": {
+        "label": null,
+        "pane": null,
+        "selectable": true,
+        "saveable": true,
+        "listed": true,
+        "group": null,
+        "folder": [],
+        "custom_tool": null,
+        "custom_settings": null,
+        "tool_type": "PriceLabel",
+        "screen_anchor": null,
+        "color": [
+          41,
+          98,
+          255,
+          255
+        ],
+        "stroke_width": 2.0,
+        "text": null,
+        "post": null,
+        "line_style": "Solid",
+        "fill_color": null,
+        "locked": false,
+        "visible": true,
+        "font_size": 14.0,
+        "font_weight": "Normal",
+        "italic": false,
+        "text_color": null,
+        "background": true,
+        "border": true,
+        "border_color": null,
+        "text_wrap": false,
+        "text_wrap_width": 200.0,
+        "text_follows_zoom": false,
+        "text_zoom_spacing": null,
+        "extend_left": false,
+        "extend_right": false,
+        "arrow_start_style": "None",
+        "arrow_end_style": "None",
+        "timeframe_visibility": {
+          "show_on_all": true,
+          "visible_timeframes": []
+        },
+        "price_axis_label": true,
+        "time_axis_label": true,
+        "line_measurements": {
+          "persistent": false,
+          "price_change": false,
+          "percent_change": false,
+          "pip_change": false,
+          "bar_count": false,
+          "elapsed_time": false,
+          "length": false,
+          "inclination": false,
+          "midpoint": false,
+          "price_labels": false,
+          "position": "Right",
+          "text_horizontal_align": "Center",
+          "text_vertical_align": "Bottom",
+          "text_orientation": "Vertical",
+          "across_panes": false
+        },
+        "position_size": null,
+        "position_sizing": {
+          "point_value": 1.0,
+          "lot_size": 1.0,
+          "quantity_step": 0.0,
+          "leverage": 1.0
+        },
+        "position_readout": {
+          "persistent": false,
+          "condensed": false,
+          "account_currency": null,
+          "conversion_rate": null,
+          "quantity_decimals": null
+        },
+        "position_target_color": null,
+        "position_stop_color": null,
+        "position_style": {
+          "line_color": null,
+          "line_width": 1.0,
+          "text_color": null,
+          "font_size": 12.0,
+          "label_background": true,
+          "label_color": null,
+          "fill": true,
+          "border": false,
+          "border_color": [
+            102,
+            123,
+            139,
+            255
+          ]
+        },
+        "fib_config": null,
+        "volume_profile": null,
+        "regression_trend": null,
+        "vwap": null,
+        "gann": null,
+        "ghost_feed": null,
+        "channel_midline": false,
+        "image": null,
+        "closed": false,
+        "pitchfork": null,
+        "elliott_degree": "Minor",
+        "bars_pattern": null,
+        "z_order": 0
+      },
+      "created_at": 1794456870038,
+      "modified_at": 1794456870038,
+      "notes": null
+    },
+    {
+      "id": "2",
+      "points": [
+        {
+          "ts_ms": 1704074280000,
+          "price": 97.0
+        },
+        {
+          "ts_ms": 1704075240000,
+          "price": 92.0
+        }
+      ],
+      "drawing": {
+        "label": null,
+        "pane": null,
+        "selectable": true,
+        "saveable": true,
+        "listed": true,
+        "group": null,
+        "folder": [],
+        "custom_tool": null,
+        "custom_settings": null,
+        "tool_type": "PriceNote",
+        "screen_anchor": null,
+        "color": [
+          41,
+          98,
+          255,
+          255
+        ],
+        "stroke_width": 2.0,
+        "text": "Entry",
+        "post": null,
+        "line_style": "Solid",
+        "fill_color": null,
+        "locked": false,
+        "visible": true,
+        "font_size": 12.0,
+        "font_weight": "Normal",
+        "italic": false,
+        "text_color": null,
+        "background": true,
+        "border": true,
+        "border_color": null,
+        "text_wrap": false,
+        "text_wrap_width": 200.0,
+        "text_follows_zoom": false,
+        "text_zoom_spacing": null,
+        "extend_left": false,
+        "extend_right": false,
+        "arrow_start_style": "None",
+        "arrow_end_style": "None",
+        "timeframe_visibility": {
+          "show_on_all": true,
+          "visible_timeframes": []
+        },
+        "price_axis_label": true,
+        "time_axis_label": true,
+        "line_measurements": {
+          "persistent": false,
+          "price_change": false,
+          "percent_change": false,
+          "pip_change": false,
+          "bar_count": false,
+          "elapsed_time": false,
+          "length": false,
+          "inclination": false,
+          "midpoint": false,
+          "price_labels": false,
+          "position": "Right",
+          "text_horizontal_align": "Center",
+          "text_vertical_align": "Bottom",
+          "text_orientation": "Vertical",
+          "across_panes": false
+        },
+        "position_size": null,
+        "position_sizing": {
+          "point_value": 1.0,
+          "lot_size": 1.0,
+          "quantity_step": 0.0,
+          "leverage": 1.0
+        },
+        "position_readout": {
+          "persistent": false,
+          "condensed": false,
+          "account_currency": null,
+          "conversion_rate": null,
+          "quantity_decimals": null
+        },
+        "position_target_color": null,
+        "position_stop_color": null,
+        "position_style": {
+          "line_color": null,
+          "line_width": 1.0,
+          "text_color": null,
+          "font_size": 12.0,
+          "label_background": true,
+          "label_color": null,
+          "fill": true,
+          "border": false,
+          "border_color": [
+            102,
+            123,
+            139,
+            255
+          ]
+        },
+        "fib_config": null,
+        "volume_profile": null,
+        "regression_trend": null,
+        "vwap": null,
+        "gann": null,
+        "ghost_feed": null,
+        "channel_midline": false,
+        "image": null,
+        "closed": false,
+        "pitchfork": null,
+        "elliott_degree": "Minor",
+        "bars_pattern": null,
+        "z_order": 0
+      },
+      "created_at": 1794456870038,
+      "modified_at": 1794456870038,
+      "notes": null
+    }
+  ],
+  "metadata": {
+    "created_at": 1794456870038,
+    "modified_at": 1794456870038,
+    "app_version": null
+  }
+}

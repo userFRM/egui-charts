@@ -161,6 +161,12 @@ pub struct ChartSnapshot {
     /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
     /// Version 1 layouts may omit drawings kept in per-symbol storage.
     pub drawings: Option<serde_json::Value>,
+    /// The chart that took the snapshot, by an identifier no other chart has, also in another
+    /// run. [`Chart::restore`] keeps the data table column choices of the saved studies only on
+    /// that chart; on any other chart, and for `None` in layouts saved before it was recorded,
+    /// each restored study starts with its columns shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_by: Option<u64>,
 }
 
 /// Why [`Chart::restore`] did not show a snapshot.
@@ -357,6 +363,7 @@ impl Chart {
                 .and_then(|positions| positions.unit),
             right_offset,
             drawings,
+            saved_by: Some(self.data_table_identity),
         };
         // A layout that restore would refuse is an error now rather than at the next load.
         check(&snapshot, factory, self.main_series_scale)
@@ -540,28 +547,28 @@ impl Chart {
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
+        // Only a snapshot this chart took names its columns by saved ids; a study of any other
+        // snapshot starts a new column.
+        let own = snapshot.saved_by == Some(self.data_table_identity);
         let saved_columns: Vec<_> = snapshot
             .studies
             .iter()
             .zip(self.indicators())
             .map(|(saved, (_, study))| {
-                // An unknown id from another chart must not claim a future local study's column.
-                let column = if saved.id < next_series {
-                    saved.id
-                } else {
-                    self.restored_studies[&saved.id]
-                };
-                (
+                // An id this chart never gave out must not claim the column of a later study.
+                let column = if own && saved.id < next_series {
                     self.study_column_ids
                         .get(&saved.id)
                         .copied()
-                        .unwrap_or(column),
-                    study.name(),
-                )
+                        .unwrap_or(saved.id)
+                } else {
+                    self.restored_studies[&saved.id]
+                };
+                (column, study.name())
             })
             .collect();
-        // Saved ids of another chart can meet entries of this chart's earlier studies. The table
-        // keys a column by its id and title, so a column two studies of one title would share is
+        // A snapshot this chart took and the host then edited can still give two studies of one
+        // title one column. The table keys a column by its id and title, so such a column is
         // ambiguous, and each of them takes its own new id instead.
         let column_ids: Vec<_> = snapshot
             .studies
@@ -1405,7 +1412,7 @@ mod tests {
         assert_eq!(restored.config().watermark_text, None);
         assert!(restored.config().watermark_description);
         legacy["version"] = 1.into();
-        for key in ["config", "options", "price_scale", "maximized"] {
+        for key in ["config", "options", "price_scale", "maximized", "saved_by"] {
             legacy["charts"][0].as_object_mut().unwrap().remove(key);
         }
         let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();

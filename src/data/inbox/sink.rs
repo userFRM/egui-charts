@@ -681,7 +681,9 @@ impl Live {
             for input in &inputs {
                 if !self.study_inputs.iter().any(|old| input.same_source(old)) {
                     // The chart rebuilt drained history; include the executions still queued.
-                    for trade in self.updates.trades.iter() {
+                    let repeats = &self.updates.repeats;
+                    let queued = self.updates.trades.iter();
+                    for trade in queued.filter(|t| t.id.is_none_or(|id| !repeats.contains(&id))) {
                         input.push_trade(&self.clock, trade);
                     }
                     if let Some(open) = self.forming {
@@ -780,9 +782,13 @@ impl Live {
         if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             if !trades::valid(&tick) || live.ahead(tick.ts, system) {
                 live.updates.rejected += 1;
-            } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
+            } else if let Some(id) = tick.id.filter(|id| live.taken.ids.contains(id)) {
                 live.updates.repeated_ticks += 1;
                 if tick.aggressor_order_id.is_some() || tick.resting_order_id.is_some() {
+                    // A queued execution takes the ids itself; a drained one's repeat waits for the store.
+                    if !live.updates.trades.holds(id) {
+                        live.updates.repeats.insert(id);
+                    }
                     live.updates.trades.push(tick);
                 }
             } else if live.last_trade.is_some_and(|last| tick.ts < last) {
