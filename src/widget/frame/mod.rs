@@ -2018,6 +2018,7 @@ impl Chart {
             if study.is_volume()
                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                 && self.main_series_visible
+                && self.chart_type.supports_volume()
                 && !self.state.data().is_empty()
             {
                 let rect = super::volume::overlay_rect(price_rect, &self.config);

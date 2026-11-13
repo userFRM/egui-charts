@@ -260,6 +260,7 @@ mod tests {
             (ChartType::Kagi, false),
             (ChartType::LineBreak, false),
             (ChartType::PointAndFigure, false),
+            (ChartType::Range, false),
         ] {
             let ctx = Context::default();
             // Closes of 100, 103, 106 and 109 in turn build elements at the default sizes.
