@@ -171,6 +171,10 @@ impl DemoApp {
             ("Formatting", &icons::TEXT),
             ("Showcase", &icons::WIDGET_BAR_HIGHLIGHTS),
         ] {
+            // Both act on the synthetic feed.
+            if self.own_data.is_some() && matches!(label, "Price unit" | "Market recording") {
+                continue;
+            }
             let response = menu_item(ui, label, icon, Some(&icons::CHEVRON_RIGHT));
             egui::containers::menu::SubMenu::new()
                 .config(
@@ -254,6 +258,20 @@ impl DemoApp {
         }
         if id == "price-workspace" {
             self.sample_scene = None;
+            return;
+        }
+        // These switch to a catalog symbol or show the sample annotations.
+        if matches!(
+            id,
+            "options-volume"
+                | "targets"
+                | "financials"
+                | "tape"
+                | "markers"
+                | "signals"
+                | "samples"
+        ) && self.synthetic_only("Samples")
+        {
             return;
         }
         let action = match id {
@@ -768,6 +786,7 @@ mod tests {
                 "Liquidity heatmap",
                 "Largest order profile",
                 "Pause synthetic feed",
+                "Data source",
                 "Order flow",
                 "Research",
                 "Copy symbol",
@@ -841,6 +860,11 @@ mod tests {
             );
             click_at_width(&mut app, &ctx, "Copy symbol", width);
             assert!(!egui::Popup::is_any_open(&ctx));
+            click_at_width(&mut app, &ctx, "Menu", width);
+            click_at_width(&mut app, &ctx, "Data source", width);
+            assert!(app.data_source.is_open() && app.keyboard_dialog_open());
+            click_at_width(&mut app, &ctx, "Cancel", width);
+            assert!(!app.data_source.is_open());
             click_at_width(&mut app, &ctx, "Menu", width);
             click_at_width(&mut app, &ctx, "Order flow", width);
             assert!(app.open_panel == Some(super::super::SidePanel::OrderFlow));
@@ -953,6 +977,12 @@ mod tests {
         ] {
             click(&mut app, &ctx, label);
         }
+        // The restarted application has storage: its first-visit choice is already answered.
+        let answered = super::super::owndata::store::Saved {
+            asked: true,
+            ..Default::default()
+        };
+        answered.save(&app.storage);
         let mut storage = super::super::tests::AppStorage::default();
         app.save(&mut storage);
         egui::Popup::close_all(&ctx);

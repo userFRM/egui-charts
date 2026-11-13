@@ -67,6 +67,7 @@ struct Action {
     panes: Option<super::pane::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
+    extended_hours: Option<bool>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
@@ -107,6 +108,7 @@ impl Action {
             && self.panes.is_none()
             && self.chart_type.is_none()
             && self.interval.is_none()
+            && self.extended_hours.is_none()
             && self.studies.is_empty()
             && !drawings_changed
     }
@@ -468,6 +470,7 @@ impl Chart {
                 panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
+                extended_hours: Some(self.extended_hours),
                 ..Action::default()
             },
             #[cfg(feature = "drawings")]
@@ -559,6 +562,9 @@ impl Chart {
         }
         if action.interval == Some(self.timeframe) {
             action.interval = None;
+        }
+        if action.extended_hours == Some(self.extended_hours) {
+            action.extended_hours = None;
         }
         if action.config.is_some() || action.chart_type.is_some() {
             action.palette = Some(palette);
@@ -893,7 +899,8 @@ impl Chart {
     }
 
     /// Drain a notification that undo/redo changed chart state. Hosts that own the data must
-    /// reload it if [`Self::timeframe`] or [`Self::bar_clock`] changed, and synchronize their UI.
+    /// reload it if [`Self::timeframe`], [`Self::bar_clock`] or [`Self::extended_hours`] changed,
+    /// and synchronize their UI.
     /// Added series that the step removed or brought back are reported by
     /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
     /// [`ChartEvent::SeriesAdded`].
@@ -1031,6 +1038,12 @@ impl Chart {
                 self.drawings.curr_timeframe.clear();
             }
             *interval = current;
+        }
+        if let Some(extended_hours) = &mut action.extended_hours {
+            let current = self.extended_hours;
+            // The setter reloads the history and the subscription of the restored session.
+            self.set_extended_hours(*extended_hours);
+            *extended_hours = current;
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);

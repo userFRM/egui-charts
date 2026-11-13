@@ -25,6 +25,19 @@ const LINK_MARKERS: [(&str, egui::Color32); 5] = [
     ("💩", egui::Color32::from_rgb(160, 105, 90)),
 ];
 
+/// Paints `chart`'s background over `rect`, the container a chart with `skip_background` set
+/// leaves its background to.
+fn slot_background(ui: &Ui, rect: Rect, chart: &Chart) {
+    let config = chart.config();
+    super::frame::paint_background(
+        ui.painter(),
+        rect,
+        rect,
+        config.background_style,
+        config.background_color,
+    );
+}
+
 // These markers must also work in hosts without emoji fonts.
 fn paint_link_marker(ui: &Ui, rect: Rect, marker: &str) {
     let Some(index) = LINK_MARKERS.iter().position(|(name, _)| *name == marker) else {
@@ -1688,6 +1701,7 @@ impl ChartLayout {
                             .horizontal(|ui| self.link_controls(ui, index, false))
                             .inner;
                         egui::CentralPanel::default().show(ui, |ui| {
+                            slot_background(ui, ui.max_rect(), chart);
                             let response = render(ui, index, chart);
                             if focus {
                                 response.request_focus();
@@ -1719,8 +1733,7 @@ impl ChartLayout {
                 continue;
             }
             let rect = rects[index];
-            ui.painter()
-                .rect_filled(rect, 0.0, charts[index].config().background_color);
+            slot_background(ui, rect, charts[index]);
             ui.scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(rect)
@@ -2233,6 +2246,55 @@ mod tests {
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Min1);
         chart
+    }
+
+    /// A chart that leaves its background to the layout gets its gradient over its slot.
+    #[test]
+    fn layout_paints_a_gradient_background() {
+        use crate::config::BackgroundStyle;
+        use egui::Color32;
+        let (top, bottom) = (Color32::from_rgb(200, 0, 0), Color32::from_rgb(0, 0, 200));
+        let mut chart = chart(60);
+        chart.config_mut().skip_background = true;
+        chart.config_mut().background_style = BackgroundStyle::VerticalGradient {
+            top_color: top,
+            bottom_color: bottom,
+        };
+        let size = vec2(800.0, 600.0);
+        let output = egui::Context::default().run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| {
+                ChartLayout::default().show(ui, &mut [&mut chart]);
+            },
+        );
+        let slot = ChartLayout::default().rects(Rect::from_min_size(Pos2::ZERO, size), 1)[0];
+        let meshes: Vec<Vec<_>> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => Some(
+                    mesh.vertices
+                        .iter()
+                        .map(|vertex| (vertex.pos, vertex.color))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        // The slot's fill is painted before the chart, so it is the first mesh.
+        assert_eq!(
+            meshes.first(),
+            Some(&vec![
+                (slot.left_top(), top),
+                (slot.right_top(), top),
+                (slot.right_bottom(), bottom),
+                (slot.left_bottom(), bottom),
+            ])
+        );
     }
 
     /// Split size and link membership steps follow the layout value that shows their chart: a host

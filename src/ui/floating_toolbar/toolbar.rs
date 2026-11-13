@@ -783,6 +783,8 @@ mod tests {
         ctx.global_style_mut(|style| style.animation_time = 0.0);
         let mut chart = Chart::new(crate::model::BarData::new());
         let mut label = Drawing::new(7, DrawingToolType::PriceLabel);
+        // A border kept in the label's colour, as an older save holds it.
+        label.border_color = Some(label.color);
         label.completed = true;
         label.points = vec![Pos2::new(100.0, 100.0)];
         chart.drawings_mut().drawings = vec![label];

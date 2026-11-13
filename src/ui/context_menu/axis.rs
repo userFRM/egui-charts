@@ -51,10 +51,11 @@ impl AxisMenus {
         if egui::Popup::is_any_open(ctx) {
             return false;
         }
+        // A touch held in place asks for the menu as a secondary click does. egui reports the
+        // hold to the widget a tap would click, which every axis that takes clicks is part of.
+        let held = ctx.interaction_snapshot(|widgets| widgets.long_touched.is_some());
         let Some(pos) = ctx.input(|input| {
-            input
-                .pointer
-                .secondary_clicked()
+            (held || input.pointer.secondary_clicked())
                 .then(|| input.pointer.interact_pos())
                 .flatten()
         }) else {
@@ -214,6 +215,22 @@ impl AxisMenus {
                 row("Scale settings…", Action::Settings, false),
                 MenuEntry::Separator,
             ]);
+            // The fit and symbol label rows switch settings of the price chart, so only the axes
+            // of the main series' pane offer them.
+            if chart.series_pane(SeriesId::MAIN).unwrap_or(PaneId::MAIN) != pane {
+                entries.retain(|entry| match entry {
+                    MenuEntry::Item(item) => !matches!(
+                        item.action,
+                        Action::PriceOnly
+                            | Action::LastValue
+                            | Action::PreviousClose
+                            | Action::Countdown
+                            | Action::BidAsk
+                            | Action::HighLow
+                    ),
+                    MenuEntry::Submenu { .. } | MenuEntry::Separator => true,
+                });
+            }
             entries.extend(Self::layout_rows(chart, pane));
             entries
         }

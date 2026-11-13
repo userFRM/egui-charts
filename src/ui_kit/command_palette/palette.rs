@@ -1,7 +1,7 @@
 //! Command palette widget
 
 use super::command::Command;
-use super::fuzzy::{FuzzyMatch, fuzzy_match};
+use super::fuzzy::{FuzzyMatch, rank};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
@@ -19,6 +19,8 @@ pub struct CommandPalette {
     selected_index: usize,
     /// Cached filtered results (command index, match)
     filtered: Vec<(usize, FuzzyMatch)>,
+    /// The query `filtered` was built for; a different query puts the highlight back on row 0.
+    filtered_query: String,
     focus_search: bool,
     context: Option<Context>,
 }
@@ -31,6 +33,7 @@ impl CommandPalette {
             search_query: String::new(),
             selected_index: 0,
             filtered: Vec::new(),
+            filtered_query: String::new(),
             focus_search: true,
             context: None,
         }
@@ -56,6 +59,7 @@ impl CommandPalette {
         self.search_query.clear();
         self.selected_index = 0;
         self.filtered.clear();
+        self.filtered_query.clear();
         self.focus_search = true;
     }
 
@@ -66,17 +70,27 @@ impl CommandPalette {
         // An empty query lists nothing, so no command is highlighted before the user types.
         if !self.search_query.is_empty() {
             for (idx, cmd) in self.commands.iter().enumerate() {
-                let mut searchable = cmd.searchable_text();
+                // The row paints the translated text, but the English text matches too.
+                let mut labels = vec![cmd.label.clone()];
+                let mut other: Vec<String> = cmd
+                    .description
+                    .iter()
+                    .chain(cmd.category.iter())
+                    .chain(cmd.keywords.iter())
+                    .cloned()
+                    .collect();
                 if let Some(ctx) = &self.context {
-                    for text in std::iter::once(&cmd.label)
-                        .chain(cmd.description.iter())
-                        .chain(cmd.category.iter())
-                    {
-                        searchable.push(' ');
-                        searchable.push_str(&l10n::text(ctx, text));
+                    labels.insert(0, l10n::text(ctx, &cmd.label));
+                    for text in cmd.description.iter().chain(cmd.category.iter()) {
+                        other.push(l10n::text(ctx, text));
                     }
                 }
-                if let Some(m) = fuzzy_match(&self.search_query, &searchable) {
+                let other = other.join(" ");
+                let best = labels
+                    .iter()
+                    .filter_map(|label| rank(&self.search_query, label, &other))
+                    .reduce(|a, b| if b.score > a.score { b } else { a });
+                if let Some(m) = best {
                     self.filtered.push((idx, m));
                 }
             }
@@ -85,9 +99,10 @@ impl CommandPalette {
             self.filtered.sort_by_key(|m| std::cmp::Reverse(m.1.score));
         }
 
-        // Reset selection if out of bounds
-        if self.selected_index >= self.filtered.len() {
+        // Arrow keys move within the list they were pressed in; a new query starts at the best match.
+        if self.filtered_query != self.search_query || self.selected_index >= self.filtered.len() {
             self.selected_index = 0;
+            self.filtered_query.clone_from(&self.search_query);
         }
     }
 
@@ -142,12 +157,15 @@ impl CommandPalette {
             return None;
         }
 
+        let before = self.selected_index;
         if move_up && self.selected_index > 0 {
             self.selected_index -= 1;
         }
         if move_down && self.selected_index + 1 < self.filtered.len() {
             self.selected_index += 1;
         }
+        // Only a key or a new query scrolls to the highlight, so the wheel still scrolls freely.
+        let mut reveal_selected = self.selected_index != before;
 
         if execute && !self.filtered.is_empty() {
             ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Enter));
@@ -196,6 +214,7 @@ impl CommandPalette {
                         }
                         if response.changed() {
                             self.update_filter();
+                            reveal_selected = true;
                         }
                     },
                 );
@@ -219,7 +238,12 @@ impl CommandPalette {
                         .show(ui, |ui| {
                             for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate() {
                                 let cmd = &self.commands[*cmd_idx];
-                                if command_row(ui, cmd, list_idx == self.selected_index).clicked() {
+                                let selected = list_idx == self.selected_index;
+                                let row = command_row(ui, cmd, selected);
+                                if selected && reveal_selected {
+                                    row.scroll_to_me(None);
+                                }
+                                if row.clicked() {
                                     executed_command = Some(cmd.id.clone());
                                 }
                             }
@@ -658,5 +682,103 @@ mod tests {
         frame(&ctx, &mut p, Some(Key::ArrowDown));
         p.remove_command("c");
         assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn typing_returns_the_highlight_to_the_first_result() {
+        let (ctx, mut p) = (
+            Context::default(),
+            CommandPalette::new(vec![
+                Command::new("sto", "Add Stochastic RSI"),
+                Command::new("con", "Add Connors RSI"),
+                Command::new("rsi", "Add RSI"),
+                Command::new("ao", "Add AO"),
+            ]),
+        );
+        p.search_query = "a".into();
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        p.search_query = "add rsi".into();
+        assert_eq!(
+            frame(&ctx, &mut p, Some(Key::Enter)).as_deref(),
+            Some("rsi")
+        );
+    }
+
+    #[test]
+    fn arrow_keys_keep_the_highlighted_row_in_view() {
+        let (ctx, mut p) = (
+            Context::default(),
+            CommandPalette::new(
+                (0..60)
+                    .map(|i| Command::new(format!("a{i}"), format!("Action {i}")))
+                    .collect(),
+            ),
+        );
+        p.search_query = "ction".into();
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, None);
+        let selected = ctx.global_style().visuals.selection.bg_fill;
+        // Runs one frame, a second after the last so the scroll animation completes, and counts
+        // the highlight rows painted inside the list.
+        let mut time = 0.0;
+        let mut run = |event: Option<Event>| {
+            let mut open = true;
+            time += 1.0;
+            let output = ctx.run_ui(
+                RawInput {
+                    time: Some(time),
+                    events: event.into_iter().collect(),
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    p.show(ui.ctx(), &mut open);
+                },
+            );
+            let visible = output
+                .shapes
+                .iter()
+                .filter(|clipped| {
+                    matches!(&clipped.shape, egui::Shape::Rect(r)
+                        if r.fill == selected && clipped.clip_rect.contains_rect(r.rect))
+                })
+                .count();
+            output.drop_without_applying_deltas();
+            visible
+        };
+        let key = |key| {
+            Some(Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            })
+        };
+        // Down and Up past the rows that fit, then settle.
+        let mut visible_highlights = 0;
+        for event in std::iter::repeat_n(key(Key::ArrowDown), 35)
+            .chain(std::iter::repeat_n(key(Key::ArrowUp), 3))
+            .chain([None, None])
+        {
+            visible_highlights = run(event);
+        }
+        assert_eq!(
+            visible_highlights, 1,
+            "the highlighted row is painted in view"
+        );
+        // More text (typed at the start, where the field's cursor begins) puts the highlight on the
+        // first row, which must come into view as well.
+        for event in [Some(Event::Text("a".into())), None, None] {
+            visible_highlights = run(event);
+        }
+        assert_eq!(visible_highlights, 1, "the first result is painted in view");
+        assert_eq!((p.search_query.as_str(), p.selected_index), ("action", 0));
     }
 }

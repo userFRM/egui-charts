@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const KEY: &str = "templates";
 /// The key of the document that holds the unnamed workspace between sessions.
 const WORKSPACE: &str = "workspace";
+/// The key of the document that holds the own-data choice, the profiles and the kept keys.
+const OWN_DATA: &str = "own-data";
 
 /// Progress of the unnamed workspace checkpoints.
 #[derive(Default)]
@@ -156,7 +158,8 @@ impl super::DemoApp {
     /// Stores the unnamed workspace when it changed. A saved layout owns its tab, and an unreadable
     /// document is never replaced.
     pub(super) fn checkpoint_workspace(&mut self) {
-        if self.workspace_recovery.unreadable
+        if self.own_data.is_some()
+            || self.workspace_recovery.unreadable
             || self.layout_is_saved(&self.layout_tabs[self.layout_tab].name)
         {
             return;
@@ -320,6 +323,20 @@ impl DemoStorage {
             .collect();
         names.sort();
         names
+    }
+
+    /// The own-data document, when one is stored.
+    pub(super) fn own_data(&self) -> Option<String> {
+        self.documents.lock().unwrap().get(OWN_DATA).cloned()
+    }
+
+    /// Stores the own-data document.
+    pub(super) fn save_own_data(&self, document: &str) {
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(OWN_DATA.to_owned(), document.to_owned());
+        self.changed.store(true, Ordering::Relaxed);
     }
 
     pub(super) fn save_layout_groups(
@@ -703,6 +720,86 @@ mod tests {
         assert_eq!(app.layout.sync_group(0), None);
         assert!(!app.layout.is_detached(0));
         assert!(app.layout.sync == Default::default());
+    }
+
+    /// The first-visit choice is on screen at the first start, each way of answering it is
+    /// remembered across a restart, an application without storage is not asked, and own data
+    /// that was connected is on again at the next start.
+    #[test]
+    fn the_first_visit_choice_is_asked_once() {
+        use super::super::owndata::feed::tests::{Server, pages, profile};
+        use super::super::owndata::store::Saved;
+        use super::super::tests::{ui_click, ui_frame};
+        const SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
+        /// Three whole frames of the application, and the texts of the last one.
+        fn frames(app: &mut DemoApp, ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(ctx, SIZE, vec![], |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest());
+                });
+            }
+            texts
+        }
+        fn offered(texts: &[(String, egui::Rect)]) -> bool {
+            texts.iter().any(|(text, _)| text == "Connect my own data")
+        }
+
+        for answer in ["Use synthetic data", "Connect my own data", "Escape"] {
+            let ctx = egui::Context::default();
+            let mut storage = AppStorage::default();
+            let mut app = restart(&ctx, &storage);
+            let texts = frames(&mut app, &ctx);
+            assert!(offered(&texts), "{answer}");
+            if answer == "Escape" {
+                let escape = egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                ui_frame(&ctx, SIZE, vec![escape], |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest());
+                });
+            } else {
+                let button = texts.iter().find(|(text, _)| text == answer);
+                let at = button.unwrap().1.center();
+                ui_click(&ctx, SIZE, at, |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest());
+                });
+            }
+            app.save(&mut storage);
+            let mut app = restart(&ctx, &storage);
+            assert!(!offered(&frames(&mut app, &ctx)), "{answer}");
+            assert!(app.own_data.is_none(), "{answer}");
+        }
+
+        // Without storage the answer could not be remembered, so the choice is not offered.
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        assert!(!offered(&frames(&mut app, &ctx)));
+
+        // Own data that was connected is on again at the next start, without a dialog.
+        let server = Server::start(pages(vec!["[]".to_owned()]));
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        let mut app = restart(&ctx, &storage);
+        let connected = Saved {
+            asked: true,
+            own: true,
+            current: Some("Local".to_owned()),
+            profiles: vec![profile(&server.origin)],
+            ..Saved::default()
+        };
+        connected.save(&app.storage);
+        app.save(&mut storage);
+        let mut app = restart(&ctx, &storage);
+        assert!(!offered(&frames(&mut app, &ctx)));
+        let on_chart = app.own_data.as_ref().map(|own| own.profile.name.as_str());
+        assert_eq!(on_chart, Some("Local"));
+        assert_eq!(app.chart.symbol(), "ABC");
     }
 
     #[test]

@@ -887,6 +887,8 @@ mod tests {
                 settings.grid_lines.vertical_color = Color32::BLUE;
                 settings.crosshair.color = Color32::YELLOW;
                 settings.watermark.color = Color32::RED;
+                settings.margins.top_percent = 12.5;
+                settings.margins.bottom_percent = 7.5;
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(Control::Templates, templates_visible);
                 dialog.open(settings);
@@ -1030,7 +1032,146 @@ mod tests {
                     mismatches.is_empty(),
                     "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
                 );
+                // A new chart keeps a tenth of the pane free above and below, and 2.5 bars after
+                // the last one.
+                let price = chart.state().price_scale().options().scale_margins;
+                assert_eq!(
+                    (
+                        price.top,
+                        price.bottom,
+                        chart.chart_options().time_scale.right_offset
+                    ),
+                    (0.1, 0.1, 2.5),
+                    "{preset}: margins"
+                );
             }
+        }
+    }
+
+    /// A palette swatch recolours a Canvas colour at the opacity its well shows, which no other
+    /// control of the tab sets; an invisible colour takes the swatch's opacity. Expected: the
+    /// swatch rgb(49, 27, 146) at the seeded alpha of 128, and opaque where the well showed an
+    /// invisible colour or the theme's opaque crosshair.
+    #[test]
+    fn palette_colour_keeps_the_watermark_opacity() {
+        use crate::widget::settings::{BackgroundType, GridLinesMode};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        type Row = fn(&mut ChartSettingsState) -> &mut Color32;
+        let translucent = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
+        let theme = Theme::light();
+        let rows: [(&str, Row, Color32, u8); 11] = [
+            ("watermark", |s| &mut s.watermark.color, translucent, 128),
+            (
+                "background",
+                |s| &mut s.chart_basic_styles.background_color,
+                translucent,
+                128,
+            ),
+            (
+                "gradient top",
+                |s| &mut s.chart_basic_styles.background_gradient_top,
+                translucent,
+                128,
+            ),
+            (
+                "gradient bottom",
+                |s| &mut s.chart_basic_styles.background_gradient_bottom,
+                translucent,
+                128,
+            ),
+            (
+                "horizontal grid",
+                |s| &mut s.grid_lines.horizontal_color,
+                translucent,
+                128,
+            ),
+            (
+                "vertical grid",
+                |s| &mut s.grid_lines.vertical_color,
+                translucent,
+                128,
+            ),
+            ("crosshair", |s| &mut s.crosshair.color, translucent, 128),
+            (
+                "scale text",
+                |s| &mut s.scales_appearance.text_color,
+                translucent,
+                128,
+            ),
+            (
+                "scale lines",
+                |s| &mut s.scales_appearance.lines_color,
+                translucent,
+                128,
+            ),
+            (
+                "invisible scale lines",
+                |s| &mut s.scales_appearance.lines_color,
+                Color32::TRANSPARENT,
+                255,
+            ),
+            // The well shows the theme's opaque crosshair, not the translucent placeholder.
+            (
+                "crosshair following the theme",
+                |s| &mut s.crosshair.color,
+                Color32::PLACEHOLDER,
+                255,
+            ),
+        ];
+        for (name, row, seeded, alpha) in rows {
+            let shown = if seeded == Color32::PLACEHOLDER {
+                theme.chart.crosshair_line
+            } else {
+                seeded
+            };
+            let mut settings = ChartSettingsState::default();
+            settings.grid_lines.mode = GridLinesMode::Both;
+            if name.starts_with("gradient") {
+                settings.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
+            }
+            *row(&mut settings) = seeded;
+            let mut dialog = SettingsDialog::new();
+            dialog.set_control_visible(Control::Templates, false);
+            dialog.open(settings);
+            dialog.active_tab = SettingsTab::Canvas;
+            let (shown_theme, setup_theme) = (theme.clone(), theme.clone());
+            let mut harness = Harness::builder()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &setup_theme);
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                        if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &shown_theme)
+                        {
+                            *accepted = Some(settings);
+                        }
+                    },
+                    (dialog, None),
+                );
+            harness.run();
+            let [r, g, b, _] = shown.to_srgba_unmultiplied();
+            let well = format!("#{r:02X}{g:02X}{b:02X}");
+            harness
+                .get_by_role_and_label(Role::ColorWell, &well)
+                .click();
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#311B92")
+                .click();
+            harness.run();
+            harness.get_by_label("Ok").click();
+            harness.run();
+            let (_, accepted) = harness.state_mut();
+            let accepted: &mut ChartSettingsState = accepted.as_mut().expect("accepted");
+            assert_eq!(
+                *row(accepted),
+                Color32::from_rgba_unmultiplied(49, 27, 146, alpha),
+                "{name}"
+            );
         }
     }
 
