@@ -7,7 +7,7 @@ use crate::model::KagiStyle;
 use crate::model::kagi::{KagiLine, KagiThickness};
 use crate::model::line_break::LineBreakLine;
 use crate::model::point_figure::PnfColumn;
-use crate::model::{Bar, ColumnDirection, RenkoBrick};
+use crate::model::{ColumnDirection, RenkoBrick};
 use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
@@ -40,7 +40,7 @@ pub(super) fn render_renko(
                 Stroke::new(1.0, color),
             );
         }
-        let rect = calc_brick_rect(x, &bar, &coords, bar_width);
+        let rect = calc_brick_rect(x, bar.open, bar.close, &coords, bar_width);
         draw_brick(painter, rect, color, 1.0);
     }
 }
@@ -153,11 +153,18 @@ pub(super) fn render_point_and_figure(
 
 // === Helper Functions ===
 
-pub(super) fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceMap, bar_width: f32) -> Rect {
-    let y_open = coords.price_to_y(bar.open);
-    let y_close = coords.price_to_y(bar.close);
-    let top = y_open.min(y_close);
-    let bottom = y_open.max(y_close);
+/// The rectangle of an element between two of its prices, at least 2 points tall and 3 wide.
+pub(super) fn calc_brick_rect(
+    x: f32,
+    from: f64,
+    to: f64,
+    coords: &PriceMap,
+    bar_width: f32,
+) -> Rect {
+    let y_from = coords.price_to_y(from);
+    let y_to = coords.price_to_y(to);
+    let top = y_from.min(y_to);
+    let bottom = y_from.max(y_to);
     let height = (bottom - top).max(2.0);
     let width = bar_width.max(3.0);
 
