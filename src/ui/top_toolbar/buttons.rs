@@ -104,6 +104,8 @@ pub struct IconTextButton<'a> {
     pub label: &'static str,
     /// Display and layout options for this component.
     pub config: TopToolbarConfig,
+    /// `Some` makes the button a toggle that is drawn filled while true.
+    selected: Option<bool>,
 }
 
 impl<'a> IconTextButton<'a> {
@@ -113,7 +115,15 @@ impl<'a> IconTextButton<'a> {
             icon,
             label,
             config: config.clone(),
+            selected: None,
         }
+    }
+
+    /// Show the button as a toggle, drawn filled while `selected`.
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
     }
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
@@ -139,10 +149,20 @@ impl<'a> IconTextButton<'a> {
 
         // All paint operations wrapped with visibility check
         if ui.is_rect_visible(rect) {
+            // Hover/pressed state
+            let is_hovered = response.hovered();
+            let is_active = response.is_pointer_button_down_on();
+            let selected = self.selected == Some(true);
+
             // Background
-            let bg_color = if response.is_pointer_button_down_on() {
+            let theme = ui.active_theme();
+            let bg_color = if selected {
+                // The inverse of the toolbar's ink, lightening as the pointer presses it.
+                let step = f32::from(u8::from(is_hovered) + u8::from(is_active));
+                theme.ui.text.lerp_to_gamma(theme.ui.panel_bg, 0.1 * step)
+            } else if is_active {
                 ui.visuals().widgets.active.bg_fill
-            } else if response.hovered() {
+            } else if is_hovered {
                 ui.visuals().widgets.hovered.bg_fill
             } else {
                 Color32::TRANSPARENT
@@ -151,28 +171,19 @@ impl<'a> IconTextButton<'a> {
             ui.painter()
                 .rect_filled(rect, self.config.rounding, bg_color);
 
-            // Hover/pressed state
-            let is_hovered = response.hovered();
-            let is_active = response.is_pointer_button_down_on();
-
             // Icon - using ui.put() for precise positioning
             let icon_pos = Pos2::new(rect.min.x + padding, rect.center().y - icon_size / 2.0);
             let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
-            let icon_color = if is_active || is_hovered {
+            let color = if selected {
+                theme.ui.panel_bg
+            } else if is_active || is_hovered {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().text_color()
             };
             self.icon
-                .as_image_tinted(Vec2::splat(icon_size), icon_color)
+                .as_image_tinted(Vec2::splat(icon_size), color)
                 .paint_at(ui, icon_rect);
-
-            // Text color
-            let color = if is_hovered || is_active {
-                ui.visuals().widgets.hovered.fg_stroke.color
-            } else {
-                ui.visuals().text_color()
-            };
 
             // Text
             ui.painter().text(
@@ -185,8 +196,12 @@ impl<'a> IconTextButton<'a> {
         }
 
         let translated_label = l10n::text(ui.ctx(), self.label);
-        response
-            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
+        response.widget_info(|| match self.selected {
+            Some(selected) => {
+                WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, &translated_label)
+            }
+            None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label),
+        });
         toolbar_tooltip(
             response,
             if self.label == "Alert" {

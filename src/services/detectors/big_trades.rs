@@ -42,7 +42,7 @@ const CALIBRATE_EVERY: u64 = 100;
 /// in a bar the service did not see open, the first one after tracking starts or the interval
 /// changes, or under a trade-based interval, stay. A trade that first becomes large after its
 /// first fill's bar has closed also keeps its zone: that bar is no longer held for classification.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct BigTradeRule {
     /// Combined size from which a trade is large.

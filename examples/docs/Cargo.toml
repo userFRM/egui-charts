@@ -1,0 +1,30 @@
+[package]
+name = "egui-charts-docs"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "egui-charts-docs"
+path = "main.rs"
+
+[dependencies]
+egui-charts = { path = "../..", default-features = false, features = ["widget", "studies"] }
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }
+chrono = "0.4.43"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "0.37.0", default-features = false, features = ["x11", "wayland"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
+web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1

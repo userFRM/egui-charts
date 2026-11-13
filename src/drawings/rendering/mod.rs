@@ -40,7 +40,8 @@ use std::rc::Rc;
 /// the regression trend, the position and forecast results and the bars
 /// pattern are computed from these bars.
 pub struct ChartView<'a> {
-    /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
+    /// Instrument metadata supplied by the host or feed, for tick and pip measurements. `None` in
+    /// a pane without a visible price series, whose values are not prices.
     pub instrument: Option<&'a crate::model::Instrument>,
     /// The host's raw-price formatter for the series the drawings belong to, from
     /// [`Chart::set_series_formatter`](crate::Chart::set_series_formatter) or else
@@ -159,7 +160,7 @@ impl Drawing {
         match self.tool_type {
             // Simple Lines (9 tools)
             DrawingToolType::TrendLine => self.render_trend_line(painter, rect, color, stroke),
-            DrawingToolType::Ray | DrawingToolType::ExtendedLine => {
+            DrawingToolType::Ray | DrawingToolType::ExtendedLine | DrawingToolType::InfoLine => {
                 self.render_trend_line(painter, rect, color, stroke)
             }
             DrawingToolType::HorizontalLine => self.render_horizontal_line(painter, rect, stroke),
@@ -167,9 +168,8 @@ impl Drawing {
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, stroke),
             DrawingToolType::TrendAngle => {
-                return self.render_trend_angle(painter, rect, color, stroke);
+                return self.render_trend_angle(painter, rect, color, stroke, view, selected);
             }
-            DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
             DrawingToolType::Rect => self.render_rect(painter, rect, color, stroke),
@@ -183,7 +183,7 @@ impl Drawing {
 
             // Fibonacci (10 tools)
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
-                self.render_fibonacci(painter, rect, view)
+                self.render_fibonacci(painter, rect, view, selected)
             }
             DrawingToolType::FibonacciSpeedResistanceArcs => self.render_fibonacci_arc(painter),
             DrawingToolType::FibonacciTimeZones => self.render_fibonacci_time_zones(painter, rect),
@@ -261,7 +261,7 @@ impl Drawing {
 
             // Annotations (7 tools)
             DrawingToolType::TextLabel | DrawingToolType::AnchoredText => {
-                self.render_text_label(painter)
+                self.render_text_label(painter, view)
             }
             DrawingToolType::Note => self.render_note(painter),
             DrawingToolType::AnchoredNote => self.render_anchored_note(painter, selected),
@@ -300,7 +300,13 @@ impl Drawing {
             | DrawingToolType::ArrowCursor
             | DrawingToolType::Eraser => {}
         }
+        if selected {
+            self.render_text_hint(painter);
+        }
         self.finish_style(painter, start, rect);
+        if self.tool_type.supports_line_measurements() {
+            self.render_line_measurements(painter, view, selected);
+        }
         if self.tool_type == DrawingToolType::Rect {
             self.render_rect_middle_line(painter, rect);
         }
@@ -371,7 +377,11 @@ impl Drawing {
                 | T::Sticker
                 | T::Image
         );
-        if !bounded || self.extend_left || self.extend_right {
+        if !bounded
+            || self.extend_left
+            || self.extend_right
+            || self.volume_profile.is_some_and(|c| c.extend_right)
+        {
             return None;
         }
         if matches!(
@@ -381,12 +391,20 @@ impl Drawing {
             let &[start, end, ..] = self.points.as_slice() else {
                 return None;
             };
-            let ratio = self
-                .fibonacci_config()
+            let config = self.fibonacci_config();
+            let ratio = config
                 .visible_levels()
                 .map(|l| l.value)
                 .filter(|v| v.is_finite() && *v >= 0.0)
                 .fold(0.0_f32, f32::max);
+            // Level labels sit just outside their circle, as wide as the font allows.
+            let label = config
+                .visible_levels()
+                .map(|l| config.label_text(l, None).chars().count())
+                .max()
+                .unwrap_or(0) as f32
+                * 1.5
+                * crate::styles::typography::font_size(config.label_size);
             let (center, size) = if self.tool_type == T::FibonacciCircles {
                 (start.lerp(end, 0.5), (end - start).abs() * ratio)
             } else {
@@ -395,7 +413,7 @@ impl Drawing {
             return size.is_finite().then(|| {
                 Rect::from_center_size(center, size)
                     .union(Rect::from_two_pos(start, end))
-                    .expand(PAINT_MARGIN)
+                    .expand(PAINT_MARGIN + label)
             });
         }
         if self.tool_type == T::GannFixed {
@@ -574,7 +592,6 @@ mod tests {
             T::PriceRange,
             T::DateRange,
             T::DateAndPriceRange,
-            T::InfoLine,
         ] {
             for (first, second) in [
                 ((300., 100.), (100., 300.)),
@@ -607,18 +624,6 @@ mod tests {
                         && s.format.font_id.size == crate::styles::typography::SM_MD))),
                     "{tool:?}: card text"
                 );
-                if tool == T::InfoLine {
-                    assert!(card.min.x >= bounds.center().x && card.min.y >= bounds.center().y);
-                    assert_eq!(
-                        shapes
-                            .iter()
-                            .filter(|s| matches!(s, Shape::LineSegment { .. }))
-                            .count(),
-                        1,
-                        "info line has no connector"
-                    );
-                    continue;
-                }
                 if second.1 <= first.1 {
                     assert!(card.max.y < bounds.min.y, "{tool:?}: card above");
                 } else {
@@ -812,6 +817,17 @@ mod tests {
                         size: Some([1500.0, 800.0]),
                         ..Default::default()
                     });
+                }
+                // The largest label size, whose text reaches far past a circle, on closed arcs.
+                if matches!(
+                    tool,
+                    DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
+                ) && i == 2
+                {
+                    let config = drawing.fib_config.as_mut().unwrap();
+                    config.label_size = 256.0;
+                    config.close_arcs = true;
                 }
                 let Some(bounds) = drawing.paint_bounds() else {
                     continue;
@@ -1408,6 +1424,21 @@ mod tests {
                 vec![(163.4, 230.), (336.6, 170.)],
                 vec![(163.4, 170.), (250., 240.)],
             ),
+            // Samples round the same semicircle, closed by the chord between the stroke's ends.
+            (
+                T::Brush,
+                (0..=12)
+                    .map(|i| {
+                        let (sin, cos) = (i as f32 * std::f32::consts::PI / 12.).sin_cos();
+                        (200. - 100. * cos, 200. - 100. * sin)
+                    })
+                    .collect(),
+                false,
+                std::f32::consts::PI * 5000.,
+                80.,
+                vec![(200., 150.)],
+                vec![(200., 250.)],
+            ),
         ] {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = points.into_iter().map(Pos2::from).collect();
@@ -1638,6 +1669,25 @@ mod tests {
             ["Fill"]
         );
         assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
+        // The popup is a card in the theme's colours whatever the pin's colour, tied to the pin's
+        // head by a thin line in the pin's colour.
+        let theme = crate::theme::Theme::dark();
+        let [card] = &selected.rects[..] else {
+            panic!("one popup");
+        };
+        assert_eq!(card.fill, theme.ui.panel_bg);
+        assert_eq!(card.stroke, egui::Stroke::new(1.0, theme.ui.border));
+        assert_eq!(
+            selected.texts[0].galley.job.sections[0].format.color,
+            theme.ui.text
+        );
+        assert_eq!(
+            selected.segments,
+            [(
+                [pos(200.0, card.rect.max.y), pos(200.0, 278.0)],
+                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+            )]
+        );
 
         let comment = draw(DrawingToolType::Comment, &[(100., 300.)], "Hi", false);
         let [bubble] = &comment.rects[..] else {
@@ -1682,7 +1732,7 @@ mod tests {
             panic!("box and pointer are one shape");
         };
         assert!(outline.closed && outline.points.contains(&pos(100.0, 300.0)));
-        assert_eq!(outline.stroke.width, 1.0);
+        assert_eq!(outline.stroke.width, 2.0);
         let inside = draw(
             DrawingToolType::Callout,
             &[(205., 105.), (200., 100.)],
@@ -1691,6 +1741,57 @@ mod tests {
         );
         assert!(inside.paths.is_empty());
         assert_eq!(inside.rects.len(), 1);
+        assert_eq!(inside.rects[0].stroke.width, 2.0);
+
+        // Wrapped text breaks into lines no wider than the wrap width.
+        for tool in [
+            DrawingToolType::Callout,
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+        ] {
+            let mut wrapped = Drawing::new(7, tool);
+            wrapped.points = vec![pos(100.0, 300.0), pos(200.0, 100.0)];
+            wrapped.text = Some("Wrapped annotation text".into());
+            wrapped.text_wrap = true;
+            wrapped.text_wrap_width = 60.0;
+            let mut painted = Painted::default();
+            collect(&paint(&wrapped), &mut painted);
+            let [text] = &painted.texts[..] else {
+                panic!("one text");
+            };
+            assert!(
+                text.galley.rows.len() > 1 && text.galley.size().x <= 60.0,
+                "{tool:?}"
+            );
+        }
+
+        // Text sized at 5 points a bar is twice as large at the 10 points a bar `paint` maps
+        // with: its 14 point font, 60 point wrap width and box padding all double.
+        let mut zoomed = Drawing::new(7, DrawingToolType::TextLabel);
+        zoomed.chart_points = vec![crate::drawings::ChartPoint::new(10.0, 200.0)];
+        zoomed.points = vec![pos(100.0, 300.0)];
+        zoomed.text = Some("Wrapped annotation text".into());
+        zoomed.background = true;
+        zoomed.text_wrap = true;
+        zoomed.text_wrap_width = 60.0;
+        let boxes = |drawing: &Drawing| {
+            let mut painted = Painted::default();
+            collect(&paint(drawing), &mut painted);
+            let ([card], [text]) = (&painted.rects[..], &painted.texts[..]) else {
+                panic!("one box around one text");
+            };
+            (
+                text.galley.job.sections[0].format.font_id.size,
+                text.galley.job.wrap.max_width,
+                text.pos - card.rect.min,
+            )
+        };
+        let (font, wrap, padding) = boxes(&zoomed);
+        assert_eq!((font, wrap), (14.0, 60.0));
+        zoomed.text_zoom_spacing = Some(5.0);
+        assert_eq!(boxes(&zoomed), (font, wrap, padding));
+        zoomed.text_follows_zoom = true;
+        assert_eq!(boxes(&zoomed), (28.0, 120.0, padding * 2.0));
 
         let label = draw(
             DrawingToolType::PriceLabel,
@@ -1785,5 +1886,57 @@ mod tests {
                 .all(|s| s.clip_rect == pane.intersect(parent)),
             "drawing or handle escaped its pane"
         );
+    }
+
+    /// An annotation that offers line controls draws differently at 2 and 7 px; annotations
+    /// with fixed borders or guides must hide those controls.
+    #[test]
+    fn offered_line_width_changes_the_drawing() {
+        let mut inert = Vec::new();
+        for tool in [
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::Note,
+            DrawingToolType::PriceNote,
+            DrawingToolType::AnchoredNote,
+            DrawingToolType::Table,
+            DrawingToolType::Callout,
+            DrawingToolType::Comment,
+            DrawingToolType::PriceLabel,
+            DrawingToolType::Signpost,
+            DrawingToolType::FlagNote,
+        ] {
+            if !tool.draws_line() {
+                continue;
+            }
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = [
+                (100., 100.),
+                (300., 300.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+                (450., 180.),
+                (500., 250.),
+            ]
+            .map(|(x, y)| Pos2::new(x, y))
+            .to_vec();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            if drawing.text.is_none() {
+                drawing.text = Some("Label".into());
+            }
+            let mut thin = drawing.clone();
+            thin.stroke_width = 2.0;
+            let mut wide = drawing;
+            wide.stroke_width = 7.0;
+            if format!("{:?}", paint(&thin)) == format!("{:?}", paint(&wide)) {
+                inert.push(tool);
+            }
+        }
+        assert_eq!(inert, Vec::<DrawingToolType>::new());
     }
 }

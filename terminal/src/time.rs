@@ -204,7 +204,7 @@ impl Terminal {
         let visible = visible_bars_for_range(range, chart.bars(SeriesId::MAIN));
         let width = chart.get_rendered_price_rect().width();
         // Include the latest slot in the scale's exclusive data range.
-        let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+        let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
         chart.disable_tracking_mode();
         chart.apply_synced_time_scale(spacing, 0.5);
         if self.layout.sync.sync_date_range
@@ -550,8 +550,9 @@ mod tests {
         terminal
     }
 
-    /// Custom and hidden intervals and starred chart types survive storage and a restart;
-    /// settings saved before these fields existed restore empty lists.
+    /// Guards that custom, hidden and starred intervals and starred chart types are saved with
+    /// the settings and restored on the next start, and that a save from before the interval and
+    /// chart type lists existed still restores its starred intervals.
     #[test]
     fn interval_and_chart_type_preferences_survive_a_restart() {
         let storage = Arc::new(MemoryStorage::default());
@@ -592,11 +593,15 @@ mod tests {
             restored.top_toolbar.chart_type_selector.preferences(),
             chart_types
         );
-        let mut older = UserSettings::from_json(r#"{"version":1}"#).unwrap();
+        let mut older = UserSettings::from_json(r#"{"version":1,"interval_favorites":["Min5"]}"#)
+            .unwrap();
         restored.time_settings(&mut older, Direction::Load);
         assert_eq!(
             restored.top_toolbar.timeframe_selector.preferences(),
-            TimeframePreferences::default()
+            TimeframePreferences {
+                favorites: vec![Timeframe::Min5],
+                ..TimeframePreferences::default()
+            }
         );
         assert_eq!(
             restored.top_toolbar.chart_type_selector.preferences(),
@@ -795,7 +800,7 @@ mod tests {
                     "{range:?} {shown_start} {shown_end} {start} {end}"
                 );
                 let expected =
-                    chart.get_rendered_price_rect().width() / ((end - start) as f32 + 0.5);
+                    (chart.get_rendered_price_rect().width() - 1.0) / ((end - start) as f32 + 0.5);
                 assert!((chart.get_time_scale_state().0 - expected).abs() < 0.001);
             }
             terminal.charts.push(

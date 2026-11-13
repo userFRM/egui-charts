@@ -10,9 +10,13 @@ use super::{
     types::{IndicatorCategory, IndicatorTab},
 };
 use crate::data::inbox::Inbox;
-use crate::data::{Datafeed, FeedError, MetricSeries};
+use crate::data::{
+    Datafeed, FeedCapabilities, FeedError, MetricSeries, OptionChain, OptionChainQuery,
+    OptionExposureHandle, OptionExposureKind, OptionExposureQuery,
+};
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::model::{FeedService, Instrument};
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
@@ -35,12 +39,18 @@ use std::sync::Arc;
 /// Width of the category sidebar.
 const SIDEBAR_WIDTH: f32 = 200.0;
 
+/// Whether `theme` is the stock light preset, the only one with chooser-specific inks.
+fn is_default_light(theme: &Theme) -> bool {
+    !theme.dark && theme.ui == Theme::light().ui
+}
+
 /// Indicator Dialog
 ///
-/// Modal dialog for searching and adding indicators. It lists every study its
-/// [`IndicatorFactory`] registers; a click or Enter on a row adds that study with its
-/// default inputs and leaves the dialog open for the next one. Edit the inputs of an added
-/// study with [`IndicatorSettingsDialog`](super::IndicatorSettingsDialog).
+/// Modal dialog for searching and adding indicators. It lists studies from its
+/// [`IndicatorFactory`], filtered by the supplied source and feed capabilities; a click or
+/// Enter on a row adds that study with its default inputs and leaves the dialog open for the
+/// next one. Edit the inputs of an added study with
+/// [`IndicatorSettingsDialog`](super::IndicatorSettingsDialog).
 pub struct IndicatorDialog {
     /// Is dialog open
     pub is_open: bool,
@@ -58,14 +68,19 @@ pub struct IndicatorDialog {
     pub favorites: HashSet<String>,
     /// Creates the studies the dialog lists
     factory: IndicatorFactory,
+    feed_capabilities: Option<(Option<FeedCapabilities>, Option<Instrument>)>,
+    unavailable_order_flow: HashSet<String>,
     metric_source: Option<(Arc<dyn Datafeed>, String)>,
     metric_catalog: Option<Arc<Inbox>>,
     metric_names: Vec<String>,
     metric_error: Option<FeedError>,
+    option_catalog: Option<Arc<Inbox>>,
+    option_profile_registered: bool,
+    option_error: Option<FeedError>,
     source: Option<StudySource>,
     source_error: Option<StudyError>,
     full: bool,
-    /// Available indicators, one per factory name
+    /// Catalogue entries, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
     config: IndicatorDialogConfig,
@@ -78,6 +93,58 @@ impl Default for IndicatorDialog {
 }
 
 impl IndicatorDialog {
+    /// Restrict studies in the factory's Order flow category to services explicitly declared
+    /// for the resolved instrument. Pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities)
+    /// and [`Chart::instrument`](crate::widget::Chart::instrument) when they change. Missing
+    /// metadata declares no services. The options profile is offered on Profiles only when the
+    /// instrument declares the option-chain service. Other categories and saved favorites are
+    /// unchanged.
+    /// Until the first call every study is offered. Requirements are cached between updates.
+    pub fn set_feed_capabilities(
+        &mut self,
+        capabilities: Option<&FeedCapabilities>,
+        instrument: Option<&Instrument>,
+    ) {
+        if self
+            .feed_capabilities
+            .as_ref()
+            .is_some_and(|(previous, symbol)| {
+                previous.as_ref() == capabilities && symbol.as_ref() == instrument
+            })
+        {
+            return;
+        }
+        self.feed_capabilities = Some((capabilities.cloned(), instrument.cloned()));
+        self.refresh_order_flow_availability();
+        self.clear_options();
+    }
+
+    fn refresh_order_flow_availability(&mut self) {
+        self.unavailable_order_flow.clear();
+        let Some((capabilities, instrument)) = &self.feed_capabilities else {
+            return;
+        };
+        for ind in &self.indicators {
+            if ind.category != IndicatorFactory::ORDER_FLOW {
+                continue;
+            }
+            let available = self.factory.create(&ind.id).is_some_and(|study| {
+                study.order_flow_inputs().iter().all(|input| {
+                    input.services().iter().all(|service| {
+                        capabilities.as_ref().zip(instrument.as_ref()).is_some_and(
+                            |(capabilities, instrument)| {
+                                capabilities.declares(*service, instrument)
+                            },
+                        )
+                    })
+                })
+            });
+            if !available {
+                self.unavailable_order_flow.insert(ind.id.clone());
+            }
+        }
+    }
+
     /// Settings to save in the host's user settings document. The dialog owns no storage.
     pub fn preferences(&self) -> IndicatorPreferences {
         IndicatorPreferences {
@@ -97,7 +164,7 @@ impl IndicatorDialog {
             is_open: false,
             search: FilterWidget::new()
                 .placeholder("Search indicators")
-                .icon_size(DESIGN_TOKENS.sizing.icon_md),
+                .icon_size(DESIGN_TOKENS.sizing.icon_lg),
             focus_search: false,
             focus_first_row: false,
             active_tab: IndicatorTab::Indicators,
@@ -105,10 +172,15 @@ impl IndicatorDialog {
             favorites: HashSet::new(),
             indicators: IndicatorInfo::from_factory(&factory),
             factory,
+            feed_capabilities: None,
+            unavailable_order_flow: HashSet::new(),
             metric_source: None,
             metric_catalog: None,
             metric_names: Vec::new(),
             metric_error: None,
+            option_catalog: None,
+            option_profile_registered: false,
+            option_error: None,
             source: None,
             source_error: None,
             full: false,
@@ -119,12 +191,16 @@ impl IndicatorDialog {
     /// List and create the studies of `factory`, such as the built-ins and the host's own
     /// added with [`IndicatorFactory::register`]
     pub fn with_factory(mut self, factory: IndicatorFactory) -> Self {
+        self.option_catalog = None;
+        self.option_profile_registered = false;
         self.indicators = IndicatorInfo::from_factory(&factory);
         self.factory = factory;
+        self.refresh_order_flow_availability();
         self
     }
 
-    /// List the metrics a feed offers for this instrument alongside the technical studies.
+    /// List the metrics and, when declared by `set_feed_capabilities`, the option-chain
+    /// profile a feed offers for this instrument alongside the technical studies.
     /// Replacing the feed or symbol discards pending replies from the previous source.
     pub fn set_metric_source(&mut self, feed: Option<Arc<dyn Datafeed>>, symbol: &str) {
         if match (&self.metric_source, &feed) {
@@ -134,6 +210,7 @@ impl IndicatorDialog {
         } {
             return;
         }
+        self.clear_options();
         self.metric_source = feed.map(|feed| (feed, symbol.to_owned()));
         self.metric_catalog = None;
         self.metric_error = None;
@@ -141,6 +218,101 @@ impl IndicatorDialog {
             self.factory.unregister(&name);
         }
         self.indicators = IndicatorInfo::from_factory(&self.factory);
+        self.refresh_order_flow_availability();
+    }
+
+    fn clear_options(&mut self) {
+        self.option_catalog = None;
+        self.option_error = None;
+        if std::mem::take(&mut self.option_profile_registered) {
+            self.factory.unregister("Options Volume Profile");
+            self.indicators = IndicatorInfo::from_factory(&self.factory);
+        }
+    }
+
+    fn poll_options(&mut self, ctx: &egui::Context) {
+        let Some((feed, symbol)) = &self.metric_source else {
+            return;
+        };
+        let Some((Some(capabilities), Some(instrument))) = &self.feed_capabilities else {
+            return;
+        };
+        if symbol.is_empty()
+            || instrument.symbol != *symbol
+            || !capabilities.declares(FeedService::OptionChain, instrument)
+        {
+            return;
+        }
+        if self.option_catalog.is_none() {
+            let inbox = Arc::new(Inbox::default());
+            let ctx = ctx.clone();
+            inbox.set_waker(move || ctx.request_repaint());
+            feed.option_expiries(symbol, inbox.reply(0));
+            self.option_catalog = Some(inbox);
+        }
+        for (_, answer) in self.option_catalog.as_ref().unwrap().drain().answers {
+            let result = answer
+                .downcast::<Result<Vec<chrono::NaiveDate>, FeedError>>()
+                .map(|result| *result)
+                .unwrap_or(Err(FeedError::Unanswered));
+            match result {
+                Ok(mut dates) => {
+                    dates.sort_unstable();
+                    dates.dedup();
+                    let Some((&first, &last)) = dates.first().zip(dates.last()) else {
+                        continue;
+                    };
+                    if self.factory.has("Options Volume Profile") {
+                        continue;
+                    }
+                    let exposure = capabilities
+                        .declares(FeedService::OptionExposure, instrument)
+                        .then(|| {
+                            let ctx = ctx.clone();
+                            OptionExposureHandle::new(
+                                &**feed,
+                                OptionExposureQuery::new(
+                                    symbol,
+                                    first..=last,
+                                    OptionExposureKind::Gamma,
+                                ),
+                                move || ctx.request_repaint(),
+                            )
+                            .expect("validated options exposure query")
+                        });
+                    let ctx = ctx.clone();
+                    let chain = OptionChain::new(
+                        &**feed,
+                        OptionChainQuery::new(symbol, first..=last),
+                        move || ctx.request_repaint(),
+                    )
+                    .expect("nonempty symbol and listed expiry range");
+                    let symbol = symbol.clone();
+                    self.factory.register_in(
+                        IndicatorFactory::PROFILES,
+                        "Options Volume Profile",
+                        move || {
+                            let mut profile = OptionsVolumeProfile::from_chain(
+                                chain.clone(),
+                                &symbol,
+                                dates.clone(),
+                            )
+                            .expect("validated options profile inputs");
+                            if let Some(exposure) = &exposure {
+                                profile = profile
+                                    .with_exposure(exposure.clone())
+                                    .expect("matching gamma subscription");
+                            }
+                            Box::new(profile)
+                        },
+                    );
+                    self.option_profile_registered = true;
+                    self.indicators = IndicatorInfo::from_factory(&self.factory);
+                }
+                Err(FeedError::NotSupported) => {}
+                Err(error) => self.option_error = Some(error),
+            }
+        }
     }
 
     fn poll_metrics(&mut self, ctx: &egui::Context) {
@@ -185,7 +357,8 @@ impl IndicatorDialog {
         }
     }
 
-    /// The studies the dialog lists, sorted by display name, including the feed's metrics.
+    /// The catalogue sorted by display name, including the feed's metrics. Entries hidden by
+    /// source or feed capability filters remain in this list.
     pub fn indicators(&self) -> &[IndicatorInfo] {
         &self.indicators
     }
@@ -276,6 +449,7 @@ impl IndicatorDialog {
         }
 
         self.poll_metrics(ctx);
+        self.poll_options(ctx);
         let config = self.config.resolved(theme);
 
         // Escape clears a search before it closes the dialog.
@@ -315,6 +489,16 @@ impl IndicatorDialog {
                 &[("error", format!("{}", error))],
             ));
         }
+        if let Some(error) = &self.option_error {
+            ui.colored_label(
+                theme.ui.error,
+                l10n::format_text(
+                    ui.ctx(),
+                    "Options: {error}",
+                    &[("error", error.to_string())],
+                ),
+            );
+        }
         if let Some(error) = &self.source_error {
             ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error.to_string()));
         }
@@ -328,6 +512,9 @@ impl IndicatorDialog {
         let search = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 40.0;
+                if is_default_light(theme) {
+                    ui.visuals_mut().weak_text_color = Some(Color32::from_gray(112));
+                }
                 ui.style_mut().override_font_id = Some(FontId::proportional(theme.text.heading));
                 self.search.show(ui).response
             })
@@ -369,6 +556,11 @@ impl IndicatorDialog {
         }
         // The sidebar runs before the list, so the list shows a category clicked this frame.
         let category = Cell::new(self.sel_category);
+        let section_color = if is_default_light(theme) {
+            Color32::from_gray(116)
+        } else {
+            theme.ui.text_muted
+        };
         SidebarLayout::new(SIDEBAR_WIDTH).show(
             ui,
             |ui| {
@@ -392,7 +584,7 @@ impl IndicatorDialog {
                             ui.label(
                                 RichText::new(l10n::text(ui.ctx(), heading))
                                     .size(theme.text.small)
-                                    .color(theme.ui.text_muted),
+                                    .color(section_color),
                             )
                         });
                     ui.add_space(theme.spacing.lg);
@@ -435,7 +627,7 @@ impl IndicatorDialog {
             || self
                 .indicators
                 .iter()
-                .any(|ind| Self::destination(ind).0 == category && self.accepts_source(ind))
+                .any(|ind| Self::destination(ind).0 == category && self.accepts(ind))
     }
 
     /// The built-in pages that have studies, above the built-in results. A search covers
@@ -447,7 +639,7 @@ impl IndicatorDialog {
             .filter(|tab| {
                 self.indicators.iter().any(|ind| {
                     Self::destination(ind) == (IndicatorCategory::BuiltIns, *tab)
-                        && self.accepts_source(ind)
+                        && self.accepts(ind)
                 })
             })
             .collect();
@@ -458,23 +650,31 @@ impl IndicatorDialog {
             && tabs.len() > 1
             && self.search.is_empty()
         {
+            let mut pill_theme = theme.clone();
+            if is_default_light(theme) {
+                pill_theme.ui.text = Color32::from_gray(26);
+                // The tab bar blends this surface with white at 60%, giving #f2f2f2.
+                pill_theme.ui.panel_bg_secondary = Color32::from_gray(233);
+            }
+            let _palette = crate::theme::ThemeScope::new(ui.ctx(), &pill_theme);
             TabBar::new(&tabs, &mut self.active_tab).pills().show(ui);
             ui.add_space(theme.spacing.xl);
         }
     }
 
-    fn accepts_source(&self, ind: &IndicatorInfo) -> bool {
-        self.source.is_none()
-            || self
-                .factory
-                .create(&ind.id)
-                .is_some_and(|study| study.source().is_some())
+    fn accepts(&self, ind: &IndicatorInfo) -> bool {
+        !self.unavailable_order_flow.contains(&ind.id)
+            && (self.source.is_none()
+                || self
+                    .factory
+                    .create(&ind.id)
+                    .is_some_and(|study| study.source().is_some()))
     }
 
     /// Whether `ind` belongs to the active category, and page for the built-ins, and matches
     /// the search.
     fn matches(&self, ctx: &egui::Context, ind: &IndicatorInfo) -> bool {
-        if !self.accepts_source(ind) {
+        if !self.accepts(ind) {
             return false;
         }
         let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
@@ -520,20 +720,30 @@ impl IndicatorDialog {
             ui.available_width(),
             DESIGN_TOKENS.sizing.button_sm,
         ));
+        let header_color = if is_default_light(theme) {
+            Color32::from_gray(114)
+        } else {
+            theme.ui.text_muted
+        };
         let label = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), "NAME"),
             FontId::proportional(theme.text.small),
-            theme.ui.text_muted,
+            header_color,
         );
         let label_pos = Pos2::new(
             header.min.x + DESIGN_TOKENS.sizing.button_md,
             header.center().y - label.size().y / 2.0,
         );
-        ui.painter().galley(label_pos, label, theme.ui.text_muted);
+        ui.painter().galley(label_pos, label, header_color);
 
         let mut action = IndicatorDialogAction::None;
         // The scroll bar takes its own column, so it never covers the badges.
         crate::styles::menu_scroll_bar(ui);
+        if is_default_light(theme) {
+            let scroll = &mut ui.spacing_mut().scroll;
+            scroll.dormant_handle_opacity = 99.0 / 255.0;
+            scroll.active_handle_opacity = 99.0 / 255.0;
+        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -542,10 +752,13 @@ impl IndicatorDialog {
                 let ring = theme.spacing.xs;
                 ui.add_space(ring);
                 for (i, indicator) in filtered.iter().enumerate() {
-                    if let Some(a) = self.draw_indicator_item(ui, config, theme, indicator, i == 0)
-                    {
-                        action = a;
-                    }
+                    ui.push_id(&indicator.id, |ui| {
+                        if let Some(a) =
+                            self.draw_indicator_item(ui, config, theme, indicator, i == 0)
+                        {
+                            action = a;
+                        }
+                    });
                 }
                 ui.add_space(ring);
             });
@@ -583,7 +796,9 @@ impl IndicatorDialog {
             ui.available_width(),
             32.0_f32.max(theme.text.title + 2.0 * theme.spacing.sm),
         );
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        // Automatic IDs include row position even inside a study's scope.
+        let (_, rect) = ui.allocate_space(desired_size);
+        let response = ui.interact(rect, ui.make_persistent_id("row"), Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
         let translated_label = l10n::text(ui.ctx(), &indicator.name);
@@ -605,6 +820,7 @@ impl IndicatorDialog {
             ui,
             config,
             rect,
+            &translated_label,
             is_favorite,
             response.hovered() || response.has_focus(),
         );
@@ -629,17 +845,18 @@ impl IndicatorDialog {
         ui: &mut Ui,
         config: &IndicatorDialogConfig,
         rect: Rect,
+        name: &str,
         is_favorite: bool,
         row_active: bool,
     ) -> Response {
         let star_rect = Self::star_rect(ui, rect);
-        let star_res = ui.allocate_rect(star_rect, Sense::click());
+        let star_res = ui.interact(star_rect, ui.make_persistent_id("favorite"), Sense::click());
         let tooltip = if is_favorite {
-            "Remove from favorites"
+            "Remove {name} from favorites"
         } else {
-            "Add to favorites"
+            "Add {name} to favorites"
         };
-        let translated_label = l10n::text(ui.ctx(), tooltip);
+        let translated_label = l10n::format_text(ui.ctx(), tooltip, &[("name", name)]);
         star_res.widget_info(|| {
             WidgetInfo::selected(
                 Role::Button,
@@ -662,7 +879,7 @@ impl IndicatorDialog {
                 .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
         }
         draw_focus_ring(ui, &star_res, 0.0);
-        star_res.on_hover_text(l10n::text(ui.ctx(), tooltip))
+        star_res.on_hover_text(translated_label)
     }
 
     /// The name centred on the row and cut off before `right`.
@@ -943,6 +1160,172 @@ mod tests {
         assert!(dialog.add("SMA").is_none());
         dialog.set_full(false);
         assert!(dialog.add("SMA").is_some());
+    }
+
+    #[test]
+    fn space_twice_on_a_focused_star_leaves_favourites_unchanged() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (category, query) in [
+            (IndicatorCategory::BuiltIns, ""),
+            (IndicatorCategory::BuiltIns, "a"),
+            (IndicatorCategory::Favorites, ""),
+        ] {
+            let mut dialog = IndicatorDialog::new();
+            dialog.open();
+            dialog.sel_category = category;
+            *dialog.search.query_mut() = query.into();
+            // Favourites keeps a fourth study to catch focus moving onto the next row.
+            let studies: Vec<_> = if category == IndicatorCategory::Favorites {
+                dialog.indicators.iter().take(4).cloned().collect()
+            } else {
+                dialog
+                    .indicators
+                    .iter()
+                    .filter(|info| dialog.matches(&egui::Context::default(), info))
+                    .take(3)
+                    .cloned()
+                    .collect()
+            };
+            if category == IndicatorCategory::Favorites {
+                dialog
+                    .favorites
+                    .extend(studies.iter().map(|info| info.id.clone()));
+            }
+            let mut expected = dialog.favorites.clone();
+            if category == IndicatorCategory::Favorites {
+                expected.remove(&studies[2].id);
+            }
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &Theme::dark());
+                })
+                .build_ui_state(
+                    |ui, dialog: &mut IndicatorDialog| {
+                        dialog.show(ui.ctx(), &Theme::dark());
+                    },
+                    dialog,
+                );
+            harness.run();
+            harness.key_press(Key::ArrowDown);
+            harness.run();
+            assert!(
+                harness
+                    .get_by_role_and_label(Role::ListBoxOption, &studies[0].name)
+                    .is_focused()
+            );
+            harness.key_press(Key::Tab);
+            harness.run();
+            let first = harness
+                .get_by_role_and_label(Role::ListBoxOption, &studies[0].name)
+                .rect();
+            assert!(
+                harness
+                    .query_all_by_role(Role::Button)
+                    .any(|star| first.contains_rect(star.rect()) && star.is_focused())
+            );
+            let row = harness
+                .get_by_role_and_label(Role::ListBoxOption, &studies[2].name)
+                .rect();
+            harness
+                .query_all_by_role(Role::Button)
+                .find(|star| row.contains_rect(star.rect()))
+                .unwrap()
+                .focus();
+            harness.run();
+            for _ in 0..2 {
+                harness.key_press(Key::Space);
+                harness.run();
+            }
+            assert_eq!(
+                harness.state().favorites,
+                expected,
+                "{category:?} / {query:?}"
+            );
+            if category == IndicatorCategory::BuiltIns {
+                let row = harness
+                    .get_by_role_and_label(Role::ListBoxOption, &studies[2].name)
+                    .rect();
+                assert!(
+                    harness
+                        .query_all_by_role(Role::Button)
+                        .any(|star| row.contains_rect(star.rect()) && star.is_focused())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chooser_stars_name_their_study() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for translated in [false, true] {
+            let mut dialog = IndicatorDialog::new();
+            dialog.open();
+            let studies: Vec<_> = dialog
+                .indicators
+                .iter()
+                .filter(|info| dialog.matches(&egui::Context::default(), info))
+                .cloned()
+                .collect();
+            dialog.favorites.insert(studies[2].id.clone());
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    if translated {
+                        l10n::set_translator(ctx, |key| {
+                            Some(match key {
+                                "Add {name} to favorites" => "Ajouter {name} aux favoris".into(),
+                                "Remove {name} from favorites" => {
+                                    "Retirer {name} des favoris".into()
+                                }
+                                _ => format!("Local {key}"),
+                            })
+                        });
+                    }
+                })
+                .build_ui(|ui| {
+                    dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            let mut labels = HashSet::new();
+            for study in &studies {
+                let name = if translated {
+                    format!("Local {}", study.name)
+                } else {
+                    study.name.clone()
+                };
+                let row = harness
+                    .get_by_role_and_label(Role::ListBoxOption, &name)
+                    .rect();
+                let star = harness
+                    .query_all_by_role(Role::Button)
+                    .find(|star| row.contains_rect(star.rect()))
+                    .unwrap();
+                let label = star.accesskit_node().label().unwrap();
+                assert_eq!(
+                    star.accesskit_node().toggled(),
+                    Some(if study.id == studies[2].id {
+                        egui::accesskit::Toggled::True
+                    } else {
+                        egui::accesskit::Toggled::False
+                    })
+                );
+                assert!(labels.insert(label.clone()), "duplicate star name: {label}");
+                let favorite = study.id == studies[2].id;
+                let expected = match (translated, favorite) {
+                    (false, false) => format!("Add {name} to favorites"),
+                    (false, true) => format!("Remove {name} from favorites"),
+                    (true, false) => format!("Ajouter {name} aux favoris"),
+                    (true, true) => format!("Retirer {name} des favoris"),
+                };
+                assert_eq!(label, expected);
+            }
+        }
     }
 
     #[test]
@@ -1340,6 +1723,148 @@ mod tests {
             }
         }
 
+        use crate::data::{FeedCapabilities, OrderFlowKind};
+        use crate::model::{FeedService::*, Instrument};
+        let instrument = Instrument::new("A");
+        let none = FeedCapabilities::new().with_services([]);
+        let live = FeedCapabilities::new().with_services([LiveTrades]);
+        let sided = FeedCapabilities::new().with_services([LiveTrades, TradeSides]);
+        let all =
+            FeedCapabilities::new().with_services([LiveTrades, TradeSides, BestBidAsk, Depth]);
+        let unknown = FeedCapabilities::new();
+        let narrowed = instrument.clone().with_services([]);
+        let declared = instrument.clone().with_services([LiveTrades, TradeSides]);
+        for (updated, capabilities, symbol, expected) in [
+            (false, None, None, [true; 4]),
+            (true, None, None, [false; 4]),
+            (true, Some(&sided), None, [false; 4]),
+            (true, None, Some(&declared), [false; 4]),
+            (true, Some(&unknown), Some(&instrument), [false; 4]),
+            (true, Some(&none), Some(&instrument), [false; 4]),
+            (true, Some(&all), Some(&narrowed), [false; 4]),
+            (true, Some(&none), Some(&declared), [false; 4]),
+            (
+                true,
+                Some(&unknown),
+                Some(&declared),
+                [true, true, false, false],
+            ),
+            (
+                true,
+                Some(&live),
+                Some(&instrument),
+                [true, false, false, false],
+            ),
+            (
+                true,
+                Some(&sided),
+                Some(&instrument),
+                [true, true, false, false],
+            ),
+            (true, Some(&all), Some(&instrument), [true; 4]),
+        ] {
+            let mut dialog = IndicatorDialog::new();
+            if updated {
+                dialog.set_feed_capabilities(capabilities, symbol);
+            }
+            dialog.favorites.insert("Quoted Spread".into());
+            dialog.open_tab(OrderFlow);
+            for query in ["", "Order flow"] {
+                *dialog.search.query_mut() = query.into();
+                for (id, accepted) in [
+                    "Trade Rate",
+                    "Rolling Volume and Delta",
+                    "Quoted Spread",
+                    "Book Size",
+                ]
+                .into_iter()
+                .zip(expected)
+                {
+                    let ind = dialog.indicators.iter().find(|ind| ind.id == id).unwrap();
+                    assert_eq!(
+                        dialog.matches(&ctx, ind),
+                        accepted,
+                        "{id} / {query:?} / {capabilities:?}"
+                    );
+                }
+            }
+            dialog.search.clear();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_tabs(ui, &Theme::dark())
+            });
+            assert_eq!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Order flow")
+            }), expected.iter().any(|accepted| *accepted));
+            output.drop_without_applying_deltas();
+            dialog.sel_category = Favorites;
+            let spread = dialog
+                .indicators
+                .iter()
+                .find(|ind| ind.id == "Quoted Spread")
+                .unwrap();
+            assert_eq!(dialog.matches(&ctx, spread), expected[2]);
+            assert!(dialog.preferences().favorites.contains("Quoted Spread"));
+            // Profiles keep their bar-based fallback even though they also expose a footprint.
+            dialog.sel_category = BuiltIns;
+            dialog.active_tab = Profiles;
+            let profile = dialog
+                .indicators
+                .iter()
+                .find(|ind| ind.id == "Vol Profile VR")
+                .unwrap();
+            assert!(dialog.matches(&ctx, profile));
+            dialog.set_feed_capabilities(Some(&all), Some(&instrument));
+            dialog.sel_category = Favorites;
+            let spread = dialog
+                .indicators
+                .iter()
+                .find(|ind| ind.id == "Quoted Spread")
+                .unwrap();
+            assert!(dialog.matches(&ctx, spread));
+        }
+
+        // Repeated capability updates and frames reuse the requirements; replacing the factory
+        // reevaluates them, including a host study registered in the Order flow category.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let builds = Arc::new(AtomicUsize::new(0));
+        let counted = |kind| {
+            let builds = builds.clone();
+            let mut factory = IndicatorFactory::new();
+            for id in factory.list() {
+                factory.unregister(&id);
+            }
+            factory.register_in(IndicatorFactory::ORDER_FLOW, "Host book", move || {
+                builds.fetch_add(1, Ordering::Relaxed);
+                Box::new(OrderFlowStudy::new(kind))
+            });
+            factory
+        };
+        let mut dialog = IndicatorDialog::new().with_factory(counted(OrderFlowKind::BookSize {
+            levels: 5,
+            distance: 0.0,
+        }));
+        dialog.set_feed_capabilities(Some(&live), Some(&instrument));
+        assert!(!dialog.offers(BuiltIns));
+        let built = builds.load(Ordering::Relaxed);
+        for _ in 0..3 {
+            dialog.set_feed_capabilities(Some(&live), Some(&instrument));
+            ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_content(ui, &dialog.config.clone(), &Theme::dark());
+            })
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(builds.load(Ordering::Relaxed), built);
+        dialog = dialog.with_factory(counted(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 60,
+            instant: 3,
+        }));
+        assert!(dialog.offers(BuiltIns));
+        dialog.set_feed_capabilities(Some(&none), Some(&instrument));
+        assert!(!dialog.offers(BuiltIns));
+        dialog.set_feed_capabilities(Some(&all), Some(&instrument));
+        assert!(dialog.offers(BuiltIns));
+
         // A study the host registers, under a new name or a built-in's, is added through the
         // factory.
         for name in ["Host SMA", "RSI"] {
@@ -1394,6 +1919,104 @@ mod tests {
         assert!(differ.is_empty(), "added with other parameters: {differ:?}");
     }
 
+    /// The light chooser has distinct hint inks; other palettes keep their supplied roles.
+    #[test]
+    fn chooser_chrome_uses_light_inks_and_preserves_other_palettes() {
+        let mut custom = Theme::light();
+        custom.ui.text_muted = Color32::RED;
+        for (theme, section, header, hint, selected, pill) in [
+            (
+                Theme::light(),
+                Color32::from_gray(116),
+                Color32::from_gray(114),
+                Color32::from_gray(112),
+                Color32::from_gray(26),
+                Color32::from_gray(242),
+            ),
+            (
+                Theme::dark(),
+                Theme::dark().ui.text_muted,
+                Theme::dark().ui.text_muted,
+                Theme::dark().ui.text_muted,
+                Theme::dark().ui.text,
+                // Black toward (55, 59, 70) at 0.6: (33, 35.4, 42).
+                Color32::from_rgb(33, 35, 42),
+            ),
+            (
+                custom.clone(),
+                Color32::RED,
+                Color32::RED,
+                Color32::RED,
+                custom.ui.text,
+                // White toward (235, 235, 235) at 0.6: 255 - 0.6 * 20 = 243.
+                Color32::from_gray(243),
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.all_styles_mut(|style| style.animation_time = 0.0);
+            egui_extras::install_image_loaders(&ctx);
+            let mut dialog = IndicatorDialog::new();
+            dialog.open();
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                ..Default::default()
+            };
+            for _ in 0..2 {
+                ctx.run_ui(input.clone(), |ui| {
+                    dialog.show(ui.ctx(), &theme);
+                })
+                .drop_without_applying_deltas();
+            }
+            let output = ctx.run_ui(input, |ui| {
+                dialog.show(ui.ctx(), &theme);
+            });
+            for (label, color) in [
+                ("PERSONAL", section),
+                ("NAME", header),
+                ("Search indicators", hint),
+            ] {
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => Some(text),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {label}"));
+                assert_eq!(text.galley.job.sections[0].format.color, color, "{label}");
+            }
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Rect(rect)
+                    if rect.brush.is_some() && rect.rect.size() == Vec2::splat(24.0)
+                        && rect.fill == hint
+                )),
+                "search glyph canvas"
+            );
+            for color in [selected, pill] {
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(
+                        &shape.shape, egui::Shape::Rect(rect)
+                        if rect.brush.is_none() && rect.fill == color && rect.rect.height() == 28.0
+                    )),
+                    "pill {color:?}"
+                );
+            }
+            if theme.ui == Theme::light().ui {
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(
+                        &shape.shape, egui::Shape::Rect(rect)
+                        if rect.rect.width() == 3.0 && rect.fill == Color32::from_black_alpha(99)
+                    )),
+                    "light scroll handle"
+                );
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!(ctx.active_theme(), theme, "chooser palette stays local");
+        }
+    }
+
     #[test]
     fn show_keeps_the_configuration_a_caller_sets() {
         let custom = IndicatorDialogConfig {
@@ -1412,5 +2035,303 @@ mod tests {
         assert_eq!(dialog.config.width, 900.0);
         assert_eq!(dialog.config.text_color, Color32::RED);
         assert_eq!(dialog.config.hover_color, hover);
+    }
+}
+
+#[cfg(test)]
+mod options_profile_tests {
+    use super::*;
+    use crate::data::{
+        HistoryPage, HistoryRequest, OptionChainQuery, OptionChainSink, OptionKind, OptionQuote,
+        ProfileDisplay, Reply,
+    };
+    use crate::model::{Bar, FeedService};
+    use chrono::{NaiveDate, TimeDelta, Utc};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Feed {
+        dates: Vec<NaiveDate>,
+        rows: Vec<OptionQuote>,
+        sink: Mutex<Option<OptionChainSink>>,
+    }
+    impl Datafeed for Feed {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::default()));
+        }
+        fn option_expiries(&self, _: &str, reply: Reply<Vec<NaiveDate>>) {
+            reply.send(Ok(self.dates.clone()));
+        }
+        fn option_chain(&self, _: OptionChainQuery, sink: OptionChainSink) {
+            sink.push(self.rows.clone()).unwrap();
+            *self.sink.lock().unwrap() = Some(sink);
+        }
+    }
+    fn quote(
+        expiry: NaiveDate,
+        strike: f64,
+        kind: OptionKind,
+        volume: f64,
+        interest: f64,
+    ) -> OptionQuote {
+        let mut row = OptionQuote::new(
+            format!("{expiry}-{strike}-{kind:?}"),
+            expiry,
+            strike,
+            kind,
+            Utc::now(),
+        );
+        row.volume = Some(volume);
+        row.open_interest = Some(interest);
+        row.multiplier = Some(100.0);
+        row
+    }
+    fn show(dialog: &mut IndicatorDialog, ctx: &egui::Context) {
+        dialog.open_tab(IndicatorTab::Profiles);
+        ctx.run_ui(Default::default(), |ui| {
+            dialog.show(ui.ctx(), &Theme::dark());
+        })
+        .drop_without_applying_deltas();
+    }
+    fn profile(feed: Arc<Feed>) -> Box<dyn Indicator> {
+        let mut dialog = IndicatorDialog::new();
+        dialog.set_metric_source(Some(feed), "SAMPLE");
+        dialog.set_feed_capabilities(
+            Some(&FeedCapabilities::new().with_services([FeedService::OptionChain])),
+            Some(&Instrument::new("SAMPLE").with_tick_size(0.01)),
+        );
+        show(&mut dialog, &egui::Context::default());
+        let mut study = dialog
+            .factory()
+            .create("Options Volume Profile")
+            .expect("declared option chains offer a profile");
+        let time = Utc::now();
+        study.calculate(
+            &(0..3)
+                .map(|i| Bar::new(time + TimeDelta::minutes(i), 105.0, 112.0, 98.0, 105.0, 1.0))
+                .collect::<Vec<_>>(),
+        );
+        study
+    }
+
+    #[test]
+    fn options_profile_expiries_keep_measures_separate_and_missing_fields_hidden() {
+        let today = Utc::now().date_naive();
+        let tomorrow = today.succ_opt().unwrap();
+        let later = today + TimeDelta::days(3);
+        let mut rows = Vec::new();
+        for (day, calls, puts, volume) in [
+            (today, 10.0, 6.0, 20.0),
+            (tomorrow, 30.0, 20.0, 100.0),
+            (later, 90.0, 80.0, 500.0),
+        ] {
+            rows.push(quote(day, 100.0, OptionKind::Call, volume, calls));
+            rows.push(quote(day, 100.0, OptionKind::Put, volume / 2.0, puts));
+        }
+        let feed = Arc::new(Feed {
+            dates: vec![later, today, tomorrow, today],
+            rows: rows.clone(),
+            ..Default::default()
+        });
+        let mut study = profile(feed.clone());
+        assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [20.0]);
+        assert_eq!(study.plot_value(0, 0), Some(0.5));
+        study.set_input("measure", InputValue::Choice(1)).unwrap();
+        study.set_input("sides", InputValue::Choice(1)).unwrap();
+        assert_eq!(study.plot_value(0, 0), Some(0.6));
+        for (expiry, calls, puts) in [(0, 10.0, 6.0), (2, 30.0, 20.0), (4, 130.0, 106.0)] {
+            study
+                .set_input("expiry", InputValue::Choice(expiry))
+                .unwrap();
+            let plot = study.volume_profiles(0..3).remove(0);
+            assert_eq!(plot.config.display, ProfileDisplay::Delta);
+            assert_eq!(plot.profile.up(), [calls]);
+            assert_eq!(plot.profile.down(), [puts]);
+        }
+        study
+            .set_input(
+                "through_date",
+                InputValue::Text((today + TimeDelta::days(2)).to_string()),
+            )
+            .unwrap();
+        assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [40.0]);
+        assert!(
+            study
+                .set_input("through_date", InputValue::Text("2026-02-30".into()))
+                .is_err()
+        );
+        study.set_input("expiry", InputValue::Choice(99)).unwrap();
+        study.set_input("expiry", InputValue::Choice(0)).unwrap();
+        let sink = feed.sink.lock().unwrap().clone().unwrap();
+        rows[0].volume = Some(0.0);
+        rows[0].open_interest = None;
+        sink.push(rows.clone()).unwrap();
+        let measure = study
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "measure")
+            .unwrap();
+        assert!(matches!(measure.kind, InputKind::Choice(choices) if choices == ["Volume"]));
+        assert!(!study.inputs().iter().any(|input| input.id == "max_pain"));
+        assert_eq!(
+            study.volume_profiles(0..3)[0].profile.down(),
+            [10.0],
+            "missing interest falls back to the offered volume"
+        );
+        study.set_input("measure", InputValue::Choice(0)).unwrap();
+        assert_eq!(study.plot_value(0, 0), None, "zero calls have no ratio");
+        rows[0].volume = None;
+        sink.push(rows).unwrap();
+        assert!(
+            study.volume_profiles(0..3).is_empty(),
+            "unknown volume is not zero"
+        );
+        let mut interest_only = feed.rows[..2].to_vec();
+        for row in &mut interest_only {
+            row.volume = None;
+        }
+        sink.push(interest_only).unwrap();
+        assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [10.0]);
+        assert_eq!(study.plot_value(0, 0), Some(0.6));
+        sink.push(Vec::new()).unwrap();
+        assert_eq!(study.plot_value(0, 0), None);
+    }
+
+    #[test]
+    fn options_profile_rows_follow_strikes_and_max_pain_updates_without_bars() {
+        let today = Utc::now().date_naive();
+        let rows = vec![
+            quote(today, 100.0, OptionKind::Call, 20.0, 1.0),
+            quote(today, 110.0, OptionKind::Put, 10.0, 2.0),
+        ];
+        let feed = Arc::new(Feed {
+            dates: vec![today],
+            rows: rows.clone(),
+            ..Default::default()
+        });
+        let mut study = profile(feed.clone());
+        let plot = study.volume_profiles(0..3).remove(0);
+        assert_eq!(
+            (plot.profile.up(), plot.profile.down()),
+            (&[20.0, 0.0][..], &[0.0, 10.0][..]),
+            "one row per listed strike, not per price tick"
+        );
+        let sink = feed.sink.lock().unwrap().clone().unwrap();
+        let mut offset = rows.clone();
+        offset[0].strike = 102.5;
+        offset[1].strike = 107.5;
+        sink.push(offset).unwrap();
+        let profile = study.volume_profiles(0..3).remove(0).profile;
+        let half = profile.row_height() / 2.0;
+        assert_eq!(
+            (profile.low() + half, profile.high() - half),
+            (102.5, 107.5),
+            "rows centre on strikes off a multiple of their spacing"
+        );
+        assert_eq!(study.plot_value(1, 0), None, "max pain starts off");
+        let legend =
+            |study: &dyn Indicator| ConfiguredStudy::new(study.clone_box()).legend_visible(1);
+        assert!(!legend(&*study), "no max pain readout while it is off");
+        study
+            .set_input("max_pain", InputValue::Toggle(true))
+            .unwrap();
+        assert!(legend(&*study));
+        // Payout at 100 and 110: 2,000 and 1,000; equal interest ties; a 300 call
+        // multiplier makes 110 cost 3,000; no interest ties at zero.
+        for (calls, puts, call_multiplier, expected) in [
+            (1.0, 2.0, 100.0, 110.0),
+            (2.0, 2.0, 100.0, 100.0),
+            (1.0, 2.0, 300.0, 100.0),
+            (0.0, 0.0, 100.0, 100.0),
+        ] {
+            let mut rows = rows.clone();
+            rows[0].open_interest = Some(calls);
+            rows[0].multiplier = Some(call_multiplier);
+            rows[1].open_interest = Some(puts);
+            sink.push(rows).unwrap();
+            assert_eq!(study.plot_value(1, 0), Some(expected));
+            assert_eq!(
+                study.plot_value(0, 0),
+                Some(0.5),
+                "volume ratio ignores interest"
+            );
+        }
+
+        use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
+        use crate::scales::{PriceMap, PriceRange, PriceTransform};
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+        let price = PriceMap::new(
+            PriceTransform {
+                mode: crate::scales::PriceScaleMode::Normal,
+                base: 100.0,
+            },
+            PriceRange::new(90.0, 120.0),
+            0.0,
+            300.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 20.0, 0, 2, 3.0, price);
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            IndicatorRenderer::render(
+                &RenderContext::new(ui.painter(), rect),
+                &[study.clone_box()],
+                &[],
+                &price,
+                &coords,
+            );
+        });
+        assert!(
+            output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Path(path)
+                if path.points.len() >= 2
+                    && path.points.iter().all(|point| (point.y - price.price_to_y(100.0)).abs() < 0.001))),
+            "live max pain level is painted"
+        );
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn options_profile_browser_requires_matching_declared_chain_and_releases_subscriptions() {
+        let today = Utc::now().date_naive();
+        let feed = Arc::new(Feed {
+            dates: vec![today],
+            ..Default::default()
+        });
+        let mut dialog = IndicatorDialog::new();
+        dialog.set_metric_source(Some(feed.clone()), "SAMPLE");
+        let ctx = egui::Context::default();
+        let caps = FeedCapabilities::new().with_services([FeedService::OptionChain]);
+        for (capabilities, instrument, offered) in [
+            (None, None, false),
+            (Some(&caps), Some(Instrument::new("OTHER")), false),
+            (
+                Some(&caps),
+                Some(Instrument::new("SAMPLE").with_services([])),
+                false,
+            ),
+            (Some(&caps), Some(Instrument::new("SAMPLE")), true),
+            (None, None, false),
+        ] {
+            dialog.set_feed_capabilities(capabilities, instrument.as_ref());
+            show(&mut dialog, &ctx);
+            assert_eq!(dialog.factory().has("Options Volume Profile"), offered);
+            if offered {
+                let info = dialog
+                    .indicators()
+                    .iter()
+                    .find(|info| info.id == "Options Volume Profile")
+                    .unwrap();
+                assert_eq!(
+                    IndicatorDialog::destination(info),
+                    (IndicatorCategory::BuiltIns, IndicatorTab::Profiles)
+                );
+            }
+        }
+        dialog.set_feed_capabilities(Some(&caps), Some(&Instrument::new("SAMPLE")));
+        show(&mut dialog, &ctx);
+        assert!(dialog.factory().has("Options Volume Profile"));
+        dialog.set_metric_source(None, "SAMPLE");
+        assert!(!dialog.factory().has("Options Volume Profile"));
+        assert!(!feed.sink.lock().unwrap().as_ref().unwrap().is_active());
     }
 }

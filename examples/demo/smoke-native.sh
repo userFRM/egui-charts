@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # Verify the native window opens and survives its first rendered frames under X11.
-# Usage: xvfb-run -a examples/demo/smoke-native.sh <demo-binary>
+# Usage: xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' examples/demo/smoke-native.sh <demo-binary>
 set -euo pipefail
 # xvfb-run can hand over before the server accepts clients; start the demo once the display answers.
+display_ready=false
 for _ in {1..20}; do
-    xdotool getdisplaygeometry >/dev/null 2>&1 && break
+    if xdotool getdisplaygeometry >/dev/null 2>&1; then
+        display_ready=true
+        break
+    fi
     sleep 0.5
 done
+if [[ $display_ready != true ]]; then
+    echo "native demo: X11 display ${DISPLAY:-<unset>} did not accept clients within 10 seconds" >&2
+    exit 1
+fi
 "$1" &
 demo_pid=$!
 trap 'kill "$demo_pid" 2>/dev/null || true; wait "$demo_pid" 2>/dev/null || true' EXIT

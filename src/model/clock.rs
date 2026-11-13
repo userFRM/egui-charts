@@ -314,6 +314,15 @@ impl BarClock {
         self.session.as_ref().is_none_or(|s| s.is_open(t, true))
     }
 
+    /// The first instant at or after `t` inside a window of this clock's session: `t` itself
+    /// without a session, `None` when no window opens within a year.
+    pub(crate) fn open_at_or_after(&self, t: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        match &self.session {
+            Some(session) => session.open_at_or_after(t),
+            None => Some(t),
+        }
+    }
+
     /// Whether `a` and `b` fall in the same bar, so a feed may stamp a bar with any instant
     /// inside it.
     pub fn same_bar(&self, a: DateTime<Utc>, b: DateTime<Utc>) -> bool {

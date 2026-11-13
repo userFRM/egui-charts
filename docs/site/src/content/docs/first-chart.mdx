@@ -1,12 +1,30 @@
 ---
 title: Your first chart
+tableOfContents: false
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
+import Example from '../../components/Example.astro';
+import firstChart from '../../../../../examples/docs/first_chart.rs?raw';
 
 Create a chart once, give it bars ordered from oldest to newest, and show it on
 every frame. This complete native application uses the dependencies from
 [installation](installation.mdx).
+
+## Try the chart
+
+This scene uses 120 fixed one-minute bars of synthetic data. The setup beside the
+chart comes from the same Rust file the example runs. Drag the plot to pan, scroll
+to zoom, and move the pointer to inspect a bar. Press Tab to leave the chart.
+
+<Example scene="first-chart" title="Your first candlestick chart"
+  task="Pan and zoom through the sample history. Your application supplies the real data."
+  code={firstChart} />
+
+## Run a native application
+
+The minimal program below starts with two bars. Use the longer sample above in
+place of its chart setup to explore more history.
 
 <Steps>
 
@@ -53,14 +71,14 @@ every frame. This complete native application uses the dependencies from
 
 <Aside type="caution" title="Create the chart once">
 The closure owns the chart. Recreating it inside the frame callback discards
-its view and interaction state. Keep it alive and let `Chart::show` handle
+its view and interaction state. Keep it alive and let [`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show) handle
 panning, zooming and the crosshair on each frame.
 </Aside>
 
 ## Replace history or update the last bar
 
-Use `SeriesId::MAIN` to address the main series. `set_data` replaces its history;
-`update` replaces a bar with the same timestamp or appends a later one.
+Use [`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html#associatedconstant.MAIN) to address the main series. [`set_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data) replaces its history;
+[`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update) replaces a bar with the same timestamp or appends a later one.
 
 ```rust
 use chrono::DateTime;

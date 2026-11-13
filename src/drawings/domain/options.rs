@@ -5,10 +5,12 @@
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
-//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`], [`PositionSizing`]).
+//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`],
+//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]).
 
-use crate::model::TimeframeUnit;
+use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::RangeInclusive;
 
@@ -165,6 +167,66 @@ impl TimeframeVisibility {
         }
     }
 
+    /// Show only on `current`, matched by its canonical interval label.
+    pub fn current_interval(current: Timeframe) -> Self {
+        Self::specific(&[&current.as_str()])
+    }
+
+    /// Show on `current` and longer time intervals. Calendar months compare as 30 days,
+    /// as in [`Timeframe::duration_ms`]. Trade intervals compare only within their own unit.
+    pub fn higher_intervals(current: Timeframe) -> Self {
+        Self::relative_intervals(current, true)
+    }
+
+    /// Show on `current` and shorter time intervals, using the same units and calendar
+    /// approximation as [`Self::higher_intervals`].
+    pub fn lower_intervals(current: Timeframe) -> Self {
+        Self::relative_intervals(current, false)
+    }
+
+    fn relative_intervals(current: Timeframe, higher: bool) -> Self {
+        use TimeframeUnit as U;
+        let (value, unit) = interval_parts(&current.as_str()).expect("canonical interval label");
+        let mut visibility = Self::default();
+        if current.is_trade_based() {
+            visibility.set_range(
+                unit,
+                Some(if higher { value..=u64::MAX } else { 1..=value }),
+            );
+            return visibility;
+        }
+        // Milliseconds in u128 keep the largest custom seconds and converted bounds exact.
+        let units = [
+            (U::Millisecond, 1_u128),
+            (U::Second, 1_000),
+            (U::Minute, 60_000),
+            (U::Hour, 3_600_000),
+            (U::Day, 86_400_000),
+            (U::Week, 604_800_000),
+            (U::Month, 2_592_000_000),
+        ];
+        let duration = u128::from(value) * units.iter().find(|(u, _)| *u == unit).unwrap().1;
+        for (unit, scale) in units {
+            let bound = if higher {
+                duration.div_ceil(scale)
+            } else {
+                duration / scale
+            };
+            // Subsecond intervals are presets; custom time intervals use whole seconds.
+            let max = if unit == U::Millisecond {
+                999
+            } else {
+                u64::MAX
+            };
+            if higher && bound > u128::from(max) || !higher && bound == 0 {
+                continue;
+            }
+            let bound = bound.min(u128::from(max)) as u64;
+            visibility.set_range(unit, Some(if higher { bound..=max } else { 1..=bound }));
+        }
+        visibility
+    }
+
     /// Check if visible on the interval labelled `timeframe`
     #[inline]
     pub fn is_visible_on(&self, timeframe: &str) -> bool {
@@ -266,6 +328,15 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
+    /// Custom retracement or extension text beside this level, independent of its numeric label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    /// Line width in points; absent inherits the drawing's level width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
+    /// Line pattern; absent inherits the drawing's level pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_style: Option<crate::model::LineStyle>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -282,6 +353,9 @@ impl FibonacciLevel {
         Self {
             value,
             label: label.to_string(),
+            text: String::new(),
+            width: None,
+            line_style: None,
             color,
             visible: true,
             show_price: true,
@@ -316,10 +390,10 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
-    /// Width of every level line, in points.
+    /// Width of level lines without an assigned width, in points.
     #[serde(default = "fib_level_width")]
     pub level_width: f32,
-    /// Line pattern shared by every level.
+    /// Pattern of level lines without an assigned pattern.
     #[serde(default)]
     pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
@@ -345,9 +419,92 @@ pub struct FibonacciConfig {
     /// Place labels at the left end of level lines instead of the right.
     #[serde(default)]
     pub labels_on_left: bool,
+    /// Font size of level labels and custom text, in points (1 through 256).
+    #[serde(default = "fib_font_size")]
+    pub label_size: f32,
+    /// Retracement, extension and channel labels sit outside the Left/Right endpoint or midway at Center.
+    /// Time projections place labels left of, on, or right of each vertical level.
+    /// Absent follows `labels_on_left` for earlier drawings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_position: Option<LineTextHorizontalAlign>,
+    /// Edge of a retracement, extension or channel label resting on its level; middle places it on the line.
+    #[serde(default = "fib_vertical_align")]
+    pub label_vertical: LineTextVerticalAlign,
+    /// Time projection labels at the top, middle or bottom of the pane; defaults to bottom.
+    #[serde(default = "fib_time_label_vertical")]
+    pub time_label_vertical: LineTextVerticalAlign,
+    /// Whether custom retracement or extension text is visible, independently of prices and ratios.
+    #[serde(default = "percent_levels")]
+    pub show_text: bool,
+    /// Custom text sits outside retracement endpoints and inside extension endpoints;
+    /// Center places it midway along the level.
+    #[serde(default)]
+    pub text_position: LineTextHorizontalAlign,
+    /// Edge of the custom retracement or extension text resting on its level.
+    #[serde(default = "fib_vertical_align")]
+    pub text_vertical: LineTextVerticalAlign,
+    /// Show the construction line between anchors, using the drawing's line style.
+    #[serde(default = "percent_levels")]
+    pub trend_visible: bool,
+    /// Complete resistance arcs into circles, including their shaded bands.
+    #[serde(default)]
+    pub close_arcs: bool,
+    /// Grow a spiral counterclockwise in screen space instead of clockwise.
+    #[serde(default)]
+    pub spiral_counterclockwise: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+    /// Time levels of a speed resistance fan, read along the time axis as `levels` are along the
+    /// price axis. Absent on fans saved before the two families were separate, which share
+    /// `levels`; see [`FibonacciConfig::fan_time_levels`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_levels: Option<Vec<FibonacciLevel>>,
+    /// Whether a speed resistance fan draws its grid: a line through each visible level inside
+    /// the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub grid_visible: bool,
+    /// Colour of the speed resistance fan grid as RGBA.
+    #[serde(default = "fib_grid_color")]
+    pub grid_color: [u8; 4],
+    /// Width of the speed resistance fan grid lines, in points.
+    #[serde(default = "fib_grid_width")]
+    pub grid_width: f32,
+    /// Line pattern of the speed resistance fan grid.
+    #[serde(default)]
+    pub grid_style: crate::model::LineStyle,
+    /// Speed resistance fan price level ratios on the left of the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub left_labels: bool,
+    /// Speed resistance fan price level ratios on the right of the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub right_labels: bool,
+    /// Speed resistance fan time level ratios above the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub top_labels: bool,
+    /// Speed resistance fan time level ratios below the anchors' box.
+    #[serde(default = "percent_levels")]
+    pub bottom_labels: bool,
+}
+
+fn fib_grid_color() -> [u8; 4] {
+    [21, 56, 153, 204]
+}
+
+fn fib_grid_width() -> f32 {
+    1.0
+}
+
+fn fib_font_size() -> f32 {
+    12.0
+}
+
+fn fib_vertical_align() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Middle
+}
+
+fn fib_time_label_vertical() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Bottom
 }
 
 fn fib_level_width() -> f32 {
@@ -359,8 +516,21 @@ fn percent_levels() -> bool {
 }
 
 impl Default for FibonacciConfig {
-    /// Default Fibonacci retracement levels
+    /// The levels a new Fibonacci retracement starts with.
     fn default() -> Self {
+        Self::for_tool(super::DrawingToolType::FibonacciRetracement)
+    }
+}
+
+impl FibonacciConfig {
+    /// The levels a new trend-based Fibonacci extension starts with.
+    pub fn extension_default() -> Self {
+        Self::for_tool(super::DrawingToolType::FibonacciExtension)
+    }
+
+    /// The presentation of retracements and channels saved without a config: seven levels with
+    /// the background off.
+    pub(crate) fn legacy() -> Self {
         Self {
             levels: vec![
                 FibonacciLevel::new(0.0, "0%", [120, 123, 134, 255]),
@@ -383,13 +553,30 @@ impl Default for FibonacciConfig {
             show_levels: None,
             levels_as_percent: false,
             labels_on_left: true,
+            label_size: fib_font_size(),
+            label_position: None,
+            label_vertical: fib_vertical_align(),
+            time_label_vertical: fib_time_label_vertical(),
+            show_text: true,
+            text_position: LineTextHorizontalAlign::Center,
+            text_vertical: fib_vertical_align(),
+            trend_visible: true,
+            time_levels: None,
+            grid_visible: true,
+            grid_color: fib_grid_color(),
+            grid_width: fib_grid_width(),
+            grid_style: crate::model::LineStyle::Solid,
+            left_labels: true,
+            right_labels: true,
+            top_labels: true,
+            bottom_labels: true,
+            close_arcs: false,
+            spiral_counterclockwise: false,
         }
     }
-}
 
-impl FibonacciConfig {
-    /// Extension levels (beyond 100%)
-    pub fn extension_default() -> Self {
+    /// The levels of extensions saved without a config.
+    pub(crate) fn legacy_extension() -> Self {
         Self {
             levels: vec![
                 FibonacciLevel::new(0.0, "0%", [120, 123, 134, 255]),
@@ -400,135 +587,205 @@ impl FibonacciConfig {
                 FibonacciLevel::new(2.0, "200%", [76, 175, 80, 255]),
                 FibonacciLevel::new(2.618, "261.8%", [156, 39, 176, 255]),
             ],
-            level_width: fib_level_width(),
-            level_style: crate::model::LineStyle::Solid,
-            show_background: false,
-            background_opacity: 30,
-            extend_left: false,
-            extend_right: false,
-            reverse: false,
-            logarithmic: false,
-            show_prices: None,
-            show_levels: None,
-            levels_as_percent: false,
-            labels_on_left: true,
+            ..Self::legacy()
         }
     }
 
-    /// Initial levels for a tool, each in its own colour, with the background on at 20%.
-    /// Retracements, extensions and channels list further ratios hidden. Existing drawings
-    /// without a stored config keep their original renderer defaults; new tools store this
-    /// table when constructed.
+    /// Initial levels for a tool as ratio, colour and visibility, with the background on at 20%
+    /// except on time zones. Hidden levels are listed so they can be switched on without typing.
+    /// Drawings saved without a config keep their old levels; new tools store this table when
+    /// constructed.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         use super::DrawingToolType as T;
-        use super::drawing::{BLUE, CYAN, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL};
-        let table = match tool {
+        use super::drawing::{
+            BLUE, CYAN, DEEP_PURPLE, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL,
+        };
+        let levels: Vec<(f32, [u8; 4], bool)> = match tool {
+            T::FibonacciSpiral => Vec::new(),
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
-                .map(|value| (value, if value == 0.0 { GREY } else { BLUE }))
+                .map(|value| (value, if value == 0.0 { GREY } else { BLUE }, true))
                 .to_vec(),
             T::TrendBasedFibTime => vec![
-                (0.0, GREY),
-                (0.382, RED),
-                (0.5, [129, 199, 132, 255]),
-                (0.618, GREEN),
-                (1.0, TEAL),
-                (1.382, CYAN),
-                (1.618, GREY),
-                (2.0, BLUE),
-                (2.382, PINK),
-                (2.618, PURPLE),
-                (3.0, [103, 58, 183, 255]),
+                (0.0, GREY, true),
+                (0.382, RED, true),
+                (0.5, [129, 199, 132, 255], false),
+                (0.618, GREEN, true),
+                (1.0, TEAL, true),
+                (1.382, CYAN, true),
+                (1.618, GREY, true),
+                (2.0, BLUE, true),
+                (2.382, PINK, true),
+                (2.618, PURPLE, true),
+                (3.0, DEEP_PURPLE, true),
             ],
             T::FibonacciSpeedFan => vec![
-                (0.0, GREY),
-                (0.25, ORANGE),
-                (0.382, CYAN),
-                (0.5, GREEN),
-                (0.618, TEAL),
-                (0.75, BLUE),
-                (1.0, GREY),
+                (0.0, GREY, true),
+                (0.25, ORANGE, true),
+                (0.382, CYAN, true),
+                (0.5, GREEN, true),
+                (0.618, TEAL, true),
+                (0.75, BLUE, true),
+                (1.0, GREY, true),
             ],
             T::FibonacciCircles | T::FibonacciSpeedResistanceArcs => vec![
-                (0.236, RED),
-                (0.382, ORANGE),
-                (0.5, TEAL),
-                (0.618, GREEN),
-                (0.786, CYAN),
-                (1.0, GREY),
-                (1.618, BLUE),
-                (2.618, PINK),
-                (3.618, BLUE),
-                (4.236, PINK),
-                (4.618, RED),
+                (0.236, RED, true),
+                (0.382, ORANGE, true),
+                (0.5, TEAL, true),
+                (0.618, GREEN, true),
+                (0.786, CYAN, true),
+                (1.0, GREY, true),
+                (1.618, BLUE, true),
+                (2.618, PINK, true),
+                (3.618, BLUE, true),
+                (4.236, PINK, true),
+                (4.618, RED, true),
             ],
-            T::FibonacciRetracement
-            | T::FibonacciExtension
-            | T::FibonacciChannel
-            | T::FibonacciWedge => {
-                let mut levels: Vec<(f32, _, _)> = [
-                    (0.0, GREY),
-                    (0.236, RED),
-                    (0.382, ORANGE),
-                    (0.5, GREEN),
-                    (0.618, TEAL),
-                    (0.786, CYAN),
-                    (1.0, GREY),
-                    (1.618, BLUE),
-                    (2.618, RED),
-                    (3.618, PURPLE),
-                    (4.236, PINK),
-                ]
-                .map(|(value, color)| (value, color, true))
-                .to_vec();
-                if tool == T::FibonacciWedge {
-                    levels.retain(|level| level.0 != 0.0);
-                    levels.push((4.618, RED, true));
-                    for level in &mut levels {
-                        level.2 = level.0 <= 1.0;
-                    }
-                } else {
-                    // Further ratios, listed hidden so they can be switched on without typing.
-                    let spare = [
-                        1.272, 1.414, 2.0, 2.272, 2.414, 3.0, 3.272, 3.414, 4.0, 4.272, 4.414,
-                        4.618, 4.764,
-                    ];
-                    let colors = [RED, ORANGE, GREEN, TEAL, CYAN, BLUE, PURPLE, PINK];
-                    levels.extend(
-                        (spare.into_iter().zip(colors.into_iter().cycle()))
-                            .map(|(value, color)| (value, color, false)),
-                    );
-                    levels.sort_by(|a, b| a.0.total_cmp(&b.0));
-                }
-                return Self {
-                    levels: levels
-                        .into_iter()
-                        .map(|(value, color, visible)| FibonacciLevel {
-                            visible,
-                            ..FibonacciLevel::new(value, "", color)
-                        })
-                        .collect(),
-                    show_background: true,
-                    background_opacity: 51,
-                    show_levels: (tool == T::FibonacciWedge).then_some(true),
-                    ..Self::default()
-                };
-            }
+            T::FibonacciWedge => vec![
+                (0.236, RED, true),
+                (0.382, ORANGE, true),
+                (0.5, GREEN, true),
+                (0.618, TEAL, true),
+                (0.786, CYAN, true),
+                (1.0, GREY, true),
+                (1.618, BLUE, false),
+                (2.618, RED, false),
+                (3.618, DEEP_PURPLE, false),
+                (4.236, PINK, false),
+                (4.618, PINK, false),
+            ],
+            T::FibonacciRetracement | T::FibonacciExtension | T::FibonacciChannel => vec![
+                (0.0, GREY, true),
+                (0.236, RED, true),
+                (0.382, ORANGE, true),
+                (0.5, GREEN, true),
+                (0.618, TEAL, true),
+                (0.786, CYAN, true),
+                (1.0, GREY, true),
+                (1.618, BLUE, true),
+                (2.618, RED, true),
+                (3.618, PURPLE, true),
+                (4.236, PINK, true),
+                (1.272, ORANGE, false),
+                (1.414, RED, false),
+                (2.272, ORANGE, false),
+                (2.414, GREEN, false),
+                (2.0, TEAL, false),
+                (3.0, CYAN, false),
+                (3.272, GREY, false),
+                (3.414, BLUE, false),
+                (4.0, RED, false),
+                (4.272, PURPLE, false),
+                (4.414, PINK, false),
+                (4.618, ORANGE, false),
+                (4.764, TEAL, false),
+            ],
             _ => return Self::default(),
         };
+        let levels: Vec<_> = levels
+            .into_iter()
+            .map(|(value, color, visible)| FibonacciLevel {
+                visible,
+                ..FibonacciLevel::new(value, "", color)
+            })
+            .collect();
         Self {
-            levels: table
-                .into_iter()
-                .map(|(value, color)| {
-                    let mut level = FibonacciLevel::new(value, "", color);
-                    level.visible = tool != T::TrendBasedFibTime || value != 0.5;
-                    level
-                })
-                .collect(),
-            show_background: tool != T::FibonacciTimeZones,
+            time_levels: (tool == T::FibonacciSpeedFan).then(|| levels.clone()),
+            levels,
+            show_background: !matches!(tool, T::FibonacciTimeZones | T::FibonacciSpiral),
             background_opacity: 51,
-            levels_as_percent: false,
-            ..Self::default()
+            show_levels: (tool == T::FibonacciWedge).then_some(true),
+            labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
+            ..Self::legacy()
         }
+    }
+
+    /// Whether ratios, line widths and typography are finite and within drawing limits.
+    pub fn is_valid(&self) -> bool {
+        let width = |value: f32| value > 0.0 && value <= super::super::validation::MAX_STROKE_WIDTH;
+        width(self.level_width)
+            && width(self.grid_width)
+            && (1.0..=256.0).contains(&self.label_size)
+            && self
+                .levels
+                .iter()
+                .chain(self.time_levels.iter().flatten())
+                .all(|level| level.value.is_finite() && level.width.is_none_or(width))
+    }
+
+    /// The time levels of a speed resistance fan: its own, or `levels` on fans saved before it
+    /// had them.
+    pub fn fan_time_levels(&self) -> &[FibonacciLevel] {
+        self.time_levels.as_deref().unwrap_or(&self.levels)
+    }
+
+    /// Apply just the fields edited against `original`, keeping the rest of this drawing's
+    /// settings. Adding or removing a level replaces the ordered table intentionally.
+    #[cfg(feature = "ui")]
+    pub(crate) fn apply_edits(&mut self, original: &Self, edited: &Self) {
+        macro_rules! fields {
+            ($target:expr, $original:expr, $edited:expr, $($field:ident),+ $(,)?) => {
+                $(if $original.$field != $edited.$field {
+                    $target.$field.clone_from(&$edited.$field);
+                })+
+            };
+        }
+        fields!(
+            self,
+            original,
+            edited,
+            level_width,
+            level_style,
+            show_background,
+            background_opacity,
+            extend_left,
+            extend_right,
+            reverse,
+            show_prices,
+            show_levels,
+            levels_as_percent,
+            labels_on_left,
+            logarithmic,
+            label_size,
+            label_position,
+            label_vertical,
+            time_label_vertical,
+            show_text,
+            text_position,
+            text_vertical,
+            trend_visible,
+            grid_visible,
+            grid_color,
+            grid_width,
+            grid_style,
+            left_labels,
+            right_labels,
+            top_labels,
+            bottom_labels,
+            close_arcs,
+            spiral_counterclockwise
+        );
+        // A fan still sharing its price levels keeps its time levels apart from this edit.
+        if self.time_levels.is_none() && edited.time_levels.is_some() && original != edited {
+            self.time_levels = Some(self.levels.clone());
+        }
+        let apply = |target: &mut Vec<FibonacciLevel>,
+                     original: &[FibonacciLevel],
+                     edited: &[FibonacciLevel]| {
+            if original.len() == edited.len() {
+                for ((target, original), edited) in target.iter_mut().zip(original).zip(edited) {
+                    fields!(
+                        target, original, edited, value, label, color, visible, show_price, text,
+                        width, line_style
+                    );
+                }
+            } else {
+                *target = edited.to_vec();
+            }
+        };
+        if let Some(target) = &mut self.time_levels {
+            apply(target, original.fan_time_levels(), edited.fan_time_levels());
+        }
+        apply(&mut self.levels, &original.levels, &edited.levels);
     }
 
     /// Label content; a tool without a price passes `None`.
@@ -645,7 +902,9 @@ impl Default for RegressionTrendConfig {
 
 /// Instrument economics used by long and short position drawings.
 /// Quantities are lots; one lot contains `lot_size` units, each worth `point_value`
-/// in the account currency per price point. Defaults retain unit sizing without rounding.
+/// per price point in the account currency, or in the instrument currency when
+/// [`PositionReadout::account_currency`] requests conversion. Defaults retain unit sizing
+/// without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PositionSizing {
@@ -696,6 +955,338 @@ impl PositionSizing {
     }
 }
 
+/// Statistics and account conversion for long and short position drawings.
+/// New drawings show full statistics only while selected. Currency conversion is supplied
+/// by the host: the library never downloads exchange rates.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionReadout {
+    /// Keep statistics visible when the drawing is not selected.
+    pub persistent: bool,
+    /// Omit captions from the level figures and position result, quantity and reward/risk ratio.
+    pub condensed: bool,
+    /// Account currency code; `None` follows the instrument currency.
+    pub account_currency: Option<String>,
+    /// Account-currency units per unit of the instrument currency. Required when the account
+    /// currency differs from the instrument's; `None` leaves that conversion unavailable.
+    pub conversion_rate: Option<f64>,
+    /// Decimal places for quantity rounding and display, from 0 through 8. `None` retains
+    /// the instrument's quantity step and automatic display precision. Rounding never adds risk.
+    pub quantity_decimals: Option<u8>,
+}
+
+impl PositionReadout {
+    /// Whether the currency code, optional rate and quantity precision can be used safely.
+    pub fn is_valid(&self) -> bool {
+        self.quantity_decimals.is_none_or(|places| places <= 8)
+            && self
+                .conversion_rate
+                .is_none_or(|rate| rate.is_finite() && rate > 0.0)
+            && self.account_currency.as_ref().is_none_or(|code| {
+                !code.is_empty()
+                    && code.len() <= 16
+                    && code.bytes().all(|c| c.is_ascii_alphanumeric())
+            })
+    }
+
+    /// Resolve account economics from a host-supplied rate. Matching currencies need no rate;
+    /// a missing rate for a different currency returns `None`, rather than a mislabeled result.
+    pub fn account_sizing(
+        &self,
+        mut sizing: PositionSizing,
+        instrument_currency: Option<&str>,
+    ) -> Option<PositionSizing> {
+        if !self.is_valid() {
+            return None;
+        }
+        if let Some(currency) = &self.account_currency
+            && !instrument_currency.is_some_and(|base| base.eq_ignore_ascii_case(currency))
+        {
+            sizing.point_value *= self.conversion_rate?;
+        }
+        sizing.is_valid().then_some(sizing)
+    }
+
+    /// Quantity in lots after conversion and downward rounding. Decimal precision and a
+    /// lot increment both apply: with quarter-lots and one decimal, valid lots are halves.
+    /// An account-percent size also fits the account's available leveraged capital.
+    pub fn quantity(
+        &self,
+        size: PositionSize,
+        entry: f64,
+        stop: f64,
+        sizing: PositionSizing,
+        instrument_currency: Option<&str>,
+    ) -> Option<f64> {
+        let mut sizing = if matches!(size, PositionSize::Quantity(_)) {
+            (self.is_valid() && sizing.is_valid()).then_some(sizing)?
+        } else {
+            self.account_sizing(sizing, instrument_currency)?
+        };
+        if let Some(places) = self.quantity_decimals {
+            let decimal_step = 10f64.powi(-i32::from(places));
+            if sizing.quantity_step == 0.0 {
+                sizing.quantity_step = decimal_step;
+            } else {
+                // A decimal lot step is m / 10^d. Its common multiple with 10^-p is
+                // 10^-p * m / gcd(m, 10^(d-p)); remove only factors two and five.
+                let text = sizing.quantity_step.to_string();
+                let digits = text
+                    .split_once('.')
+                    .map_or(0, |(_, fraction)| fraction.len());
+                if digits > usize::from(places) {
+                    let mut units: u64 =
+                        text.replace('.', "").trim_start_matches('0').parse().ok()?;
+                    for factor in [2, 5] {
+                        for _ in 0..digits - usize::from(places) {
+                            if !units.is_multiple_of(factor) {
+                                break;
+                            }
+                            units /= factor;
+                        }
+                    }
+                    sizing.quantity_step = decimal_step * units as f64;
+                }
+            }
+        }
+        size.quantity_with_sizing(entry, stop, &sizing)
+    }
+
+    /// Statistics in files written before these settings were always visible.
+    pub(crate) fn legacy() -> Self {
+        Self {
+            persistent: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// Lines, labels, zone fill and border of long and short position drawings. The target and
+/// stop colours, whose opacity is that of their zones, are
+/// [`Drawing::position_target_color`](crate::drawings::Drawing::position_target_color) and
+/// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionStyle {
+    /// Colour of the entry line, its price tag and the trade's path; `None` draws the lines in a
+    /// translucent shade of the theme's secondary text colour and the tag in that colour.
+    pub line_color: Option<[u8; 4]>,
+    /// Width of the entry line, the trade's path and the zone border, in points.
+    pub line_width: f32,
+    /// Colour of the label text; `None` is white on a plate and the level or result colour
+    /// without one, or the theme's secondary text on a label without a result.
+    pub text_color: Option<[u8; 4]>,
+    /// Size of the label text, in points.
+    pub font_size: f32,
+    /// Whether the labels sit on filled plates.
+    pub label_background: bool,
+    /// Plate colour of every label; `None` takes the target, stop or result colour.
+    pub label_color: Option<[u8; 4]>,
+    /// Whether the target and stop zones are filled.
+    pub fill: bool,
+    /// Whether the target and stop zones are outlined in [`Self::border_color`].
+    pub border: bool,
+    /// Colour of the zone outline.
+    pub border_color: [u8; 4],
+}
+
+impl Default for PositionStyle {
+    fn default() -> Self {
+        Self {
+            line_color: None,
+            line_width: 1.0,
+            text_color: None,
+            font_size: 12.0,
+            label_background: true,
+            label_color: None,
+            fill: true,
+            border: false,
+            border_color: [102, 123, 139, 255],
+        }
+    }
+}
+
+impl PositionStyle {
+    /// Whether the line width lies in 1 to 100 points and the font size in 1 to 256 points.
+    pub fn is_valid(&self) -> bool {
+        (1.0..=100.0).contains(&self.line_width) && (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
+/// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NoteTextStyle {
+    /// Text colour as RGBA.
+    pub color: [u8; 4],
+    /// Size of the text, in points.
+    pub font_size: f32,
+    /// Whether the text is bold.
+    pub bold: bool,
+    /// Whether the text is slanted.
+    pub italic: bool,
+}
+
+impl NoteTextStyle {
+    /// Whether the font size lies in 1 to 256 points.
+    pub fn is_valid(&self) -> bool {
+        (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
+/// Placement of a line tool's measurement text relative to its anchors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineMeasurementPosition {
+    /// Before the left anchor.
+    Left,
+    /// Above the middle of the anchors.
+    Center,
+    /// After the right anchor.
+    #[default]
+    Right,
+    /// After the right anchor if the text fits in the pane there, else before the left anchor if
+    /// it fits there, else above the middle of the anchors.
+    Auto,
+}
+
+/// Which part of a line's text sits at which point of the line, reading left to right. A vertical
+/// line reads from bottom to top, so its left end is at the bottom, whichever way its text is turned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineTextHorizontalAlign {
+    /// The text starts at the line's left end.
+    Left,
+    /// The text is centred on the line's middle.
+    #[default]
+    Center,
+    /// The text ends at the line's right end.
+    Right,
+}
+
+/// Which edge of a line's text rests on the line. A vertical line takes its text's top to face
+/// left, so [`Self::Top`] reads right of the line and [`Self::Bottom`] left of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineTextVerticalAlign {
+    /// The text's top edge, so that it reads below the line.
+    Top,
+    /// The text's middle, so that it reads on the line.
+    Middle,
+    /// The text's bottom edge, so that it reads above the line.
+    #[default]
+    Bottom,
+}
+
+/// How a vertical line's text is turned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineTextOrientation {
+    /// Along the line, reading from bottom to top.
+    #[default]
+    Vertical,
+    /// Upright, across the line.
+    Horizontal,
+}
+
+/// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
+/// placement of the text of those tools and of a horizontal line or ray or a vertical line,
+/// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
+/// saves from before these settings read the same way.
+/// Price changes follow anchor order; lengths and elapsed time are unsigned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineMeasurements {
+    /// Keep enabled readouts visible without selecting the line.
+    pub persistent: bool,
+    /// Price difference in the chart's price format.
+    pub price_change: bool,
+    /// Price difference as a percentage of the first anchor's price.
+    pub percent_change: bool,
+    /// Price difference in instrument pips, or ticks when pips are not defined.
+    pub pip_change: bool,
+    /// Number of bars between the anchors.
+    pub bar_count: bool,
+    /// Time between the anchors, using their timestamps.
+    pub elapsed_time: bool,
+    /// Screen length divided by the horizontal spacing of one bar, in periods.
+    pub length: bool,
+    /// Inclination on the displayed scale, in degrees.
+    pub inclination: bool,
+    /// Show a movable marker halfway along the displayed line segment.
+    pub midpoint: bool,
+    /// Show the price of each anchor beside it, whether or not the line is selected.
+    pub price_labels: bool,
+    /// Where to place the readouts; right of the anchors by default.
+    pub position: LineMeasurementPosition,
+    /// Where the line's custom text sits along the line.
+    pub text_horizontal_align: LineTextHorizontalAlign,
+    /// Which edge of the line's custom text rests on the line.
+    pub text_vertical_align: LineTextVerticalAlign,
+    /// How a vertical line's custom text is turned. Other lines write theirs along the line.
+    pub text_orientation: LineTextOrientation,
+    /// Whether a vertical line runs through the chart's other panes at its anchor's time, as well
+    /// as its own. Off keeps it, and always its text, in its own pane; other lines ignore it.
+    pub across_panes: bool,
+}
+
+thread_local! {
+    /// Whether the last drawing read on this thread left out its line measurements.
+    static LINE_MEASUREMENTS_LEFT_OUT: Cell<bool> = const { Cell::new(false) };
+}
+
+impl LineMeasurements {
+    /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
+    /// in the middle of the line, a horizontal or vertical line writes its text on the line and a
+    /// vertical line runs through every pane, other tools keep their readouts hidden and their text
+    /// above the line.
+    pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        if tool == super::DrawingToolType::VerticalLine {
+            return Self {
+                text_vertical_align: LineTextVerticalAlign::Middle,
+                across_panes: true,
+                ..Self::default()
+            };
+        }
+        if tool == super::DrawingToolType::HorizontalLine {
+            return Self {
+                text_vertical_align: LineTextVerticalAlign::Middle,
+                ..Self::default()
+            };
+        }
+        if tool != super::DrawingToolType::InfoLine {
+            return Self::default();
+        }
+        Self {
+            persistent: true,
+            price_change: true,
+            percent_change: true,
+            pip_change: true,
+            bar_count: true,
+            elapsed_time: true,
+            length: true,
+            inclination: true,
+            position: LineMeasurementPosition::Center,
+            ..Self::default()
+        }
+    }
+
+    /// Notes that the drawing being read has no line measurements, and gives the [`Default`] ones.
+    pub(crate) fn left_out() -> Self {
+        LINE_MEASUREMENTS_LEFT_OUT.set(true);
+        Self::default()
+    }
+
+    /// Clears the note of [`Self::left_out`], before a drawing is read.
+    pub(crate) fn forget_left_out() {
+        LINE_MEASUREMENTS_LEFT_OUT.set(false);
+    }
+
+    /// Takes [`Self::for_tool`] of an info line whose settings the drawing just read left out, so
+    /// one saved before they existed keeps the readouts it always showed; other tools keep the
+    /// [`Default`] ones, which draw their text where it always was.
+    pub(crate) fn fill_left_out(&mut self, tool: super::DrawingToolType) {
+        if LINE_MEASUREMENTS_LEFT_OUT.replace(false) && tool == super::DrawingToolType::InfoLine {
+            *self = Self::for_tool(tool);
+        }
+    }
+}
+
 /// How a long or short position drawing sizes its quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionSize {
@@ -715,6 +1306,7 @@ pub enum PositionSize {
 impl PositionSize {
     /// Size in lots using the instrument's point value and lot size. Risk-based sizes and
     /// fixed lot quantities round down to `quantity_step`, so rounding cannot increase risk.
+    /// Account-percent sizing also caps quantity to the account's available leveraged capital.
     /// Returns `None` if no positive permitted quantity fits, or inputs are invalid.
     pub fn quantity_with_sizing(
         &self,
@@ -728,6 +1320,12 @@ impl PositionSize {
         let mut quantity = self.quantity(entry, stop)?;
         if !matches!(self, Self::Quantity(_)) {
             quantity /= sizing.point_value * sizing.lot_size;
+        }
+        if let Self::RiskPercent { account_size, .. } = *self {
+            let capital_per_lot = sizing.required_capital(entry, 1.0)?;
+            if capital_per_lot > 0.0 {
+                quantity = quantity.min(account_size / capital_per_lot);
+            }
         }
         if sizing.quantity_step > 0.0 {
             let steps = quantity / sizing.quantity_step;
@@ -778,6 +1376,81 @@ mod tests {
     use super::*;
     use crate::data::VolumeProfileConfig;
     use crate::model::Timeframe;
+
+    #[test]
+    fn new_fibonacci_tools_start_from_their_level_tables() {
+        use crate::drawings::DrawingToolType as T;
+        // Length, label side and (position, ratio, colour, shown) of sample rows.
+        let spares = [
+            (0, 0.0, [0x80, 0x80, 0x80], true),
+            (10, 4.236, [0xE9, 0x1E, 0x63], true),
+            (11, 1.272, [0xFF, 0x98, 0x00], false),
+            (15, 2.0, [0x08, 0x99, 0x81], false),
+            (23, 4.764, [0x08, 0x99, 0x81], false),
+        ];
+        let wedge = [
+            (0, 0.236, [0xF2, 0x36, 0x45], true),
+            (8, 3.618, [0x67, 0x3A, 0xB7], false),
+            (10, 4.618, [0xE9, 0x1E, 0x63], false),
+        ];
+        let zones = [
+            (0, 0.0, [0x80, 0x80, 0x80], true),
+            (10, 89.0, [0x29, 0x62, 0xFF], true),
+        ];
+        let time = [
+            (2, 0.5, [0x81, 0xC7, 0x84], false),
+            (10, 3.0, [0x67, 0x3A, 0xB7], true),
+        ];
+        for (name, config, len, left, rows) in [
+            ("default", FibonacciConfig::default(), 24, true, &spares[..]),
+            (
+                "extension",
+                FibonacciConfig::extension_default(),
+                24,
+                true,
+                &spares,
+            ),
+            (
+                "channel",
+                FibonacciConfig::for_tool(T::FibonacciChannel),
+                24,
+                true,
+                &spares,
+            ),
+            (
+                "wedge",
+                FibonacciConfig::for_tool(T::FibonacciWedge),
+                11,
+                true,
+                &wedge,
+            ),
+            (
+                "zones",
+                FibonacciConfig::for_tool(T::FibonacciTimeZones),
+                11,
+                false,
+                &zones,
+            ),
+            (
+                "time",
+                FibonacciConfig::for_tool(T::TrendBasedFibTime),
+                11,
+                false,
+                &time,
+            ),
+        ] {
+            assert_eq!(config.levels.len(), len, "{name}");
+            assert_eq!(config.labels_on_left, left, "{name}");
+            for &(index, value, [r, g, b], visible) in rows {
+                let level = &config.levels[index];
+                assert_eq!(
+                    (level.value, level.color, level.visible),
+                    (value, [r, g, b, 255], visible),
+                    "{name}, level {index}"
+                );
+            }
+        }
+    }
 
     /// Reference: quantity = risked amount / |entry - stop| (reference.py);
     /// none when a size from the risk has its stop at the entry, or a setting
@@ -842,6 +1515,61 @@ mod tests {
                 size.quantity_with_sizing(100.0, stop, &unleveraged)
             );
         }
+        // Ten quarter-point stop ticks at 50 per point, ten units per lot and 0.8
+        // account units per quote unit cost 1000 per lot: 230 risk permits 0.23 lots.
+        let mut readout = PositionReadout {
+            account_currency: Some("EUR".into()),
+            conversion_rate: Some(0.8),
+            quantity_decimals: Some(2),
+            ..Default::default()
+        };
+        for (places, step, expected) in [
+            (Some(2), 0.01, Some(0.23)),
+            (Some(1), 0.01, Some(0.2)),
+            (Some(0), 0.01, None),
+            (None, 0.01, Some(0.23)),
+            (Some(1), 0.25, Some(0.5)),
+        ] {
+            readout.quantity_decimals = places;
+            let sizing = PositionSizing {
+                quantity_step: step,
+                ..sizing
+            };
+            let size = if step == 0.25 {
+                PositionSize::Quantity(0.99)
+            } else {
+                PositionSize::RiskAmount(230.0)
+            };
+            let got = readout.quantity(size, 100.0, 97.5, sizing, Some("USD"));
+            assert!(
+                got.zip(expected)
+                    .map_or(got == expected, |(a, b)| (a - b).abs() < 1e-12),
+                "{places:?}, step {step}: {got:?}"
+            );
+        }
+        // One lot needs 100 * 50 * 0.8 * 10 / 5 = 8000 account units.
+        // An account of 1000 permits 0.125 lots, or 0.12 at the 0.01 increment.
+        readout.quantity_decimals = Some(2);
+        for (leverage, expected) in [(1.0, 0.02), (5.0, 0.12), (10.0, 0.25), (100.0, 1.0)] {
+            assert_eq!(
+                readout.quantity(
+                    PositionSize::RiskPercent {
+                        account_size: 1000.0,
+                        percent: 100.0
+                    },
+                    100.0,
+                    97.5,
+                    PositionSizing { leverage, ..sizing },
+                    Some("USD")
+                ),
+                Some(expected)
+            );
+        }
+        readout.conversion_rate = None;
+        assert!(readout.account_sizing(sizing, Some("USD")).is_none());
+        assert_eq!(readout.account_sizing(sizing, Some("EUR")), Some(sizing));
+        readout.quantity_decimals = Some(9);
+        assert!(!readout.is_valid());
         assert_eq!(sizing.required_capital(100.0, 0.18), Some(1800.0));
         assert_eq!(
             PositionSize::Quantity(2.13).quantity_with_sizing(
@@ -959,6 +1687,131 @@ mod tests {
         assert!(!saved.is_visible_on("1D") && saved.is_visible_on("3h"));
         saved.set_range(TimeframeUnit::Hour, None);
         assert_eq!(saved.range(TimeframeUnit::Hour), None);
+
+        // One hour = 3,600 seconds; 90 minutes = 5,400 seconds. Both bounds include equality.
+        for (current, probes) in [
+            (
+                Timeframe::Hour1,
+                vec![
+                    ("30s", false, true),
+                    ("59min", false, true),
+                    ("1h", true, true),
+                    ("90min", true, false),
+                    ("1D", true, false),
+                    ("1W", true, false),
+                    ("1M", true, false),
+                    ("100t", false, false),
+                ],
+            ),
+            (
+                Timeframe::Custom(n(5400)),
+                vec![
+                    ("1h", false, true),
+                    ("89min", false, true),
+                    ("90min", true, true),
+                    ("91min", true, false),
+                    ("2h", true, false),
+                ],
+            ),
+            (
+                Timeframe::Ms250,
+                vec![
+                    ("100ms", false, true),
+                    ("250ms", true, true),
+                    ("500ms", true, false),
+                    ("1s", true, false),
+                ],
+            ),
+            (
+                Timeframe::Week1,
+                vec![
+                    ("6D", false, true),
+                    ("7D", true, true),
+                    ("1W", true, true),
+                    ("1M", true, false),
+                ],
+            ),
+            (
+                Timeframe::Month1,
+                vec![
+                    ("4W", false, true),
+                    ("30D", true, true),
+                    ("1M", true, true),
+                    ("5W", true, false),
+                ],
+            ),
+            (
+                Timeframe::Ticks(n(100)),
+                vec![
+                    ("99t", false, true),
+                    ("100t", true, true),
+                    ("101t", true, false),
+                    ("100v", false, false),
+                    ("1D", false, false),
+                ],
+            ),
+            (
+                Timeframe::Volume(n(100)),
+                vec![
+                    ("99v", false, true),
+                    ("100v", true, true),
+                    ("101v", true, false),
+                    ("100t", false, false),
+                ],
+            ),
+            (
+                Timeframe::Range(n(100)),
+                vec![
+                    ("99r", false, true),
+                    ("100r", true, true),
+                    ("101r", true, false),
+                    ("100delta", false, false),
+                ],
+            ),
+            (
+                Timeframe::Delta(n(100)),
+                vec![
+                    ("99delta", false, true),
+                    ("100delta", true, true),
+                    ("101delta", true, false),
+                    ("100r", false, false),
+                ],
+            ),
+        ] {
+            let above = TimeframeVisibility::higher_intervals(current);
+            let below = TimeframeVisibility::lower_intervals(current);
+            let only = TimeframeVisibility::current_interval(current);
+            for (label, higher, lower) in probes {
+                assert_eq!(
+                    above.is_visible_on(label),
+                    higher,
+                    "above {current}: {label}"
+                );
+                assert_eq!(
+                    below.is_visible_on(label),
+                    lower,
+                    "below {current}: {label}"
+                );
+                assert_eq!(
+                    only.is_visible_on(label),
+                    label == current.as_str(),
+                    "only {current}: {label}"
+                );
+            }
+        }
+        assert_eq!(
+            TimeframeVisibility::higher_intervals(Timeframe::Hour1)
+                .range(TimeframeUnit::Millisecond),
+            None
+        );
+        // Values above i64::MAX milliseconds must not collapse to equal saturated durations.
+        let largest = TimeframeVisibility::higher_intervals(Timeframe::Custom(n(u64::MAX)));
+        assert!(largest.is_visible_on(&format!("{}s", u64::MAX)));
+        assert!(!largest.is_visible_on(&format!("{}s", u64::MAX - 1)));
+        assert!(
+            TimeframeVisibility::lower_intervals(Timeframe::Custom(n(u64::MAX)))
+                .is_visible_on(&format!("{}s", u64::MAX - 1))
+        );
 
         let legacy = r#"{"show_on_all":false,"visible_timeframes":["4h"]}"#;
         let loaded: TimeframeVisibility = serde_json::from_str(legacy).unwrap();

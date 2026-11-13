@@ -61,7 +61,7 @@ impl StudyStrategy {
             Rule::Average => Box::new(SMA::default()),
             Rule::TwoAverages => Box::new(SMA::new(9)),
             Rule::Sar => Box::new(ParabolicSAR::default()),
-            Rule::Rsi => Box::new(RSI::default()),
+            Rule::Rsi => Box::new(RSI::new(14)),
             Rule::Stochastic => Box::new(Stochastic::default()),
             Rule::SuperTrend => Box::new(SuperTrend::default()),
             Rule::Rating => Box::new(TechnicalRatings::default()),

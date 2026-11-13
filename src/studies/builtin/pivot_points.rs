@@ -672,6 +672,36 @@ impl Indicator for PivotPoints {
         }
     }
 
+    fn data_start(&self, _: &StudyDataRequest) -> Option<chrono::DateTime<chrono::Utc>> {
+        if !self.daily_bars || self.interval.duration_ms() >= Timeframe::Day1.duration_ms() {
+            return None;
+        }
+        // The oldest retained period needs the whole preceding daily-bar group, in UTC.
+        let (year, part) = self.stepper.state().periods.front()?.key;
+        let start = match self.period() {
+            Some(AnchorPeriod::Session) => NaiveDate::from_yo_opt(year, part)?.pred_opt()?,
+            Some(AnchorPeriod::Week) => {
+                NaiveDate::from_isoywd_opt(year, part, chrono::Weekday::Mon)?
+                    .checked_sub_days(chrono::Days::new(7))?
+            }
+            Some(AnchorPeriod::Month) => NaiveDate::from_ymd_opt(year, part, 1)?
+                .checked_sub_months(chrono::Months::new(1))?,
+            Some(AnchorPeriod::Quarter) => NaiveDate::from_ymd_opt(year, part * 3 + 1, 1)?
+                .checked_sub_months(chrono::Months::new(3))?,
+            period => {
+                let years = match (period, self.timeframe) {
+                    (Some(AnchorPeriod::Decade), _) => 10,
+                    (None, PivotTimeframe::TwoYears) => 2,
+                    (None, PivotTimeframe::ThreeYears) => 3,
+                    (None, PivotTimeframe::FiveYears) => 5,
+                    _ => 1,
+                };
+                NaiveDate::from_ymd_opt((year - 1) * years, 1, 1)?
+            }
+        };
+        Some(start.and_time(chrono::NaiveTime::MIN).and_utc())
+    }
+
     fn update_data(
         &mut self,
         data: &[Bar],
@@ -984,6 +1014,53 @@ mod tests {
         }
     }
 
+    /// Daily history includes the entire period preceding the oldest retained pivot, using
+    /// UTC dates like the daily-bar groups, including ISO weeks and aligned multi-year blocks.
+    #[test]
+    fn daily_history_starts_before_the_oldest_retained_pivot_period() {
+        let first = Utc.with_ymd_and_hms(2024, 3, 15, 13, 30, 0).unwrap();
+        let bar = |time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0);
+        for (timeframe, expected) in [
+            (PivotTimeframe::Auto, "2024-03-14T00:00:00Z"),
+            (PivotTimeframe::Daily, "2024-03-14T00:00:00Z"),
+            (PivotTimeframe::Weekly, "2024-03-04T00:00:00Z"),
+            (PivotTimeframe::Monthly, "2024-02-01T00:00:00Z"),
+            (PivotTimeframe::Quarterly, "2023-10-01T00:00:00Z"),
+            (PivotTimeframe::Yearly, "2023-01-01T00:00:00Z"),
+            (PivotTimeframe::TwoYears, "2022-01-01T00:00:00Z"),
+            (PivotTimeframe::ThreeYears, "2019-01-01T00:00:00Z"),
+            (PivotTimeframe::FiveYears, "2015-01-01T00:00:00Z"),
+            (PivotTimeframe::TenYears, "2010-01-01T00:00:00Z"),
+        ] {
+            let mut pivots = PivotPoints::new()
+                .with_timeframe(timeframe)
+                .with_daily_bars(true);
+            let request = pivots.data_requests().pop().unwrap();
+            assert_eq!(pivots.data_start(&request), None);
+            pivots.calculate(&[bar(first)]);
+            assert_eq!(
+                pivots.data_start(&request),
+                Some(expected.parse().unwrap()),
+                "{timeframe:?}"
+            );
+            pivots.set_timeframe(Timeframe::Day1);
+            assert_eq!(pivots.data_start(&request), None);
+        }
+        let bars = [2022, 2023, 2024]
+            .map(|year| bar(Utc.with_ymd_and_hms(year, 3, 15, 13, 30, 0).unwrap()));
+        for (back, expected) in [(1, "2023-01-01T00:00:00Z"), (2, "2022-01-01T00:00:00Z")] {
+            let mut pivots = PivotPoints::new()
+                .with_timeframe(PivotTimeframe::Yearly)
+                .with_pivots_back(back)
+                .with_daily_bars(true);
+            pivots.calculate(&bars);
+            let request = pivots.data_requests().pop().unwrap();
+            assert_eq!(pivots.data_start(&request), Some(expected.parse().unwrap()));
+            pivots = pivots.with_daily_bars(false);
+            assert_eq!(pivots.data_start(&request), None);
+        }
+    }
+
     /// The daily bars of 2 to 6 March have high 13, low 7 and close 11, so the week of 9 March has
     /// P = 31/3, R1 = 2P - L = 41/3 and S1 = 2P - H = 23/3, whatever its hourly bars and whether
     /// the chart holds that earlier week at all.
@@ -1028,20 +1105,26 @@ mod tests {
                 timeframe: Timeframe::Day1,
             }],
         );
-        let mut on_daily = PivotPoints::new().with_timeframe(PivotTimeframe::Weekly);
-        on_daily.set_timeframe(Timeframe::Day1);
-        on_daily.calculate(&daily);
+        // Traditional levels by hand from H=13,L=7,C=11,P=31/3 and range=6:
+        // R2=P+6, S2=P-6; R3=2P+13-14, S3=2P-26+7;
+        // R4=3P+13-21, S4=3P-39+7; R5=4P+13-28, S5=4P-52+7.
+        let expected = [
+            31.0 / 3.0,
+            41.0 / 3.0,
+            23.0 / 3.0,
+            49.0 / 3.0,
+            13.0 / 3.0,
+            59.0 / 3.0,
+            5.0 / 3.0,
+            23.0,
+            -1.0,
+            79.0 / 3.0,
+            -11.0 / 3.0,
+        ];
         for bar in 0..3 {
-            for (line, want) in [(0, 31.0 / 3.0), (1, 41.0 / 3.0), (2, 23.0 / 3.0)] {
+            for (line, want) in expected.into_iter().enumerate() {
                 let got = pivots.values().value(line, bar).unwrap();
-                assert!((got - want).abs() < 1e-9, "line {line} bar {bar}: {got}");
-            }
-            for line in 0..11 {
-                assert_eq!(
-                    pivots.values().value(line, bar),
-                    on_daily.values().value(line, 5),
-                    "line {line} bar {bar}"
-                );
+                assert!((got - want).abs() < 1e-12, "line {line} bar {bar}: {got}");
             }
         }
         // A tick on the newest daily bar keeps the levels; a corrected earlier week moves them.

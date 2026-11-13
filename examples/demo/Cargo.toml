@@ -11,12 +11,12 @@ name = "egui-charts-demo"
 path = "main.rs"
 
 [dependencies]
-egui-charts = { path = "../..", features = ["ui", "alert-engine", "strategies"] }
-eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui-charts = { path = "../..", features = ["ui", "alert-engine", "strategies", "detectors"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "persistence"] }
 # The emoji fonts draw the icons the drawing bar's Icons/Emojis menu places.
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
-# Image addresses work on the web; native builds also accept local files.
-egui_extras = { version = "0.37.0", features = ["svg", "image", "file", "http"] }
+# Embedded SVGs and validated PNG/JPEG bytes; native builds also load local files.
+egui_extras = { version = "0.37.0", default-features = false, features = ["svg", "image"] }
 chrono = "0.4.43"
 log = "0.4.29"
 serde = { version = "1", features = ["derive"] }
@@ -27,15 +27,17 @@ rfd = "0.17.2"
 # Native gets the windowing backends and the system clipboard.
 # WASM uses the canvas backend and browser downloads.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui_extras = { version = "0.37.0", default-features = false, features = ["file"] }
 maudio = "0.1.15"
-eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "glow", "links", "x11", "wayland"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Check recording size before the browser allocates its bytes.
+rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 wasm-bindgen = "0.2.108"
 wasm-bindgen-futures = "0.4.58"
 web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "AudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioContextState"] }
 console_error_panic_hook = "0.1.7"
-getrandom = { version = "0.2", features = ["js"] }
 
 # `index.html` builds the web release with this profile; native builds keep `release`.
 # The same as the library's `wasm-release`, which explains the settings.

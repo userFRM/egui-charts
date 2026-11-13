@@ -17,7 +17,8 @@ pub use countdown::bar_countdown;
 #[cfg(feature = "widget")]
 pub(crate) use horizontal::median_bar_duration;
 pub use horizontal::{
-    HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
+    CustomHorizontalScale, HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout,
+    key_time, time_key,
 };
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
@@ -36,7 +37,7 @@ pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConf
 pub use study_format::StudyFormat;
 pub use time_formatter::{
     CustomTimeFormatter, DefaultTimeFormatter, LocaleTimeFormatter, RelativeTimeFormatter,
-    TimeFormatter, TimeFormatterBuilder, TimezoneMode,
+    TickMarkContext, TimeFormatter, TimeFormatterBuilder, TimezoneMode,
 };
 pub use timescale_marks::{
     TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,

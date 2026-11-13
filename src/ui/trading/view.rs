@@ -295,7 +295,9 @@ impl Trading {
         chart.export_layout_svg(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
-    fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
+    /// Draws a frozen chart and its opted-in trading overlays inside an image layout callback.
+    /// Use with [`Chart::export_layout_image`] and [`Chart::export_snapshot`] for several charts.
+    pub fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.show(ui);
         if self.display.include_in_image {
             chart.trading_bid_ask = self.display.bid_ask_labels;
@@ -523,7 +525,7 @@ impl Trading {
 }
 
 /// The open of the exchange session containing `time`, by the chart's trading hours and zone.
-fn session_open(
+pub(super) fn session_open(
     chart: &Chart,
     time: chrono::DateTime<chrono::Utc>,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -888,16 +890,28 @@ mod tests {
         assert!(broker.modified.lock().unwrap().is_empty());
     }
 
-    /// Line gestures wait for the actual confirmation button and send one broker call.
+    // One test per width: the cases take minutes, and separate tests share them across threads.
     #[test]
-    fn line_changes_wait_for_confirmation_and_send_one_call() {
+    fn line_changes_wait_for_confirmation_and_send_one_call_at_800_points() {
+        line_changes_wait_for_confirmation_and_send_one_call(800.0);
+    }
+
+    #[test]
+    fn line_changes_wait_for_confirmation_and_send_one_call_at_320_points() {
+        line_changes_wait_for_confirmation_and_send_one_call(320.0);
+    }
+
+    #[test]
+    fn line_changes_wait_for_confirmation_and_send_one_call_at_260_points() {
+        line_changes_wait_for_confirmation_and_send_one_call(260.0);
+    }
+
+    /// Line gestures wait for the actual confirmation button and send one broker call.
+    fn line_changes_wait_for_confirmation_and_send_one_call(width: f32) {
         use crate::chart::TradingLabelAlignment::{Center, Left, Right};
         use crate::theme::{Theme, apply_to_egui};
         for theme in [Theme::light(), Theme::dark()] {
-            for (width, alignment) in [800.0, 320.0, 260.0]
-                .into_iter()
-                .flat_map(|width| [Left, Center, Right].map(|alignment| (width, alignment)))
-            {
+            for alignment in [Left, Center, Right] {
                 for instant in [false, true] {
                     for (operation, edge, handle, gesture) in [
                         ("Cancel order", false, false, ""),

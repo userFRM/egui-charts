@@ -59,8 +59,31 @@ impl VisibilityTab {
                         .accessible_name(label(ui, "{0} from"))
                         .changed();
                     ui.add_enabled(ticked, egui::Label::new(l10n::text(ui.ctx(), "to")));
+                    let number_formatter = ui.style().number_formatter.clone();
                     changed |= ui
-                        .add_enabled(ticked, egui::DragValue::new(&mut to).range(from..=u64::MAX))
+                        .add_enabled(
+                            ticked,
+                            egui::DragValue::new(&mut to)
+                                .range(from..=u64::MAX)
+                                .custom_formatter(move |value, decimals| {
+                                    if value >= u64::MAX as f64 {
+                                        "∞".into()
+                                    } else {
+                                        number_formatter.format(value, decimals)
+                                    }
+                                })
+                                .custom_parser(|text| {
+                                    if text.trim() == "∞" {
+                                        Some(u64::MAX as f64)
+                                    } else {
+                                        text.split_whitespace()
+                                            .collect::<String>()
+                                            .replace('−', "-")
+                                            .parse()
+                                            .ok()
+                                    }
+                                }),
+                        )
                         .accessible_name(label(ui, "{0} to"))
                         .changed();
                     // Only an edited row is written, so saved labels of other units stay exact.

@@ -4,9 +4,8 @@
 //! cargo run --example yield_curve
 //! ```
 //!
-//! The horizontal axis is a [`MaturityScale`]. Its whitespace bars give the main series a slot
-//! every month, so each curve, drawn as a series of its own, is spaced by maturity rather than
-//! by point. The yields are generated sample data, not market data.
+//! The horizontal axis is a [`MaturityScale`]. Actual samples are spaced linearly by maturity
+//! without placeholder rows. The yields are generated sample data, not market data.
 
 use egui_charts::model::{Bar, BarData};
 use egui_charts::scales::{MaturityScale, key_time};
@@ -33,38 +32,25 @@ pub(crate) struct YieldCurve {
 
 impl YieldCurve {
     pub(crate) fn new() -> Self {
-        let scale = MaturityScale::default();
-        let slots = scale.whitespace(360.0);
-        let all_slots = slots.len();
-        let mut chart = Chart::new(BarData::from_bars(slots));
-        chart.set_horizontal_scale(Some(Arc::new(scale)));
-        chart.set_symbol("Yield, %");
-        chart.config_mut().show_volume = false;
-        for (name, color, curve) in [
-            (
-                "Today",
-                egui::Color32::from_rgb(41, 98, 255),
-                today as fn(f64) -> f64,
-            ),
-            (
-                "A year ago",
-                egui::Color32::from_rgb(242, 54, 69),
-                a_year_ago,
-            ),
-        ] {
-            let series = chart.add_series(SeriesOptions {
-                name: name.into(),
-                color,
-                ..Default::default()
-            });
-            let bars = MATURITIES
+        let bars = |curve: fn(f64) -> f64| {
+            MATURITIES
                 .iter()
                 .filter_map(|&months| Some(Bar::from_value(key_time(months)?, curve(months))))
-                .collect();
-            chart.set_data(series, bars);
-        }
-        // Three more bars than slots leave room for the right offset.
-        chart.set_visible_bars(all_slots + 3);
+                .collect()
+        };
+        let mut chart = Chart::new(BarData::from_bars(bars(today)));
+        chart.set_chart_type(egui_charts::ChartType::Line);
+        chart.set_horizontal_scale(Some(Arc::new(MaturityScale::default())));
+        chart.set_symbol("Today, yield %");
+        chart.config_mut().show_volume = false;
+        let previous = chart.add_series(SeriesOptions {
+            name: "A year ago".into(),
+            color: egui::Color32::from_rgb(242, 54, 69),
+            ..Default::default()
+        });
+        chart.set_data(previous, bars(a_year_ago));
+        // Three spacing units beyond the samples leave room for the right offset.
+        chart.set_visible_bars(MATURITIES.len() + 3);
         Self { chart }
     }
 

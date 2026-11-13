@@ -10,6 +10,7 @@
 
 mod callout;
 mod labels;
+pub(super) use labels::price_text;
 mod notes;
 mod signpost;
 mod table;

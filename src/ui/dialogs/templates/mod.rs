@@ -43,6 +43,7 @@ mod tests {
         drawing.label = Some("name".into());
         drawing.post = Some(crate::model::PostLink::new("https://example.invalid/a"));
         drawing.screen_anchor = Some([0.25, 0.75]);
+        drawing.text_zoom_spacing = Some(6.5);
         drawing.pane = Some(7);
         drawing.folder = vec!["Analysis".into()];
         let mut template = DrawingTemplate::from_drawing(&drawing);
@@ -51,6 +52,7 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
         assert!(template.settings.chart_points.is_empty());
         assert!(template.settings.screen_anchor.is_none());
+        assert!(template.settings.text_zoom_spacing.is_none());
         assert!(template.settings.pane.is_none());
         assert!(template.settings.post.is_none());
         assert!(template.settings.folder.is_empty());
@@ -68,6 +70,7 @@ mod tests {
         );
         assert_eq!(drawing.chart_points.len(), 2);
         assert_eq!(drawing.screen_anchor, Some([0.25, 0.75]));
+        assert_eq!(drawing.text_zoom_spacing, Some(6.5));
         assert_eq!(drawing.pane, Some(9));
         assert_eq!(drawing.folder, ["Analysis", "Levels"]);
         assert_eq!(drawing.chart_points[0].bar_idx, 3.0);

@@ -14,7 +14,8 @@ use egui::Color32;
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CandleColorConfig {
-    /// Colour each candle by its close against the previous close instead of its open.
+    /// Colour plain candles by their close against the previous close instead of their open.
+    /// Bars, volume candles and Heikin Ashi keep their rule in `ChartSettingsState::chart_type_params`.
     pub color_by_previous_close: bool,
     /// Whether candle bodies are filled.
     pub show_body: bool,
@@ -269,6 +270,8 @@ impl Default for MarginsSettings {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ScalesAndLinesSettings {
+    /// Axis layout of the pane containing the main series.
+    pub axis_layout: crate::model::PaneAxisOptions,
     /// Display host-supplied currency metadata.
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
@@ -282,6 +285,8 @@ pub struct ScalesAndLinesSettings {
     /// Lock scale units per bar to `price_to_bar_ratio`.
     pub lock_price_to_bar_ratio: bool,
     /// Positive scale units per bar while locked; log scales use natural logarithms of prices.
+    /// Read from a chart that is not locked, it is the ratio of the view the chart shows, so ticking
+    /// the lock keeps that view; 1 for a chart not drawn yet.
     pub price_to_bar_ratio: f64,
     /// Last price tag and line colour, or the candle direction colour when unset.
     pub symbol_price_color: Option<Color32>,
@@ -328,6 +333,7 @@ pub struct ScalesAndLinesSettings {
 impl Default for ScalesAndLinesSettings {
     fn default() -> Self {
         Self {
+            axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
             show_scale_mode_buttons: true,
@@ -516,6 +522,8 @@ pub struct OrderFlowSettings {
 
 /// Serializable display settings shared by the chart and its settings dialog.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+// The trait impls below wrap the derived ones.
+#[serde(remote = "Self")]
 pub struct ChartSettingsState {
     // Symbol tab
     /// Active representation used to select the Symbol controls. Applying settings keeps the chart type.
@@ -582,6 +590,28 @@ pub struct ChartSettingsState {
     // Events tab
     /// Visible event categories.
     pub events: crate::model::EventVisibility,
+}
+
+impl serde::Serialize for ChartSettingsState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChartSettingsState {
+    /// A saved HLC area entry of the former format takes its colours from the saved candle
+    /// colours, which [`from_chart`](Self::from_chart) writes from the chart's.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::model::HlcAreaStyle::forget_former();
+        let mut state = Self::deserialize(deserializer)?;
+        if let Some(params) = &mut state.chart_type_params {
+            params
+                .styles
+                .hlc_area
+                .fill_former(state.candle_colors.body_up, state.candle_colors.body_down);
+        }
+        Ok(state)
+    }
 }
 
 impl Default for ChartSettingsState {

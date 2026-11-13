@@ -118,6 +118,13 @@ impl Chart {
             from_ticks: BTreeMap::new(),
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
+            readout_revision: crate::model::next_revision(),
+            // Unique also among the charts of other runs, whose snapshots a host may keep.
+            #[cfg(feature = "ui")]
+            data_table_identity: std::hash::BuildHasher::hash_one(
+                &std::hash::RandomState::new(),
+                (chrono::Utc::now(), crate::model::next_revision()),
+            ),
             study_data: Default::default(),
             element_studies: Default::default(),
             execution_ranges: Default::default(),
@@ -136,11 +143,13 @@ impl Chart {
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
+            stale: Vec::new(),
             next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
             primitives: Vec::new(),
             next_primitive: 0,
+            hide_foreground: false,
             #[cfg(feature = "drawings")]
             drawings: DrawingManager::new(),
             #[cfg(feature = "drawings")]
@@ -151,6 +160,8 @@ impl Chart {
             drawing_store: None,
             #[cfg(feature = "drawings")]
             restored_studies: Default::default(),
+            #[cfg(feature = "drawings")]
+            study_column_ids: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane::PaneLayout::default(),
             pane_options: Default::default(),
@@ -162,7 +173,6 @@ impl Chart {
             currency_choices: Vec::new(),
             currency_choice: None,
             legend_badge: None,
-            watermark: None,
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
@@ -203,8 +213,6 @@ impl Chart {
             show_price_targets: false,
             hidden_signal_categories: Default::default(),
             event_click: None,
-            mark_hits: std::cell::RefCell::default(),
-            clickable_marks: Vec::new(),
             timeframe: None,
             feed_link: None,
             #[cfg(feature = "drawings")]
@@ -223,10 +231,15 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
+            layout_link_controls: false,
+            layout_identity: crate::model::next_revision(),
+            host_crosshair: None,
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,
+            synced_crosshair_series: None,
             last_crosshair: None,
+            last_crosshair_series: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Default::default(),
@@ -484,7 +497,12 @@ impl Chart {
     /// the dataset with [`Chart::set_data`] recalculates them. A size the chart cannot use is
     /// reported on the chart. On price-based types a change
     /// clears the zoom history and selection and keeps the right-edge item by time and rank.
-    pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+    /// A volume candles style read from a document saved before that style existed takes the
+    /// defaults; applying the document's chart settings builds it from their body colours.
+    pub fn set_chart_type_params(&mut self, mut params: ChartTypeParams) {
+        if params.styles.volume_candles.is_saved_without_style() {
+            params.styles.volume_candles = Default::default();
+        }
         if self.chart_type.is_time_independent() && self.chart_type_params != params {
             self.state.clear_zoom_history();
             self.selection.deselect();
@@ -511,7 +529,7 @@ impl Chart {
         if visible_bars == 0 {
             self.chart_options.time_scale.bar_spacing
         } else {
-            width / visible_bars as f32
+            (width - 1.0) / visible_bars as f32
         }
     }
 
@@ -526,15 +544,15 @@ impl Chart {
     /// Width in points of the main price axis on `side` at the last frame, 0 when that axis is
     /// hidden: the configured minimum width, or wider when the labels need more room.
     pub fn price_axis_width(&self, side: crate::scales::PriceScaleId) -> f32 {
-        let (shown, minimum) = match side {
+        let (axis_side, minimum) = match side {
             crate::scales::PriceScaleId::Right => {
-                (self.config.show_right_axis, self.config.right_axis_width)
+                (crate::model::AxisSide::Right, self.config.right_axis_width)
             }
             crate::scales::PriceScaleId::Left => {
-                (self.config.show_left_axis, self.config.left_axis_width)
+                (crate::model::AxisSide::Left, self.config.left_axis_width)
             }
         };
-        if shown {
+        if self.primary_axis_side() == Some(axis_side) {
             minimum.max(self.measured_axis_width)
         } else {
             0.0
@@ -982,8 +1000,10 @@ impl ChartBuilder {
             self.config = self.config.with_theme(theme);
         }
 
-        let mut chart =
-            Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
+        // Configure in place to avoid stacking full chart values in nested constructors.
+        let mut chart = Chart::new(BarData::new());
+        chart.update_config(self.config);
+        chart.set_chart_options(self.chart_options);
 
         chart.theme_override = self.theme;
         chart.set_locale(self.locale);
@@ -1250,9 +1270,10 @@ mod tests {
         }
     }
 
-    /// Both entry points fit 50 slots once and leave the same view at the latest bar.
+    /// Both entry points fit 50 slots once and leave the same view at the latest bar, and the
+    /// time scale reads a set count back, also below one point per bar.
     #[test]
-    fn visible_bars_matches_the_setter_on_initial_frames() {
+    fn visible_bars_matches_the_setter_on_initial_frames_and_reads_back() {
         let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let data = BarData::from_bars(
             (0..600)
@@ -1290,7 +1311,7 @@ mod tests {
                 );
                 assert_eq!(
                     built.state.time_scale().bar_spacing(),
-                    built.get_rendered_price_rect().width() / 50.0
+                    (built.get_rendered_price_rect().width() - 1.0) / 50.0
                 );
                 assert_eq!(built.get_visible_bars(), set.get_visible_bars());
                 assert_eq!(built.get_visible_bars(), 49);
@@ -1301,6 +1322,15 @@ mod tests {
             built.state.time_scale_mut().set_bar_spacing(20.0);
             built.apply_timescale_config(width - 166.0);
             assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
+        }
+        // The time scale reads the count back, also at less than a point per bar.
+        for (width, count) in [(600.0, 1000), (801.0, 800), (740.0, 50)] {
+            let mut chart = Chart::new(data.clone());
+            chart.state.time_scale_mut().set_min_bar_spacing(0.01);
+            chart.set_visible_bars(count);
+            chart.apply_timescale_config(width);
+            let candles = chart.state.time_scale().visible_candles();
+            assert_eq!(candles, count, "width {width}");
         }
     }
 }

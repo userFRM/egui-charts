@@ -71,7 +71,7 @@ pub struct DrawingToolbarDomainState {
 // Import from modular components
 use super::{
     DrawingToolShortcuts, DrawingToolbarAction, DrawingToolbarConfig,
-    categories::{CursorsCategory, ToolCategory, trend_lines::render_registered_tool_submenu},
+    categories::{CursorsCategory, trend_lines::render_registered_tool_submenu},
     components::{draw_separator_styled, draw_tool_button},
     data, icons,
     state::{MagnetType, ToolbarState},
@@ -209,6 +209,12 @@ impl DrawingToolbar {
 
     /// Render the toolbar and return the full action
     pub fn show_with_action(&mut self, ui: &mut Ui) -> DrawingToolbarAction {
+        if self.state.preferences.hidden {
+            let position = ui.available_rect_before_wrap().min + Vec2::splat(8.0);
+            return self
+                .show_floating_with_action(ui, position)
+                .unwrap_or(DrawingToolbarAction::None);
+        }
         let mut action = DrawingToolbarAction::None;
 
         // A tool's shortcut selects it, unless the user is typing.
@@ -305,8 +311,10 @@ impl DrawingToolbar {
         }
 
         // === FAVOURITE TOOLS STRIP ===
-        if let Some(tool) = self.show_floating(ui, sidebar_rect.right_top() + Vec2::splat(8.0)) {
-            action = DrawingToolbarAction::SelectTool(tool);
+        if let Some(pick) =
+            self.show_floating_with_action(ui, sidebar_rect.right_top() + Vec2::splat(8.0))
+        {
+            action = pick;
         }
 
         ui.allocate_rect(sidebar_rect, Sense::hover());
@@ -590,7 +598,8 @@ impl DrawingToolbar {
         self.menu_button(ui, "Hide", &response);
 
         // Favourite tools strip
-        let strip_shown = self.state.floating_visible && !self.state.favorites.is_empty();
+        let strip_shown = self.state.floating_visible
+            && (!self.state.favorites.is_empty() || !self.state.cursor_favorites.is_empty());
         if FavoritesButton::show(ui, strip_shown) {
             self.state.floating_visible = !strip_shown;
         }
@@ -641,7 +650,7 @@ impl DrawingToolbar {
 
         let trading = !self.hidden.contains(&Control::Trading);
         let sel_tool = self.state.sel_tool;
-        let starred = self.state.favorites.len();
+        let starred = self.state.favorites.len() + self.state.cursor_favorites.len();
         let state = &mut self.state;
         let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
@@ -652,12 +661,12 @@ impl DrawingToolbar {
                 state.snap_to_indicators,
             ),
             "Hide" => HideMenu::show_submenu(ui, trading, state),
-            "Remove" => RemoveMenu::show_submenu(ui),
+            "Remove" => RemoveMenu::show_submenu(ui, state),
             "Icons/Emojis" => state.glyph_picker.show(ui, registry),
             _ => {
                 let favorites = &mut state.favorites;
                 let action = if category == "Cursors" {
-                    CursorsCategory.render_submenu(ui, sel_tool, favorites)
+                    CursorsCategory.render_with_favorites(ui, &mut state.cursor_favorites)
                 } else {
                     render_registered_tool_submenu(
                         ui,
@@ -672,7 +681,7 @@ impl DrawingToolbar {
         })
         .flatten();
         // Starring a tool shows the strip it joins.
-        if self.state.favorites.len() > starred {
+        if self.state.favorites.len() + self.state.cursor_favorites.len() > starred {
             self.state.floating_visible = true;
         }
 
@@ -732,16 +741,24 @@ impl DrawingToolbar {
             // switch it on.
             A::ToggleMagnet if !self.state.magnet_mode => return None,
             A::ToggleMagnet => self.state.magnet_mode = false,
+            A::SetToolbarVisible(visible) => self.state.preferences.hidden = !visible,
+            A::SetLockedDrawingRemoval(include) => {
+                self.state.preferences.remove_locked = Some(*include);
+            }
             A::HideAllDrawings => self.state.hide_drawings = !self.state.hide_drawings,
             A::HideAllIndicators => self.state.hide_indicators = !self.state.hide_indicators,
             A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
             A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
             A::HideAll => {
                 let state = &mut self.state;
-                state.hide_drawings = true;
-                state.hide_indicators = true;
-                state.hide_positions = true;
-                state.hide_orders = true;
+                let trading = !self.hidden.contains(&Control::Trading);
+                let hidden = !state.all_hidden(trading);
+                state.hide_drawings = hidden;
+                state.hide_indicators = hidden;
+                if trading {
+                    state.hide_positions = hidden;
+                    state.hide_orders = hidden;
+                }
             }
             A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
             A::InsertGlyph { icon_name, .. } => {
@@ -773,6 +790,197 @@ mod tests {
             egui::Shape::Text(t) if t.galley.job.text == value => Some(t.visual_bounding_rect()),
             _ => None,
         })
+    }
+
+    /// Stars keep cursor picks separate from drawing picks and do not change the active mode.
+    #[test]
+    fn cursor_stars_keep_the_menu_open_and_strip_picks_report_modes() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let theme = crate::theme::Theme::light();
+        for cursor in CursorType::all() {
+            let mut toolbar = DrawingToolbar::new();
+            toolbar.select_tool(DrawingToolType::TrendLine);
+            let theme = theme.clone();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .build_ui_state(
+                    |ui, state: &mut (DrawingToolbar, DrawingToolbarAction)| {
+                        let action = state.0.show_with_action(ui);
+                        if action != DrawingToolbarAction::None {
+                            state.1 = action;
+                        }
+                    },
+                    (toolbar, DrawingToolbarAction::None),
+                );
+            harness.run();
+            harness.get_by_role_and_label(Role::Button, "Arrow").click();
+            harness.run();
+            let name = format!("Favourite {}", cursor.name());
+            harness
+                .get_by_role_and_label(Role::RadioButton, cursor.name())
+                .hover();
+            harness.run();
+            // This target is absent on the old cursor menu.
+            let star = harness.get_by_role_and_label(Role::Button, &name);
+            assert_ne!(star.accesskit_node().toggled(), Some(Toggled::True));
+            star.focus();
+            harness.run();
+            harness.key_press(egui::Key::Space);
+            harness.run();
+            assert_eq!(harness.state().1, DrawingToolbarAction::None);
+            assert_eq!(
+                harness.state().0.state.sel_tool,
+                Some(DrawingToolType::TrendLine)
+            );
+            assert_eq!(
+                harness.state().0.state.current_cursor_type,
+                CursorType::Arrow
+            );
+            assert_eq!(
+                harness
+                    .get_by_role_and_label(Role::Button, &name)
+                    .accesskit_node()
+                    .toggled(),
+                Some(Toggled::True)
+            );
+            // Unstarring keeps the flyout open too, then the same target can star it again.
+            for selected in [false, true] {
+                harness.get_by_role_and_label(Role::Button, &name).click();
+                harness.run();
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(Role::Button, &name)
+                        .accesskit_node()
+                        .toggled(),
+                    Some(if selected {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
+                );
+            }
+            harness.key_press(egui::Key::Escape);
+            harness.run();
+            assert!(
+                harness
+                    .query_by_role_and_label(Role::Button, &name)
+                    .is_none()
+            );
+            let pick = harness
+                .query_all_by_role_and_label(Role::Button, cursor.name())
+                .last()
+                .unwrap();
+            pick.click();
+            harness.run();
+            let expected = if *cursor == CursorType::Eraser {
+                DrawingToolbarAction::ToggleEraserMode
+            } else {
+                DrawingToolbarAction::SetCursorType(*cursor)
+            };
+            assert_eq!(harness.state().1, expected);
+            assert_eq!(harness.state().0.state.sel_tool, None);
+        }
+    }
+
+    /// A separately placed strip offers only picks its API can report to a synchronising host.
+    #[test]
+    fn show_floating_offers_only_picks_it_reports() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for with_action in [false, true] {
+            for has_tool in [false, true] {
+                let mut toolbar = DrawingToolbar::new();
+                toolbar.state.cursor_favorites = vec![CursorType::Dot];
+                if has_tool {
+                    toolbar.state.favorites = vec![DrawingToolType::TrendLine];
+                }
+                let domain = toolbar.get_domain_state();
+                let mut harness = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .build_ui_state(
+                        move |ui,
+                              state: &mut (
+                            DrawingToolbar,
+                            DrawingToolbarDomainState,
+                            Option<DrawingToolbarAction>,
+                        )| {
+                            state.0.sync_from_domain_state(&state.1);
+                            let pick = if with_action {
+                                state
+                                    .0
+                                    .show_floating_with_action(ui, egui::pos2(20.0, 20.0))
+                            } else {
+                                state
+                                    .0
+                                    .show_floating(ui, egui::pos2(20.0, 20.0))
+                                    .map(DrawingToolbarAction::SelectTool)
+                            };
+                            if let Some(pick) = pick {
+                                state.1 = state.0.get_domain_state();
+                                state.2 = Some(pick);
+                            }
+                        },
+                        (toolbar, domain, None),
+                    );
+                harness.run();
+                assert_eq!(
+                    harness
+                        .query_by_role_and_label(Role::Button, "Dot")
+                        .is_some(),
+                    with_action,
+                    "cursor button with action API {with_action}, drawing favourite {has_tool}"
+                );
+                assert_eq!(
+                    harness
+                        .query_by_role_and_label(Role::Button, "Move favorite tools")
+                        .is_some(),
+                    with_action || has_tool,
+                    "the strip must hide when this API has no reportable picks"
+                );
+                if with_action {
+                    harness.get_by_role_and_label(Role::Button, "Dot").click();
+                    harness.run();
+                    assert_eq!(
+                        harness.state().2,
+                        Some(DrawingToolbarAction::SetCursorType(CursorType::Dot))
+                    );
+                }
+                if has_tool {
+                    harness
+                        .get_by_role_and_label(Role::Button, "Trend Line")
+                        .click();
+                    harness.run();
+                    assert_eq!(
+                        harness.state().2,
+                        Some(DrawingToolbarAction::SelectTool(DrawingToolType::TrendLine))
+                    );
+                    assert_eq!(harness.state().1.sel_tool, Some(DrawingToolType::TrendLine));
+                }
+                harness.run();
+                assert_eq!(
+                    harness.state().0.state.current_cursor_type,
+                    if with_action {
+                        CursorType::Dot
+                    } else {
+                        CursorType::Arrow
+                    }
+                );
+                assert_eq!(
+                    harness.state().1.current_cursor_type,
+                    harness.state().0.state.current_cursor_type
+                );
+            }
+        }
     }
 
     /// The floating strip lists the favorite tools as they change, stays where it was first put
@@ -1256,6 +1464,43 @@ mod tests {
         assert!(label(&shapes, "Got it").is_none());
     }
 
+    /// Group rules use the same palette blend as the top toolbar, including custom colours.
+    #[test]
+    fn drawing_bar_rules_follow_the_palette() {
+        use crate::theme::Theme;
+        use egui::{Color32, Shape};
+
+        let mut custom = Theme::light();
+        custom.ui.panel_bg = Color32::from_rgb(240, 220, 200);
+        custom.ui.text = Color32::from_rgb(40, 20, 0);
+        // Rounded channel blends: 46 + .16 * 173; 255 - .085 * 255;
+        // 150 + .16 * 105; and (240, 220, 200) - .085 * 200.
+        for (theme, expected) in [
+            (Theme::dark(), Color32::from_gray(74)),
+            (Theme::high_contrast(), Color32::from_gray(167)),
+            (Theme::light(), Color32::from_gray(233)),
+            (custom, Color32::from_rgb(223, 203, 183)),
+        ] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                draw_separator_styled(ui, 52.0);
+            });
+            let rules: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Rect(rect) if rect.rect.size() == Vec2::new(33.0, 1.0) => {
+                        Some(rect.fill)
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(rules, [expected]);
+        }
+    }
+
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
     #[test]
     fn drawing_bar_icons_keep_their_grid_pitch_and_state_colours() {
@@ -1265,10 +1510,14 @@ mod tests {
         let mut custom = crate::theme::Theme::dark();
         custom.ui.text = Color32::GREEN;
         custom.ui.accent_text = Color32::YELLOW;
+        let mut custom_light = crate::theme::Theme::light();
+        custom_light.ui.text = Color32::from_rgb(30, 60, 90);
+        custom_light.ui.panel_bg = Color32::from_rgb(245, 235, 225);
         for (theme, text) in [
             (crate::theme::Theme::dark(), Color32::from_gray(219)),
             (crate::theme::Theme::light(), Color32::BLACK),
             (custom, Color32::GREEN),
+            (custom_light, Color32::from_rgb(30, 60, 90)),
         ] {
             for (selected, magnet) in [
                 (None, false),
@@ -1318,11 +1567,7 @@ mod tests {
                     {
                         text
                     } else if i == 10 && magnet {
-                        if theme.dark {
-                            theme.ui.panel_bg
-                        } else {
-                            Color32::WHITE
-                        }
+                        theme.ui.panel_bg
                     } else {
                         text
                     };
@@ -1352,7 +1597,7 @@ mod tests {
                 let selected_fill = if theme.dark {
                     theme.ui.btn_bg_active
                 } else {
-                    Color32::from_gray(235)
+                    crate::ui::top_toolbar::buttons::rule_color(&theme)
                 };
                 let hovered_fill = if selected.is_none() {
                     theme.ui.btn_bg_hover
@@ -1370,22 +1615,14 @@ mod tests {
                         && r.rect == Rect::from_min_size(origin + vec2(8.5, selected_y), vec2(35.0, 35.0))
                 )));
                 if magnet {
-                    let fill = if theme.dark {
-                        theme.ui.text
-                    } else {
-                        Color32::from_gray(26)
-                    };
+                    let fill = theme.ui.text;
                     assert!(shapes.iter().any(|s| matches!(
                         &s.shape,
                         Shape::Rect(r) if r.fill == fill
                             && r.rect == Rect::from_center_size(origin + vec2(26.0, 437.0), vec2(35.0, 35.0))
                     )));
                 }
-                let separator = if theme.dark {
-                    Color32::from_gray(74)
-                } else {
-                    Color32::from_gray(235)
-                };
+                let separator = crate::ui::top_toolbar::buttons::rule_color(&theme);
                 for y in [316.0, 409.0, 616.0] {
                     assert!(shapes.iter().any(|s| matches!(
                         &s.shape,

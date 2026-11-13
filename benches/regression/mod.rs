@@ -90,6 +90,29 @@ pub fn run(name: &str, frames: usize) {
         );
         return;
     }
+    if name == "bar-limit" {
+        // Built-in studies only: a host study waits for its next full recompute by measured
+        // time, which would change the instruction count from run to run.
+        let mut chart = super::limited_chart(false);
+        let mut last = super::example::sample_bar(super::BAR_LIMIT - super::frame::WARMUP - 1, 0);
+        let samples = super::frame::run(vec2(1440.0, 900.0), pos2(700.0, 350.0), frames, |ui| {
+            // A frame whose first pass is discarded runs this twice but takes one bar.
+            if ui.ctx().current_pass_index() == 0 {
+                last.time += chrono::Duration::minutes(1);
+                chart.update(SeriesId::MAIN, last.clone());
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+        });
+        black_box(samples);
+        assert_eq!(
+            chart.bars(SeriesId::MAIN).len() < super::BAR_LIMIT,
+            frames > 0,
+            "only the measured frames evict"
+        );
+        return;
+    }
     let bars = match name {
         "frame-1000" => 1_000,
         "frame-1000000" => 1_000_000,

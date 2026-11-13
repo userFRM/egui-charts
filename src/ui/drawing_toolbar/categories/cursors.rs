@@ -15,72 +15,7 @@ use super::{DrawingToolbarAction, ToolCategory};
 use crate::theme::ThemeExt;
 use crate::ui::drawing_toolbar::toolbar::CursorStateData;
 
-/// Cursor tool types (not drawing tools, but cursor modes)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CursorType {
-    /// Crosshair cursor.
-    Cross,
-    /// Dot cursor.
-    Dot,
-    /// Arrow cursor.
-    Arrow,
-    /// Pointer with a presentation halo.
-    Demonstration,
-    /// Trail that follows the pointer while the button is held, then fades.
-    Magic,
-    /// Click a drawing to delete it.
-    Eraser,
-}
-
-impl CursorType {
-    /// Values in display order.
-    pub fn all() -> &'static [CursorType] {
-        &[
-            CursorType::Cross,
-            CursorType::Dot,
-            CursorType::Arrow,
-            CursorType::Demonstration,
-            CursorType::Magic,
-            CursorType::Eraser,
-        ]
-    }
-
-    /// Display name for this value.
-    pub fn name(&self) -> &'static str {
-        match self {
-            CursorType::Cross => "Cross",
-            CursorType::Dot => "Dot",
-            CursorType::Arrow => "Arrow",
-            CursorType::Demonstration => "Demonstration",
-            CursorType::Magic => "Magic",
-            CursorType::Eraser => "Eraser",
-        }
-    }
-
-    /// Icon representing this value.
-    pub fn icon(&self) -> &'static Icon {
-        match self {
-            CursorType::Cross => &icons::CROSSHAIR,
-            CursorType::Dot => &icons::DOT,
-            CursorType::Arrow => &icons::ARROW,
-            CursorType::Demonstration => &icons::DEMONSTRATION,
-            CursorType::Magic => &icons::MAGIC_CURSOR,
-            CursorType::Eraser => &icons::ERASER,
-        }
-    }
-
-    /// Keyboard shortcut label, when one is assigned.
-    pub fn shortcut(&self) -> Option<&'static str> {
-        match self {
-            CursorType::Cross => None,
-            CursorType::Dot => None,
-            CursorType::Arrow => None,
-            CursorType::Demonstration => None,
-            CursorType::Magic => None,
-            CursorType::Eraser => None,
-        }
-    }
-}
+pub use crate::config::CursorType;
 
 /// Cursors category implementation
 pub struct CursorsCategory;
@@ -119,6 +54,24 @@ impl ToolCategory for CursorsCategory {
         _sel_tool: Option<DrawingToolType>,
         _favorites: &mut Vec<DrawingToolType>,
     ) -> DrawingToolbarAction {
+        let id = ui.make_persistent_id("cursor_favorites");
+        let mut favorites = ui
+            .data_mut(|data| data.remove_temp::<Vec<CursorType>>(id))
+            .unwrap_or_default();
+        let action = self.render_with_favorites(ui, &mut favorites);
+        ui.data_mut(|data| data.insert_temp(id, favorites));
+        action
+    }
+}
+
+impl CursorsCategory {
+    /// Show the cursor menu with host-owned favourites. Keep and serialize `favorites` with
+    /// user preferences; [`ToolCategory::render_submenu`] retains them only for the UI session.
+    pub fn render_with_favorites(
+        &self,
+        ui: &mut Ui,
+        favorites: &mut Vec<CursorType>,
+    ) -> DrawingToolbarAction {
         // The toolbar stores its cursor state for the frame before it shows this menu.
         let Some(state) = ui
             .ctx()
@@ -149,12 +102,28 @@ impl ToolCategory for CursorsCategory {
             let (rect, response) =
                 ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
             let active = state.is_active(*cursor);
+            let favorite = favorites.contains(cursor);
+            let translated_label = l10n::text(ui.ctx(), cursor.name());
+            let star_rect = egui::Rect::from_center_size(
+                rect.right_center() - egui::vec2(20.0, 0.0),
+                egui::vec2(28.0, rect.height()),
+            );
+            let star = ui.interact(
+                star_rect,
+                response.id.with("favorite"),
+                egui::Sense::click(),
+            );
+            let label = l10n::format_text(ui.ctx(), "Favourite {0}", &[("0", &translated_label)]);
+            star.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::Button, star.enabled(), favorite, &label)
+            });
+            let hovered = ui.rect_contains_pointer(rect);
             let foreground = if active {
                 theme.ui.panel_bg
             } else {
                 theme.ui.text
             };
-            if active || response.hovered() {
+            if active || hovered {
                 ui.painter().rect_filled(
                     rect,
                     6,
@@ -178,11 +147,40 @@ impl ToolCategory for CursorsCategory {
             ui.painter().text(
                 egui::pos2(rect.left() + 40.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                l10n::text(ui.ctx(), cursor.name()),
+                &translated_label,
                 font.clone(),
                 foreground,
             );
-            let translated_label = l10n::text(ui.ctx(), cursor.name());
+            if favorite || hovered || response.has_focus() || star.has_focus() {
+                let icon = if favorite {
+                    &icons::STAR_FILLED
+                } else {
+                    &icons::STAR_EMPTY
+                };
+                let color = if active {
+                    foreground
+                } else if favorite {
+                    theme.ui.warning
+                } else {
+                    crate::ui_kit::section::menu_heading_color(&theme)
+                };
+                icon.as_image_tinted(egui::Vec2::splat(16.0), color)
+                    .paint_at(
+                        ui,
+                        egui::Rect::from_center_size(star_rect.center(), egui::Vec2::splat(16.0)),
+                    );
+            }
+            crate::styles::focus::draw_focus_ring(ui, &star, theme.radius.sm);
+            if star.has_focus() {
+                star.scroll_to_me(None);
+            }
+            if star.clicked() {
+                if favorite {
+                    favorites.retain(|value| value != cursor);
+                } else {
+                    favorites.push(*cursor);
+                }
+            }
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
                     egui::Role::RadioButton,

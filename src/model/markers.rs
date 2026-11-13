@@ -81,9 +81,9 @@ pub enum MarkerZOrder {
 /// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkerOptions {
-    /// Whether the prices of the [`MarkerPos::AtPriceTop`], [`AtPriceBottom`](MarkerPos::AtPriceBottom)
-    /// and [`AtPriceMiddle`](MarkerPos::AtPriceMiddle) markers in view widen the autoscaled price
-    /// range, so that they are not cut off. Default true.
+    /// Whether visible price-relative markers widen the autoscaled range to fit their shapes
+    /// and text at the configured size, when the pane has enough height. Pane-edge positions
+    /// and manual ranges are unchanged. Default true.
     pub auto_scale: bool,
     /// Default [`MarkerZOrder::Normal`].
     pub z_order: MarkerZOrder,
@@ -232,7 +232,9 @@ pub struct ChangeMarkers {
     pub up_color: Color32,
     /// Colour of a fall.
     pub down_color: Color32,
-    /// How long a mark stays after the update that made it. Default 5 seconds.
+    /// How long a mark fades linearly from its configured colour to transparent after a
+    /// changed close. Another change to the same bar restarts the fade. Zero hides the mark.
+    /// Default 5 seconds.
     pub duration: std::time::Duration,
 }
 

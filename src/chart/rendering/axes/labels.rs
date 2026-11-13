@@ -16,7 +16,7 @@ const AXIS_TICK_LENGTH: f32 = 3.0;
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
 /// through. `axis` sets the border, tick marks and label clipping. A host `formatter` writes the
-/// labels with [`PriceFormatter::format_tick`].
+/// labels with [`PriceFormatter::format_ticks`].
 pub fn render_price_labels(
     context: &RenderContext,
     price_scale: &PriceMap,
@@ -50,7 +50,12 @@ pub fn render_price_labels_at_pos(
     slot: ShapeIdx,
     formatter: Option<&dyn PriceFormatter>,
 ) {
-    let mut marks = price_marks(price_scale, formatter);
+    let marks = price_axis_marks(
+        context.painter,
+        price_scale,
+        axis.edge_ticks_visible.then_some(context.rect),
+        formatter,
+    );
 
     // Determine positioning based on scale position
     let (edge, side, alignment) = match position {
@@ -60,41 +65,6 @@ pub fn render_price_labels_at_pos(
     let x_offset = edge + side * PRICE_LABEL_GAP;
 
     let font = axis_font(context.painter.ctx());
-    if axis.edge_ticks_visible {
-        // Edge labels sit half a line inside the pane, so they show whole.
-        let inset = context
-            .painter
-            .layout_no_wrap("0".to_owned(), font.clone(), colors.text)
-            .size()
-            .y
-            / 2.0;
-        // A pane too short for two labels gets none at its edges.
-        if context.rect.height() >= inset * 4.0 {
-            let edges = [context.rect.top() + inset, context.rect.bottom() - inset];
-            // An edge label replaces the marks closer to it than they are to each other.
-            let step = marks
-                .windows(2)
-                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
-                .reduce(f32::min)
-                .unwrap_or(inset * 4.0);
-            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
-            marks.extend(edges.map(|y| {
-                let value = price_scale.y_to_scale(y);
-                PriceMark {
-                    price: value,
-                    label: match formatter {
-                        Some(formatter) => {
-                            formatter.format_tick(price_scale.transform().axis_value(value))
-                        }
-                        None => price_scale.label(value, tick_decimals(price_scale, y), None),
-                    },
-                    y_coord: y,
-                    weight: 0,
-                }
-            }));
-        }
-    }
-
     let painter = if axis.hide_clipped_labels {
         context.painter.clone()
     } else {
@@ -153,18 +123,71 @@ pub fn render_price_labels_at_pos(
 }
 
 /// Price axis marks of `price_scale` from the "nice numbers" generator, labelled with
-/// [`PriceFormatter::format_tick`] when the host supplies a `formatter`.
+/// [`PriceFormatter::format_ticks`] when the host supplies a `formatter`.
 pub(crate) fn price_marks(
     price_scale: &PriceMap,
     formatter: Option<&dyn PriceFormatter>,
 ) -> Vec<PriceMark> {
     let mut marks = price_scale.marks();
-    if let Some(formatter) = formatter {
-        for mark in &mut marks {
-            mark.label = formatter.format_tick(mark.price);
+    format_price_marks(&mut marks, formatter);
+    marks
+}
+
+/// The complete list for painting and measuring an axis, with edge values inside `pane`.
+pub(super) fn price_axis_marks(
+    painter: &egui::Painter,
+    price_scale: &PriceMap,
+    pane: Option<Rect>,
+    formatter: Option<&dyn PriceFormatter>,
+) -> Vec<PriceMark> {
+    let mut marks = price_scale.marks();
+    if let Some(pane) = pane {
+        // Edge labels sit half a line inside the pane, so they show whole.
+        let inset = painter
+            .layout_no_wrap("0".to_owned(), axis_font(painter.ctx()), Color32::WHITE)
+            .size()
+            .y
+            / 2.0;
+        // A pane too short for two labels gets none at its edges.
+        if pane.height() >= inset * 4.0 {
+            let edges = [pane.top() + inset, pane.bottom() - inset];
+            // An edge label replaces the marks closer to it than they are to each other.
+            let step = marks
+                .windows(2)
+                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
+                .reduce(f32::min)
+                .unwrap_or(inset * 4.0);
+            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
+            marks.extend(edges.map(|y| {
+                let value = price_scale.y_to_scale(y);
+                PriceMark {
+                    price: price_scale.transform().axis_value(value),
+                    label: price_scale.label(value, tick_decimals(price_scale, y), None),
+                    y_coord: y,
+                    weight: 0,
+                }
+            }));
+            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
         }
     }
+    format_price_marks(&mut marks, formatter);
     marks
+}
+
+fn format_price_marks(marks: &mut [PriceMark], formatter: Option<&dyn PriceFormatter>) {
+    if let Some(formatter) = formatter {
+        let prices: Vec<_> = marks.iter().map(|mark| mark.price).collect();
+        let labels = formatter.format_ticks(&prices);
+        if labels.len() == marks.len() {
+            for (mark, label) in marks.iter_mut().zip(labels) {
+                mark.label = label;
+            }
+        } else {
+            for mark in marks {
+                mark.label = formatter.format_tick(mark.price);
+            }
+        }
+    }
 }
 
 /// Whether a label at `rect` is left out: a tag takes the place of the axis labels it overlaps.
@@ -210,8 +233,8 @@ type TimeAxisPoints = Vec<(chrono::DateTime<chrono::Utc>, usize)>;
 /// (`closed_weekdays`), so a series of weekday bars labels no weekend there. Whitespace on
 /// either side gets at most four keys per point of plot width.
 ///
-/// Keys carry unsigned indices, so when they reach before the first bar every index, and the
-/// bar indices of the returned mapping, are shifted by the same number of slots.
+/// Keys carry unsigned indices, so keys before the first bar shift all candidate indices.
+/// Ordinal mappings shift by the same number of slots; numeric mappings retain their key origin.
 /// [`render_time_labels`] paints them.
 pub(crate) fn time_axis_marks(
     context: &RenderContext,
@@ -225,7 +248,20 @@ pub(crate) fn time_axis_marks(
     // The logical indices at the right and left edges of the plot; the left one is negative
     // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
-    let left = (right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing)).floor();
+    let left = right + 1.0 - f64::from((context.rect.width() - 1.0) / coords.bar_spacing);
+    let (left, right) =
+        coords
+            .numeric_positions
+            .as_ref()
+            .map_or((left.floor(), right), |positions| {
+                let right = right + 0.5;
+                let left =
+                    right - f64::from(context.rect.width() - 1.0) / f64::from(coords.bar_spacing);
+                (
+                    (positions.index(left) + 0.5).floor(),
+                    positions.index(right) - 0.5,
+                )
+            });
     let first = if visible_data.is_empty() {
         left.max(0.0) as usize
     } else {
@@ -276,42 +312,53 @@ pub(crate) fn time_axis_marks(
             .take(trailing)
             .map_while(|index| Some((time_at(index as f64)?, index + shift))),
     );
-    // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
-    let weekday = |time| {
-        let local = match calendar {
-            Some(zone) => crate::model::local_time(zone.clone(), time),
-            None => crate::model::local_time(chrono::Local, time),
+    if coords.numeric_positions.is_none() {
+        // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
+        let weekday = |time| {
+            let local = match calendar {
+                Some(zone) => crate::model::local_time(zone.clone(), time),
+                None => crate::model::local_time(chrono::Local, time),
+            };
+            local.weekday().num_days_from_monday() as usize
         };
-        local.weekday().num_days_from_monday() as usize
-    };
-    let after = closed_weekdays(
-        last.saturating_sub(15)..=last,
-        last as f64 + 1.0,
-        &time_at,
-        weekday,
-    );
-    let before = if shift > 0 {
-        closed_weekdays(0..=last.min(15), -1.0, &time_at, weekday)
-    } else {
-        [false; 7]
-    };
-    bars.retain(|(time, index)| {
-        if *index < shift {
-            !before[weekday(*time)]
+        let after = closed_weekdays(
+            last.saturating_sub(15)..=last,
+            last as f64 + 1.0,
+            &time_at,
+            weekday,
+        );
+        let before = if shift > 0 {
+            closed_weekdays(0..=last.min(15), -1.0, &time_at, weekday)
         } else {
-            *index <= last + shift || !after[weekday(*time)]
-        }
-    });
+            [false; 7]
+        };
+        bars.retain(|(time, index)| {
+            if *index < shift {
+                !before[weekday(*time)]
+            } else {
+                *index <= last + shift || !after[weekday(*time)]
+            }
+        });
+    }
     let layout = TickMarkLayout {
         width: context.rect.width(),
-        bar_spacing: coords.bar_spacing,
+        bar_spacing: coords
+            .numeric_positions
+            .as_ref()
+            .map_or(coords.bar_spacing, |positions| {
+                (f64::from(coords.bar_spacing) / positions.unit.unwrap_or(1.0)) as f32
+            }),
         min_spacing: min_time_label_spacing(options),
         uniform_distribution: options.uniform_distribution,
     };
-    let mapping = ChartMapping {
-        start_idx: coords.start_idx + shift,
-        base_idx: coords.base_idx + shift,
-        ..*coords
+    let mapping = if coords.numeric_positions.is_some() {
+        coords.clone()
+    } else {
+        ChartMapping {
+            start_idx: coords.start_idx + shift,
+            base_idx: coords.base_idx + shift,
+            ..coords.clone()
+        }
     };
     (scale.tick_marks(&bars, &layout), bars, mapping)
 }
@@ -353,7 +400,11 @@ fn closed_weekdays(
 fn time_to_idx(
     time: chrono::DateTime<chrono::Utc>,
     bars: &[(chrono::DateTime<chrono::Utc>, usize)],
+    coords: &ChartMapping,
 ) -> f64 {
+    if let Some(positions) = &coords.numeric_positions {
+        return positions.index_at(time);
+    }
     if bars.is_empty() {
         return 0.0;
     }
@@ -401,11 +452,8 @@ pub(crate) fn render_time_grid(
     horizontal: Option<(Color32, crate::model::LineStyle)>,
 ) {
     let lines = marks.iter().filter_map(|mark| {
-        let index = time_to_idx(mark.time, points);
-        let delta = (coords.base_idx as f64 - index) + coords.right_offset;
-        let x = (f64::from(context.rect.right())
-            - (delta + 0.5) * f64::from(coords.bar_spacing)
-            - 1.0) as f32;
+        let index = time_to_idx(mark.time, points, coords);
+        let x = coords.index_to_x(index);
         (x >= context.rect.left() && x <= context.rect.right()).then_some([
             Pos2::new(x, context.rect.top()),
             Pos2::new(x, context.rect.bottom()),
@@ -481,12 +529,8 @@ pub fn render_time_labels(
 
     for mark in marks {
         // Use fractional index for smooth label movement during pan
-        let index = time_to_idx(mark.time, points);
-        // Calculate x using same formula as candle rendering
-        let delta_from_right = (coords.base_idx as f64 - index) + coords.right_offset;
-        let x = (f64::from(context.rect.min.x) + f64::from(context.rect.width())
-            - (delta_from_right + 0.5) * f64::from(coords.bar_spacing)
-            - 1.0) as f32;
+        let index = time_to_idx(mark.time, points, coords);
+        let x = coords.index_to_x(index);
 
         if x < context.rect.min.x || x > context.rect.max.x {
             continue;
@@ -551,6 +595,139 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
+
+    #[test]
+    fn display_format_keeps_thousands_grouping_and_change_sign() {
+        use crate::model::{Instrument, SeriesDisplayFormat, SeriesFormat};
+        use crate::scales::CustomPriceFormatter;
+        use crate::widget::{SeriesId, SeriesOptions};
+        use std::sync::Arc;
+
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 760.0),
+            (crate::theme::Theme::dark(), 320.0),
+        ] {
+            for (kind, separator, host, close, change) in [
+                (
+                    SeriesFormat::Price,
+                    Some(','),
+                    false,
+                    "1,234,568.14",
+                    "+0.25",
+                ),
+                (
+                    SeriesFormat::Price,
+                    Some(' '),
+                    false,
+                    "1 234 568.14",
+                    "+0.25",
+                ),
+                (SeriesFormat::Price, None, false, "1234568.14", "+0.25"),
+                (
+                    SeriesFormat::Percentage,
+                    Some(','),
+                    false,
+                    "1,234,568.14%",
+                    "+0.25%",
+                ),
+                (
+                    SeriesFormat::Price,
+                    Some(','),
+                    true,
+                    "host 1234568.14",
+                    "host 0.25",
+                ),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[1_234_500.0], &[1_234_567.89, 1_234_568.14]);
+                chart.set_theme(&ctx, &theme);
+                chart.set_size(Some(egui::vec2(width, 580.0)));
+                chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
+                chart.config_mut().show_volume = false;
+                chart.config_mut().thousands_sep = separator;
+                chart
+                    .series_style_mut(SeriesId::MAIN)
+                    .unwrap()
+                    .display_format = Some(SeriesDisplayFormat {
+                    kind,
+                    ..Default::default()
+                });
+                if host {
+                    chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|value| {
+                        format!("host {value:.2}")
+                    }))));
+                }
+                let id = chart.add_series(SeriesOptions {
+                    name: "Peer".into(),
+                    ..Default::default()
+                });
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                chart.series_style_mut(id).unwrap().display_format =
+                    chart.series_style(SeriesId::MAIN).unwrap().display_format;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let texts: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(texts.contains(&close), "tag: {texts:?}");
+                assert!(
+                    texts
+                        .iter()
+                        .any(|text| text.contains(&format!("C {close}"))),
+                    "legend close: {texts:?}"
+                );
+                assert!(
+                    texts
+                        .iter()
+                        .any(|text| text.starts_with(&format!("{change} ("))),
+                    "legend change: {texts:?}"
+                );
+                assert!(
+                    texts.iter().any(|text| text == &format!("Peer  {close}")),
+                    "added legend: {texts:?}"
+                );
+                for id in [SeriesId::MAIN, id] {
+                    assert_eq!(
+                        chart.format_series_price(id, 1_234_568.14).as_deref(),
+                        Some(close)
+                    );
+                }
+                chart.chart_options.tooltip.on_long_press = false;
+                let plot = chart.get_rendered_price_rect();
+                let pointer =
+                    egui::Pos2::new(chart.get_chart_mapping().idx_to_x(99), plot.center().y);
+                let hovered = shapes(
+                    &ctx,
+                    &mut chart,
+                    0.2,
+                    vec![egui::Event::PointerMoved(pointer)],
+                );
+                assert!(
+                hovered.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.galley.text() == format!("{change} (+0.00%)")
+                        && text.pos.y > plot.top() + 50.0
+                )),
+                "tooltip change"
+            );
+                #[cfg(feature = "ui")]
+                {
+                    let data =
+                        crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(
+                            &chart,
+                        );
+                    assert_eq!(data.formatted_prices.as_ref().unwrap()[3], close);
+                    assert_eq!(
+                        data.formatted_change.as_deref(),
+                        Some(format!("{change} (+0.00%)").as_str())
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn combined_grid_preserves_geometry_and_independent_styles() {
@@ -667,6 +844,7 @@ mod tests {
             chart.config_mut().show_symbol_last_val = false;
             chart.config_mut().show_volume = false;
             chart.config_mut().show_indicator_last_val = false;
+            chart.config_mut().price_axis.show_study_values = false;
             chart.set_instrument(Some(
                 crate::model::Instrument::new("SAMPLE").with_price_decimals(5),
             ));
@@ -904,6 +1082,7 @@ mod tests {
             let mut chart = chart(&[price], &[price]);
             chart.config_mut().show_volume = false;
             chart.config_mut().show_indicator_last_val = false;
+            chart.config_mut().price_axis.show_study_values = false;
             #[cfg(feature = "studies")]
             chart.add_indicator(Box::new(crate::studies::MACD::default()));
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
@@ -1080,13 +1259,23 @@ mod tests {
     fn study_axis_tags_follow_visible_last_values_and_separate_collisions() {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use egui::Color32;
-        for (overlay, shown) in [(true, true), (false, true), (true, false), (false, false)] {
+        for (overlay, shown, legend_shown) in [
+            (true, true, true),
+            (false, true, true),
+            (true, false, true),
+            (false, false, true),
+            (true, true, false),
+            (false, true, false),
+            (true, false, false),
+            (false, false, false),
+        ] {
             for side in [Some(false), Some(true), None] {
                 let ctx = Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
                 chart.config_mut().show_right_axis = side == Some(false);
                 chart.config_mut().show_left_axis = side == Some(true);
-                chart.config_mut().show_indicator_last_val = shown;
+                chart.config_mut().show_indicator_last_val = legend_shown;
+                chart.config_mut().price_axis.show_study_values = shown;
                 chart.config_mut().show_symbol_last_val = false;
                 chart.config_mut().show_volume = false;
                 let colors = [

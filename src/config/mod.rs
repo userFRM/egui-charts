@@ -6,6 +6,7 @@
 
 mod chart;
 mod crosshair;
+mod cursor;
 mod drawing_tool;
 mod interaction;
 mod keyboard;
@@ -18,10 +19,11 @@ pub use chart::{
     SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
-pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
+pub use cursor::CursorType;
+pub use drawing_tool::{DrawingInteractionMode, DrawingSort, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
-    HandleScrollOptions, TrackingModeExitMode, TrackingModeOptions,
+    HandleScrollOptions, TouchTrackingExitMode, TrackingModeExitMode, TrackingModeOptions,
 };
 pub use keyboard::{KeyboardAction, KeyboardOptions};
 pub use kinetic::KineticScrollOptions;

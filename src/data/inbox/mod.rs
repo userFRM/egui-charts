@@ -65,6 +65,9 @@ struct Live {
     sampler: Option<Sampler>,
     study_inputs: Vec<crate::data::OrderFlowInput>,
     taken: TakenIds,
+    /// Pending bars the pending limit does not count, those of a replay rebuild until the chart
+    /// drains them; `usize::MAX` while the rebuild runs.
+    rebuilt_bars: usize,
     updates: Updates,
 }
 
@@ -89,8 +92,11 @@ pub(crate) struct Updates {
     pub(crate) reset: bool,
     /// One per slot, keyed by its open; the last one is the forming bar.
     pub(crate) bars: BTreeMap<DateTime<Utc>, (Bar, Origin)>,
-    /// The trades folded into `bars`, in arrival order.
+    /// The trades folded into `bars`, in arrival order, and repeats completing the order ids of
+    /// drained ones.
     pub(crate) trades: Trades,
+    /// Ids of the queued repeats, which `bars` did not count.
+    repeats: HashSet<u64>,
     /// The order book, if it changed.
     pub(crate) depth: Option<OrderBook>,
     pub(crate) orders: Option<OrderQueue>,
@@ -128,6 +134,7 @@ impl Updates {
             reset: false,
             bars: BTreeMap::new(),
             trades,
+            repeats: HashSet::new(),
             depth: None,
             orders: None,
             orders_changed: false,
@@ -180,6 +187,15 @@ impl Inbox {
         }
     }
 
+    /// Drops as late the executions `id` receives before `time`, which bars the chart kept
+    /// over a pause already count.
+    #[cfg(feature = "widget")]
+    pub(crate) fn drop_trades_before(&self, id: SubscriptionId, time: DateTime<Utc>) {
+        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+            live.last_trade = live.last_trade.max(Some(time));
+        }
+    }
+
     /// Connects active stream studies before their inputs are coalesced for the frame.
     #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn study_inputs(
@@ -197,6 +213,18 @@ impl Inbox {
         self.state().subscriptions.remove(&id);
     }
 
+    /// Stops a subscription atomically, retaining its symbol, undrained executions and reset.
+    #[cfg(feature = "widget")]
+    pub(crate) fn unsubscribe_with_trades(
+        &self,
+        id: SubscriptionId,
+    ) -> Option<(String, bool, Trades)> {
+        self.state()
+            .subscriptions
+            .remove(&id)
+            .map(|live| (live.symbol, live.updates.reset, live.updates.trades))
+    }
+
     /// Takes everything that arrived since the last drain.
     pub(crate) fn drain(&self) -> Drained {
         let mut state = self.state();
@@ -209,6 +237,9 @@ impl Inbox {
             .map(|(id, live)| {
                 let next = Updates::new(live.updates.trades.empty());
                 let mut updates = std::mem::replace(&mut live.updates, next);
+                if live.rebuilt_bars != usize::MAX {
+                    live.rebuilt_bars = 0;
+                }
                 if updates.dropped_bars > 0 {
                     updates.rejected += updates.dropped_bars;
                     updates.error = Some(FeedError::InvalidData(format!(

@@ -1,7 +1,7 @@
-//! Editing the drawing collection: add, delete, layer, group, edit, show, hide and lock.
+//! Editing the drawing collection: add, delete, layer, group, file, edit, show, hide and lock.
 
 use super::{DrawingManager, DrawingSyncAction, queue_sync, sync_id};
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::{Drawing, DrawingToolType, FolderSync};
 use crate::drawings::services::{ZOrderService, in_z_order};
 use crate::model::PostContent;
 use egui::Rect;
@@ -62,11 +62,28 @@ impl DrawingManager {
 
     /// Deletes the selected drawings, keeping any locked ones.
     pub fn delete_selected(&mut self) {
+        let ids: Vec<_> = self.selected_ids().collect();
+        self.delete_drawings(&ids);
+    }
+
+    /// Deletes the given drawings as one undo step, keeping any locked ones.
+    pub fn delete_drawings(&mut self, ids: &[usize]) {
+        let unlocked: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| ids.contains(&d.id) && !d.locked)
+            .map(|d| d.id)
+            .collect();
+        self.remove_drawings(&unlocked);
+    }
+
+    /// Deletes the given drawings as one undo step, locked ones included.
+    pub(crate) fn remove_drawings(&mut self, ids: &[usize]) {
         let before: Vec<_> = self
             .drawings
             .iter()
             .enumerate()
-            .filter(|(_, d)| d.selectable && self.selection.is_selected(d.id) && !d.locked)
+            .filter(|(_, d)| ids.contains(&d.id))
             .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
@@ -90,20 +107,26 @@ impl DrawingManager {
     /// To unload drawings without deleting them, clear [`Self::drawings`], then call
     /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. A bulk removal is one undo step.
     pub fn clear_all(&mut self) {
+        self.clear_all_with_locked(false);
+    }
+
+    /// Bulk removal with explicit permission to include locked drawings. Preserves locks in
+    /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
+    pub fn clear_all_with_locked(&mut self, include_locked: bool) {
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
-                .filter(|(_, drawing)| !drawing.locked)
+                .filter(|(_, drawing)| include_locked || !drawing.locked)
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
         );
-        for drawing in self.drawings.iter().filter(|d| !d.locked) {
+        for drawing in self.drawings.iter().filter(|d| include_locked || !d.locked) {
             if drawing.saveable {
-                self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+                self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
             }
         }
-        self.drawings.retain(|d| d.locked);
+        self.drawings.retain(|d| d.locked && !include_locked);
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -133,6 +156,11 @@ impl DrawingManager {
 
     /// Apply a layer move as one undo step, saving each changed drawing.
     pub fn reorder_drawings(&mut self, id: usize, layers: &[(usize, i32)]) {
+        let edited = self
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .and_then(|d| d.modified_at);
         let mut previous = Vec::new();
         for &(id, layer) in layers {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
@@ -140,11 +168,13 @@ impl DrawingManager {
             {
                 previous.push((id, drawing.z_order));
                 drawing.z_order = layer;
-                self.queue(DrawingSyncAction::UpdateDrawing(id));
+                // Only the moved drawing is edited; tied layers around it are just renumbered.
+                self.notify(DrawingSyncAction::UpdateDrawing(id));
             }
         }
         if !previous.is_empty() {
-            self.history.push_reorder(id, previous);
+            self.stamp(id);
+            self.history.push_reorder(id, previous, edited);
         }
     }
 
@@ -255,15 +285,24 @@ impl DrawingManager {
             edit(drawing);
             if old.locked && drawing.locked {
                 let visible = drawing.visible;
+                let timeframe_visibility = drawing.timeframe_visibility.clone();
                 let label = drawing.label.clone();
                 let folder = drawing.folder.clone();
+                let folder_sync = drawing.folder_sync.clone();
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label && folder == old.folder {
+                if visible == old.visible
+                    && timeframe_visibility == old.timeframe_visibility
+                    && label == old.label
+                    && folder == old.folder
+                    && folder_sync == old.folder_sync
+                {
                     return;
                 }
                 drawing.visible = visible;
+                drawing.timeframe_visibility = timeframe_visibility;
                 drawing.label = label;
                 drawing.folder = folder;
+                drawing.folder_sync = folder_sync;
             }
             if !drawing.selectable {
                 self.selection.deselect(id);
@@ -319,18 +358,27 @@ impl DrawingManager {
             let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
-                let (visible, label, folder) = (
+                let (visible, timeframe_visibility, label, folder, folder_sync) = (
                     drawing.visible,
+                    drawing.timeframe_visibility.clone(),
                     drawing.label.clone(),
                     drawing.folder.clone(),
+                    drawing.folder_sync.clone(),
                 );
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label && folder == old.folder {
+                if visible == old.visible
+                    && timeframe_visibility == old.timeframe_visibility
+                    && label == old.label
+                    && folder == old.folder
+                    && folder_sync == old.folder_sync
+                {
                     continue;
                 }
                 drawing.visible = visible;
+                drawing.timeframe_visibility = timeframe_visibility;
                 drawing.label = label;
                 drawing.folder = folder;
+                drawing.folder_sync = folder_sync;
             }
             if !drawing.selectable {
                 self.selection.deselect(old.id);
@@ -423,6 +471,15 @@ impl DrawingManager {
             if self.pane_members.contains(&drawing.pane) {
                 drawing.update_screen_coords(bar_to_x, price_to_y);
                 drawing.update_pane_coords(self.pane_rect);
+            } else if drawing.reaches_other_panes()
+                && let Some(anchor) = drawing.chart_points.first()
+            {
+                // Its time maps to this pane too; its price belongs to its own pane's scale.
+                let y = drawing
+                    .points
+                    .first()
+                    .map_or(self.pane_rect.center().y, |p| p.y);
+                drawing.points = vec![egui::Pos2::new(bar_to_x(anchor.bar_idx), y)];
             }
         }
     }
@@ -501,6 +558,9 @@ impl DrawingManager {
                 );
             }
         }
+        for (_, drawing) in &before {
+            self.stamp(drawing.id);
+        }
         self.history.push_snapshot(before);
     }
 
@@ -527,6 +587,9 @@ impl DrawingManager {
                     Some(&sync_id(drawing)),
                 );
             }
+        }
+        for (_, drawing) in &before {
+            self.stamp(drawing.id);
         }
         self.history.push_snapshot(before);
     }
@@ -618,6 +681,89 @@ impl DrawingManager {
         self.select_drawings(ids);
     }
 
+    /// Moves `ids` into the folder at `path`, and each of `folders` with its contents under
+    /// `path`, as one undo step; an empty `path` is the root. Everything moved follows the
+    /// synchronization of its new top-level folder. A folder reaching the root keeps the mode set
+    /// on it, or else the one it followed so far.
+    ///
+    /// Moves nothing and returns `false` if a folder would enter itself or a descendant, or take
+    /// the name of a folder already there.
+    pub fn move_to_folder(
+        &mut self,
+        ids: &[usize],
+        folders: &[Vec<String>],
+        path: &[String],
+    ) -> bool {
+        let mut names = HashSet::new();
+        for folder in folders {
+            let Some(name) = folder.last() else {
+                return false;
+            };
+            let target = [path, std::slice::from_ref(name)].concat();
+            if path.starts_with(folder)
+                || !names.insert(name)
+                || self.drawings.iter().any(|d| d.folder.starts_with(&target))
+            {
+                return false;
+            }
+        }
+        let modes = self.folder_modes(path);
+        let moved: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| ids.contains(&d.id) || folders.iter().any(|f| d.folder.starts_with(f)))
+            .map(|d| d.id)
+            .collect();
+        self.edit_drawings(&moved, |d| {
+            let (at, own) = folders.iter().find(|f| d.folder.starts_with(f)).map_or(
+                (d.folder.len(), Vec::new()),
+                |folder| {
+                    let at = folder.len() - 1;
+                    let mut own = d.folder_sync.get(at..).unwrap_or_default().to_vec();
+                    if path.is_empty() && own.first().copied().flatten().is_none() {
+                        own.resize(own.len().max(1), None);
+                        own[0] = d.folder_sync_mode();
+                    }
+                    (at, own)
+                },
+            );
+            d.folder = [path, &d.folder[at..]].concat();
+            d.folder_sync = [modes.as_slice(), own.as_slice()].concat();
+        });
+        true
+    }
+
+    /// The synchronization set on each folder along `path`.
+    fn folder_modes(&self, path: &[String]) -> Vec<Option<FolderSync>> {
+        (1..=path.len())
+            .map(|depth| {
+                self.drawings
+                    .iter()
+                    .filter(|d| d.folder.starts_with(&path[..depth]))
+                    .find_map(|d| d.folder_sync.get(depth - 1).copied().flatten())
+            })
+            .collect()
+    }
+
+    /// Sets the synchronization of a top-level folder, which its descendants follow, as one undo
+    /// step. Returns `false` for a nested folder, which follows its top-level folder.
+    pub fn set_folder_sync(&mut self, folder: &[String], sync: Option<FolderSync>) -> bool {
+        if folder.len() != 1 {
+            return false;
+        }
+        let ids: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| d.folder.starts_with(folder) && d.folder_sync_mode() != sync)
+            .map(|d| d.id)
+            .collect();
+        self.edit_drawings(&ids, |d| {
+            d.folder_sync.resize(d.folder_sync.len().max(1), None);
+            d.folder_sync[0] = sync;
+        });
+        true
+    }
+
     /// Add a drawing from another source (for multi-chart sync, or restored from storage)
     /// under a new id, and return the id. A drawing restored from storage keeps its stored
     /// identity (`stored_id`, `created_at`, `notes`) and its z-order. A drawing that was never
@@ -641,21 +787,143 @@ impl DrawingManager {
                 .iter()
                 .any(|d| d.stored_id == drawing.stored_id)
         {
-            (drawing.stored_id, drawing.created_at) = (None, None);
+            (drawing.stored_id, drawing.created_at, drawing.modified_at) = (None, None, None);
         }
         if drawing.stored_id.is_none() {
             drawing.z_order = self.top_z_order();
         }
         // Assign a new ID to avoid conflicts
         drawing.id = self.take_id();
+        let id = drawing.id;
+        // A linked copy keeps the time of the edit it copies.
+        let stamp =
+            drawing.stored_id.is_none() && drawing.saveable && drawing.modified_at.is_none();
         if drawing.stored_id.is_none() {
             if drawing.saveable {
-                self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
+                self.notify(DrawingSyncAction::SaveDrawing(id));
             }
             self.history.push_add(drawing.clone());
         }
-        let id = drawing.id;
         self.drawings.push(drawing);
+        if stamp {
+            self.stamp(id);
+        }
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::domain::ChartPoint;
+
+    fn path(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    fn manager(folders: &[&[&str]]) -> DrawingManager {
+        let mut manager = DrawingManager::new();
+        for folder in folders {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 1.0), ChartPoint::new(2.0, 2.0)];
+            drawing.completed = true;
+            drawing.folder = path(folder);
+            manager.add_synced_drawing(drawing).unwrap();
+        }
+        manager
+    }
+
+    fn folders(manager: &DrawingManager) -> Vec<Vec<String>> {
+        manager.drawings.iter().map(|d| d.folder.clone()).collect()
+    }
+
+    /// A folder cannot enter itself or a descendant or overwrite a sibling, and a refused move
+    /// changes nothing and leaves no undo step.
+    #[test]
+    fn refused_folder_moves_change_nothing() {
+        let tree: &[&[&str]] = &[&["A", "B", "C"], &["A", "X"], &["X"]];
+        for (folder, parent) in [
+            (&["A"][..], &["A"][..]),
+            (&["A"], &["A", "B"]),
+            (&["A", "B"], &["A", "B", "C"]),
+            // Its parent already holds it, and the root already holds a folder of that name.
+            (&["A", "B"], &["A"]),
+            (&["A", "X"], &[]),
+        ] {
+            let mut manager = manager(tree);
+            let before = folders(&manager);
+            manager.history.clear();
+            assert!(
+                !manager.move_to_folder(&[], &[path(folder)], &path(parent)),
+                "{folder:?} into {parent:?}"
+            );
+            assert_eq!(folders(&manager), before);
+            assert!(!manager.undo());
+        }
+    }
+
+    /// A nested folder follows its top-level folder. Back at the root it has the mode set on it,
+    /// or else the one it followed.
+    #[test]
+    fn nesting_inherits_and_unnesting_retains_synchronization() {
+        use FolderSync::{Chart, Layout};
+        for (own, parent, nested, unnested) in [
+            (Some(Layout), Some(Chart), Some(Chart), Some(Layout)),
+            (None, Some(Layout), Some(Layout), Some(Layout)),
+            (Some(Chart), None, None, Some(Chart)),
+            (None, None, None, None),
+        ] {
+            let mut manager = manager(&[&["Child", "Inner"], &["Top"]]);
+            assert!(manager.set_folder_sync(&path(&["Child"]), own));
+            assert!(manager.set_folder_sync(&path(&["Top"]), parent));
+            assert!(manager.move_to_folder(&[], &[path(&["Child"])], &path(&["Top"])));
+            let moved = &manager.drawings[0];
+            assert_eq!(moved.folder, path(&["Top", "Child", "Inner"]));
+            assert_eq!(moved.folder_sync_mode(), nested);
+            // A nested folder follows; only its top-level folder sets the mode.
+            assert!(!manager.set_folder_sync(&path(&["Top", "Child"]), Some(Chart)));
+            assert!(manager.move_to_folder(&[], &[path(&["Top", "Child"])], &[]));
+            let moved = &manager.drawings[0];
+            assert_eq!(moved.folder, path(&["Child", "Inner"]));
+            assert_eq!(moved.folder_sync_mode(), unnested);
+        }
+    }
+
+    /// A bulk delete skips locked drawings, and its undo restores the rest with their nesting.
+    #[test]
+    fn deleting_drawings_keeps_locked_ones_in_one_undo_step() {
+        let mut manager = manager(&[&["A"], &["A", "B"], &["A", "B"]]);
+        manager.drawings[0].locked = true;
+        let before = folders(&manager);
+        let ids: Vec<_> = manager.drawings.iter().map(|d| d.id).collect();
+        manager.delete_drawings(&ids);
+        assert_eq!(manager.drawings.len(), 1);
+        assert!(manager.undo());
+        assert_eq!(folders(&manager), before);
+    }
+
+    /// Redo restores an added drawing as it was when the add was undone, with the bar spacing
+    /// its text was first displayed at, which the drawing adopts after its undo step is recorded.
+    #[test]
+    fn redo_keeps_the_spacing_added_text_was_first_shown_at() {
+        let mut manager = DrawingManager::new();
+        let mut text = Drawing::new(0, DrawingToolType::TextLabel);
+        text.text = Some("Note".into());
+        text.text_follows_zoom = true;
+        text.chart_points = vec![ChartPoint::new(10.0, 100.0)];
+        let id = manager.add_drawing(text).unwrap();
+        // First shown at 6 points a bar, then zoomed in to 12.
+        manager.update_all_screen_coords(|bar: f32| bar * 6.0, |price: f64| price as f32);
+        let at_12 = |bar: f32| bar * 12.0;
+        manager.update_all_screen_coords(at_12, |price: f64| price as f32);
+        let zoom = |manager: &DrawingManager| {
+            let text = manager.drawings.iter().find(|d| d.id == id).unwrap();
+            text.text_zoom(at_12, at_12(10.0))
+        };
+        // Sized at 6 points a bar and shown at 12, the text is drawn at 12 / 6 = 2 times its size.
+        assert_eq!(zoom(&manager), 2.0, "before the undo");
+        assert!(manager.undo() && manager.redo());
+        manager.update_all_screen_coords(at_12, |price: f64| price as f32);
+        assert_eq!(zoom(&manager), 2.0, "after the redo");
     }
 }

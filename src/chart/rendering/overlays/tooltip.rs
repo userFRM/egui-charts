@@ -202,7 +202,7 @@ pub fn render_floating_tooltip(
                         .map_or(2, usize::from)
                 )
             },
-            |formatter| formatter.format(change),
+            |formatter| formatter.format_change(change),
         );
         let percent = formatters.percentage.map_or_else(
             || format!("{change_pct:+.2}%"),
@@ -349,7 +349,7 @@ pub fn render_floating_tooltip(
         );
     }
 
-    let border_color = if candle.is_bullish() {
+    let border_color = if candle.close >= candle.open {
         options.border_color_bullish
     } else {
         options.border_color_bearish
@@ -534,6 +534,61 @@ pub fn render_tracking_tooltip(
     );
 }
 
+/// Clips a wick or body edge to the circle using its nearest point on the line.
+fn lens_line(
+    painter: &Painter,
+    center: Pos2,
+    radius: f32,
+    [start, end]: [Pos2; 2],
+    stroke: Stroke,
+) {
+    let direction = end - start;
+    let length_sq = direction.length_sq();
+    if length_sq == 0.0 {
+        return;
+    }
+    let nearest = (center - start).dot(direction) / length_sq;
+    let distance_sq = (start + direction * nearest).distance_sq(center);
+    if distance_sq > radius * radius {
+        return;
+    }
+    let span = ((radius * radius - distance_sq) / length_sq).sqrt();
+    let from = (nearest - span).max(0.0);
+    let to = (nearest + span).min(1.0);
+    if from < to {
+        painter.line_segment([start + direction * from, start + direction * to], stroke);
+    }
+}
+
+/// Intersects the lens polygon with the four sides of a filled candle body.
+fn lens_body(circle: &[Pos2], body: Rect) -> Vec<Pos2> {
+    let mut points = circle.to_vec();
+    for (axis, edge, sign) in [
+        (0, body.left(), 1.0),
+        (0, body.right(), -1.0),
+        (1, body.top(), 1.0),
+        (1, body.bottom(), -1.0),
+    ] {
+        let input = std::mem::take(&mut points);
+        let Some(mut previous) = input.last().copied() else {
+            break;
+        };
+        for current in input {
+            let inside = (current[axis] - edge) * sign >= 0.0;
+            let was_inside = (previous[axis] - edge) * sign >= 0.0;
+            if inside != was_inside {
+                let t = (edge - previous[axis]) / (current[axis] - previous[axis]);
+                points.push(previous + (current - previous) * t);
+            }
+            if inside {
+                points.push(current);
+            }
+            previous = current;
+        }
+    }
+    points
+}
+
 /// Renders magnifier tooltip as circular zoom lens
 /// Shows enlarged view of candles around cursor position
 pub fn render_magnifier_tooltip(
@@ -578,13 +633,6 @@ pub fn render_magnifier_tooltip(
         .painter
         .circle_filled(center, radius, chart.bg_tooltip);
 
-    // Draw magnifier border
-    context.painter.circle_stroke(
-        center,
-        radius,
-        Stroke::new(DESIGN_TOKENS.stroke.thick, chart.axis_text_secondary),
-    );
-
     // Calculate visible range in the magnifier
     // The magnifier shows a zoomed view centered on the hover position
     let src_width = size / zoom;
@@ -593,48 +641,32 @@ pub fn render_magnifier_tooltip(
     let price_to_mag_y =
         |price: f64| center.y + (price_scale.price_to_y(price) - hover_pos.y) * zoom;
 
-    // Calculate bar indices visible in magnifier. Degenerate bar spacing maps
-    // every pixel onto the same bar rather than dividing by zero.
-    let bars_per_pixel = if coords.bar_spacing.abs() < f32::EPSILON {
-        0.0
-    } else {
-        1.0 / coords.bar_spacing
-    };
-    let center_bars_from_right =
-        f64::from((context.rect.max.x - hover_pos.x) * bars_per_pixel) - 0.5 - coords.right_offset;
-    let src_bars = (src_width * bars_per_pixel) as isize;
-    let half_bars = src_bars / 2;
-
-    // Render candles within the magnifier clip region
-    // Use clip rect to constrain drawing to the circle
+    // The painter clips rectangles only; clip candle geometry to the lens as well.
     let clip_rect = Rect::from_center_size(center, Vec2::splat(size));
+    let painter = context.painter.with_clip_rect(clip_rect);
+    let candle_radius = (radius - DESIGN_TOKENS.stroke.hairline / 2.0).max(0.0);
+    let circle: Vec<_> = (0..64)
+        .map(|i| {
+            let angle = std::f32::consts::TAU * i as f32 / 64.0;
+            center + Vec2::angled(angle) * candle_radius
+        })
+        .collect();
 
     // Draw zoomed candles
     let zoomed_bar_spacing = coords.bar_spacing * zoom;
     let candle_width = zoomed_bar_spacing * 0.7;
 
-    // Only bars of `visible_data` can be drawn, so the loop never visits more than that many.
-    let last = (coords.base_idx as f64 - center_bars_from_right - coords.start_idx as f64).floor()
-        as isize;
-    let first = last
+    let first = coords
+        .x_to_idx(hover_pos.x - src_width / 2.0 - coords.bar_spacing)
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    let end = coords
+        .x_to_idx(hover_pos.x + src_width / 2.0 + coords.bar_spacing)
         .saturating_add(1)
-        .saturating_sub(visible_data.len() as isize);
-    for i in (-half_bars).max(first)..=half_bars.min(last) {
-        let bar_offset = center_bars_from_right + i as f64;
-        let global_idx = (coords.base_idx as f64 - bar_offset).floor() as isize;
-
-        if global_idx < coords.start_idx as isize {
-            continue;
-        }
-        let local_idx = (global_idx as usize).saturating_sub(coords.start_idx);
-        if local_idx >= visible_data.len() {
-            continue;
-        }
-
-        let bar = &visible_data[local_idx];
-
-        // Calculate position within magnifier
-        let bar_x = center.x - (i as f32 * zoomed_bar_spacing);
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    for (local_idx, bar) in visible_data.iter().enumerate().take(end).skip(first) {
+        let bar_x = center.x + (coords.idx_to_x(coords.start_idx + local_idx) - hover_pos.x) * zoom;
 
         // Skip if outside magnifier bounds
         if bar_x < clip_rect.min.x - candle_width || bar_x > clip_rect.max.x + candle_width {
@@ -654,7 +686,10 @@ pub fn render_magnifier_tooltip(
         };
 
         // Draw wick
-        context.painter.line_segment(
+        lens_line(
+            &painter,
+            center,
+            candle_radius,
             [Pos2::new(bar_x, high_y), Pos2::new(bar_x, low_y)],
             Stroke::new(DESIGN_TOKENS.stroke.hairline, candle_color),
         );
@@ -670,16 +705,38 @@ pub fn render_magnifier_tooltip(
         );
 
         if is_bullish {
-            context.painter.rect_stroke(
-                body_rect,
-                0.0,
-                Stroke::new(DESIGN_TOKENS.stroke.hairline, candle_color),
-                StrokeKind::Inside,
-            );
+            let corners = [
+                body_rect.left_top(),
+                body_rect.right_top(),
+                body_rect.right_bottom(),
+                body_rect.left_bottom(),
+            ];
+            for i in 0..4 {
+                lens_line(
+                    &painter,
+                    center,
+                    candle_radius,
+                    [corners[i], corners[(i + 1) % 4]],
+                    Stroke::new(DESIGN_TOKENS.stroke.hairline, candle_color),
+                );
+            }
         } else {
-            context.painter.rect_filled(body_rect, 0.0, candle_color);
+            let points = lens_body(&circle, body_rect);
+            if points.len() >= 3 {
+                painter.add(egui::Shape::convex_polygon(
+                    points,
+                    candle_color,
+                    Stroke::NONE,
+                ));
+            }
         }
     }
+
+    context.painter.circle_stroke(
+        center,
+        radius,
+        Stroke::new(DESIGN_TOKENS.stroke.thick, chart.axis_text_secondary),
+    );
 
     // Draw crosshair in center of magnifier
     let crosshair_color = chart.crosshair_line;
@@ -1224,7 +1281,16 @@ mod tests {
         let map = PriceMap::new(transform, range, 0.0, 500.0, false);
         let p = map.y_to_price(HOVER.y);
         let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-        let bars = vec![Bar::new(t, p, p * 2.0, p / 2.0, p, 1.0); 80];
+        let bars = (0..80)
+            .map(|i| {
+                let (open, close) = if i % 2 == 0 {
+                    (p, p)
+                } else {
+                    (p * 1.8, p / 1.8)
+                };
+                Bar::new(t, open, p * 2.0, p / 2.0, close, 1.0)
+            })
+            .collect::<Vec<_>>();
         let coords = ChartMapping::new(rect, 10.0, 0, 79, 0.0, map);
         let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
             let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
@@ -1244,24 +1310,67 @@ mod tests {
     }
 
     /// The lens magnifies the chart about the cursor: on a logarithmic scale a wick
-    /// from half to twice the price under the cursor is centred on the lens.
+    /// from half to twice the price under the cursor is centred on the lens, and
+    /// every wick, body edge and fill stays inside its circular boundary.
     #[test]
-    fn magnifier_centres_the_cursor_price_on_a_log_scale() {
-        let shapes = lens_shapes(&TooltipOptions::default());
-        // Longer than the lens crosshair, so only a candle wick matches.
-        let wick = shapes
-            .iter()
-            .find_map(|c| match &c.shape {
-                egui::Shape::LineSegment { points, .. }
-                    if points[0].x == points[1].x && (points[0].y - points[1].y).abs() > 50.0 =>
-                {
-                    Some(*points)
-                }
-                _ => None,
-            })
-            .expect("a wick in the lens");
-        let mid = (wick[0].y + wick[1].y) / 2.0;
-        assert!((mid - HOVER.y).abs() < 0.5, "wick {wick:?}");
+    fn magnifier_centres_and_clips_candles_on_a_log_scale() {
+        for (size, zoom) in [(120.0, 2.0), (240.0, 4.0)] {
+            let shapes = lens_shapes(&TooltipOptions {
+                magnifier_size: size,
+                magnifier_zoom: zoom,
+                ..Default::default()
+            });
+            assert!(
+                shapes.iter().any(|shape| match &shape.shape {
+                    egui::Shape::Rect(body) => body.fill != egui::Color32::TRANSPARENT,
+                    egui::Shape::Path(body) => body.fill != egui::Color32::TRANSPARENT,
+                    _ => false,
+                }),
+                "a filled candle body in the lens"
+            );
+            // Bar 40 is at 800 - (79 - 40 + 0.5) * 10 - 1 = 404.
+            let wick_x = HOVER.x + 4.0 * zoom;
+            let wick = shapes
+                .iter()
+                .find_map(|c| match &c.shape {
+                    egui::Shape::LineSegment { points, .. }
+                        if points[0].x == wick_x
+                            && points[1].x == wick_x
+                            && (points[0].y - points[1].y).abs() > 50.0 =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .expect("a wick in the lens");
+            let mid = (wick[0].y + wick[1].y) / 2.0;
+            assert!((mid - HOVER.y).abs() < 0.5, "wick {wick:?}");
+            // log(2) / log(1000) * 500 * zoom exceeds either lens radius.
+            // The circle equation gives the wick endpoints at its offset from the cursor.
+            let radius = size / 2.0 - DESIGN_TOKENS.stroke.hairline / 2.0;
+            let extent = (radius * radius - (4.0 * zoom).powi(2)).sqrt();
+            assert!((wick[0].y - (HOVER.y - extent)).abs() < 0.01);
+            assert!((wick[1].y - (HOVER.y + extent)).abs() < 0.01);
+            for shape in &shapes {
+                let points: &[Pos2] = match &shape.shape {
+                    egui::Shape::LineSegment { points, .. } => points,
+                    egui::Shape::Path(path) => &path.points,
+                    egui::Shape::Rect(body) => {
+                        for corner in [body.rect.left_top(), body.rect.right_bottom()] {
+                            assert!(corner.distance(HOVER) <= size / 2.0 + 0.01, "body {body:?}");
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                };
+                assert!(
+                    points
+                        .iter()
+                        .all(|point| point.distance(HOVER) <= size / 2.0 + 0.01),
+                    "size {size}, zoom {zoom}: {points:?}"
+                );
+            }
+        }
     }
 
     /// A zoom of 0 or NaN neither hangs the frame nor paints non-finite geometry.

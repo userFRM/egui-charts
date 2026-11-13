@@ -7,21 +7,26 @@ import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
 const path = Astro.url.pathname;
 const base = '/egui-charts/docs/';
 const sections = [
-  { label: 'Getting started', href: `${base}installation/`, slugs: ['installation', 'first-chart', 'data-model', 'data'] },
-  { label: 'Features', href: `${base}chart-types/`, slugs: ['chart-types', 'scales', 'studies', 'study-data', 'drawings', 'order-flow', 'replay', 'strategy-report', 'host-services', 'theming', 'application-ui', 'performance'] },
-  { label: 'Reference', href: `${base}builder-guide/`, slugs: ['builder-guide', 'api-reference'] },
+  { label: 'Learning', href: `${base}installation/`, slugs: ['installation', 'first-chart', 'tutorial/second-series', 'builder-guide', 'data-model', 'data'] },
+  { label: 'Concepts', href: `${base}#chart-concepts`, slugs: ['chart-types', 'scales', 'interaction'] },
+  { label: 'Extensions', href: `${base}api-reference/#extensions`, slugs: ['studies', 'study-data', 'drawings', 'order-flow', 'theming'] },
+  { label: 'Recipes', href: `${base}recipes/`, slugs: ['recipes', 'recipes/annotations', 'recipes/price-volume', 'recipes/host-readout', 'recipes/synchronized', 'recipes/export', 'application-ui', 'replay', 'strategy-report', 'host-services', 'performance'] },
   { label: 'Status', href: `${base}progress/`, slugs: ['progress'] },
 ];
 ---
 
 <div class="site-header">
-  <SiteTitle />
+  <div class="guide-identity">
+    <SiteTitle />
+    <a class="guide-version" href={`${base}installation/`} title="main: 0.3 in development, egui/eframe 0.37">main (0.3 dev) · egui 0.37</a>
+  </div>
   <nav class="section-nav" aria-label="Main sections">
     {sections.map(({ label, href, slugs }) => (
       <a href={href} aria-current={slugs.some((slug) => path === `${base}${slug}/`) ? 'true' : undefined}>{label}</a>
     ))}
     <a href="/egui-charts/demo/">Live demo</a>
-    <a href="https://docs.rs/egui-charts">docs.rs</a>
+    <a href={`${base}api/egui_charts/index.html`} title="main API: rustdoc with its own symbol search">main API (rustdoc)</a>
+    <a href="https://docs.rs/egui-charts/0.2.0/egui_charts/">0.2.0 API (egui 0.33.3)</a>
   </nav>
   <div class="header-controls">
     <Search />
@@ -29,3 +34,12 @@ const sections = [
     <SocialIcons />
   </div>
 </div>
+
+<style>
+  .guide-identity { flex-shrink: 0; }
+  .guide-version { display: block; color: var(--sl-color-gray-2); font-size: 0.75rem; text-decoration: none; }
+  .guide-version:hover { text-decoration: underline; }
+  @media (max-width: 49.99rem) {
+    .guide-version { font-size: 0.6875rem; }
+  }
+</style>

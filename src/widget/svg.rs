@@ -1,8 +1,10 @@
 //! Vector output of exported chart frames, from the shapes before tessellation.
 
+#[cfg(feature = "png-export")]
 use super::raster::{Texture, png, textures};
 use egui::epaint::{ClippedShape, Mesh, PathStroke, Shape, StrokeKind, TextShape, Vertex};
 use egui::{Color32, Pos2, Rect, Stroke, TextureId, TexturesDelta, emath::TSTransform};
+#[cfg(feature = "png-export")]
 use std::collections::HashSet;
 use std::fmt::Write;
 
@@ -13,12 +15,14 @@ use std::fmt::Write;
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],
-    delta: &TexturesDelta,
+    #[cfg_attr(not(feature = "png-export"), allow(unused_variables))] delta: &TexturesDelta,
 ) -> Result<String, String> {
     let mut out = Svg {
+        #[cfg(feature = "png-export")]
         textures: textures(delta),
         defs: String::new(),
         body: String::new(),
+        #[cfg(feature = "png-export")]
         embedded: HashSet::new(),
         ids: 0,
     };
@@ -68,9 +72,11 @@ struct Run {
 }
 
 struct Svg {
+    #[cfg(feature = "png-export")]
     textures: std::collections::HashMap<TextureId, Texture>,
     defs: String,
     body: String,
+    #[cfg(feature = "png-export")]
     embedded: HashSet<(TextureId, Color32)>,
     ids: usize,
 }
@@ -117,6 +123,17 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        // A raw carriage return would read back as a line feed.
+        .replace('\r', "&#13;")
+}
+
+/// Whether the XML 1.0 `Char` production allows `ch` in a document.
+fn is_xml_char(ch: char) -> bool {
+    !matches!(ch, '\0'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
+}
+
+fn attr_escape(text: &str) -> String {
+    escape(text).replace('"', "&quot;")
 }
 
 impl Svg {
@@ -335,7 +352,7 @@ impl Svg {
                         r#"<text x="{}" y="{}" font-family="{}" font-size="{}" fill="{}" fill-opacity="{}" xml:space="preserve">{}</text>"#,
                         xs.join(" "),
                         run.y,
-                        run.family,
+                        attr_escape(&run.family),
                         run.size,
                         run.rgb,
                         run.opacity,
@@ -350,6 +367,10 @@ impl Svg {
                     .or(ends.last())
                     .map(|(_, format)| *format);
                 index += 1;
+                // Skipping the glyph keeps the remaining x positions aligned with their characters.
+                if !is_xml_char(glyph.chr) {
+                    continue;
+                }
                 let Some(format) = format else { continue };
                 let vertex = row.visuals.mesh.vertices.get(glyph.first_vertex as usize);
                 let mut tint = vertex.map_or(Color32::PLACEHOLDER, |v| v.color);
@@ -365,7 +386,22 @@ impl Svg {
                 let family = match &format.font_id.family {
                     egui::FontFamily::Proportional => "sans-serif".to_owned(),
                     egui::FontFamily::Monospace => "monospace".to_owned(),
-                    egui::FontFamily::Name(name) => format!("'{name}', sans-serif"),
+                    egui::FontFamily::Name(name) => {
+                        let mut family = String::from("'");
+                        for ch in name.chars() {
+                            if ch.is_control() || matches!(ch, '\u{fffe}' | '\u{ffff}') {
+                                // CSS escapes preserve whitespace and keep forbidden XML characters out.
+                                let _ = write!(family, "\\{:x} ", ch as u32);
+                            } else {
+                                if matches!(ch, '\\' | '\'') {
+                                    family.push('\\');
+                                }
+                                family.push(ch);
+                            }
+                        }
+                        family.push_str("', sans-serif");
+                        family
+                    }
                 };
                 let x = origin.x + glyph.pos.x;
                 let y = origin.y + glyph.pos.y;
@@ -529,6 +565,7 @@ impl Svg {
     }
 
     /// The `uv` part of a frame texture in `pos`, multiplied by `tint`.
+    #[cfg(feature = "png-export")]
     fn image(&mut self, key: TextureId, pos: Rect, uv: Rect, tint: Color32) -> Result<(), String> {
         let Some(texture) = self.textures.get(&key) else {
             return Err(format!(
@@ -582,7 +619,21 @@ impl Svg {
         Ok(())
     }
 
+    #[cfg(not(feature = "png-export"))]
+    fn image(
+        &mut self,
+        key: TextureId,
+        _pos: Rect,
+        _uv: Rect,
+        _tint: Color32,
+    ) -> Result<(), String> {
+        Err(format!(
+            "SVG image texture {key:?} requires the png-export feature"
+        ))
+    }
+
     /// Keep managed and user ids distinct, including user ids with their highest bit set.
+    #[cfg(feature = "png-export")]
     fn texture_ids(&self, id: TextureId) -> String {
         match id {
             TextureId::Managed(n) => format!("m{n}"),
@@ -595,6 +646,7 @@ fn dist(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     (0..4).map(|i| (a[i] - b[i]).powi(2)).sum()
 }
 
+#[cfg(feature = "png-export")]
 fn base64(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);

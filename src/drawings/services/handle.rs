@@ -185,6 +185,12 @@ impl HandleService {
             }
         }
 
+        if drawing.tool_type.supports_line_measurements()
+            && drawing.line_measurements.midpoint
+            && let &[a, b, ..] = drawing.points.as_slice()
+        {
+            handles.push((HandlePos::Middle, a.lerp(b, 0.5)));
+        }
         handles
     }
 
@@ -889,6 +895,27 @@ mod tests {
                 });
             }
             assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
+        }
+        for tool in [
+            DrawingToolType::TrendLine,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::Ray,
+            DrawingToolType::InfoLine,
+            DrawingToolType::TrendAngle,
+        ] {
+            let mut line = create_test_drawing(tool, vec![pos2(100.0, 100.0), pos2(300.0, 200.0)]);
+            assert!(
+                !HandleService::get_handles(&line)
+                    .iter()
+                    .any(|(h, _)| *h == Middle),
+                "{tool:?}"
+            );
+            line.line_measurements.midpoint = true;
+            assert_eq!(
+                HandleService::get_handles(&line).last(),
+                Some(&(Middle, pos2(200.0, 150.0))),
+                "{tool:?}"
+            );
         }
         // Renderer control counts, including generated position stops.
         let anchor_counts: &[(&[DrawingToolType], usize)] = &[

@@ -1,6 +1,6 @@
 //! Result rows and shared painting of the symbol choosers.
 
-use super::{Row, SymbolSearchDialog};
+use super::{Row, SymbolSearchDialog, group_key};
 use crate::localization as l10n;
 use crate::model::Instrument;
 use crate::painting::symbol_mark::{paint_round_image, paint_symbol_mark};
@@ -33,8 +33,10 @@ impl SymbolSearchDialog {
                 &symbol.symbol,
             )
         });
-        ui.ctx()
-            .accesskit_node_builder(response.id, |node| node.set_selected(is_sel));
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_selected(is_sel);
+            node.set_description(venue_label(symbol));
+        });
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
         }
@@ -62,9 +64,9 @@ impl SymbolSearchDialog {
             .map(|kind| kind.to_string())
             .unwrap_or_default();
         let exchange = if self.config.show_exchange {
-            symbol.exchange.as_deref().unwrap_or_default()
+            venue_label(symbol)
         } else {
-            ""
+            String::new()
         };
         let column_width = |kind_column: bool| {
             self.filtered_symbols
@@ -76,7 +78,7 @@ impl SymbolSearchDialog {
                             .map(|kind| kind.to_string())
                             .unwrap_or_default()
                     } else if self.config.show_exchange {
-                        symbol.exchange.clone().unwrap_or_default()
+                        venue_label(symbol)
                     } else {
                         String::new()
                     };
@@ -97,7 +99,7 @@ impl SymbolSearchDialog {
         let exchange_right = right - kind_width - 16.0;
         for (text, edge, width) in [
             (kind.as_str(), right, kind_width),
-            (exchange, exchange_right, exchange_width),
+            (exchange.as_str(), exchange_right, exchange_width),
         ] {
             if text.is_empty() {
                 continue;
@@ -142,24 +144,25 @@ impl SymbolSearchDialog {
         let mut text_right = exchange_right - exchange_width - 16.0;
         let mut toggled = false;
         if row.members > 0 {
-            let expanded = symbol
-                .root
-                .as_ref()
-                .is_some_and(|root| self.expanded.contains(root));
+            let expanded = group_key(symbol).is_some_and(|root| self.expanded.contains(&root));
             let galley = ui.painter().layout_no_wrap(
                 format!("+{}", row.members),
                 egui::FontId::proportional(11.0),
                 theme.ui.text,
             );
             let pill = egui::Rect::from_min_max(
-                Pos2::new(text_right - galley.size().x - 16.0, rect.center().y - 10.0),
+                Pos2::new(text_right - galley.size().x - 32.0, rect.center().y - 10.0),
                 Pos2::new(text_right, rect.center().y + 10.0),
             );
             text_right = pill.left() - 8.0;
             let toggle = ui.interact(pill, response.id.with("members"), Sense::click());
             let label = l10n::format_text(
                 ui.ctx(),
-                "{0} more instruments of {1}",
+                if symbol.symbol_type == Some(crate::model::SymbolType::Futures) {
+                    "{0} contracts for {1}"
+                } else {
+                    "{0} sources for {1}"
+                },
                 &[
                     ("0", row.members.to_string()),
                     ("1", symbol.root.clone().unwrap_or_default()),
@@ -181,8 +184,52 @@ impl SymbolSearchDialog {
                 egui::StrokeKind::Inside,
             );
             crate::styles::focus::draw_focus_ring(ui, &toggle, pill.height() / 2.0);
-            ui.painter()
-                .galley(pill.center() - galley.size() / 2.0, galley, theme.ui.text);
+            ui.painter().galley(
+                pill.center() - galley.size() / 2.0 - Vec2::new(8.0, 0.0),
+                galley,
+                theme.ui.text,
+            );
+            let arrow = if expanded {
+                crate::icons::icons::CHEVRON_UP
+            } else {
+                crate::icons::icons::CHEVRON_DOWN
+            };
+            arrow
+                .as_image_tinted(Vec2::splat(12.0), theme.ui.text)
+                .paint_at(
+                    ui,
+                    egui::Rect::from_center_size(
+                        Pos2::new(pill.right() - 10.0, pill.center().y),
+                        Vec2::splat(12.0),
+                    ),
+                );
+            if self.config.show_exchange
+                && symbol.symbol_type != Some(crate::model::SymbolType::Futures)
+            {
+                for member in self
+                    .filtered_symbols
+                    .iter()
+                    .filter(|member| member.search_group() == symbol.search_group())
+                    .take((((text_right - left - 12.0) / 14.0) as usize).min(3))
+                {
+                    let mark = egui::Rect::from_center_size(
+                        Pos2::new(text_right - 10.0, rect.center().y),
+                        Vec2::splat(20.0),
+                    );
+                    paint_symbol_mark(
+                        ui.painter(),
+                        mark,
+                        member
+                            .source
+                            .as_deref()
+                            .or(member.exchange.as_deref())
+                            .unwrap_or(&member.symbol),
+                        member.exchange_logo.as_deref().map(ImageSource::from),
+                    );
+                    text_right -= 14.0;
+                }
+                text_right -= 12.0;
+            }
             toggled = toggle.clicked();
         }
         paint_symbol_text(
@@ -199,6 +246,14 @@ impl SymbolSearchDialog {
         );
 
         (response, toggled)
+    }
+}
+
+/// Keep the listing venue visible when the host also identifies its data provider.
+fn venue_label(symbol: &Instrument) -> String {
+    match (symbol.exchange.as_deref(), symbol.source.as_deref()) {
+        (Some(exchange), Some(source)) if exchange != source => format!("{exchange} · {source}"),
+        (exchange, source) => exchange.or(source).unwrap_or_default().to_owned(),
     }
 }
 
@@ -299,7 +354,11 @@ fn highlighted_text(
     accent: Color32,
 ) -> egui::text::LayoutJob {
     let lower = text.to_lowercase();
-    let query = query.to_lowercase();
+    let request = crate::services::SymbolQuery::new(query);
+    let query = request
+        .qualified()
+        .map_or(query, |(_, symbol)| symbol)
+        .to_lowercase();
     let matches: Vec<_> = if query.is_empty() {
         Vec::new()
     } else {

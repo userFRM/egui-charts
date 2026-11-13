@@ -95,7 +95,13 @@ impl DrawingPropertiesDialog {
             drawing.tool_type.as_str().into(),
             DrawingProps::from_drawing(drawing, chart),
         );
-        if let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type) {
+        self.default_template = Some(DrawingTemplate::from_drawing(
+            &chart.drawings().new_drawing(0, drawing.tool_type),
+        ));
+        // The built-in factory cannot apply a template carrying a custom tool's identity.
+        if drawing.custom_tool.is_some()
+            && let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type)
+        {
             self.default_template = Some(defaults.clone());
         }
         true
@@ -239,17 +245,24 @@ impl DrawingPropertiesDialog {
                 }
                 drawing.position_size = old.position_size;
                 drawing.position_sizing = old.position_sizing;
+                drawing.position_readout = old.position_readout;
                 drawing.position_target_color = old.position_target_color;
                 drawing.position_stop_color = old.position_stop_color;
+                drawing.position_style = old.position_style;
                 drawing.volume_profile = old.volume_profile;
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
                 drawing.channel_midline = old.channel_midline;
+                drawing.line_measurements = old.line_measurements;
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
                 drawing.font_weight = old.font_weight;
                 drawing.italic = old.italic;
+                drawing.text_wrap = old.text_wrap;
+                drawing.text_wrap_width = old.text_wrap_width;
+                drawing.text_follows_zoom = old.text_follows_zoom;
+                drawing.note_text_style = old.note_text_style;
                 drawing.text_color = old.text_color;
                 drawing.background = old.background;
                 drawing.border = old.border;
@@ -301,7 +314,7 @@ impl DrawingPropertiesDialog {
     fn current_template(&self) -> Option<DrawingTemplate> {
         let mut template = self.props.tool_settings.as_deref()?.clone();
         let d = &mut template.settings;
-        d.color = self.props.color.to_srgba_unmultiplied();
+        d.color = self.props.color_rgba();
         d.stroke_width = self.props.line_width;
         d.line_style = self.props.line_style;
         d.fill_color = self.props.fill_enabled.then(|| {
@@ -448,7 +461,7 @@ impl DrawingPropertiesDialog {
                     .props
                     .tool_settings
                     .as_ref()
-                    .is_some_and(|t| t.settings.tool_type.supports_text()),
+                    .is_some_and(|t| TextTab::available(t.settings.tool_type)),
                 PropertiesTab::Coordinates => self
                     .props
                     .tool_settings
@@ -475,10 +488,15 @@ impl DrawingPropertiesDialog {
             )
             .show(ui, |ui| match self.active_tab {
                 PropertiesTab::Style => {
-                    StyleTab::show(ui, &mut self.props, &mut state.pickers);
+                    StyleTab::show(
+                        ui,
+                        &mut self.props,
+                        &mut state.pickers,
+                        &mut state.text_pickers,
+                    );
                 }
                 PropertiesTab::Inputs => {
-                    let color = self.props.color.to_srgba_unmultiplied();
+                    let color = self.props.color_rgba();
                     if let Some(template) = &mut self.props.tool_settings {
                         template.settings.color = color;
                         InputsTab::show(
@@ -566,7 +584,8 @@ const FOOTER_HEIGHT: f32 = 60.0;
 struct UiState {
     /// Colour and fill colour pickers of the Style tab.
     pickers: [ColorPickerState; 2],
-    /// Text colour, background and border pickers of the Text tab.
+    /// Text colour, background and border pickers of the Text tab, and of the Style tab's rows
+    /// for a price label's badge and a price note's label.
     text_pickers: [ColorPickerState; 3],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
@@ -648,13 +667,17 @@ mod tests {
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = Chart::new(BarData::new());
             let mut dialog = DrawingPropertiesDialog::new();
-            for (tool, fill, extend, text) in [
-                (Tool::HorizontalLine, false, false, true),
-                (Tool::Rect, true, true, true),
-                (Tool::Brush, false, false, false),
-                (Tool::TrendLine, false, true, true),
-                (Tool::TextLabel, false, false, true),
-                (Tool::Highlighter, false, false, false),
+            for (tool, fill, extend, text, stroke) in [
+                (Tool::HorizontalLine, false, false, true, true),
+                (Tool::Rect, true, true, true, true),
+                (Tool::Brush, true, false, false, true),
+                (Tool::TrendLine, false, true, true, true),
+                (Tool::TrendAngle, false, true, true, true),
+                (Tool::TextLabel, false, false, true, false),
+                (Tool::Highlighter, false, false, false, true),
+                (Tool::ArrowMarker, false, false, true, false),
+                (Tool::ArrowMarkDown, false, false, true, false),
+                (Tool::FibonacciChannel, true, false, true, false),
             ] {
                 let mut drawing = Drawing::new(7, tool);
                 drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
@@ -672,6 +695,9 @@ mod tests {
                     ("Fill", fill),
                     ("Extend", extend),
                     ("Text", text),
+                    ("Color", tool != Tool::FibonacciChannel),
+                    ("Line width", stroke),
+                    ("Line style", stroke),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
@@ -687,6 +713,45 @@ mod tests {
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }
+        }
+    }
+
+    /// A trend angle's Text tab styles its own labels: it has no text to write, align or box.
+    /// Text also offers to follow the zoom and to wrap.
+    #[test]
+    fn text_tab_rows_follow_the_tool() {
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let mut dialog = DrawingPropertiesDialog::new();
+        for (tool, writes, styles, boxed) in [
+            (Tool::TrendAngle, false, true, false),
+            (Tool::TrendLine, true, true, false),
+            (Tool::TextLabel, true, true, true),
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 2];
+            chart.drawings_mut().drawings = vec![drawing];
+            dialog.open_for_chart(&chart, DrawingId(7));
+            dialog.active_tab = PropertiesTab::Text;
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let has = |label: &str| labels.iter().any(|(text, _)| text == label);
+            assert!(has("Font size"), "{tool:?}");
+            assert_eq!(has("Label"), writes, "{tool:?}");
+            assert_eq!(
+                has("Horizontal alignment"),
+                tool == Tool::TrendLine,
+                "{tool:?}"
+            );
+            assert_eq!(has("Text style") && has("Text color"), styles, "{tool:?}");
+            assert_eq!(has("Background"), boxed, "{tool:?}");
+            assert_eq!(
+                has("Text size") && has("Text wrap"),
+                tool == Tool::TextLabel,
+                "{tool:?}"
+            );
+            dialog.close();
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
         }
     }
 
@@ -754,10 +819,22 @@ mod tests {
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
+                settings.position_style.border = true;
                 settings.price_axis_label = false;
                 settings.time_axis_label = false;
                 settings.italic = true;
+                settings.text_wrap = true;
+                settings.text_wrap_width = 120.0;
+                settings.text_follows_zoom = true;
+                let note_text = crate::drawings::NoteTextStyle {
+                    color: [7, 8, 9, 255],
+                    font_size: 18.0,
+                    bold: true,
+                    italic: false,
+                };
+                settings.note_text_style = Some(note_text);
                 settings.text_color = Some([1, 2, 3, 255]);
+                settings.line_measurements.price_labels = true;
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -769,9 +846,14 @@ mod tests {
                 let preview = &chart.drawings().drawings[0];
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
+                assert!(preview.position_style.border);
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
+                assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
+                assert!(preview.text_follows_zoom);
+                assert_eq!(preview.note_text_style, Some(note_text));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
+                assert!(preview.line_measurements.price_labels);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -813,12 +895,21 @@ mod tests {
             let restored = &chart.drawings().drawings[0];
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
+            assert!(!restored.position_style.border, "{finish}");
             assert!(
                 restored.price_axis_label && restored.time_axis_label,
                 "{finish}"
             );
             assert!(!restored.italic, "{finish}");
-            assert_eq!(restored.text_color, None, "{finish}");
+            assert!(!restored.text_follows_zoom, "{finish}");
+            assert_eq!(restored.note_text_style, None, "{finish}");
+            assert_eq!(
+                (restored.text_wrap, restored.text_wrap_width),
+                (false, 200.0),
+                "{finish}"
+            );
+            assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
+            assert_eq!(restored.line_measurements, Default::default(), "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(
@@ -877,6 +968,71 @@ mod tests {
                 "{finish}"
             );
             assert!(!chart.can_undo(), "{finish}");
+        }
+    }
+
+    /// Reset uses the chart's creation style, including a host tint or a saved tool default.
+    #[test]
+    fn reset_to_defaults_keeps_the_host_colour() {
+        let host = [10, 200, 30, 255];
+        for (tool, custom, saved) in [
+            (Tool::TrendLine, false, false),
+            (Tool::TrendLine, false, true),
+            (Tool::Rect, false, false),
+            (Tool::Rect, false, true),
+            (Tool::Polyline, true, true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::new());
+            let manager = chart.drawings_mut();
+            manager.options.default_color = Some(host);
+            if saved {
+                let mut defaults = Drawing::with_color(0, tool, [60, 70, 80, 255]);
+                defaults.fill_color = Some([90, 99, 111, 85]);
+                if custom {
+                    defaults.custom_tool = Some("host-path".into());
+                }
+                defaults.stroke_width = 3.0;
+                manager
+                    .tool_defaults
+                    .insert(tool, DrawingTemplate::from_drawing(&defaults));
+            }
+            let mut drawing = manager.new_drawing(7, tool);
+            if custom {
+                drawing.custom_tool = Some("host-path".into());
+            }
+            drawing.stroke_width = 5.0;
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            let anchors = drawing.chart_points.clone();
+            manager.drawings.push(drawing);
+            let mut dialog = DrawingPropertiesDialog::new();
+            assert!(dialog.open_for_chart(&chart, DrawingId(7)));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            click(&mut dialog, &mut chart, &ctx, "Template");
+            click(&mut dialog, &mut chart, &ctx, "Reset to defaults");
+            click(&mut dialog, &mut chart, &ctx, "Ok");
+            let reset = &chart.drawings().drawings[0];
+            assert_eq!(
+                reset.color,
+                if saved { [60, 70, 80, 255] } else { host },
+                "{tool:?}"
+            );
+            assert_eq!(
+                reset.fill_color,
+                if saved {
+                    Some([90, 99, 111, 85])
+                } else if tool == Tool::Rect {
+                    Some([10, 200, 30, 51])
+                } else {
+                    None
+                },
+                "{tool:?}"
+            );
+            assert_eq!(reset.stroke_width, if saved { 3.0 } else { 2.0 });
+            assert_eq!(reset.chart_points, anchors);
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].stroke_width, 5.0);
+            assert!(!chart.can_undo());
         }
     }
 

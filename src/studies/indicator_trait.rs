@@ -101,7 +101,8 @@ pub struct StudyPane {
     /// Reference level, colour and caption: the defaults of
     /// [`StudySettings::levels`](super::StudySettings::levels).
     pub levels: Vec<(f64, Color32, &'static str)>,
-    /// Fill between the outer levels using [`Indicator::level_fill_color`].
+    /// Fill between the levels selected by [`Indicator::level_fill_indices`], or the outer
+    /// levels, using [`Indicator::level_fill_color`].
     pub fill_between_levels: bool,
 }
 
@@ -156,6 +157,24 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Whether users may edit this study. Host setters and restore operations remain available.
+    fn user_edit_enabled(&self) -> bool {
+        true
+    }
+
+    /// Optional study help article, opened by the host from the legend or context menu.
+    /// Built-ins default to their API article; custom studies can supply a host URL.
+    fn help_url(&self) -> Option<&str> {
+        #[cfg(feature = "studies")]
+        {
+            super::factory::builtin_help_url(std::any::type_name::<Self>())
+        }
+        #[cfg(not(feature = "studies"))]
+        {
+            None
+        }
+    }
+
     /// Colour inside a projected price band.
     fn projection_fill_color(&self, projection: &super::StudyProjection) -> Color32 {
         self.plot_color(projection.plot, projection.bars.start as usize)
@@ -178,7 +197,35 @@ pub trait Indicator: Send {
         crate::model::LineStyle::Dashed
     }
 
-    /// Colour of the band between the outer pane levels.
+    /// Stroke width of a pane reference level in logical pixels.
+    fn level_width(&self, _value: f64) -> f32 {
+        1.0
+    }
+
+    /// Colour of an enabled dotted value line at a pane guide. Off by default, independent of
+    /// plot value tags and guide visibility. Hidden guides retain their value-line colour.
+    fn level_price_line(&self, _index: usize) -> Option<Color32> {
+        None
+    }
+
+    /// Pattern and width for a level by its position in the pane's levels. The value is the
+    /// drawn value, including a host's zone override. Defaults to the value-based methods.
+    fn level_stroke(&self, _index: usize, value: f64) -> (crate::model::LineStyle, f32) {
+        (self.level_style(value), self.level_width(value))
+    }
+
+    /// Optional tint beneath the study's geometry over its plot area.
+    fn background(&self) -> Option<Color32> {
+        None
+    }
+
+    /// Indices into the pane's levels that bound its fill, independent of other guides.
+    /// `None` uses the lowest and highest levels. Invalid indices contribute no boundary.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        None
+    }
+
+    /// Colour of the band between the selected pane levels.
     fn level_fill_color(&self) -> Color32 {
         let color = self.plot_style(0).color;
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
@@ -205,6 +252,12 @@ pub trait Indicator: Send {
         self.plot_style(line).visible
     }
 
+    /// The output lines the legend lists, in the order it lists them: all of them in plot order
+    /// by default. A study whose leading reading is not its first output lists that one first.
+    fn legend_lines(&self) -> Vec<usize> {
+        (0..self.line_count()).collect()
+    }
+
     /// Whether plot `line` shows its last value in a tag on the price scale while the chart
     /// shows study values. By default every plot of a study with up to four plots does and no
     /// plot of a study with more, whose values stay in the legend, so that the tags leave the
@@ -213,6 +266,27 @@ pub trait Indicator: Send {
     fn plot_tagged(&self, line: usize) -> bool {
         let _ = line;
         self.line_count() <= 4
+    }
+
+    /// Whether a horizontal latest-value line is drawn for this output. Off by default,
+    /// independent of scale tags and displacement. A missing latest output draws no line.
+    fn plot_price_line(&self, _line: usize) -> bool {
+        false
+    }
+
+    /// Editable alternate colour and width states, separate from the output's main style.
+    fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
+        Vec::new()
+    }
+
+    /// Alternate state at a source bar, or `None` for the main style.
+    fn plot_variant(&self, _line: usize, _bar: usize) -> Option<usize> {
+        None
+    }
+
+    /// Stroke width at a source bar. Column and background plots use bar pitch instead.
+    fn plot_width(&self, line: usize, _bar: usize) -> f32 {
+        self.plot_style(line).width
     }
 
     /// The output whose visibility in the style tab also applies to plot `line`, for a plot past
@@ -255,6 +329,11 @@ pub trait Indicator: Send {
         Vec::new()
     }
 
+    /// Vertical colour ramps beneath the plots. Missing values break the filled area.
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        Vec::new()
+    }
+
     /// Value at a displayed bar, accounting for the plot's displacement.
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         let source = bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?;
@@ -266,6 +345,9 @@ pub trait Indicator: Send {
         let (levels, fill_between_levels, level_fill_color) =
             super::settings::declared_levels(self);
         super::StudySettings {
+            show_legend_values: true,
+            user_edit_enabled: Some(self.user_edit_enabled()),
+            help_url: self.help_url().map(str::to_owned),
             plots: (0..self.line_count())
                 .map(|line| self.plot_style(line))
                 .collect(),
@@ -277,6 +359,31 @@ pub trait Indicator: Send {
             level_fill_color,
             untagged_plots: (0..self.line_count())
                 .filter(|&line| !self.plot_tagged(line))
+                .collect(),
+            price_line_plots: (0..self.line_count())
+                .filter(|&line| self.plot_price_line(line))
+                .collect(),
+            plot_variants: (0..self.line_count())
+                .map(|line| self.plot_variants(line))
+                .collect(),
+            gradients: self
+                .gradients()
+                .iter()
+                .map(|fill| super::GradientStyle {
+                    colors: fill.colors,
+                    visible: true,
+                })
+                .collect(),
+            background: self.background(),
+            background_visible: true,
+            fills: self
+                .fills()
+                .iter()
+                .map(|fill| super::FillStyle {
+                    color: fill.color,
+                    inverted_color: fill.inverted_color,
+                    visible: true,
+                })
                 .collect(),
         }
     }
@@ -349,13 +456,14 @@ pub trait Indicator: Send {
         }
     }
 
-    /// Price mapping supplied by the chart for a shared scale, independent of pane bounds.
-    /// Custom presentation implementations can retain it to support shared scales.
+    /// Price mapping supplied by the chart, independent of pane bounds: for a shared scale, and
+    /// for a study in the price pane on its own scale or no scale whose chart primitives add
+    /// prices to its fit. Custom presentation implementations can retain it to support these.
     fn scale_mapping(&self) -> Option<crate::scales::PriceMap> {
         None
     }
 
-    /// Updates the chart's shared-scale mapping. `None` restores the ordinary pane mapping.
+    /// Updates the chart-supplied mapping. `None` restores the ordinary pane mapping.
     fn set_scale_mapping(&mut self, mapping: Option<crate::scales::PriceMap>) {
         let _ = mapping;
     }
@@ -399,9 +507,11 @@ pub trait Indicator: Send {
     /// The oldest time this study reads from `request`, one of its
     /// [`data_requests`](Indicator::data_requests). A connected feed stops loading older
     /// history of that series once it holds a bar at or before the earliest such time of the
-    /// studies reading it, and loads more when that time moves earlier. `None`, the default,
-    /// and a time before the chart's first bar load the series back to that bar. Price-based
-    /// chart types such as Renko do not use the times and always load it back to that bar.
+    /// studies reading it or the feed reports its end, and loads more when that time moves
+    /// earlier. The time may lie before the chart's first bar, however few bars the chart holds.
+    /// `None`, the default, counts as the chart's first bar. Price-based chart types such as
+    /// Renko load at least back to that bar, honoring a stated time only when it lies earlier,
+    /// since the source study is not given the view of the rendered elements.
     fn data_start(
         &self,
         request: &super::StudyDataRequest,
@@ -490,6 +600,15 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Whether the study has results only with its
+    /// [`order_flow_inputs`](Self::order_flow_inputs), so that it cannot be calculated on the bars
+    /// of another interval or symbol, whose order flow the chart does not hold. The default is
+    /// whether it names any. A study that builds its results from the bars and refines them with
+    /// order flow where the chart holds it returns `false`, and keeps its Interval input.
+    fn needs_order_flow(&self) -> bool {
+        !self.order_flow_inputs().is_empty()
+    }
+
     /// Bring [`values`](Indicator::values) up to date after `data[from..]` changed or grew,
     /// given that `data[..from]` is unchanged since the previous call. The values equal those of
     /// [`calculate`](Indicator::calculate) on the same data, bit for bit. After bars are
@@ -507,6 +626,18 @@ pub trait Indicator: Send {
     /// revisit the bars whose output changes. Earlier corrections may recompute in full.
     /// Defaults to `false`.
     fn is_incremental(&self) -> bool {
+        false
+    }
+
+    /// Called by the chart after it evicted the oldest `count` source bars, before it calculates
+    /// the study again in full, which can be a few frames later. Returns whether the study
+    /// dropped the outputs of those bars and keeps the others on the bars that remain until
+    /// then; otherwise it has no values until then. The default keeps nothing. The chart's
+    /// presentation wrapper, which holds every study whose
+    /// [`has_settings`](Indicator::has_settings) is `false`, keeps the values of a study that
+    /// draws no candles, zones, markers, labels, projections, provisional segments or drawings.
+    fn remove_oldest_bars(&mut self, count: usize) -> bool {
+        let _ = count;
         false
     }
 
@@ -532,7 +663,8 @@ pub trait Indicator: Send {
     /// Return the computed output columns, with NaN for missing values.
     ///
     /// The length of the returned output matches the length of the `data`
-    /// slice most recently passed to [`calculate`](Indicator::calculate).
+    /// slice most recently passed to [`calculate`](Indicator::calculate), less the bars
+    /// [`remove_oldest_bars`](Indicator::remove_oldest_bars) removed since.
     fn values(&self) -> &IndicatorValues;
 
     /// Rendering style of an overlay line. Defaults to a 1 px line in its configured colour.
@@ -602,6 +734,15 @@ pub trait Indicator: Send {
     /// Fixed and calendar profiles include their whole selected span, even offscreen bars.
     /// Visible-range studies recompute for this range; ordinary studies return no profiles.
     fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
+        let _ = visible;
+        Vec::new()
+    }
+
+    /// Levels of finished price-row profiles carried right past their own bars, each to the
+    /// first later bar that trades in its row of the profile, or on the line for the value area
+    /// high, or to the last bar: those whose bars intersect the half-open visible source-bar
+    /// range, including levels of profiles left of it. Empty by default.
+    fn profile_levels(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::ProfileLevel> {
         let _ = visible;
         Vec::new()
     }

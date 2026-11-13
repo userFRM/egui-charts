@@ -6,7 +6,7 @@ use super::{
     retry_delay,
 };
 use crate::data::inbox::Answer;
-use crate::data::merge::Origin;
+use crate::data::merge::{Origin, same_values};
 use crate::data::trades::Trades;
 use crate::data::{
     DepthHistory, DepthPage, DepthRequest, FeedCapabilities, FeedError, FeedState, HistoryPage,
@@ -36,38 +36,43 @@ impl Chart {
     /// Refreshes the instrument grid, issues what the feed must be asked and applies its answers.
     /// Called first in [`show`](Self::show).
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
+        self.follow_market_replay();
         // A restored scale still takes its default grid from the current instrument.
         let tick_size = self
             .instrument()
             .and_then(|instrument| instrument.tick_size);
         self.state.price_scale_mut().set_tick_size(tick_size);
-        // Profile drawings read held trades on every time-based chart type.
-        let executions = self
-            .timeframe
-            .is_none_or(|timeframe| !timeframe.is_trade_based())
-            && (self.chart_type == ChartType::VolumeFootprint
-                || (self.chart_type == ChartType::SessionVolumeProfile
-                    && cfg!(feature = "studies"))
-                || (self.feed_link.is_some() && self.profile_drawings()));
+        // Profile drawings read held trades on every chart type.
+        let executions = self.chart_type == ChartType::VolumeFootprint
+            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"))
+            || (self.feed_link.is_some() && self.profile_drawings());
+        // Replay keeps the bars after its cutoff aside; paged trades are matched to all of them.
+        let history = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
+            .map_or(self.state.data().bars.as_slice(), Vec::as_slice);
         if let Some(link) = self
             .feed_link
             .as_mut()
             .filter(|link| executions != link.footprint.is_some())
         {
             link.footprint = if executions {
-                link.footprint(None)
+                link.footprint(None, history)
             } else {
                 None
             };
         }
-        // Replay can stop inside a bar, so profile drawings sum only executions before the cutoff.
-        let cutoff = self.replay_time().filter(|_| self.profile_drawings());
+        // Candle replay can stop inside a bar while the feed holds later trades, so profile
+        // drawings sum only executions before its cutoff. A market replay's feed delivers none
+        // past its cursor, so they read the footprint it extends.
+        let cutoff = (self.replay.as_ref())
+            .map(|replay| replay.time)
+            .filter(|_| self.profile_drawings());
         if let Some(link) = self
             .feed_link
             .as_mut()
             .filter(|link| link.replay_footprint.as_ref().map(|(time, _)| *time) != cutoff)
         {
-            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time))));
+            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time), history)));
         }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
@@ -83,7 +88,7 @@ impl Chart {
         if link.clock != clock {
             link.reload_pending = true;
         }
-        if link.reload_pending {
+        if link.reload_pending || link.resumed {
             self.reload(&mut link, clock);
         }
         // The chart's own viewport, also after it moved to another: off the UI thread
@@ -106,6 +111,14 @@ impl Chart {
                 }
             }
         }
+        if executions && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            let (input, _) = link
+                .footprint_input
+                .get_or_insert_with(|| (crate::data::OrderFlowInput::footprint(), u64::MAX));
+            inputs.push(input.clone());
+        } else {
+            link.footprint_input = None;
+        }
         if inputs.len() != link.study_inputs.len()
             || inputs
                 .iter()
@@ -124,7 +137,9 @@ impl Chart {
                         (input.clone(), seen)
                     } else {
                         input.set_tick_size(link.instrument.as_ref().and_then(|i| i.tick_size));
-                        input.replace_trades(&link.clock, &link.trades);
+                        // A source restored by undo missed what the sink allocated while away.
+                        input.forget_trade_bar();
+                        input.replace_trades(&link.clock, &link.trades, &self.state.data().bars);
                         if let Some(now) = link.time {
                             input.advance_time(&link.clock, now);
                         }
@@ -235,6 +250,8 @@ impl Chart {
                 self.bar_close_time = None;
                 self.server_time_offset = None;
                 self.replace_main_data(Vec::new());
+                link.resumed_from = None;
+                link.pushed_from = None;
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
@@ -242,10 +259,38 @@ impl Chart {
                 link.order_book = None;
                 link.order_queue = None;
                 link.depth_history.iter_mut().for_each(DepthHistory::clear);
-                link.rebuild_bubbles();
+                link.rebuild_bubbles(&[]);
             }
             if !updates.bars.is_empty() {
-                let incoming = updates.bars.into_values().collect();
+                let mut incoming: Vec<_> = updates.bars.into_values().collect();
+                // A feed may push its bars again on resubscribing: until the chart holds a bar
+                // from the first slot it lacks on, the kept bars stand for the older ones.
+                if let Some(from) = link.resumed_from
+                    && self
+                        .bars(SeriesId::MAIN)
+                        .last()
+                        .is_none_or(|last| link.clock.bar_open(last.time) < from)
+                {
+                    incoming.retain(|(bar, origin)| {
+                        *origin != Origin::Live || link.clock.bar_open(bar.time) >= from
+                    });
+                }
+                // Only a trade-based interval's cut reads the start, and there a bar's slot is
+                // its own time. A feed may push a bar the chart holds again, on subscribing: only
+                // a bar that changes what the chart holds is news the history lacks.
+                if link.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+                    let held = self.bars(SeriesId::MAIN);
+                    let news = (incoming.iter())
+                        .filter(|(_, origin)| *origin == Origin::Live)
+                        .map(|(bar, _)| bar)
+                        .filter(|bar| {
+                            !(held.binary_search_by_key(&bar.time, |held| held.time))
+                                .is_ok_and(|at| same_values(&held[at], bar))
+                        })
+                        .map(|bar| bar.time)
+                        .min();
+                    link.pushed_from = news.into_iter().chain(link.pushed_from).min();
+                }
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
                 if merged.first_changed.is_some() {
@@ -277,7 +322,9 @@ impl Chart {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                 evicted |= !added;
                 if added {
-                    if let Some(flow) = footprint {
+                    if let Some(flow) = footprint
+                        && clock.timeframe().is_none_or(|tf| !tf.is_trade_based())
+                    {
                         let _ = flow.push(trade);
                     }
                     if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
@@ -377,17 +424,30 @@ impl Chart {
                         .iter()
                         .any(|other| input.same_source(other))
                     {
+                        self.readout_revision = crate::model::next_revision();
                         let from = input.changed_since(*seen).map_or(0, |time| {
                             self.state
                                 .data()
                                 .bars
                                 .partition_point(|bar| link.clock.bar_open(bar.time) < time)
                         });
-                        self.pending_from[at] =
-                            Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+                        // Dropping the input's oldest bars leaves the other bars' values in place.
+                        if input.only_dropped_since(*seen) && self.pending_from[at] != Some(0) {
+                            self.stale[at] = true;
+                        } else {
+                            self.pending_from[at] =
+                                Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+                        }
                     }
                 }
                 *seen = revision;
+            }
+        }
+        if let (Some((input, seen)), Some(flow)) = (&mut link.footprint_input, &mut link.footprint)
+        {
+            *seen = input.copy_footprint(flow, *seen);
+            if let Some(lost) = link.trades.lost_until() {
+                flow.drop_through(lost, link.trades.iter());
             }
         }
         self.scroll_back(&mut link);
@@ -398,13 +458,42 @@ impl Chart {
         self.feed_link = Some(link);
     }
 
-    /// Drops what the chart held for the old symbol or timeframe and asks for the new one.
+    /// Reloads bars and the subscription, retaining executions for a new interval on the same
+    /// feed key, and the bars, executions and depth history when only a pause ended.
     fn reload(&mut self, link: &mut FeedLink, clock: BarClock) {
+        // A resume alone keeps what the chart holds. A trade-based bar cannot be rebuilt from a
+        // time, so that interval reloads as before.
+        let resumed = std::mem::take(&mut link.resumed)
+            && !link.reload_pending
+            && !clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         link.reload_pending = false;
+        let mut retain_trades = (resumed || link.clock != clock)
+            && link.extended_hours == self.extended_hours
+            && link.conversion == self.conversion
+            && link.clock.sessions().with_timeframe(Timeframe::Min1)
+                == clock.sessions().with_timeframe(Timeframe::Min1)
+            && link.instrument.is_some();
         if let Some(id) = link.subscription.take() {
-            link.inbox.unsubscribe(id);
+            if let Some((symbol, reset, pending)) = link.inbox.unsubscribe_with_trades(id) {
+                retain_trades &= symbol == self.symbol;
+                if retain_trades {
+                    if reset {
+                        link.trades = Trades::new(TRADE_CAPACITY);
+                        link.trades_from_start = false;
+                    }
+                    link.trades.append(pending, &mut |_, _| ());
+                }
+            } else {
+                retain_trades = false;
+            }
             link.feed.unsubscribe(id);
+        } else {
+            retain_trades &= link
+                .instrument
+                .as_ref()
+                .is_some_and(|i| i.symbol == self.symbol);
         }
+        let resume = resumed && retain_trades;
         // The feed-wide answer does not depend on the symbol or interval.
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
         link.pending.retain(|(_, request, _)| feed_wide(request));
@@ -415,28 +504,47 @@ impl Chart {
             .filter(|instrument| instrument.symbol == self.symbol);
         self.state.price_scale_mut().set_price_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
-        link.trades = Trades::new(TRADE_CAPACITY);
+        if retain_trades {
+            link.trades.reanchor();
+        } else {
+            link.trades = Trades::new(TRADE_CAPACITY);
+        }
+        link.extended_hours = self.extended_hours;
+        link.conversion = self.conversion.clone();
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
                 input.clear();
             }
         }
         link.study_inputs.clear();
+        link.footprint_input = None;
         link.time = None;
+        link.pushed_from = None;
         link.order_book = None;
         link.order_queue = None;
-        link.depth_history.iter_mut().for_each(DepthHistory::clear);
+        if !resume {
+            link.depth_history.iter_mut().for_each(DepthHistory::clear);
+        }
         link.depth_complete = false;
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
-        link.trades_from_start = false;
+        link.trades_from_start &= retain_trades;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = clock;
-        link.rebuild_bubbles();
-        // Timestamp anchors survive the empty interval between history requests.
-        self.replace_main_data(Vec::new());
+        link.rebuild_bubbles(&[]);
+        if resume {
+            // The last bar may have missed trades while paused: the page or the stream rebuilds it.
+            let last = self.pop_bars(SeriesId::MAIN, 1);
+            link.resumed_from = last.first().map(|bar| link.clock.bar_open(bar.time));
+            // Kept bars from the stream are history now: the latest page counts their trades too.
+            self.from_ticks.clear();
+        } else {
+            // Timestamp anchors survive the empty interval between history requests.
+            self.replace_main_data(Vec::new());
+            link.resumed_from = None;
+        }
         self.feed = FeedState::default();
         if link.capabilities.is_none() && link.pending.is_empty() && link.retries.is_empty() {
             let reply = link.reply(Request::Capabilities);
@@ -482,6 +590,7 @@ impl Chart {
         link.pending.retain(|(_, request, _)| !history(request));
         link.retries.retain(|(_, request, _)| !history(request));
         self.replace_main_data(Vec::new());
+        link.resumed_from = None;
         self.feed.loading_history = false;
         self.feed.last_error = Some(FeedError::NotSupported);
     }
@@ -498,7 +607,8 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
-        link.rebuild_bubbles();
+        self.readout_revision = crate::model::next_revision();
+        link.rebuild_bubbles(&self.state.data().bars);
         if !supports(link.instrument.as_ref(), timeframe) {
             self.rule_out(link);
             return;
@@ -517,6 +627,10 @@ impl Chart {
             TRADE_CAPACITY,
             tick_size,
         );
+        // A feed may replay retained executions on resubscribing: the kept bars count them.
+        if let Some(from) = link.resumed_from {
+            link.inbox.drop_trades_before(sink.id, from);
+        }
         let config = link.depth_history.as_ref().map(|h| h.config().clone());
         link.inbox.sample_depth(sink.id, config);
         link.inbox.study_inputs(
@@ -575,6 +689,21 @@ impl Chart {
                 self.symbol
             );
         }
+        // Kept bars that end before the latest page would leave a hole scroll-back never fills.
+        if !scroll_back
+            && let Some(from) = link.resumed_from
+            && page
+                .bars
+                .iter()
+                .map(|bar| link.clock.bar_open(bar.time))
+                .min()
+                .is_some_and(|oldest| oldest > from)
+        {
+            let kept = self
+                .bars(SeriesId::MAIN)
+                .partition_point(|bar| link.clock.bar_open(bar.time) < from);
+            self.remove_oldest_bars(SeriesId::MAIN, kept);
+        }
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
@@ -588,8 +717,26 @@ impl Chart {
         self.feed.history_complete |= (page.end_of_history
             || (empty && page.continue_before.is_none()))
             && !self.bar_limit_reached();
+        // From the start on, a held bar the page holds with the same values is history, so the
+        // stream starts at the oldest held bar the page lacks or holds with other values.
+        link.pushed_from = link.pushed_from.and_then(|from| {
+            let held = self.bars(SeriesId::MAIN);
+            held[held.partition_point(|bar| bar.time < from)..]
+                .iter()
+                .find(|bar| {
+                    !(page.bars.iter().rev())
+                        .find(|paged| paged.time == bar.time)
+                        .is_some_and(|paged| same_values(paged, bar))
+                })
+                .map(|bar| bar.time)
+        });
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
+        // Paged executions on a trade-based interval fill the bars they rebuild.
+        if link.footprint.is_some() && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
+        {
+            link.footprint = link.footprint(None, &self.state.data().bars);
+        }
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A nonempty page with no valid bar older than the oldest held would be requested
         // again on every frame.
@@ -637,9 +784,9 @@ impl Chart {
     }
 
     /// Puts a page of older trades in front of the held ones. A page that ends history, names a
-    /// continuation, or adds nothing new cannot move the boundary, so the same request is never
-    /// repeated. A page that ends history also confirms that the held trades start where trade
-    /// history starts.
+    /// continuation, or adds nothing before a boundary it was asked for cannot move it, so the
+    /// same request is never repeated. A page that ends history also confirms that the held trades
+    /// start where trade history starts.
     fn apply_trades(&mut self, link: &mut FeedLink, asked: &TradeRequest, page: TradePage) {
         let empty = page.trades.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
@@ -652,6 +799,7 @@ impl Chart {
         // The oldest held trade's bar is complete once nothing is left before it.
         let reached_start = end && !link.trades_from_start;
         link.trades_from_start |= end;
+        let left_out = link.trades.left_out_at();
         let bubbles = &mut link.bubbles;
         let mut changed = false;
         let fold = &mut |trade: &Tick, added| {
@@ -661,15 +809,19 @@ impl Chart {
         self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
         if changed {
             for (input, _) in &link.study_inputs {
-                input.replace_trades(&link.clock, &link.trades);
+                input.replace_trades(&link.clock, &link.trades, &self.state.data().bars);
             }
         }
-        if (changed || reached_start) && link.footprint.is_some() {
-            link.footprint = link.footprint(None);
+        // A page that only leaves executions out adds none, yet the held ones then prove less.
+        let cut = link.trades.left_out_at() != left_out;
+        if (changed || reached_start || cut) && link.footprint.is_some() {
+            link.footprint = link.footprint(None, &self.state.data().bars);
         }
         link.trade_cursor = continuation;
         link.trades_complete |=
-            end || (continuation.is_none() && !changed) || link.trades.room() == 0;
+            // The latest page can repeat a retained tape without reaching its oldest execution.
+            end || (continuation.is_none() && !changed && asked.before.is_some())
+                || link.trades.room() == 0;
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading

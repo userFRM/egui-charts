@@ -9,11 +9,11 @@ use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
 pub use currency::render_axis_currency;
-use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 pub(super) use labels::semibold;
 pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
 pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
-pub(crate) use study_scale::{render_study_axis, study_mapping};
+pub(crate) use study_scale::{fit_study_mapping, render_study_axis, study_mapping};
 
 /// Gap between the plot's right edge and the start of the price axis labels.
 pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
@@ -21,9 +21,49 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 /// Padding between an axis tag's text and its edge.
 const TAG_PADDING: Vec2 = Vec2::new(6.0, 1.5);
 
-/// The default font for axis labels and tags: the theme's label text.
+fn axis_font_id() -> egui::Id {
+    egui::Id::NULL.with("axis_font")
+}
+
+/// Restores the axis font after painting one chart, including during unwinding.
+pub(crate) struct AxisFontScope {
+    ctx: egui::Context,
+    previous: Option<FontId>,
+}
+
+impl AxisFontScope {
+    pub(crate) fn new(ctx: &egui::Context, family: &FontFamily) -> Self {
+        let family = if ctx.fonts(|fonts| fonts.definitions().families.contains_key(family)) {
+            family.clone()
+        } else {
+            FontFamily::Proportional
+        };
+        let font = FontId::new(ctx.active_theme().text.label, family);
+        let previous = ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id())
+                .replace(font)
+        });
+        Self {
+            ctx: ctx.clone(),
+            previous,
+        }
+    }
+}
+
+impl Drop for AxisFontScope {
+    fn drop(&mut self) {
+        self.ctx.data_mut(|data| {
+            // Keep the slot allocated so steady frames only replace its value.
+            *data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id()) = self.previous.take();
+        });
+    }
+}
+
+/// The chart's axis family at the theme's label size, proportional outside a chart.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
-    FontId::proportional(ctx.active_theme().text.label)
+    ctx.data(|data| data.get_temp::<Option<FontId>>(axis_font_id()))
+        .flatten()
+        .unwrap_or_else(|| FontId::proportional(ctx.active_theme().text.label))
 }
 
 /// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
@@ -168,6 +208,137 @@ pub(crate) fn render_axis_value(
     Some(paint_axis_tag(
         painter, anchor, align, axis_right, text, text_color, fill,
     ))
+}
+
+/// Primitive tags share automatic placement; callers defer fixed tags until automatic tags finish.
+pub(crate) fn render_primitive_price_labels(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
+    occupied: &mut Vec<Option<Rect>>,
+    allow_overlap: bool,
+) {
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(
+        painter.clip_rect().x_range(),
+        plot.y_range(),
+    )));
+    let axis = Rect::from_x_y_ranges(
+        if axis_right <= plot.left() {
+            painter.clip_rect().left()..=plot.left()
+        } else {
+            plot.right()..=axis_right
+        },
+        plot.y_range(),
+    );
+    let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    for (label, map) in labels {
+        let fixed = label.fixed_coordinate.is_some();
+        if !fixed && !map.range().contains(map.transform().to_scale(label.price)) {
+            continue;
+        }
+        let y = label
+            .fixed_coordinate
+            .map_or_else(|| map.price_to_y(label.price), |offset| plot.top() + offset);
+        if !y.is_finite() {
+            continue;
+        }
+        let ink = label
+            .text_color
+            .unwrap_or_else(|| tag_text_color(label.color));
+        let tag = if fixed {
+            let (anchor, align) = price_tag_anchor(plot, axis_right, y);
+            Some(paint_axis_tag(
+                &axis_painter,
+                anchor,
+                align,
+                axis_right,
+                label.text,
+                ink,
+                label.color,
+            ))
+        } else {
+            render_axis_value(
+                &painter,
+                plot,
+                axis_right,
+                y,
+                label.text,
+                (ink, label.color),
+                occupied,
+                allow_overlap,
+            )
+        };
+        let clip = if fixed {
+            axis_painter.clip_rect()
+        } else {
+            painter.clip_rect()
+        };
+        if let Some(tag) = tag.filter(|tag| tag.intersects(clip)) {
+            if label.tick_visible {
+                let edge = if axis_right <= plot.left() {
+                    plot.left()
+                } else {
+                    plot.right()
+                };
+                let end = edge + if axis_right <= plot.left() { -5.0 } else { 5.0 };
+                axis_painter.line_segment(
+                    [
+                        Pos2::new(edge, tag.center().y),
+                        Pos2::new(end, tag.center().y),
+                    ],
+                    Stroke::new(1.0, ink),
+                );
+            }
+            occupied.push(Some(tag));
+        }
+    }
+}
+
+/// Fixed time tags are clipped rather than moved; automatic tags keep the usual edge fitting.
+pub(crate) fn render_primitive_time_label(
+    painter: &Painter,
+    axis: Rect,
+    x: f32,
+    label: crate::chart::primitives::TimeAxisLabel,
+) -> Option<Rect> {
+    if !x.is_finite() || (label.fixed_coordinate.is_none() && !axis.x_range().contains(x)) {
+        return None;
+    }
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    let ink = label
+        .text_color
+        .unwrap_or_else(|| tag_text_color(label.color));
+    let tag = if label.fixed_coordinate.is_some() {
+        let galley = painter.layout_no_wrap(label.text, axis_font(painter.ctx()), ink);
+        let size = Vec2::new(galley.size().x + 8.0, 25.0_f32.max(galley.size().y));
+        let tag = Align2::CENTER_TOP.anchor_size(Pos2::new(x, axis.top() + 1.5), size);
+        painter.rect_filled(tag, 1.0, label.color);
+        painter.galley(tag.center() - galley.size() / 2.0, galley, ink);
+        tag
+    } else {
+        paint_crosshair_tag(
+            &painter,
+            Pos2::new(x, axis.top() + 1.5),
+            Align2::CENTER_TOP,
+            axis.left()..=axis.right(),
+            label.text,
+            (ink, label.color),
+            axis_font(painter.ctx()),
+            25.0,
+            None,
+        )
+    };
+    if !tag.intersects(painter.clip_rect()) {
+        return None;
+    }
+    if label.tick_visible {
+        painter.line_segment(
+            [Pos2::new(x, axis.top()), Pos2::new(x, axis.top() + 5.0)],
+            Stroke::new(1.0, ink),
+        );
+    }
+    Some(tag.intersect(axis))
 }
 
 /// Last-bar values of visible study lines, in the same units and colours as their plot.
@@ -332,7 +503,7 @@ pub(crate) fn tag_text_color(fill: Color32) -> Color32 {
     }
 }
 
-/// Paints a compact hover tag within its axis bounds.
+/// Paints a compact hover tag within its axis bounds, using `font`'s size and the axis family.
 pub(crate) fn paint_crosshair_tag(
     painter: &Painter,
     anchor: Pos2,
@@ -340,13 +511,14 @@ pub(crate) fn paint_crosshair_tag(
     bounds: std::ops::RangeInclusive<f32>,
     text: String,
     colors: (Color32, Color32),
-    font: FontId,
+    mut font: FontId,
     height: f32,
     covered: Option<Rect>,
 ) -> Rect {
     let (text_color, fill) = colors;
     let padding = 8.0;
     let available = (bounds.end() - bounds.start()).max(0.0);
+    font.family = axis_font(painter.ctx()).family;
     let mut job = egui::text::LayoutJob::simple_singleline(text, font, text_color);
     job.wrap = egui::text::TextWrapping::truncate_at_width((available - padding).max(0.0));
     let galley = painter.layout_job(job);
@@ -390,7 +562,18 @@ pub fn price_axis_width(
     tag_labels: &[&str],
     formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> f32 {
-    price_marks(price_map, formatter)
+    price_axis_width_with_edges(painter, price_map, tag_labels, formatter, None)
+}
+
+/// Measures the list painted by an axis, including edge ticks when `pane` is present.
+pub(crate) fn price_axis_width_with_edges(
+    painter: &Painter,
+    price_map: &PriceMap,
+    tag_labels: &[&str],
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+    pane: Option<Rect>,
+) -> f32 {
+    labels::price_axis_marks(painter, price_map, pane, formatter)
         .into_iter()
         .map(|mark| mark.label)
         .chain(tag_labels.iter().map(|label| (*label).to_owned()))
@@ -686,10 +869,7 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
         egui::Sense::click(),
     );
     crate::icons::icons::SETTINGS
-        .as_image_tinted(
-            Vec2::splat(16.0),
-            ui.ctx().active_theme().chart.axis_text_secondary,
-        )
+        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().ui.text)
         .paint_at(
             ui,
             Rect::from_center_size(target.center(), Vec2::splat(16.0)),
@@ -726,6 +906,209 @@ mod tests {
     use super::*;
     use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
     use egui::{Context, RawInput, Shape};
+
+    fn texts<'a>(shape: &'a Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+            Shape::Text(text) => out.push(text),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn axis_font_scope_restores_nested_fonts_after_unwinding() {
+        let ctx = Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            FontFamily::Name("Nested".into()),
+            fonts.families[&FontFamily::Proportional].clone(),
+        );
+        ctx.set_fonts(fonts);
+        ctx.run_ui(RawInput::default(), |_| {})
+            .drop_without_applying_deltas();
+        let other = Context::default();
+        let default = axis_font(&ctx);
+        for size in [18.0, 24.0] {
+            let mut theme = ctx.active_theme();
+            theme.text.label = size;
+            {
+                let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
+                let _font = AxisFontScope::new(&ctx, &FontFamily::Monospace);
+                assert_eq!(axis_font(&ctx), FontId::monospace(size));
+                assert_eq!(axis_font(&other), default);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    theme.text.label = 30.0;
+                    let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
+                    let family = FontFamily::Name("Nested".into());
+                    let _font = AxisFontScope::new(&ctx, &family);
+                    assert_eq!(axis_font(&ctx), FontId::new(30.0, family));
+                    panic!("unwind the nested chart");
+                }));
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<&str>(),
+                    Some(&"unwind the nested chart")
+                );
+                assert_eq!(axis_font(&ctx), FontId::monospace(size));
+            }
+            assert_eq!(axis_font(&ctx), default);
+        }
+    }
+
+    #[test]
+    fn axis_labels_fall_back_from_an_uninstalled_family() {
+        use crate::widget::test_frames::chart;
+        use egui_kittest::Harness;
+
+        for (width, theme) in [
+            (320.0, crate::theme::Theme::light()),
+            (320.0, crate::theme::Theme::dark()),
+            (900.0, crate::theme::Theme::light()),
+            (900.0, crate::theme::Theme::dark()),
+        ] {
+            let family = FontFamily::Name("Not Installed".into());
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.set_theme_override(Some(theme));
+            chart.config_mut().axis_font_family = family.clone();
+            chart.config_mut().show_volume = false;
+            let time = chart.state.shown()[90].time;
+            chart.set_crosshair_position(Some((time, 105.0)));
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 600.0))
+                .build_ui_state(
+                    |ui, chart: &mut crate::widget::Chart| {
+                        chart.show(ui);
+                    },
+                    chart,
+                );
+            for installed in [false, true] {
+                if installed {
+                    let mut fonts = egui::FontDefinitions::default();
+                    fonts.families.insert(
+                        family.clone(),
+                        fonts.families[&FontFamily::Monospace].clone(),
+                    );
+                    harness.ctx.set_fonts(fonts);
+                }
+                harness.step();
+                let expected = if installed {
+                    &family
+                } else {
+                    &FontFamily::Proportional
+                };
+                let plot = harness.state().get_rendered_price_rect();
+                let mut counts = [0; 2];
+                let mut painted = Vec::new();
+                for shape in &harness.output().shapes {
+                    texts(&shape.shape, &mut painted);
+                }
+                for text in painted {
+                    let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                    let time = text.pos.y >= plot.bottom()
+                        && text.pos.y < plot.bottom() + 35.0
+                        && plot.x_range().contains(text.pos.x);
+                    if price || time {
+                        counts[usize::from(time)] += 1;
+                        for section in &text.galley.job.sections {
+                            assert_eq!(&section.format.font_id.family, expected);
+                        }
+                    }
+                }
+                assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+                assert_eq!(harness.state().config().axis_font_family, family);
+                #[cfg(feature = "ui")]
+                assert_eq!(
+                    harness
+                        .state()
+                        .snapshot()
+                        .unwrap()
+                        .config
+                        .unwrap()
+                        .axis_font_family,
+                    family
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn charts_keep_axis_families_local() {
+        use crate::widget::test_frames::chart;
+
+        let ctx = Context::default();
+        let family = FontFamily::Name("Host Mono".into());
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            family.clone(),
+            fonts.families[&FontFamily::Monospace].clone(),
+        );
+        ctx.set_fonts(fonts);
+        let host_style = ctx.global_style();
+        let mut charts = [chart(&[100.0], &[110.0]), chart(&[100.0], &[110.0])];
+        for chart in &mut charts {
+            chart.set_size(Some(Vec2::new(760.0, 260.0)));
+            chart.config_mut().show_volume = false;
+            let time = chart.state.shown()[90].time;
+            chart.set_crosshair_position(Some((time, 105.0)));
+        }
+        // Defaults, independent families, then a runtime change back to the defaults.
+        for families in [
+            [FontFamily::Proportional, FontFamily::Proportional],
+            [family.clone(), FontFamily::Proportional],
+            [FontFamily::Proportional, FontFamily::Proportional],
+        ] {
+            for (chart, family) in charts.iter_mut().zip(&families) {
+                chart.config_mut().axis_font_family = family.clone();
+            }
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 700.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.label("Host before");
+                    for chart in &mut charts {
+                        chart.show(ui);
+                    }
+                    ui.label("Host after");
+                },
+            );
+            let mut painted = Vec::new();
+            for shape in &output.shapes {
+                texts(&shape.shape, &mut painted);
+            }
+            for (chart, family) in charts.iter().zip(&families) {
+                let plot = chart.get_rendered_price_rect();
+                let mut counts = [0; 2];
+                for text in &painted {
+                    let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                    let time = text.pos.y >= plot.bottom()
+                        && text.pos.y < plot.bottom() + 35.0
+                        && plot.x_range().contains(text.pos.x);
+                    if price || time {
+                        counts[usize::from(time)] += 1;
+                        assert_eq!(&text.galley.job.sections[0].format.font_id.family, family);
+                    }
+                }
+                assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+            }
+            for label in ["Host before", "Host after"] {
+                let text = painted
+                    .iter()
+                    .find(|text| text.galley.text() == label)
+                    .unwrap();
+                assert_eq!(
+                    text.galley.job.sections[0].format.font_id,
+                    host_style.text_styles[&egui::TextStyle::Body]
+                );
+            }
+            assert_eq!(ctx.global_style(), host_style);
+            assert_eq!(
+                axis_font(&ctx),
+                FontId::proportional(ctx.active_theme().text.label)
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
 
     #[test]
     fn price_line_follows_the_scale() {
@@ -1054,41 +1437,57 @@ mod tests {
     #[test]
     fn axis_controls_emit_their_actions() {
         use egui::{Event, Modifiers, PointerButton};
-        let ctx = Context::default();
-        let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
-        let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
-        let mut actions = Vec::new();
-        for (pos, expected) in [
-            (Pos2::new(87.0, 110.5), Some("add")),
-            (tag.center(), None),
-            (corner.center(), Some("settings")),
-        ] {
-            let before = actions.len();
-            for pressed in [None, Some(true), Some(false)] {
-                let mut input = RawInput::default();
-                input.events.push(Event::PointerMoved(pos));
-                if let Some(pressed) = pressed {
-                    input.events.push(Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
+        let mut custom = crate::theme::Theme::dark();
+        custom.ui.text = Color32::from_rgb(123, 100, 90);
+        for theme in crate::theme::presets()
+            .into_iter()
+            .map(|(_, theme)| theme)
+            .chain([custom])
+        {
+            let ctx = Context::default();
+            crate::icons::install_loader(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
+            let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+            let mut actions = Vec::new();
+            for (pos, expected) in [
+                (Pos2::new(87.0, 110.5), Some("add")),
+                (tag.center(), None),
+                (corner.center(), Some("settings")),
+            ] {
+                let before = actions.len();
+                for pressed in [None, Some(true), Some(false)] {
+                    let mut input = RawInput::default();
+                    input.events.push(Event::PointerMoved(pos));
+                    if let Some(pressed) = pressed {
+                        input.events.push(Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    let output = ctx.run_ui(input, |ui| {
+                        if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE)
+                        {
+                            assert_eq!(price, 704.64);
+                            actions.push("add");
+                        }
+                        if axis_settings_button(ui, corner).clicked() {
+                            actions.push("settings");
+                        }
                     });
+                    let ink = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.brush.is_some() => Some(rect.fill),
+                        _ => None,
+                    });
+                    assert_eq!(ink, Some(theme.ui.text));
+                    output.drop_without_applying_deltas();
                 }
-                let output = ctx.run_ui(input, |ui| {
-                    if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE) {
-                        assert_eq!(price, 704.64);
-                        actions.push("add");
-                    }
-                    if axis_settings_button(ui, corner).clicked() {
-                        actions.push("settings");
-                    }
-                });
-                output.drop_without_applying_deltas();
+                assert_eq!(actions[before..].first().copied(), expected);
             }
-            assert_eq!(actions[before..].first().copied(), expected);
+            assert_eq!(actions, ["add", "settings"]);
         }
-        assert_eq!(actions, ["add", "settings"]);
     }
 
     /// Study tags keep their optional names and choose readable text for the plot fill.

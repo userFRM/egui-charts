@@ -18,19 +18,26 @@ pub struct ImageExportOptions {
     pub include_title: bool,
     /// Include the export time in the chart's time zone above the chart.
     pub include_timestamp: bool,
-    /// Draw the symbol watermark and the one set with [`Chart::set_watermark`], as they show on
-    /// screen, independently of the title and timestamp.
+    /// Draw the symbol watermark and every host watermark set with [`Chart::set_watermark`]
+    /// or [`Chart::set_pane_watermark`], as they show on screen, independently of the title and
+    /// timestamp.
     pub include_watermark: bool,
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
     /// Draw the crosshair where the pointer last placed it over the plots, or where
-    /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
+    /// [`Chart::set_crosshair_position`], [`Chart::set_series_crosshair_position`] or a
+    /// synchronized chart placed it since.
     pub include_crosshair: bool,
+    /// Draw [`PrimitivePass::Above`](super::PrimitivePass::Above) content above the plots and
+    /// persistent drawings. Defaults to `true`, independently of `include_crosshair`.
+    /// Frozen exports omit pointer hover and selection decorations with either setting.
+    pub include_foreground: bool,
     /// Pixels of the textures the host binds itself, by the id its images use, so
-    /// [`Chart::export_png`] and [`Chart::export_svg`] can draw them. Without an entry, an image
-    /// of such a texture fails the export. Supplied textures use linear filtering and clamp to
-    /// their edges. Prefer [`egui::TextureId::User`]: ids that collide with the offscreen frame's
-    /// own textures return an error. [`ChartImage`] frames include the supplied pixels too.
+    /// `Chart::export_png` and [`Chart::export_svg`] can draw them with `png-export`.
+    /// Without an entry, an image of such a texture fails the export. Supplied textures use
+    /// linear filtering and clamp to their edges. Prefer [`egui::TextureId::User`]: ids that
+    /// collide with the offscreen frame's own textures return an error. [`ChartImage`] frames
+    /// include the supplied pixels too.
     pub textures: HashMap<egui::TextureId, Arc<egui::ColorImage>>,
 }
 
@@ -43,6 +50,7 @@ impl Default for ImageExportOptions {
             include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
+            include_foreground: true,
             textures: HashMap::new(),
         }
     }
@@ -65,8 +73,13 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
+/// A column of a [`DataTable`]: the original id and title of its study, `None` for the main
+/// series, then its plot or main series column. The title keeps a choice off a study of another
+/// title that a restore adds under the id the choice was made for.
+pub(crate) type ColumnId = (Option<(usize, String)>, usize);
+
 /// The loaded bars and visible study plots as text, aligned by chart time: what
-/// [`Chart::export_csv`] writes and the chart data table lists.
+/// `Chart::export_csv` (with `csv`) writes and the chart data table lists.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct DataTable {
@@ -78,6 +91,8 @@ pub struct DataTable {
 
 impl DataTable {
     /// CSV text of the `columns` (indices into [`Self::headers`]) in the given order.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn csv(
         &self,
         columns: &[usize],
@@ -140,7 +155,8 @@ fn add_host_textures(
     Ok(())
 }
 
-/// Why [`Chart::export_image`], [`Chart::export_png`] or [`Chart::export_svg`] made no image.
+/// Why [`Chart::export_image`], `Chart::export_png` (with `png-export`) or
+/// [`Chart::export_svg`] made no image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExportError {
@@ -196,15 +212,22 @@ impl Chart {
     /// label does.
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let table = self.data_table();
         table.csv(&(0..table.headers.len()).collect::<Vec<_>>())
     }
 
-    /// The cells of [`Self::export_csv`] as a table, with the same bars, study plots, times and
-    /// precision. During replay it holds the bars the replay cutoff has completed, and on
-    /// price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
+    /// The cells of `Self::export_csv` (with `csv`) as a table, with the same bars, study plots,
+    /// times and precision. During replay it holds the bars the replay cutoff has completed,
+    /// and on price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
     pub fn data_table(&self) -> DataTable {
+        self.data_table_with_columns().0
+    }
+
+    /// Build cells and the identity of each column from the same calculated studies.
+    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<ColumnId>) {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -290,15 +313,28 @@ impl Chart {
             }));
             rows.push(row);
         }
-        DataTable {
-            headers: header,
-            rows,
-        }
+        let column_ids = (0..6)
+            .map(|column| (None, column))
+            .chain(columns.iter().map(|&(study, line, _)| {
+                let id = self.study_ids[study].0;
+                #[cfg(feature = "drawings")]
+                let id = self.study_column_ids.get(&id).copied().unwrap_or(id);
+                (Some((id, studies[study].name().to_owned())), line)
+            }))
+            .collect();
+        (
+            DataTable {
+                headers: header,
+                rows,
+            },
+            column_ids,
+        )
     }
 
     /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
     /// scales as the widget. Does not poll feeds, change live viewport state, call the lifecycle
-    /// hooks of primitives or capture host panels/dialogs.
+    /// hooks of primitives or capture host panels/dialogs. A pane primitive attached since the
+    /// last frame is left out, as it draws only after its `attached` hook.
     /// `ctx` supplies the host's fonts and style after its first frame. Images use one pixel per point and dimensions
     /// between 100 and 7680 on each axis, with at most 33,177,600 pixels.
     /// Pass the returned frame to an egui renderer; see [`ChartImage`] for delivery responsibilities.
@@ -327,7 +363,7 @@ impl Chart {
     /// ```no_run
     /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), egui_charts::widget::ExportError> {
     /// let options = egui_charts::widget::ImageExportOptions::default();
-    /// let png = chart.export_layout_png(ctx, &options, |ui, snapshot| {
+    /// let image = chart.export_layout_image(ctx, &options, |ui, snapshot| {
     ///     ui.horizontal(|ui| {
     ///         ui.label(snapshot.symbol());
     ///         ui.label("1m");
@@ -378,30 +414,11 @@ impl Chart {
         if ctx.cumulative_pass_nr() == 0 {
             return Err(ExportError::NoFrame);
         }
-        let mut chart = self.export_snapshot();
-        chart.config.skip_background = options.transparent_background;
-        chart.config.show_symbol_labels &= options.include_title;
-        if !options.include_watermark {
-            chart.config.show_watermark = false;
-            chart.watermark = None;
-        }
-        let mut theme = self
+        let mut chart = self.export_snapshot(ctx, options);
+        let theme = chart
             .theme_override
             .clone()
             .unwrap_or_else(|| ctx.active_theme());
-        if options.transparent_background {
-            theme.chart.bg = egui::Color32::TRANSPARENT;
-        }
-        chart.theme_override = Some(theme.clone());
-        if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
-            match price {
-                Some(price) => chart.set_crosshair_position(Some((time, price))),
-                None => {
-                    chart.set_synced_crosshair_time(Some(time));
-                    chart.chart_options.crosshair.horz_line_visible = false;
-                }
-            }
-        }
         let image_ctx = egui::Context::default();
         image_ctx.set_global_style(ctx.global_style());
         crate::theme::apply_to_egui(&image_ctx, &theme);
@@ -465,6 +482,8 @@ impl Chart {
     /// # Errors
     /// Returns the errors of [`Self::export_image`], [`ExportError::Unsupported`] for content
     /// that cannot be drawn, or [`ExportError::Encode`] if the PNG encoder fails.
+    #[cfg(feature = "png-export")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "png-export")))]
     pub fn export_png(
         &self,
         ctx: &egui::Context,
@@ -477,6 +496,8 @@ impl Chart {
 
     /// Like [`Self::export_png`] for a layout of library widgets, drawn by `layout` as
     /// [`Self::export_layout_image`] describes.
+    #[cfg(feature = "png-export")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "png-export")))]
     pub fn export_layout_png(
         &self,
         ctx: &egui::Context,
@@ -493,13 +514,14 @@ impl Chart {
     /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
     /// the same title, timestamp, watermark and background. Text stays text, in the font family
     /// class of the on-screen font, and the frame's textures, such as legend icons, are embedded
-    /// as PNG, with the host's [`ImageExportOptions::textures`]. Fails with the reason for content
-    /// SVG cannot take over unchanged, such as host paint callbacks and textures the host binds
-    /// itself without supplying their pixels, instead of leaving it out.
+    /// as PNG with `png-export` enabled, with the host's [`ImageExportOptions::textures`].
+    /// Fails with the reason for content SVG cannot take over unchanged, such as host paint
+    /// callbacks and textures the host binds itself without supplying their pixels, instead of
+    /// leaving it out.
     ///
     /// # Errors
     /// Returns the errors of [`Self::export_image`] or [`ExportError::Unsupported`] for content
-    /// the format cannot take over unchanged.
+    /// the format cannot take over unchanged, including image textures when `png-export` is off.
     pub fn export_svg(
         &self,
         ctx: &egui::Context,
@@ -525,7 +547,49 @@ impl Chart {
         svg.map_err(ExportError::Unsupported)
     }
 
-    fn export_snapshot(&self) -> Self {
+    /// A frozen chart for a multi-chart image layout, with the same background, title,
+    /// watermark, foreground and crosshair choices as [`Self::export_image`]. Show it inside the callback
+    /// of [`Self::export_layout_image`], `Self::export_layout_png` (with `png-export`) or
+    /// [`Self::export_layout_svg`].
+    /// No storage or live subscriptions are attached; the original chart stays unchanged.
+    pub fn export_snapshot(&self, ctx: &egui::Context, options: &ImageExportOptions) -> Self {
+        let mut chart = self.frozen_export_snapshot();
+        chart.hide_foreground = !options.include_foreground;
+        chart.config.skip_background = options.transparent_background;
+        chart.config.show_symbol_labels &= options.include_title;
+        if !options.include_watermark {
+            chart.config.show_watermark = false;
+            for pane in &mut chart.pane_layout.panes {
+                pane.watermark = None;
+            }
+        }
+        let mut theme = self
+            .theme_override
+            .clone()
+            .unwrap_or_else(|| ctx.active_theme());
+        if options.transparent_background {
+            theme.chart.bg = egui::Color32::TRANSPARENT;
+        }
+        chart.theme_override = Some(theme);
+        if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
+            match price {
+                Some(price) => match self.last_crosshair_series {
+                    Some(series) => {
+                        chart.set_series_crosshair_position(series, Some((time, price)))
+                    }
+                    None => chart.set_crosshair_position(Some((time, price))),
+                },
+                None => {
+                    chart.set_synced_crosshair_time(Some(time));
+                    chart.chart_options.crosshair.horz_line_visible = false;
+                    chart.chart_options.crosshair.horz_label_visible = false;
+                }
+            }
+        }
+        chart
+    }
+
+    fn frozen_export_snapshot(&self) -> Self {
         let mut chart = Chart::with_config(Default::default(), self.config.clone());
         chart.state = self.state.clone();
         chart.chart_options = self.chart_options.clone();
@@ -545,6 +609,7 @@ impl Chart {
         chart.main_series_visible = self.main_series_visible;
         chart.main_series_present = self.main_series_present;
         chart.main_series_scale = self.main_series_scale;
+        chart.main_series_style = self.main_series_style.clone();
         chart.price_series = self
             .price_series
             .iter()
@@ -553,8 +618,11 @@ impl Chart {
                 options: series.options.clone(),
                 visible: series.visible,
                 fed: series.fed,
+                filled: None,
+                restored: false,
                 bars: series.bars.clone(),
                 revision: series.revision,
+                last_price_pulse: std::cell::Cell::new(None),
                 heikin_ashi: Default::default(),
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
@@ -569,7 +637,6 @@ impl Chart {
         chart.feed_link = self.feed_link.as_ref().map(super::feed::FeedLink::frozen);
         chart.legend_instrument = self.instrument().cloned();
         chart.legend_badge = self.legend_badge.clone();
-        chart.watermark = self.watermark.clone();
         chart.legend_statuses = self.legend_statuses.clone();
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
@@ -641,6 +708,7 @@ impl Chart {
             chart.volume_setting = self.volume_setting;
         }
         chart.primitives = self.primitives.clone();
+        chart.freeze_custom_points(self.replay_time());
         chart.next_primitive = self.next_primitive;
         chart.settle_primitives();
         chart.study_data = self.study_data.snapshot();
@@ -652,11 +720,18 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData, Instrument, Timeframe};
-    use crate::studies::{CustomIndicator, IndicatorValue};
+    #[cfg(feature = "csv")]
+    use crate::model::Instrument;
+    #[cfg(any(feature = "csv", feature = "drawings"))]
+    use crate::model::{Bar, BarData, Timeframe};
+    #[cfg(any(feature = "csv", feature = "drawings"))]
+    use crate::studies::CustomIndicator;
+    #[cfg(feature = "csv")]
+    use crate::studies::IndicatorValue;
     use crate::widget::SeriesId;
 
     #[test]
+    #[cfg(feature = "csv")]
     fn csv_aligns_fresh_visible_plots_and_formats_chart_times_and_prices() {
         let times: Vec<_> = [
             "2024-11-03T05:30:00.125Z",
@@ -835,7 +910,7 @@ mod tests {
         }))));
         chart.pump_marks(&ctx);
 
-        let mut snapshot = chart.export_snapshot();
+        let mut snapshot = chart.frozen_export_snapshot();
         assert_eq!(snapshot.time_scale_events.len(), 1);
         test_frames::frame(&ctx, &mut snapshot, 0.1, vec![]);
         let value = |chart: &Chart| {
@@ -901,7 +976,7 @@ mod tests {
         chart.pump_marks(&ctx);
         assert_eq!(source.calls.load(Ordering::Relaxed), 1);
 
-        let mut snapshot = chart.export_snapshot();
+        let mut snapshot = chart.frozen_export_snapshot();
         assert!(snapshot.mark_source.is_none());
         assert_eq!(snapshot.event_visibility(), chart.event_visibility());
         assert_eq!(snapshot.time_scale_events.len(), 2);
@@ -1052,11 +1127,120 @@ mod tests {
                 vec!["t1".into(), "2.50".into(), "2.00".into()],
             ],
         };
+        #[cfg(feature = "csv")]
         assert_eq!(table.csv(&[0, 2]).unwrap(), "time,SMA: 5\nt0,\nt1,2.00\n");
         assert_eq!(table.tsv(&[2, 1]), "SMA: 5\tclose\n\t1.50\n2.00\t2.50");
     }
 
     #[test]
+    #[cfg(feature = "ui")]
+    fn svg_escapes_a_restored_axis_font_family() {
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames};
+        use egui::FontFamily;
+
+        for (name, escaped) in [
+            (
+                r#"R&D "Mono" <x> it's \ here"#,
+                r#"R&amp;D &quot;Mono&quot; &lt;x&gt; it\'s \\ here"#,
+            ),
+            ("Line\nfeed\rreturn\ttab", r"Line\a feed\d return\9 tab"),
+            ("Control\0\u{1}\u{b}\u{c}\u{1f}", r"Control\0 \1 \b \c \1f "),
+            ("Unicode\u{fffe}\u{ffff}", r"Unicode\fffe \ffff "),
+        ] {
+            let ctx = egui::Context::default();
+            let family = FontFamily::Name(name.into());
+            let control = FontFamily::Name("Host Mono".into());
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.families.insert(
+                family.clone(),
+                fonts.families[&FontFamily::Monospace].clone(),
+            );
+            fonts
+                .families
+                .insert(control.clone(), fonts.families[&family].clone());
+            ctx.set_fonts(fonts);
+            let mut chart = test_frames::chart(&[100.0], &[110.0]);
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let options = ImageExportOptions {
+                size: [480, 320],
+                include_title: false,
+                include_timestamp: false,
+                include_watermark: false,
+                ..Default::default()
+            };
+            chart.config_mut().axis_font_family = family.clone();
+            let json = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
+            }
+            .to_json()
+            .unwrap();
+            let saved = SavedLayout::from_json(&json).unwrap();
+            chart.config_mut().axis_font_family = FontFamily::Proportional;
+            chart.restore(&saved.charts[0]).unwrap();
+            assert_eq!(chart.config().axis_font_family, family);
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+
+            chart.config_mut().axis_font_family = control;
+            let text_count = chart
+                .export_svg(&ctx, &options)
+                .unwrap()
+                .matches("<text ")
+                .count();
+            assert!(text_count > 0);
+            chart.config_mut().axis_font_family = family;
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            resvg::usvg::Tree::from_str(&svg, &Default::default()).unwrap();
+            assert!(svg.contains(&format!("font-family=\"'{escaped}', sans-serif\"")));
+            assert_eq!(svg.matches("<text ").count(), text_count);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "ui")]
+    fn svg_writes_a_restored_watermark_with_control_characters_as_xml() {
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames};
+
+        let ctx = egui::Context::default();
+        let options = ImageExportOptions {
+            size: [480, 320],
+            include_title: false,
+            include_timestamp: false,
+            include_watermark: true,
+            ..Default::default()
+        };
+        for bad in ['\u{1}', '\u{b}', '\u{fffe}', '\r'] {
+            let mut chart = test_frames::chart(&[10.0, 12.0], &[14.0, 13.0]);
+            chart.config_mut().show_watermark = true;
+            chart.config_mut().watermark_text = Some(format!("WATER{bad}MARK"));
+            let json = SavedLayout {
+                mode: ChartLayoutMode::Single,
+                charts: vec![chart.snapshot().unwrap()],
+                sizing: None,
+            }
+            .to_json()
+            .unwrap();
+            let saved = SavedLayout::from_json(&json).unwrap();
+            let mut chart = test_frames::chart(&[10.0, 12.0], &[14.0, 13.0]);
+            chart.restore(&saved.charts[0]).unwrap();
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            resvg::usvg::Tree::from_str(&svg, &Default::default())
+                .unwrap_or_else(|e| panic!("U+{:04X}: {e}", bad as u32));
+            assert!(!svg.contains(bad), "U+{:04X} was written raw", bad as u32);
+            let kept = if bad == '\r' {
+                "WATER&#13;MARK"
+            } else {
+                "WATERMARK"
+            };
+            assert!(svg.contains(kept), "U+{:04X}", bad as u32);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "png-export")]
     fn svg_images_apply_the_options_and_report_what_they_cannot_hold() {
         use crate::widget::test_frames::{chart, frame};
         let ctx = egui::Context::default();
@@ -1078,6 +1262,7 @@ mod tests {
         let opaque = svg(&base);
         assert!(opaque.starts_with("<svg") && opaque.contains(r#"width="480" height="320""#));
         assert!(opaque.contains("WATERMARK"), "watermark was dropped");
+        #[cfg(feature = "icons")]
         assert!(
             opaque.contains("data:image/png;base64,"),
             "frame textures were dropped"
@@ -1292,9 +1477,92 @@ mod tests {
     }
 
     #[test]
-    fn png_images_rasterise_the_chart_with_the_last_crosshair_on_request() {
+    #[cfg(not(feature = "png-export"))]
+    fn svg_exports_vectors_and_refuses_textures_without_png_export() {
         use crate::widget::test_frames::{chart, frame};
-        use egui::{Event, Pos2};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0, 12.0], &[14.0, 13.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let options = ImageExportOptions {
+            size: [480, 320],
+            include_timestamp: false,
+            ..Default::default()
+        };
+        assert!(
+            chart
+                .export_layout_svg(&ctx, &options, |ui, _| {
+                    ui.label("Vector text");
+                })
+                .unwrap()
+                .contains("Vector text")
+        );
+        let id = egui::TextureId::User(7);
+        let options = ImageExportOptions {
+            textures: HashMap::from([(
+                id,
+                Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::RED)),
+            )]),
+            ..options
+        };
+        assert_eq!(
+            chart.export_layout_svg(&ctx, &options, |ui, _| {
+                ui.image((id, egui::vec2(32.0, 32.0)));
+            }),
+            Err(ExportError::Unsupported(
+                "SVG image texture User(7) requires the png-export feature".into()
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "png-export")]
+    fn image_exports_control_foreground_and_crosshair_independently() {
+        use crate::chart::primitives::{Primitive, PrimitivePass, PrimitiveView};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Color32, Event, Pos2};
+
+        struct Layers([[Color32; 3]; 2]);
+        impl Layers {
+            fn paint(
+                &self,
+                painter: &egui::Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                background: bool,
+            ) {
+                let at = match pass {
+                    PrimitivePass::Below => 0,
+                    PrimitivePass::Series => 1,
+                    PrimitivePass::Above => 2,
+                };
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        Pos2::new(
+                            view.mapping.rect.left() + 16.0 + at as f32 * 24.0,
+                            view.mapping.rect.bottom() - if background { 32.0 } else { 16.0 },
+                        ),
+                        egui::vec2(12.0, 12.0),
+                    ),
+                    0.0,
+                    self.0[background as usize][at],
+                );
+            }
+        }
+        impl Primitive for Layers {
+            fn draw_background(
+                &self,
+                painter: &egui::Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.paint(painter, view, pass, true);
+            }
+            fn draw(&self, painter: &egui::Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                self.paint(painter, view, pass, false);
+            }
+        }
+
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
         frame(
@@ -1304,18 +1572,17 @@ mod tests {
             vec![Event::PointerMoved(Pos2::new(400.0, 200.0))],
         );
         frame(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
-        let decode = |include_crosshair| {
+        let options = |include_foreground, include_crosshair| ImageExportOptions {
+            size: [480, 320],
+            include_title: false,
+            include_timestamp: false,
+            include_crosshair,
+            include_foreground,
+            ..Default::default()
+        };
+        let decode = |chart: &Chart, include_foreground, include_crosshair| {
             let png = chart
-                .export_png(
-                    &ctx,
-                    &ImageExportOptions {
-                        size: [480, 320],
-                        include_title: false,
-                        include_timestamp: false,
-                        include_crosshair,
-                        ..Default::default()
-                    },
-                )
+                .export_png(&ctx, &options(include_foreground, include_crosshair))
                 .unwrap();
             let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
             let mut pixels = vec![0; reader.output_buffer_size()];
@@ -1326,7 +1593,7 @@ mod tests {
             );
             pixels.as_chunks::<4>().0.to_vec()
         };
-        let (plain, crosshair) = (decode(false), decode(true));
+        let (plain, crosshair) = (decode(&chart, true, false), decode(&chart, true, true));
         // Candle bodies keep their exact colour through rasterisation and encoding.
         let bullish = chart.config().bullish_color.to_srgba_unmultiplied();
         assert!(plain.iter().filter(|pixel| **pixel == bullish).count() > 1000);
@@ -1335,5 +1602,190 @@ mod tests {
         let column = (0..480).map(|x| (0..320).filter(|&y| changed(x, y)).count());
         let row = (0..320).map(|y| (0..480).filter(|&x| changed(x, y)).count());
         assert!(column.max() > Some(60) && row.max() > Some(100));
+
+        chart.chart_options.crosshair.vert_label_background_color = egui::Color32::RED;
+        chart.chart_options.crosshair.horz_label_background_color = egui::Color32::BLUE;
+        let (time, _) = chart.last_crosshair.unwrap();
+        for price in [Some(105.0), None] {
+            chart.last_crosshair = Some((time, price));
+            let crosshair = decode(&chart, true, true);
+            assert!(crosshair.contains(&[255, 0, 0, 255]));
+            assert_eq!(crosshair.contains(&[0, 0, 255, 255]), price.is_some());
+        }
+
+        let pane = chart.add_indicator(Box::new(
+            CustomIndicator::new("Pane", |bars| {
+                bars.iter()
+                    .map(|bar| IndicatorValue::Single(bar.close))
+                    .collect()
+            })
+            .with_overlay(false),
+        ));
+        let colors = [
+            [
+                [
+                    Color32::from_rgb(1, 2, 3),
+                    Color32::from_rgb(4, 5, 6),
+                    Color32::from_rgb(7, 8, 9),
+                ],
+                [
+                    Color32::from_rgb(21, 22, 23),
+                    Color32::from_rgb(24, 25, 26),
+                    Color32::from_rgb(27, 28, 29),
+                ],
+            ],
+            [
+                [
+                    Color32::from_rgb(11, 12, 13),
+                    Color32::from_rgb(14, 15, 16),
+                    Color32::from_rgb(17, 18, 19),
+                ],
+                [
+                    Color32::from_rgb(31, 32, 33),
+                    Color32::from_rgb(34, 35, 36),
+                    Color32::from_rgb(37, 38, 39),
+                ],
+            ],
+        ];
+        for (id, colors) in [SeriesId::MAIN, pane].into_iter().zip(colors) {
+            assert!(chart.attach_primitive(id, Layers(colors)).is_some());
+        }
+        #[cfg(feature = "drawings")]
+        {
+            use crate::drawings::{Drawing, DrawingToolType};
+            let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
+            drawing.color = [45, 201, 173, 255];
+            drawing.stroke_width = 3.0;
+            let id = chart.create_drawing(drawing, &[(time, 103.0)]).unwrap();
+            chart.drawings.select(id);
+        }
+        chart.selection.select(
+            super::super::ChartElementId::Series(SeriesId::MAIN),
+            Some(50),
+        );
+        chart.last_crosshair = Some((time, Some(105.0)));
+        let mut images = Vec::new();
+        for (foreground, crosshair) in [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let options = options(foreground, crosshair);
+            let pixels = decode(&chart, foreground, crosshair);
+            let mut image = chart.export_image(&ctx, &options).unwrap();
+            let raster = super::super::raster::rasterize(
+                image.size,
+                &image.primitives,
+                &image.textures_delta,
+            )
+            .unwrap();
+            image.textures_delta.clear();
+            assert_eq!(
+                raster
+                    .iter()
+                    .map(Color32::to_srgba_unmultiplied)
+                    .collect::<Vec<_>>(),
+                pixels
+            );
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            for colors in colors.into_iter().flatten() {
+                for (pass, color) in colors.into_iter().enumerate() {
+                    let present = pass != 2 || foreground;
+                    assert_eq!(
+                        pixels.contains(&color.to_srgba_unmultiplied()),
+                        present,
+                        "{color:?}, foreground={foreground}"
+                    );
+                    let [r, g, b, _] = color.to_srgba_unmultiplied();
+                    assert_eq!(svg.contains(&format!("rgb({r},{g},{b})")), present);
+                }
+            }
+            for color in [Color32::RED, Color32::BLUE] {
+                assert_eq!(pixels.contains(&color.to_srgba_unmultiplied()), crosshair);
+                let [r, g, b, _] = color.to_srgba_unmultiplied();
+                assert_eq!(svg.contains(&format!("rgb({r},{g},{b})")), crosshair);
+            }
+            assert!(pixels.contains(&bullish));
+            #[cfg(feature = "drawings")]
+            assert!(pixels.contains(&[45, 201, 173, 255]));
+            images.push(pixels);
+        }
+        // Four 12-pixel swatches, with at most one feathered pixel along each edge.
+        assert!(
+            images[0]
+                .iter()
+                .zip(&images[2])
+                .filter(|(a, b)| a != b)
+                .count()
+                <= 4 * 14 * 14
+        );
+        // Disjoint overlays change only their own pixels; the underlying frame stays identical.
+        for at in 0..images[0].len() {
+            let expected = if images[2][at] != images[0][at] {
+                images[2][at]
+            } else {
+                images[1][at]
+            };
+            assert_eq!(images[3][at], expected, "pixel {at}");
+        }
+        assert!(ImageExportOptions::default().include_foreground);
+        assert!(chart.selected_element().is_some());
+        chart.clear_selection();
+        #[cfg(feature = "drawings")]
+        {
+            assert!(chart.drawings.selected_ids().next().is_some());
+            chart.drawings.deselect();
+        }
+        assert_eq!(decode(&chart, false, false), images[0]);
+    }
+
+    /// An export uses the same scales as the widget, so a main series that reserves 60 and 70
+    /// points keeps them: on the 10% margins of the default scale its high, 20, sits
+    /// 0.1 h + 60 below the top of the plot and its low, 10, 0.1 h + 70 above the bottom.
+    /// The style the host set on the main series is the one the snapshot reports.
+    #[test]
+    fn export_snapshot_keeps_the_main_series_style() {
+        use crate::model::{AutoscaleInfo, AutoscaleMargins, AutoscaleProvider};
+
+        let gaps = |chart: &Chart| {
+            let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+            let (top, bottom) = map.extent();
+            let height = bottom - top;
+            (
+                map.price_to_y(20.0) - top - (0.1 * height + 60.0),
+                bottom - map.price_to_y(10.0) - (0.1 * height + 70.0),
+            )
+        };
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
+        style.price_line_visible = false;
+        style.autoscale = Some(AutoscaleProvider::with_margins(|_, default| {
+            Some(AutoscaleInfo {
+                price_range: default?,
+                margins: AutoscaleMargins {
+                    top: 60.0,
+                    bottom: 70.0,
+                },
+            })
+        }));
+        for step in 0..2 {
+            crate::widget::test_frames::frame(&ctx, &mut chart, step as f64, vec![]);
+        }
+        let live = gaps(&chart);
+        let mut snapshot = chart.export_snapshot(&ctx, &ImageExportOptions::default());
+        let offscreen = egui::Context::default();
+        for step in 0..2 {
+            crate::widget::test_frames::frame(&offscreen, &mut snapshot, step as f64, vec![]);
+        }
+        let exported = gaps(&snapshot);
+        let hidden = snapshot
+            .series_style(SeriesId::MAIN)
+            .map(|style| style.price_line_visible);
+        assert!(
+            live.0.abs() < 0.01 && live.1.abs() < 0.01,
+            "live view reserves the request: {live:?}"
+        );
+        assert!(
+            exported.0.abs() < 0.01 && exported.1.abs() < 0.01 && hidden == Some(false),
+            "observed gaps {exported:?}, price line visible {hidden:?}"
+        );
     }
 }

@@ -12,14 +12,14 @@ use crate::services::SignalEvent;
 /// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
 /// ticks without reversing. If any fill identifies its aggressor, at least three distinct
 /// aggressors are required. Unknown-side fills are excluded.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StopRunRule;
 
 /// A closed bar with directional delta of at least 25%, three diagonal imbalances at 3:1,
 /// a body at least 60% of its range, and volume at least 1.5 times the previous ten traded bars.
 /// Unknown-side fills never count. The latest subscribed time interval supplies the bars.
 /// The first retained bar is left out because its opening executions may be missing.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StopSweepRule;
 
 #[derive(Default)]
@@ -269,7 +269,7 @@ impl StopSweeps {
                 .levels
                 .keys()
                 .filter(|&&level| {
-                    let (bid, ask) = bar.imbalance(level, 3.0, true);
+                    let (bid, ask) = bar.imbalance(level, 3.0, true, 0.0);
                     if buy { ask } else { bid }
                 })
                 .count();

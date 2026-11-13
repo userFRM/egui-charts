@@ -14,13 +14,17 @@ on:
 env:
   ASTRO_TELEMETRY_DISABLED: "1"
   CARGO_TERM_COLOR: always
+  # Leave room for web artifacts when linking the native build checks.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   TRUNK_VERSION: "0.21.14"
 
-# Allow only one concurrent deployment, cancelling in-progress runs of the same
-# ref so a newer commit always wins the Pages publish.
+# One run per ref at a time. A newer pull request push cancels the running build;
+# a main deploy always finishes, and only the newest waiting commit runs next, so
+# frequent merges cannot keep the published site from updating.
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Build the native examples and the site exactly as it is published, so a
@@ -28,8 +32,17 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      # Native checks share disk with the web builds; debug symbols are unused here.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
+      # The doc tests, the native examples and two release wasm builds no
+      # longer fit the runner's free disk; drop SDKs this job never uses.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -39,6 +52,7 @@ jobs:
           workspaces: |
             . -> target
             examples/demo -> target
+            examples/docs -> target
       - name: Install Trunk
         uses: jetli/trunk-action@v0.5.1
         with:
@@ -57,16 +71,21 @@ jobs:
         run: cargo test --doc --all-features
       - name: Build Starlight guide
         working-directory: docs/site
-        run: npm run build
-      - name: Build API reference
         env:
           RUSTDOCFLAGS: -Dwarnings
-        run: cargo doc --no-deps --all-features
+        run: npm run build
       - name: Build native examples
         run: cargo build --examples
       - name: Build wasm demo
         working-directory: examples/demo
         run: trunk build --release --public-url /egui-charts/demo/
+      - name: Check guide examples
+        run: |
+          cargo fmt --manifest-path examples/docs/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path examples/docs/Cargo.toml --all-targets -- -D warnings
+      - name: Build wasm guide examples
+        working-directory: examples/docs
+        run: trunk build --release --locked --public-url /egui-charts/docs/examples/widget/
       - name: Assemble site
         run: |
           mkdir _site
@@ -76,6 +95,8 @@ jobs:
           cp docs/site/dist/index.html _site/index.html
           cp -r docs/site/dist _site/docs
           cp -r target/doc _site/docs/api
+          mkdir -p _site/docs/examples
+          cp -r examples/docs/dist _site/docs/examples/widget
           # rustdoc's crate index is nested; give /docs/api/ a stable entry point.
           cat > _site/docs/api/index.html <<'HTML'
           <!doctype html>
@@ -83,6 +104,10 @@ jobs:
           <meta http-equiv="refresh" content="0; url=egui_charts/index.html">
           <title>egui-charts API reference</title><a href="egui_charts/index.html">Open the API reference</a></html>
           HTML
+      - name: Check assembled guide and API links
+        run: node docs/site/check-api-links.mjs _site/docs
+      - name: Check assembled guide examples
+        run: node --test examples/docs/site.test.mjs
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:

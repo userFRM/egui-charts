@@ -109,6 +109,9 @@ pub struct StrategyTester {
     name: String,
     inputs: Vec<StudyInput>,
     settings: BacktestSettings,
+    undo_settings: Vec<BacktestSettings>,
+    redo_settings: Vec<BacktestSettings>,
+    settings_edit: Option<BacktestSettings>,
     start: String,
     lower: bool,
     lower_timeframe: Timeframe,
@@ -148,6 +151,9 @@ impl StrategyTester {
             inputs,
             ranges,
             settings: BacktestSettings::default(),
+            undo_settings: Vec::new(),
+            redo_settings: Vec::new(),
+            settings_edit: None,
             start: String::new(),
             lower: false,
             lower_timeframe: Timeframe::Sec1,
@@ -200,6 +206,8 @@ impl StrategyTester {
     pub fn set_settings(&mut self, settings: BacktestSettings) -> Result<(), &'static str> {
         super::properties::validate(&settings)?;
         if self.settings != settings {
+            self.undo_settings.push(self.settings.clone());
+            self.redo_settings.clear();
             self.start = settings
                 .start_time
                 .map_or_else(String::new, |time| time.to_rfc3339());
@@ -207,6 +215,36 @@ impl StrategyTester {
             self.changed();
         }
         Ok(())
+    }
+
+    /// Restore the previous account and execution settings, retaining the report as stale.
+    pub fn undo_settings(&mut self) -> bool {
+        let Some(settings) = self.undo_settings.pop() else {
+            return false;
+        };
+        self.redo_settings
+            .push(std::mem::replace(&mut self.settings, settings));
+        self.restore_settings();
+        true
+    }
+
+    /// Reapply settings undone through [`Self::undo_settings`].
+    pub fn redo_settings(&mut self) -> bool {
+        let Some(settings) = self.redo_settings.pop() else {
+            return false;
+        };
+        self.undo_settings
+            .push(std::mem::replace(&mut self.settings, settings));
+        self.restore_settings();
+        true
+    }
+
+    fn restore_settings(&mut self) {
+        self.start = self
+            .settings
+            .start_time
+            .map_or_else(String::new, |time| time.to_rfc3339());
+        self.changed();
     }
 
     /// Whether the report no longer describes the current form or chart scope.
@@ -475,6 +513,7 @@ impl StrategyTester {
                 .show(ui);
             });
         let mut edited = false;
+        let mut previous_settings = None;
         match self.tab {
             Tab::Report => {
                 let action = self.show_report(ui);
@@ -487,8 +526,18 @@ impl StrategyTester {
                     .id_salt("tester_form")
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
+                            let shown: Vec<_> = self
+                                .inputs
+                                .iter()
+                                .map(|input| input.is_shown(&self.inputs))
+                                .collect();
                             crate::ui_kit::FormGrid::new("strategy_inputs").show(ui, |ui| {
-                                for input in &mut self.inputs {
+                                for (input, _) in self
+                                    .inputs
+                                    .iter_mut()
+                                    .zip(shown)
+                                    .filter(|(_, shown)| *shown)
+                                {
                                     edited |= super::inputs::show_input(ui, input, &[]);
                                 }
                             });
@@ -500,13 +549,38 @@ impl StrategyTester {
                             }
                         }
                         Tab::Properties => {
-                            edited |= super::properties::show(
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        !self.undo_settings.is_empty(),
+                                        egui::Button::new(l10n::text(ui.ctx(), "Undo settings")),
+                                    )
+                                    .clicked()
+                                {
+                                    self.undo_settings();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        !self.redo_settings.is_empty(),
+                                        egui::Button::new(l10n::text(ui.ctx(), "Redo settings")),
+                                    )
+                                    .clicked()
+                                {
+                                    self.redo_settings();
+                                }
+                            });
+                            let before = self.settings.clone();
+                            let changed = super::properties::show(
                                 ui,
                                 &mut self.settings,
                                 &mut self.start,
                                 &mut self.lower,
                                 &mut self.lower_timeframe,
                             );
+                            if changed {
+                                edited = true;
+                                previous_settings = Some(before);
+                            }
                         }
                         Tab::Optimisation => {
                             if optimisation::show(ui, &mut self.ranges) {
@@ -565,6 +639,17 @@ impl StrategyTester {
             Err(error) => {
                 self.error = Some(error.into());
             }
+        }
+        if let Some(before) = previous_settings {
+            self.settings_edit.get_or_insert(before);
+        }
+        // A drag changes settings on every frame but is one undo step.
+        if !ui.input(|input| input.pointer.any_down())
+            && let Some(before) = self.settings_edit.take()
+            && self.settings != before
+        {
+            self.undo_settings.push(before);
+            self.redo_settings.clear();
         }
         if let Some(job) = &mut self.job {
             match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {

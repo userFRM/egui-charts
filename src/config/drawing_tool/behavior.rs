@@ -69,7 +69,6 @@ impl DrawingToolType {
                 | Self::AnchoredVWAP
                 | Self::FixedRangeVolumeProfile
                 | Self::AnchoredVolumeProfile
-                | Self::Brush
                 | Self::Highlighter
                 | Self::ArrowMarker
                 | Self::Arrow
@@ -183,6 +182,37 @@ impl DrawingToolType {
     /// Whether the renderer draws a middle line when the drawing's middle line flag is on.
     pub fn supports_middle_line(&self) -> bool {
         matches!(self, Self::Rect | Self::ParallelChannel)
+    }
+
+    /// Whether the renderer shows the drawing's line measurements and midpoint.
+    pub fn supports_line_measurements(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::TrendAngle
+        )
+    }
+
+    /// Whether the drawing paints a line whose width and pattern its settings can change.
+    /// Solid marks and annotations with fixed borders or guides offer no line controls.
+    pub fn draws_line(&self) -> bool {
+        !matches!(
+            self,
+            Self::TextLabel
+                | Self::AnchoredText
+                | Self::Note
+                | Self::PriceNote
+                | Self::AnchoredNote
+                | Self::Table
+                | Self::Comment
+                | Self::PriceLabel
+                | Self::Signpost
+                | Self::FlagNote
+                | Self::ArrowMarker
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+        )
     }
 
     /// Whether a double click edits the drawing's text in place instead of opening its settings.

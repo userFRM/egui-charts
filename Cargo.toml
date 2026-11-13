@@ -140,14 +140,18 @@ harness = false
 required-features = ["widget"]
 
 [features]
-default = ["ui", "locales", "timezones"]
+default = ["ui", "locales", "timezones", "csv", "png-export"]
+## CSV import and export for bars, strategy reports and chart data. Enabled by `ui`.
+csv = ["dep:csv"]
 ## HTTP history, symbol search and live bar refresh through `data::http::HttpDatafeed`.
 http = ["dep:ehttp", "dep:wasm-bindgen", "dep:web-sys"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
 ## `Indicator` trait layer of `studies`) and does not depend on egui.
-widget = ["dep:egui", "dep:web-time", "dep:png"]
+widget = ["dep:egui", "dep:web-time"]
+## PNG image export and embedded image textures in SVG export. Enabled by `ui`.
+png-export = ["widget", "dep:png"]
 ## Drawing tools, annotation storage and interaction. Enabled by `ui`.
 drawings = ["widget"]
 ## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
@@ -164,12 +168,13 @@ detectors = []
 ## `StrategyReport`.  Needs no egui, so a server can run it.
 strategies = []
 ## Compile-time embedded SVG icons (`icons::Icon`).  Required by `ui`.
-## The chart installs egui_extras' SVG image loader and a pixel-aligned icon loader so the icons render.
-icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
+## The chart installs the pixel-aligned loader for these icons; general SVG images need `ui`
+## or an image loader installed by the host.
+icons = ["widget", "dep:resvg"]
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, the
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
-ui = ["icons", "studies", "drawings", "dep:thiserror", "eframe/accesskit"]
+ui = ["icons", "studies", "drawings", "csv", "png-export", "dep:egui_extras", "egui_extras/svg", "dep:thiserror", "eframe/accesskit"]
 ## Month and weekday names and the AM/PM marker in the language of a locale, for
 ## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
 ## Without it those labels stay in English.
@@ -190,6 +195,12 @@ inherits = "release"
 opt-level = "s"
 lto = "fat"
 codegen-units = 1
+
+# The library tests run about four times faster with optimised dependencies, which more than repays
+# the longer first build. The library itself stays unoptimised because it is rebuilt on every change.
+# Only this workspace reads this setting: a crate that depends on this one keeps its own.
+[profile.dev.package."*"]
+opt-level = 2
 
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
@@ -234,7 +245,7 @@ serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
 chrono-tz = { version = "0.10.4", optional = true }
 web-time = { version = "1.1.0", optional = true }
-csv = "1.4.0"
+csv = { version = "1.4.0", optional = true }
 # Encodes chart images rasterised by `Chart::export_png`.
 png = { version = "0.17.16", optional = true }
 thiserror = { version = "2.0.18", optional = true }

@@ -101,7 +101,7 @@ pub(super) fn paint(
         }
         let histogram = matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns);
         if histogram {
-            plot.width = coords.bar_spacing * factor as f32 * 0.8;
+            plot.width = coords.bar_spacing_for_width() * factor as f32 * 0.8;
         }
         let mut points = Vec::new();
         for group in visible.start / factor..visible.end.div_ceil(factor) {
@@ -141,6 +141,14 @@ pub(super) fn paint(
             paint_study_plot(&painter, &points, plot, y(0.0));
         }
     }
+    let map = crate::scales::PriceMap::new(
+        crate::scales::PriceTransform::default(),
+        crate::scales::PriceRange::new(min, max),
+        rect.top(),
+        rect.bottom(),
+        false,
+    );
+    crate::chart::indicators::plots::paint_price_lines(&painter, study, &map);
 }
 
 pub(super) fn tags(
@@ -197,12 +205,18 @@ pub(super) fn tags(
 
 impl super::Chart {
     pub(super) fn shows_volume(&self) -> bool {
-        let visible = self.studies.indicators().iter().any(|study| {
-            study.is_volume()
-                && study.is_overlay()
-                && study.is_visible()
-                && (0..study.line_count()).any(|line| study.plot_style(line).visible)
-        }) || (!cfg!(feature = "studies") && self.config.show_volume);
+        let visible = self
+            .study_ids
+            .iter()
+            .zip(self.studies.indicators())
+            .any(|(id, study)| {
+                self.series_pane(*id) == Some(self.main_series_pane())
+                    && study.is_volume()
+                    && study.is_overlay()
+                    && study.is_visible()
+                    && (0..study.line_count()).any(|line| study.plot_style(line).visible)
+            })
+            || (!cfg!(feature = "studies") && self.config.show_volume);
         self.main_series_visible && self.chart_type.supports_volume() && visible
     }
 }
@@ -224,7 +238,7 @@ pub(super) fn mapping(
             rect.bottom(),
             false,
         ),
-        ..*coords
+        ..coords.clone()
     }
 }
 

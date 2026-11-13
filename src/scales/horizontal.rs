@@ -1,25 +1,142 @@
 //! Horizontal scales: what the horizontal position of a bar stands for and how it is labelled.
 //!
-//! Bars are placed left to right in the order of their [`time`](crate::model::Bar::time), one
-//! slot each. On the time scale that order is chronological. A [`HorizontalScale`] gives it
-//! another meaning, such as option strikes or bond maturities: the host encodes each key as an
-//! instant that sorts as the key does, and the scale labels the axis and the crosshair from it.
-//! [`key_time`] and [`time_key`] encode numeric keys, which [`PriceHorizontalScale`] and
-//! [`MaturityScale`] use.
+//! Time charts give each bar one ordinal slot. Numeric scales place keys in proportion to
+//! their values, without placeholder bars. The host encodes each numeric key with [`key_time`];
+//! [`PriceHorizontalScale`] and [`MaturityScale`] label the axis and crosshair from it.
+//! [`CustomHorizontalScale`] accepts ordered host keys directly, including categories and
+//! structured keys, and keeps their internal chart identities out of the host's data model.
 
 use super::time_formatter::TimeFormatter;
 use super::timescale_marks::{
-    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight, keep_spaced,
+    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,
+    keep_spaced_by,
 };
 use crate::model::Bar;
 use chrono::{DateTime, Duration, Utc};
+
+/// A domain of host keys with equally spaced ranks, ordered by [`Ord`] and labelled by a host
+/// formatter. An enum's declaration order can define category order; a struct can implement its
+/// own order.
+/// Equal keys share one identity, regardless of their labels. Duplicate domain entries are
+/// removed. Series replacements keep the last bar of a repeated key and live updates replace it.
+///
+/// Share the same domain across every series and annotation on a chart. The domain is immutable:
+/// include future categories before streaming values, or rebuild it and replace the bars and
+/// annotations together when the domain changes. Unknown keys return `None`; whitespace outside
+/// the domain has no label. Missing categories retain their rank's space without placeholder
+/// bars; their annotations interpolate between loaded neighbours.
+///
+/// [`Self::value`] and, with `widget`, `Self::marker` accept keys directly. [`Self::time`] is
+/// the bridge for OHLC bars, drawing timestamps and primitive axis labels; it is an internal
+/// identity, not a date to display or persist separately from this domain. [`Self::key`] recovers
+/// the original key from a bar or pointer event. `Chart::set_horizontal_scale` installs the domain.
+///
+/// ```
+/// use egui_charts::scales::CustomHorizontalScale;
+///
+/// #[derive(PartialEq, Eq, PartialOrd, Ord)]
+/// enum Phase { Open, Auction, Close }
+/// let scale = CustomHorizontalScale::new(
+///     [Phase::Close, Phase::Open, Phase::Auction],
+///     |key| match key {
+///         Phase::Open => "Open", Phase::Auction => "Auction", Phase::Close => "Close",
+///     }.to_owned(),
+/// );
+/// let bar = scale.value(&Phase::Auction, 103.0).unwrap();
+/// assert!(scale.key(bar.time) == Some(&Phase::Auction));
+/// ```
+pub struct CustomHorizontalScale<K> {
+    keys: Vec<K>,
+    format: Box<dyn Fn(&K) -> String + Send + Sync>,
+}
+
+impl<K: Ord> CustomHorizontalScale<K> {
+    /// Builds a domain sorted by key, with one entry per distinct key. Formatting never changes
+    /// ordering: distinct keys may have the same label.
+    pub fn new(
+        keys: impl IntoIterator<Item = K>,
+        format: impl Fn(&K) -> String + Send + Sync + 'static,
+    ) -> Self {
+        let mut keys: Vec<_> = keys.into_iter().collect();
+        keys.sort();
+        keys.dedup();
+        Self {
+            keys,
+            format: Box::new(format),
+        }
+    }
+
+    /// The internal chart identity of a key, or `None` for an unknown key. Use this for APIs
+    /// that still take a timestamp; hosts do not need to encode keys or manufacture dates.
+    pub fn time(&self, key: &K) -> Option<DateTime<Utc>> {
+        let index = self.keys.binary_search(key).ok()?;
+        DateTime::from_timestamp(index.try_into().ok()?, 0)
+    }
+
+    /// The host key of an exact chart identity, or `None` for an interpolated or unknown one.
+    pub fn key(&self, time: DateTime<Utc>) -> Option<&K> {
+        if time.timestamp_subsec_nanos() != 0 {
+            return None;
+        }
+        self.keys.get(usize::try_from(time.timestamp()).ok()?)
+    }
+
+    /// A single-value bar at `key`, suitable for line, area, baseline and column series.
+    /// Returns `None` for an unknown key. Stream it through `Chart::update` as any other bar.
+    pub fn value(&self, key: &K, value: f64) -> Option<Bar> {
+        Some(Bar::from_value(self.time(key)?, value))
+    }
+
+    /// A marker at `key`, with the normal marker defaults, or `None` for an unknown key.
+    #[cfg(feature = "widget")]
+    pub fn marker(&self, key: &K) -> Option<crate::model::Marker> {
+        Some(crate::model::Marker::new(self.time(key)?))
+    }
+}
+
+impl<K: Ord + Send + Sync> HorizontalScale for CustomHorizontalScale<K> {
+    fn is_numeric(&self) -> bool {
+        // Internal identities are ranks, so gaps retain missing categories without time rules.
+        true
+    }
+
+    fn tick_marks(
+        &self,
+        points: &[(DateTime<Utc>, usize)],
+        layout: &TickMarkLayout,
+    ) -> Vec<TickMark> {
+        let marks = points
+            .iter()
+            .filter_map(|&(time, index)| {
+                Some(TickMark {
+                    time,
+                    index,
+                    label: (self.format)(self.key(time)?),
+                    mark_type: TickMarkType::Time,
+                    weight: TickMarkWeight::new(1),
+                    bold: false,
+                })
+            })
+            .collect();
+        keep_spaced_by(
+            marks,
+            f64::from(layout.min_spacing / layout.bar_spacing),
+            layout.uniform_distribution,
+            |mark| time_key(mark.time),
+        )
+    }
+
+    fn format_crosshair(&self, key: DateTime<Utc>, _bar_seconds: i64) -> String {
+        self.key(key).map_or_else(String::new, &self.format)
+    }
+}
 
 /// Where the tick marks of a horizontal axis are laid out.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TickMarkLayout {
     /// Plot width in points.
     pub width: f32,
-    /// Distance between neighbouring bars in points.
+    /// Points per ordinal slot, or per numeric key unit on a numeric scale.
     pub bar_spacing: f32,
     /// Minimum distance between the centres of two labels in points.
     pub min_spacing: f32,
@@ -35,10 +152,18 @@ pub struct TickMarkLayout {
 /// [`TimeFormatter`]; `Chart::set_horizontal_scale` (requires `widget`)
 /// replaces it.
 pub trait HorizontalScale: Send + Sync {
+    /// Whether positions are proportional to numeric keys encoded with [`key_time`].
+    /// The default retains ordinal time slots. Numeric scales use key units for
+    /// [`TickMarkLayout::bar_spacing`].
+    fn is_numeric(&self) -> bool {
+        false
+    }
+
     /// The marks to label among `points`, the key and logical index of each bar in view in
     /// order, extended into whitespace on both sides using the chart's full-history time
     /// mapping. When the keys reach before the first bar, every index is shifted by the same
     /// number of slots, so only the order of the indices and their differences carry meaning.
+    /// Numeric scales receive the same bounded whitespace extension as time scales.
     /// The renderer places each mark at its key and skips labels that would overlap.
     fn tick_marks(
         &self,
@@ -138,6 +263,10 @@ impl Default for PriceHorizontalScale {
 }
 
 impl HorizontalScale for PriceHorizontalScale {
+    fn is_numeric(&self) -> bool {
+        true
+    }
+
     fn tick_marks(
         &self,
         points: &[(DateTime<Utc>, usize)],
@@ -173,9 +302,8 @@ impl HorizontalScale for PriceHorizontalScale {
 /// multiples of 10 years first, then of 5 and 3 years, whole years, half years, quarters and
 /// months, and draws the longest kind shown in bold.
 ///
-/// The bars of a chart take one slot each whatever their keys, so a curve spaced by maturity
-/// needs a slot every month: give the main series the [`whitespace`](Self::whitespace) bars and
-/// draw each curve as a series of its own, placed on them by key.
+/// Actual maturity samples are spaced linearly by month. [`Self::whitespace`] remains available
+/// for hosts that also need explicit empty samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MaturityScale {
     /// Months between neighbouring slots.
@@ -231,6 +359,10 @@ impl MaturityScale {
 }
 
 impl HorizontalScale for MaturityScale {
+    fn is_numeric(&self) -> bool {
+        true
+    }
+
     fn tick_marks(
         &self,
         points: &[(DateTime<Utc>, usize)],
@@ -259,7 +391,8 @@ impl HorizontalScale for MaturityScale {
 }
 
 /// Marks every point with the `weight` of its numeric key and keeps the heaviest marks that lie
-/// the minimum spacing apart, as the time scale does. The heaviest kept marks are bold.
+/// the minimum numeric distance apart, as the time scale does for ordinal slots. The heaviest
+/// kept marks are bold.
 fn weighted_marks(
     points: &[(DateTime<Utc>, usize)],
     layout: &TickMarkLayout,
@@ -277,10 +410,11 @@ fn weighted_marks(
             bold: false,
         })
         .collect();
-    let mut kept = keep_spaced(
+    let mut kept = keep_spaced_by(
         marks,
-        layout.min_spacing / layout.bar_spacing,
+        f64::from(layout.min_spacing / layout.bar_spacing),
         layout.uniform_distribution,
+        |mark| time_key(mark.time),
     );
     let heaviest = kept.iter().map(|mark| mark.weight).max();
     for mark in &mut kept {
@@ -295,8 +429,8 @@ fn weighted_marks(
 mod tests {
     use super::*;
 
-    /// Expected marks follow from the published weights by hand: a mark needs the minimum
-    /// spacing over the bar spacing, rounded up, in bars to its kept neighbours.
+    /// Expected marks follow from the weights by hand: minimum pixel spacing divided by
+    /// points per key unit gives the minimum numeric distance between labels.
     #[test]
     fn numeric_scales_encode_keys_and_label_the_roundest_in_reach() {
         for key in [4512.5, 101.1, -0.5, 0.0, 360.0] {
@@ -323,29 +457,38 @@ mod tests {
             &'a [&'a str],
             &'a [&'a str],
         );
-        let cases: [Case; 3] = [
-            // Two bars apart: the multiples of 100, then 4550 between 4500 and 4600, while
-            // 4450 sits beside 4400.
+        let cases: [Case; 4] = [
+            // 80 / 1.6 = 50 strike units between labels, including the irregular first gaps.
             (
                 &price,
                 &strikes,
-                40.0,
+                1.6,
                 80.0,
                 false,
-                &["4400", "4500", "4550", "4600"],
+                &["4400", "4450", "4500", "4550", "4600"],
                 &["4400", "4500", "4600"],
             ),
-            // 4450 not fitting leaves out every multiple of 50.
+            // 40 / 2 = 20 units: 110 is too near 100, while 140 fits unless its whole
+            // weight is rejected by uniform distribution.
             (
                 &price,
-                &strikes,
+                &[100.0, 110.0, 140.0],
+                2.0,
                 40.0,
-                80.0,
-                true,
-                &["4400", "4500", "4600"],
-                &["4400", "4500", "4600"],
+                false,
+                &["100", "140"],
+                &["100"],
             ),
-            // Six bars apart: 0 (10 years), 36 (3 years), whole years, then half years.
+            (
+                &price,
+                &[100.0, 110.0, 140.0],
+                2.0,
+                40.0,
+                true,
+                &["100"],
+                &["100"],
+            ),
+            // Six months apart: 0 (10 years), 36 (3 years), whole years, then half years.
             (
                 &MaturityScale::default(),
                 &months,

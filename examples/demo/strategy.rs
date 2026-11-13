@@ -1,9 +1,13 @@
 //! A host-run sample backtest and the report's navigation, signals and CSV delivery.
 
-use super::{Bar, DemoApp, LiveFeed, SeriesId, Timeframe, panel_frame};
-use egui_charts::model::{OrderSide, SignalId, StrategyExit, StrategyReport, StrategyTrade};
+use super::{Bar, DemoApp, SeriesId, Timeframe, panel_frame};
+use egui_charts::model::{
+    BarClock, OrderSide, SignalId, StrategyExit, StrategyReport, StrategyTrade,
+};
 use egui_charts::services::{Events, SignalEvent, Signals};
-use egui_charts::ui::strategy_report::{StrategyReportAction, StrategyTesterAction};
+use egui_charts::ui::strategy_report::{
+    StrategyHistoryRequest, StrategyReportAction, StrategyTesterAction,
+};
 use std::sync::Arc;
 
 /// Buys two units every 40 bars, holds for 20 and pays one currency unit per fill.
@@ -62,6 +66,87 @@ fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> Strategy
 }
 
 impl DemoApp {
+    /// Supplies completed bars on the chart's session and adjustment basis, with warm-up history.
+    fn strategy_history(
+        &self,
+        request: &StrategyHistoryRequest,
+    ) -> Result<(Vec<Bar>, Vec<Bar>), String> {
+        if self.replay.is_some() {
+            return Err("Stop replay before requesting synthetic backtest history.".into());
+        }
+        if request.symbol != self.chart.symbol()
+            || Some(request.timeframe) != self.chart.timeframe()
+        {
+            return Err("The requested strategy symbol or interval is no longer selected.".into());
+        }
+        if self.live.loading() {
+            return Err(
+                "Synthetic history is still loading. Retry when chart loading finishes.".into(),
+            );
+        }
+        let clock_for = |timeframe| {
+            let mut clock = BarClock::new(timeframe);
+            if self.chart.bar_clock().has_session() {
+                clock = clock.with_session(
+                    crate::sampledata::us_equity_zone(),
+                    crate::sampledata::us_equity_session(),
+                    self.chart.extended_hours(),
+                );
+            }
+            clock
+        };
+        let history = |timeframe: Timeframe, fills: bool| {
+            if timeframe.is_trade_based() {
+                return Err("Synthetic backtest history requires a time interval.".to_owned());
+            }
+            let clock = clock_for(timeframe);
+            let mut bars =
+                self.live
+                    .snapshot(timeframe, clock.clone(), self.chart.extended_hours());
+            bars.retain(|bar| bar.time < clock.bar_open(self.live.now()));
+            let label = if fills { "Finer fill" } else { "Decision" };
+            let first = bars.first().ok_or_else(|| {
+                format!("{label} history has no completed {timeframe} bars in this session.")
+            })?;
+            if request.start < first.time {
+                return Err(format!(
+                    "{label} history at {timeframe} starts {}. Choose a later start or a longer interval.",
+                    first.time.format("%Y-%m-%d %H:%M:%S UTC")
+                ));
+            }
+            if bars.last().is_none_or(|bar| bar.time < request.start) {
+                return Err("The start date is after the last completed synthetic bar.".into());
+            }
+            Ok(bars)
+        };
+        let bars = history(request.timeframe, false)?;
+        let lower = match request.lower_timeframe {
+            Some(timeframe)
+                if timeframe.duration_ms() > 0
+                    && timeframe.duration_ms() < request.timeframe.duration_ms() =>
+            {
+                let lower = history(timeframe, true)?;
+                if egui_charts::data::resample(
+                    &lower,
+                    clock_for(timeframe),
+                    clock_for(request.timeframe),
+                )
+                .is_none()
+                {
+                    return Err("Finer fill bars must fit completely inside decision bars. Choose a dividing interval.".into());
+                }
+                lower
+            }
+            Some(_) => {
+                return Err(
+                    "Choose a time-based fill interval shorter than the decision interval.".into(),
+                );
+            }
+            None => Vec::new(),
+        };
+        Ok((bars, lower))
+    }
+
     pub(super) fn run_sample_backtest(&mut self) {
         self.stop_live_strategy();
         let bars = self.chart.bars(SeriesId::MAIN);
@@ -74,6 +159,13 @@ impl DemoApp {
         }
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
+        if let Some(tick) = self.chart.instrument().and_then(|i| i.tick_size) {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.price_increment = tick;
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot use the instrument's price increment: {error}");
+            }
+        }
         self.strategy_report.set_report(Some(report), source);
         self.strategy_report
             .select_strategy("Consecutive Up/Down")
@@ -87,6 +179,16 @@ impl DemoApp {
         self.update_live_strategy();
         if self.strategy_report.report().is_none() {
             return;
+        }
+        let chart_type = self.chart.chart_type();
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.chart_type = chart_type;
+            settings.recalculate_on_history &= !chart_type.transforms_data();
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot update strategy candles: {error}");
+            }
         }
         let mut clear = false;
         let action = egui::Panel::bottom("strategy_report")
@@ -120,6 +222,14 @@ impl DemoApp {
                 )
             })
             .inner;
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let kind = self.strategy_report.settings().chart_type;
+            self.state.chart_type = kind;
+            self.top_toolbar.chart_type_selector.current = kind;
+            self.chart.set_chart_type(kind);
+            self.size_price_based_charts();
+        }
         if clear {
             self.stop_live_strategy();
             self.strategy_report.set_report(None, &[]);
@@ -135,8 +245,18 @@ impl DemoApp {
                         self.refresh_strategy_signals();
                     }
                     StrategyTesterAction::RequestHistory(request) => {
-                        self.strategy_report.history_failed(&request,
-                            "The synthetic demo supplies chart history only. Clear the start date and disable lower-interval fills, or connect a host datafeed.");
+                        match self.strategy_history(&request) {
+                            Ok((bars, lower)) => {
+                                if let Err(error) =
+                                    self.strategy_report.set_history(&request, bars, lower)
+                                {
+                                    self.strategy_report.history_failed(&request, error);
+                                }
+                            }
+                            Err(error) => {
+                                self.strategy_report.history_failed(&request, error);
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -211,29 +331,31 @@ impl DemoApp {
                 .iter_mut()
                 .map(|extra| (&mut extra.chart, &extra.live)),
         ) {
-            let live = self.api_samples.then(|| live.clone());
-            let source: Option<Arc<dyn Signals>> = match self.strategy_report.report() {
-                Some(report) => Some(Arc::new(ReportSignals {
+            let live: Arc<dyn Signals> = if self.api_samples {
+                live.clone()
+            } else {
+                live.detectors()
+            };
+            let source: Arc<dyn Signals> = match self.strategy_report.report() {
+                Some(report) => Arc::new(ReportSignals {
                     report: report.clone(),
                     live,
-                })),
-                None => live.map(|live| live as Arc<dyn Signals>),
+                }),
+                None => live,
             };
-            chart.set_signal_source(source);
+            chart.set_signal_source(Some(source));
         }
     }
 }
 
 struct ReportSignals {
     report: StrategyReport,
-    live: Option<Arc<LiveFeed>>,
+    live: Arc<dyn Signals>,
 }
 
 impl Signals for ReportSignals {
     fn subscribe(&self, symbol: &str, timeframe: Timeframe, events: Events<SignalEvent>) {
-        if let Some(live) = &self.live {
-            live.subscribe(symbol, timeframe, events.clone());
-        }
+        self.live.subscribe(symbol, timeframe, events.clone());
         if self.report.symbol != symbol || self.report.timeframe != timeframe {
             return;
         }
@@ -243,9 +365,7 @@ impl Signals for ReportSignals {
     }
 
     fn clicked(&self, id: &SignalId) {
-        if let Some(live) = &self.live {
-            live.clicked(id);
-        }
+        self.live.clicked(id);
     }
 }
 
@@ -331,6 +451,126 @@ mod tests {
             .unwrap_or_else(|| panic!("missing {label}"))
     }
 
+    #[test]
+    fn requested_history_runs_and_failures_keep_the_completed_report() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.switch_timeframe(Timeframe::Hour1);
+        super::super::tests::settle(&mut app, &ctx);
+        app.run_sample_backtest();
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_strategy_report(ui, app.theme.ui.panel_bg),
+            )
+        };
+        let click = |app: &mut DemoApp, label| {
+            let output = frame(app, vec![]);
+            let pos = text_at(&output, label);
+            output.drop_without_applying_deltas();
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                )
+                .drop_without_applying_deltas();
+            }
+        };
+        let start = now - chrono::TimeDelta::days(2);
+        let mut settings = app.strategy_report.settings().clone();
+        settings.start_time = Some(start);
+        app.strategy_report.set_settings(settings.clone()).unwrap();
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        click(&mut app, "Run");
+        for _ in 0..100 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        assert!(
+            !app.strategy_report.is_stale(),
+            "supported history must complete the requested run"
+        );
+        let report = app.strategy_report.report().unwrap().clone();
+        assert!(report.trades.iter().all(|trade| trade.entry_time >= start));
+        assert_eq!(report.equity.first().unwrap().0, start);
+        assert_eq!(report.equity.len(), 49);
+        assert_eq!(report.equity.last().unwrap().0, now);
+        // The finer sample is the same minute source aggregated into decision-hour OHLCV.
+        let mut actions = Vec::new();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            actions = app
+                .strategy_report
+                .show(ui, "SAMPLE", Timeframe::Hour1, &[]);
+        });
+        let pos = text_at(&output, "Run");
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            ctx.run_ui(
+                RawInput {
+                    events: vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    actions = app
+                        .strategy_report
+                        .show(ui, "SAMPLE", Timeframe::Hour1, &[]);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        let mut request = actions
+            .into_iter()
+            .find_map(|action| match action {
+                StrategyTesterAction::RequestHistory(request) => Some(request),
+                _ => None,
+            })
+            .expect("tester requests host history");
+        request.lower_timeframe = Some(Timeframe::Min1);
+        let (bars, lower) = app.strategy_history(&request).unwrap();
+        let hours = egui_charts::data::resample(&lower, Timeframe::Min1, Timeframe::Hour1).unwrap();
+        assert_eq!(&bars[1..], &hours[1..]);
+        assert!(lower.len() > bars.len() * 50);
+        request.lower_timeframe = Some(Timeframe::Sec1);
+        assert!(
+            app.strategy_history(&request)
+                .unwrap_err()
+                .contains("Finer fill history")
+        );
+        settings.start_time = Some("1990-01-01T00:00:00Z".parse().unwrap());
+        app.strategy_report.set_settings(settings).unwrap();
+        click(&mut app, "Run");
+        let output = frame(&mut app, vec![]);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text().starts_with("Decision history at"))));
+        output.drop_without_applying_deltas();
+        assert_eq!(app.strategy_report.report(), Some(&report));
+    }
+
     fn fills_visible(
         output: &FullOutput,
         chart: &egui_charts::Chart,
@@ -354,7 +594,10 @@ mod tests {
                 matches!(&shape.shape, Shape::Path(marker)
                     if marker.closed && marker.points.len() == 3
                         && marker.stroke.width == 1.0
-                        && (marker.points[0].x - point.x).abs() < 0.1)
+                        && (marker.points[0].x - point.x).abs() < 0.1
+                        // Sample bar marks are triangles of the same stroke at the same bars;
+                        // a fill marker is the narrower one.
+                        && (marker.points[2].x - marker.points[1].x - 10.0).abs() < 0.01)
                     && bounds.width() <= 16.0
                     && bounds.height() <= 16.0
                     && bounds.expand(0.1).contains(point)
@@ -368,10 +611,16 @@ mod tests {
             for width in [640.0, 1440.0] {
                 let ctx = egui::Context::default();
                 let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                super::super::tests::settle(&mut app, &ctx);
                 app.theme = theme.clone();
                 egui_charts::theme::apply_to_egui(&ctx, &theme);
                 app.live.set_paused(true);
                 app.chart.set_feed_paused(true);
+                // Detector triangles can share a fill's price; this test identifies report markers.
+                for kind in egui_charts::services::DetectionKind::ALL {
+                    app.chart
+                        .set_signal_category_visible(kind.category(), false);
+                }
                 let bars = app.chart.bars(SeriesId::MAIN).to_vec();
                 let live_marker = |output: &FullOutput| {
                     output.shapes.iter().any(|shape| {
@@ -380,6 +629,10 @@ mod tests {
                     })
                 };
                 let frame = |app: &mut DemoApp, events| {
+                    super::super::tests::finish_feed(&app.live);
+                    for extra in &app.extra_charts {
+                        super::super::tests::finish_feed(&extra.live);
+                    }
                     ctx.run_ui(
                         RawInput {
                             screen_rect: Some(Rect::from_min_size(

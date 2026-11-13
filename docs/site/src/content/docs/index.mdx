@@ -20,12 +20,78 @@ hero:
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 import FirstChart from '../../components/FirstChart.astro';
 
+<figure id="product-tour" className="live-chart">
+  <figcaption>
+    <span>Explore the demo <span className="sample-label">Generated sample data</span></span>
+    <a href="/egui-charts/demo/">Open the demo <span aria-hidden="true">→</span></a>
+  </figcaption>
+  <video id="tour-video" autoplay muted loop playsinline preload="metadata" poster="/egui-charts/docs/media/tour-poster.webp" width="2560" height="1440" aria-label="Chart layouts, studies, drawing tools, watchlist and bar replay in the demo">
+    <source data-src="/egui-charts/docs/media/tour-1080p.webm" type="video/webm; codecs=av01.0.09M.08" />
+    <source data-src="/egui-charts/docs/media/tour-1080p.mp4" type="video/mp4" />
+    <a href="/egui-charts/docs/media/tour-1080p.mp4">Watch the demo tour</a>
+  </video>
+  <p><button id="tour-play" type="button" hidden>Play the demo tour</button> Four charts, studies, drawing tools and replay. All prices come from the sample feed.</p>
+  <noscript><p><a href="/egui-charts/docs/media/tour-1080p.mp4">Play the demo tour</a></p></noscript>
+</figure>
+
+<script is:inline set:html={`
+  (() => {
+    const video = document.getElementById('tour-video');
+    const play = document.getElementById('tour-play');
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const load = () => {
+      for (const source of video.querySelectorAll('source')) source.src = source.dataset.src;
+      video.load();
+    };
+    const update = () => {
+      video.autoplay = !motion.matches;
+      play.hidden = !motion.matches;
+      video.controls = !motion.matches;
+      if (motion.matches) {
+        video.pause();
+        for (const source of video.querySelectorAll('source')) source.removeAttribute('src');
+        video.load();
+      } else {
+        load();
+        video.play().catch(() => { play.hidden = false; });
+      }
+    };
+    play.addEventListener('click', () => {
+      video.controls = true;
+      load();
+      video.play().then(() => { play.hidden = true; }).catch(() => { play.hidden = false; });
+    });
+    motion.addEventListener('change', update);
+    update();
+  })();
+`} />
+
 <FirstChart />
 
+## Learn the chart
+
 <CardGrid>
-  <LinkCard title="Getting started" href="/egui-charts/docs/installation/" description="Install the crate, learn the data model, and put your first chart on screen." />
-  <LinkCard title="Features" href="/egui-charts/docs/chart-types/" description="Explore chart types, studies, drawings, order flow and workspace controls." />
-  <LinkCard title="Integration reference" href="/egui-charts/docs/builder-guide/" description="Connect your history and live stream, handle events, and save chart state." />
+  <LinkCard title="Installation" href="/egui-charts/docs/installation/" description="Choose main (0.3 in development, egui 0.37) or the published 0.2.0 API (egui 0.33.3)." />
+  <LinkCard title="First chart" href="/egui-charts/docs/first-chart/" description="Put a chart on screen, keep its state, replace history and update bars." />
+  <LinkCard title="Builder tutorial" href="/egui-charts/docs/builder-guide/" description="Connect historical and streaming data, handle events, and save chart state." />
+  <LinkCard title="main API (rustdoc)" href="/egui-charts/docs/api/egui_charts/index.html" description="Browse types and methods for egui 0.37, with rustdoc's own symbol search." />
+</CardGrid>
+
+## Chart concepts
+
+<CardGrid>
+  <LinkCard title="Series and chart types" href="/egui-charts/docs/chart-types/" description="Choose a renderer, add a series, and select shared or independent pricing." />
+  <LinkCard title="Price scale" href="/egui-charts/docs/scales/#choose-a-price-scale" description="Use normal, logarithmic, percentage or indexed prices." />
+  <LinkCard title="Time scale and whitespace" href="/egui-charts/docs/scales/#exchange-time-not-bar-indices" description="Share UTC viewports and reserve future whitespace. Use Bar::whitespace for missing observations." />
+  <LinkCard title="Panes and markers" href="/egui-charts/docs/api-reference/#panes" description="Place series and studies in panes, resize them, and attach event markers to bars." />
+</CardGrid>
+
+## Build your workspace
+
+<CardGrid>
+  <LinkCard title="Studies and extensions" href="/egui-charts/docs/api-reference/#extensions" description="Add custom studies, series primitives, drawing tools and themes." />
+  <LinkCard title="Recipes" href="/egui-charts/docs/api-reference/#recipes" description="Page history, stream bars, connect HTTP endpoints, save drawings and synchronize charts." />
+  <LinkCard title="Interaction" href="/egui-charts/docs/scales/#handle-chart-events" description="Respond to clicks, crosshair movement and visible-range changes." />
   <LinkCard title="Status" href="/egui-charts/docs/progress/" description="See what works today and which capabilities still have gaps." />
 </CardGrid>
 

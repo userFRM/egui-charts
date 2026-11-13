@@ -1,16 +1,24 @@
 //! Candlestick-family chart renderers
 //!
-//! Includes: Candlestick, OHLC Bars, Hollow Candles, Heikin-Ashi, Volume Candles, Columns
+//! Includes: Candlestick, OHLC Bars, Hollow Candles, Volume Candles, Columns
 
-use super::HeikinAshiCache;
-use super::helpers::{
-    OhlcYCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks, prev_close,
-};
+use super::helpers::{OhlcYCoords, body_rect, prev_close, push_body, push_wicks};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{self, BarRenderParams, RenderContext, StyleColors};
-use crate::model::{Bar, BarsStyle, CandlesStyle};
+use crate::model::{Bar, BarsStyle, CandlesStyle, HollowStyle, PriceSource, VolumeCandlesStyle};
 use crate::scales::PriceMap;
-use egui::{Color32, Pos2, Rect};
+use crate::tokens::DESIGN_TOKENS;
+use egui::{Color32, Pos2, Rect, Stroke};
+
+/// The border width of hollow and volume candles: an added series' positive width, otherwise the
+/// design's. The main series paints them with a width of zero.
+fn border_width(colors: &StyleColors) -> f32 {
+    if colors.candle_border_width.is_finite() && colors.has_border() {
+        colors.candle_border_width
+    } else {
+        DESIGN_TOKENS.stroke.medium
+    }
+}
 
 pub(super) fn render_candles(
     price_ctx: &RenderContext,
@@ -34,15 +42,20 @@ pub(super) fn render_candles(
         let rising = if style.color_by_previous_close {
             !bar.is_whitespace() && bar.close >= prev_close(full_data, start_idx + i)
         } else {
-            bar.is_bullish()
+            bar.close >= bar.open
         };
         rendering::render_candle(price_ctx, bar, rising, price_scale, colors, &params, style);
-
-        if show_volume {
-            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-        }
+    }
+    if show_volume {
+        render_volume_bars(
+            volume_ctx,
+            visible_data,
+            start_idx,
+            max_volume,
+            colors,
+            chart_rect_min_x,
+            idx_to_coord,
+        );
     }
 }
 
@@ -52,6 +65,7 @@ pub(super) fn render_ohlc_bars(
     price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -64,18 +78,30 @@ pub(super) fn render_ohlc_bars(
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let params = BarRenderParams::new(x, bar_width, wick_width);
-        rendering::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params, style);
-
-        if show_volume {
-            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-        }
+        let rising = if style.color_by_previous_close {
+            !bar.is_whitespace() && bar.close >= prev_close(full_data, start_idx + i)
+        } else {
+            bar.close >= bar.open
+        };
+        rendering::render_ohlc_bar(price_ctx, bar, rising, price_scale, colors, &params, style);
+    }
+    if show_volume {
+        render_volume_bars(
+            volume_ctx,
+            visible_data,
+            start_idx,
+            max_volume,
+            colors,
+            chart_rect_min_x,
+            idx_to_coord,
+        );
     }
 }
 
 /// Hollow candles: coloured by the close versus the previous close, hollow when the close is above
-/// the open and filled otherwise
+/// the open and filled otherwise. Body, border and wick have their own visibility and colours. A
+/// bar's own colours replace them, its body colour also standing in for a border or wick it leaves
+/// unset.
 pub(super) fn render_hollow_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -90,11 +116,12 @@ pub(super) fn render_hollow_candles(
     max_volume: f64,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    style: &HollowStyle,
 ) {
-    let painter = price_ctx.painter;
     let coords = *price_scale;
+    let border_width = border_width(colors);
+    // At most two wicks, a fill and a border per bar, under one paint list lock.
+    let mut shapes = Vec::with_capacity(4 * visible_data.len());
 
     for (i, bar) in visible_data.iter().enumerate() {
         if bar.is_whitespace() {
@@ -102,33 +129,48 @@ pub(super) fn render_hollow_candles(
         }
         let g = start_idx + i;
         let x = idx_to_coord(g, chart_rect_min_x);
-        let color = bar.colors.as_ref().and_then(|own| own.color).unwrap_or(
-            if bar.close >= prev_close(full_data, g) {
-                bullish_color
-            } else {
-                bearish_color
-            },
-        );
+        let (body, border, wick) = if bar.close >= prev_close(full_data, g) {
+            (style.body_up, style.border_up, style.wick_up)
+        } else {
+            (style.body_down, style.border_down, style.wick_down)
+        };
+        let own = bar.colors.as_deref();
+        let own_body = own.and_then(|own| own.color);
+        let body = own_body.unwrap_or(body);
+        let border = own
+            .and_then(|own| own.border)
+            .or(own_body)
+            .unwrap_or(border);
+        let wick = own.and_then(|own| own.wick).or(own_body).unwrap_or(wick);
         let y = OhlcYCoords::from_bar(bar, &coords);
 
-        draw_wicks(painter, x, &y, wick_width, color);
-
-        if bar.close > bar.open {
-            draw_body_hollow(painter, x, bar_width, &y, color);
-        } else {
-            draw_body_filled(painter, x, bar_width, &y, color);
+        if style.wick_visible {
+            push_wicks(&mut shapes, x, &y, Stroke::new(wick_width, wick));
         }
+        let fill = (style.body_visible && bar.close <= bar.open).then_some(body);
+        let border = style
+            .border_visible
+            .then(|| Stroke::new(border_width, border));
+        push_body(&mut shapes, body_rect(x, bar_width, &y), fill, border);
+    }
+    price_ctx.painter.extend(shapes);
 
-        if show_volume {
-            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-        }
+    if show_volume {
+        render_volume_bars(
+            volume_ctx,
+            visible_data,
+            start_idx,
+            max_volume,
+            colors,
+            chart_rect_min_x,
+            idx_to_coord,
+        );
     }
 }
 
-/// Columns: one solid column per bar from the pane bottom, or from `base` when set, to the close,
-/// coloured by the close versus the previous close. Columns are at least one pixel tall.
+/// Columns: one solid column per bar from the pane bottom, or from `base` when set, to the `source`
+/// price, coloured by the close versus the previous close whatever the source. Columns are at least
+/// one pixel tall.
 pub(super) fn render_columns(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -145,6 +187,7 @@ pub(super) fn render_columns(
     bullish_color: Color32,
     bearish_color: Color32,
     base: Option<f64>,
+    source: PriceSource,
 ) {
     let bottom = price_ctx.rect.max.y;
     let base_y = base.map(|price| price_scale.price_to_y(price));
@@ -161,11 +204,12 @@ pub(super) fn render_columns(
                 bearish_color
             },
         );
-        let close = price_scale.price_to_y(bar.close);
+        let value = source.compute(bar.open, bar.high, bar.low, bar.close);
+        let value = price_scale.price_to_y(value);
         let (top, bottom) = match base_y {
-            None => (close.min(bottom - 1.0), bottom),
-            Some(base) if close <= base => (close.min(base - 1.0), base),
-            Some(base) => (base, close.max(base + 1.0)),
+            None => (value.min(bottom - 1.0), bottom),
+            Some(base) if value <= base => (value.min(base - 1.0), base),
+            Some(base) => (base, value.max(base + 1.0)),
         };
         let rect = Rect::from_min_max(
             Pos2::new(x - bar_width / 2.0, top),
@@ -187,97 +231,53 @@ pub(super) fn render_columns(
     }
 }
 
-/// Heikin-Ashi candles: smoothed candlesticks.
-///
-/// Heikin-Ashi is a cumulative recurrence, so the series is computed over the
-/// complete dataset (`full_data`) and cached; the visible window is sliced out
-/// of the cached series. This keeps every bar's Heikin-Ashi value invariant as
-/// the user pans and zooms, instead of reseeding from the first visible bar.
-pub(super) fn render_heikin_ashi(
-    price_ctx: &RenderContext,
-    volume_ctx: &RenderContext,
-    price_scale: &PriceMap,
-    colors: &StyleColors,
-    visible_data: &[Bar],
-    full_data: &[Bar],
-    revision: u64,
-    cache: &HeikinAshiCache,
-    start_idx: usize,
-    bar_width: f32,
-    wick_width: f32,
-    show_volume: bool,
-    max_volume: f64,
-    chart_rect_min_x: f32,
-    idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
-) {
-    if visible_data.is_empty() {
-        return;
-    }
-
-    let ha_bars = cache.bars(full_data, revision);
-    let start = start_idx.min(ha_bars.len());
-    let end = start.saturating_add(visible_data.len()).min(ha_bars.len());
-    let ha_window = &ha_bars[start..end];
-    let painter = price_ctx.painter;
-    let coords = *price_scale;
-
-    for (i, bar) in ha_window.iter().enumerate() {
-        if bar.is_whitespace() {
-            continue;
-        }
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let color = if bar.close >= bar.open {
-            bullish_color
-        } else {
-            bearish_color
-        };
-        let y = OhlcYCoords::from_bar(bar, &coords);
-
-        draw_wicks(painter, x, &y, wick_width, color);
-        draw_body_filled(painter, x, bar_width, &y, color);
-    }
-
-    if show_volume {
-        render_volume_bars(
-            volume_ctx,
-            visible_data,
-            start_idx,
-            max_volume,
-            colors,
-            chart_rect_min_x,
-            &idx_to_coord,
-        );
-    }
-}
-
 /// Volume candles: body width proportional to the bar's share of `max_volume`, the largest
-/// visible volume.
+/// visible volume. Body, border and wick have their own visibility and colours. A bar's own colours
+/// replace them, its body colour also standing in for a border or wick it leaves unset.
 pub(super) fn render_volume_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     base_bar_width: f32,
     wick_width: f32,
     max_volume: f64,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    style: &VolumeCandlesStyle,
 ) {
-    let painter = price_ctx.painter;
     let coords = *price_scale;
+    let border_width = border_width(colors);
+    // At most two wicks, a fill and a border per bar, under one paint list lock.
+    let mut shapes = Vec::with_capacity(4 * visible_data.len());
 
     for (i, bar) in visible_data.iter().enumerate() {
         if bar.is_whitespace() {
             continue;
         }
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let color = bar_color(bar, bullish_color, bearish_color);
+        let g = start_idx + i;
+        let x = idx_to_coord(g, chart_rect_min_x);
+        let rising = if style.color_by_previous_close {
+            bar.close >= prev_close(full_data, g)
+        } else {
+            bar.close >= bar.open
+        };
+        let (body, border, wick) = if rising {
+            (style.body_up, style.border_up, style.wick_up)
+        } else {
+            (style.body_down, style.border_down, style.wick_down)
+        };
+        let own = bar.colors.as_deref();
+        let own_body = own.and_then(|own| own.color);
+        let body = own_body.unwrap_or(body);
+        let border = own
+            .and_then(|own| own.border)
+            .or(own_body)
+            .unwrap_or(border);
+        let wick = own.and_then(|own| own.wick).or(own_body).unwrap_or(wick);
         let y = OhlcYCoords::from_bar(bar, &coords);
 
         // A zero or missing volume leaves a body as thin as the wick; without any visible
@@ -294,17 +294,25 @@ pub(super) fn render_volume_candles(
         };
         let bar_width = (base_bar_width * volume_ratio).max(wick_width);
 
-        draw_wicks(painter, x, &y, wick_width, color);
-        draw_body_filled(painter, x, bar_width, &y, color);
+        if style.wick_visible {
+            push_wicks(&mut shapes, x, &y, Stroke::new(wick_width, wick));
+        }
+        let fill = style.body_visible.then_some(body);
+        let border = style
+            .border_visible
+            .then(|| Stroke::new(border_width, border));
+        push_body(&mut shapes, body_rect(x, bar_width, &y), fill, border);
     }
+    price_ctx.painter.extend(shapes);
 
     // Volume candles don't show separate volume bars
-    let _ = (volume_ctx, colors);
+    let _ = volume_ctx;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::BarColors;
     use crate::scales::{PriceRange, PriceTransform};
     use egui::{Context, LayerId, Painter, Shape, vec2};
 
@@ -366,6 +374,7 @@ mod tests {
                     Color32::GREEN,
                     Color32::RED,
                     base,
+                    PriceSource::Close,
                 );
             });
             let columns: Vec<_> = output
@@ -513,14 +522,14 @@ mod tests {
                     &map,
                     &colors,
                     &bars,
+                    &bars,
                     0,
                     20.0,
                     1.0,
                     max_volume,
                     0.0,
                     |i, _| 25.0 + i as f32 * 50.0,
-                    Color32::GREEN,
-                    Color32::RED,
+                    &VolumeCandlesStyle::default(),
                 );
             });
             let drawn: Vec<_> = output
@@ -534,5 +543,202 @@ mod tests {
             output.drop_without_applying_deltas();
             assert_eq!(drawn, widths, "{volumes:?} / {max_volume}");
         }
+    }
+
+    /// A bar's own border and wick colours replace the style's on hollow candles, and its own
+    /// body colour stands in for whichever of the two it does not set.
+    #[test]
+    fn hollow_candles_take_per_bar_border_and_wick_colours() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let style = HollowStyle::default();
+        let (body, border, wick) = (
+            Color32::from_rgb(7, 8, 9),
+            Color32::from_rgb(3, 4, 102),
+            Color32::from_rgb(105, 106, 6),
+        );
+        let hollow = Color32::TRANSPARENT;
+        for (own, rects, wicks) in [
+            (
+                BarColors {
+                    border: Some(border),
+                    wick: Some(wick),
+                    ..Default::default()
+                },
+                [(hollow, border), (style.body_down, border)],
+                [wick; 4],
+            ),
+            // A fill and border of one colour paint as the fill alone.
+            (
+                BarColors {
+                    color: Some(body),
+                    ..Default::default()
+                },
+                [(hollow, body), (body, hollow)],
+                [body; 4],
+            ),
+            (
+                BarColors {
+                    color: Some(body),
+                    wick: Some(wick),
+                    ..Default::default()
+                },
+                [(hollow, body), (body, hollow)],
+                [wick; 4],
+            ),
+            (
+                BarColors {
+                    color: Some(body),
+                    border: Some(border),
+                    ..Default::default()
+                },
+                [(hollow, border), (body, border)],
+                [body; 4],
+            ),
+        ] {
+            // Rising and hollow, then falling and filled below the first close; both have two
+            // wicks.
+            let mut bars = [
+                Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 22.0, 8.0, 20.0, 0.0),
+                Bar::new(chrono::DateTime::UNIX_EPOCH, 30.0, 32.0, 14.0, 16.0, 0.0),
+            ];
+            for bar in &mut bars {
+                bar.colors = Some(Box::new(own.clone()));
+            }
+            let ctx = Context::default();
+            let output = ctx.run_ui(Default::default(), |_| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                let context = RenderContext::new(&painter, rect);
+                render_hollow_candles(
+                    &context,
+                    &context,
+                    &map,
+                    &colors,
+                    &bars,
+                    &bars,
+                    0,
+                    10.0,
+                    1.0,
+                    false,
+                    0.0,
+                    0.0,
+                    |i, _| 25.0 + i as f32 * 50.0,
+                    &style,
+                );
+            });
+            let (mut painted_rects, mut painted_wicks) = (vec![], vec![]);
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Rect(body) => painted_rects.push((body.fill, body.stroke.color)),
+                    Shape::LineSegment { stroke, .. } => painted_wicks.push(stroke.color),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!(painted_rects, rects, "{own:?}");
+            assert_eq!(painted_wicks, wicks, "{own:?}");
+        }
+    }
+
+    /// A bar's own body colour fills its volume candle and colours a border and wicks it leaves
+    /// unset; its own border and wick colours replace the style's. A bar without colours of its
+    /// own keeps the style's, and an opaque border in the colour of its fill paints as the fill
+    /// alone.
+    #[test]
+    fn volume_candles_take_per_bar_colours() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 40.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let (own, border, wick) = (
+            Color32::from_rgb(1, 100, 2),
+            Color32::from_rgb(3, 4, 102),
+            Color32::from_rgb(105, 106, 6),
+        );
+        let style = VolumeCandlesStyle::default();
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let mut bars = [
+            Bar::new(time, 10.0, 22.0, 8.0, 20.0, 10.0),
+            Bar::new(time, 30.0, 32.0, 14.0, 16.0, 10.0),
+            Bar::new(time, 10.0, 22.0, 8.0, 20.0, 10.0),
+        ];
+        bars[0].colors = Some(Box::new(BarColors {
+            color: Some(own),
+            ..Default::default()
+        }));
+        bars[1].colors = Some(Box::new(BarColors {
+            border: Some(border),
+            wick: Some(wick),
+            ..Default::default()
+        }));
+        let ctx = Context::default();
+        let output = ctx.run_ui(Default::default(), |_| {
+            let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+            let context = RenderContext::new(&painter, rect);
+            render_volume_candles(
+                &context,
+                &context,
+                &map,
+                &colors,
+                &bars,
+                &bars,
+                0,
+                20.0,
+                1.0,
+                10.0,
+                0.0,
+                |i, _| 25.0 + i as f32 * 50.0,
+                &style,
+            );
+        });
+        let (mut bodies, mut wicks) = (vec![], vec![]);
+        for shape in &output.shapes {
+            match &shape.shape {
+                Shape::Rect(body) => bodies.push((body.fill, body.stroke.color)),
+                Shape::LineSegment { stroke, .. } => wicks.push(stroke.color),
+                _ => {}
+            }
+        }
+        output.drop_without_applying_deltas();
+        let none = Color32::TRANSPARENT;
+        assert_eq!(
+            bodies,
+            [
+                (own, none),
+                (style.body_down, border),
+                (style.body_up, none)
+            ]
+        );
+        assert_eq!(wicks, [own, own, wick, wick, style.wick_up, style.wick_up]);
     }
 }

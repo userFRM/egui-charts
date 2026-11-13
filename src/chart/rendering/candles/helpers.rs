@@ -5,7 +5,8 @@
 use crate::model::Bar;
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
+use egui::epaint::RectShape;
+use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, StrokeKind};
 use std::ops::Range;
 
 /// Pre-computed pixel Y coordinates for a single OHLC bar.
@@ -35,57 +36,60 @@ impl OhlcYCoords {
     }
 }
 
-/// Draw candle wicks (upper and lower)
-pub fn draw_wicks(painter: &Painter, x: f32, y: &OhlcYCoords, wick_width: f32, color: Color32) {
-    // Upper wick
-    painter.add(Shape::line_segment(
-        [Pos2::new(x, y.wick_top), Pos2::new(x, y.body_top)],
-        Stroke::new(wick_width, color),
-    ));
-    // Lower wick
-    painter.add(Shape::line_segment(
-        [Pos2::new(x, y.body_bottom), Pos2::new(x, y.wick_bottom)],
-        Stroke::new(wick_width, color),
-    ));
+/// Queue the wicks of a candle; a trending bar has no wick on one side, and a segment without
+/// length paints nothing.
+pub(super) fn push_wicks(shapes: &mut Vec<Shape>, x: f32, y: &OhlcYCoords, stroke: Stroke) {
+    for (from, to) in [(y.wick_top, y.body_top), (y.body_bottom, y.wick_bottom)] {
+        if from != to {
+            shapes.push(Shape::line_segment(
+                [Pos2::new(x, from), Pos2::new(x, to)],
+                stroke,
+            ));
+        }
+    }
 }
 
-/// Draw filled candle body
-pub fn draw_body_filled(
-    painter: &Painter,
-    x: f32,
-    bar_width: f32,
-    y: &OhlcYCoords,
-    color: Color32,
+/// Queue the fill and the inside border of a candle body, if any.
+///
+/// A border in the colour of an opaque fill changes no pixel and is skipped. The tessellator
+/// stops a shared fill at the middle of the stroke, so only an opaque border may share the
+/// fill's shape.
+pub(super) fn push_body(
+    shapes: &mut Vec<Shape>,
+    rect: Rect,
+    fill: Option<Color32>,
+    border: Option<Stroke>,
 ) {
-    let body_rect = Rect::from_min_max(
+    let border = border.filter(|b| !(fill == Some(b.color) && b.color.is_opaque()));
+    match (fill, border) {
+        (Some(fill), Some(border)) if !border.color.is_opaque() => {
+            shapes.push(Shape::rect_filled(rect, 0.0, fill));
+            shapes.push(Shape::rect_stroke(rect, 0.0, border, StrokeKind::Inside));
+        }
+        (None, None) => {}
+        (fill, border) => shapes.push(
+            RectShape::new(
+                rect,
+                0.0,
+                fill.unwrap_or(Color32::TRANSPARENT),
+                border.unwrap_or(Stroke::NONE),
+                StrokeKind::Inside,
+            )
+            .into(),
+        ),
+    }
+}
+
+/// The body of a candle, at least the design's minimum height.
+pub fn body_rect(x: f32, bar_width: f32, y: &OhlcYCoords) -> Rect {
+    Rect::from_min_max(
         Pos2::new(x - bar_width / 2.0, y.body_top),
         Pos2::new(
             x + bar_width / 2.0,
             y.body_bottom
                 .max(y.body_top + DESIGN_TOKENS.sizing.candle.min_body_height),
         ),
-    );
-    painter.add(Shape::rect_filled(body_rect, 0.0, color));
-}
-
-/// Draw hollow candle body (stroke only)
-pub fn draw_body_hollow(
-    painter: &Painter,
-    x: f32,
-    bar_width: f32,
-    y: &OhlcYCoords,
-    color: Color32,
-) {
-    let body_rect = Rect::from_min_max(
-        Pos2::new(x - bar_width / 2.0, y.body_top),
-        Pos2::new(x + bar_width / 2.0, y.body_bottom),
-    );
-    painter.add(Shape::rect_stroke(
-        body_rect,
-        0.0,
-        Stroke::new(DESIGN_TOKENS.stroke.medium, color),
-        egui::epaint::StrokeKind::Inside,
-    ));
+    )
 }
 
 /// Draw a brick/block with border (for Renko, Line Break)
@@ -145,14 +149,4 @@ pub fn prev_close(full: &[Bar], idx: usize) -> f64 {
         .rev()
         .find(|bar| !bar.is_whitespace())
         .map_or(full[idx].open, |bar| bar.close)
-}
-
-/// Select bullish or bearish color based on bar direction
-#[inline]
-pub fn bar_color(bar: &crate::model::Bar, bullish: Color32, bearish: Color32) -> Color32 {
-    if bar.close > bar.open {
-        bullish
-    } else {
-        bearish
-    }
 }

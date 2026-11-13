@@ -148,6 +148,8 @@ impl PriceMarkGenerator {
         let min_step = self
             .min_step()
             .filter(|_| prices || map.transform().mode == PriceScaleMode::Normal);
+        // A volume step is a multiple of the format's minimum move, so it also keeps that grid.
+        let min_step = map.volume_step().filter(|_| prices).or(min_step);
         if let Some(min_step) = min_step {
             nice_step = Self::round_up_to_multiple(nice_step, min_step);
         }
@@ -719,6 +721,55 @@ mod tests {
             let marks = scale.map(PriceTransform::default(), 0.0, 500.0).marks();
             assert_eq!(marks.len(), count, "{density}: {marks:?}");
         }
+    }
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn volume_display_format_keeps_the_low_decades_of_a_log_axis() {
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Volume,
+            precision: 2,
+            min_move: 1.0,
+        };
+        let map = map(
+            PriceScaleMode::Logarithmic,
+            1_000f64.ln(),
+            10_000_000f64.ln(),
+        );
+        for map in [map, map.with_display_format(format)] {
+            let marks = map.marks();
+            assert!(marks.iter().any(|mark| mark.price < 10_000.0), "{marks:?}");
+            assert!(marks.iter().all(|mark| mark.price.fract() == 0.0));
+        }
+        // On a linear axis the hundredth of a million still sets a 10,000-unit grid.
+        let marks = self::map(PriceScaleMode::Normal, 1_000.0, 10_000_000.0)
+            .with_display_format(format)
+            .marks();
+        assert!(!marks.is_empty());
+        assert!(marks.iter().all(|mark| mark.price % 10_000.0 == 0.0));
+    }
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn volume_format_on_a_narrow_log_axis_repeats_no_label() {
+        use crate::scales::PriceFormatter;
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Volume,
+            precision: 2,
+            min_move: 1.0,
+        };
+        let marks = map(
+            PriceScaleMode::Logarithmic,
+            1_010_000f64.ln(),
+            1_060_000f64.ln(),
+        )
+        .with_display_format(format)
+        .marks();
+        let labels: Vec<String> = marks.iter().map(|mark| format.format(mark.price)).collect();
+        assert!(labels.len() >= 3, "{labels:?}");
+        let mut distinct = labels.clone();
+        distinct.dedup();
+        assert_eq!(distinct, labels);
     }
 
     #[test]

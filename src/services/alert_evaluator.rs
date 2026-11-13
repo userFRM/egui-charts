@@ -11,7 +11,7 @@ use crate::model::{
     Alert, AlertId, AlertInputs, AlertSource, Bar, BarClock, Instrument, Timeframe,
 };
 use crate::studies::{
-    ConfiguredStudy, Indicator, IndicatorFactory, StudyData, StudyDataRequest, StudySource,
+    Indicator, IndicatorFactory, StudyData, StudyDataRequest, StudySource, StudyTemplate,
 };
 
 /// History, subscriptions and independent study state for the alert service. Both interactive
@@ -19,7 +19,7 @@ use crate::studies::{
 /// and replay never replace its saved study definitions. Dropping it releases all subscriptions.
 pub struct AlertEvaluator {
     feed: Arc<dyn Datafeed>,
-    runs: HashMap<(AlertId, String), Evaluation>,
+    runs: HashMap<(AlertId, String, Timeframe), Evaluation>,
     feeds: HashMap<Subject, AlertFeed>,
     #[cfg(feature = "ui")]
     storage: Option<Arc<dyn super::Storage>>,
@@ -36,52 +36,77 @@ struct Subject {
     count: usize,
     start: Option<DateTime<Utc>>,
     /// Event readers belong to one alert, including when its OHLC inputs match another alert.
-    owner: Option<(AlertId, String)>,
+    owner: Option<(AlertId, String, Timeframe)>,
     calendar: Option<crate::model::AlertCalendar>,
 }
 
 struct Evaluation {
     alert: Alert,
+    timeframe: Timeframe,
     inputs: AlertInputs,
     studies: Vec<(usize, Box<dyn Indicator>)>,
+    /// Studies the conditions of this interval test, with the studies they take as input.
+    tested: HashSet<usize>,
     error: Option<String>,
     initialized: bool,
+    ready: bool,
     start: Option<DateTime<Utc>>,
 }
 
 impl Evaluation {
-    fn new(alert: &Alert, factory: &IndicatorFactory) -> Self {
-        let inputs = alert.inputs.as_deref().cloned().unwrap_or_default();
-        let mut required: HashSet<_> = alert
-            .sources()
-            .filter_map(|source| match source {
-                AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
-                _ => None,
-            })
-            .collect();
-        loop {
-            let before = required.len();
+    fn new(alert: &Alert, timeframe: Timeframe, factory: &IndicatorFactory) -> Self {
+        let mut inputs = alert.inputs.as_deref().cloned().unwrap_or_default();
+        // A captured span counts bars of the source chart's interval, as in `prepare_alert`.
+        if timeframe != alert.timeframe.unwrap_or_default() {
+            inputs.start = None;
+            inputs.visible = None;
+        }
+        // `ids` with the saved studies they take as input, transitively.
+        let with_inputs = |mut ids: HashSet<usize>| loop {
+            let before = ids.len();
             for study in &inputs.studies {
-                if !required.contains(&study.id) {
+                if !ids.contains(&study.id) {
                     continue;
                 }
                 for (_, input) in &study.inputs {
                     if let crate::model::InputValue::Source(StudySource::Study { id, .. }) = input {
-                        required.insert(*id);
+                        ids.insert(*id);
                     }
                 }
             }
-            if required.len() == before {
-                break;
+            if ids.len() == before {
+                break ids;
             }
-        }
+        };
+        let tested = with_inputs(
+            alert
+                .rules()
+                .filter(|(_, _, interval)| *interval == timeframe)
+                .flat_map(|(source, condition, _)| {
+                    std::iter::once(source).chain(condition.partners().into_iter().flatten())
+                })
+                .filter_map(|source| match source {
+                    AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
+                    _ => None,
+                })
+                .collect(),
+        );
+        // The fired message comes from the first interval.
+        let required = if timeframe == alert.timeframe.unwrap_or_default() {
+            with_inputs(tested.iter().copied().chain(alert.plot_studies()).collect())
+        } else {
+            tested.clone()
+        };
         let mut result = Self {
             alert: alert.clone(),
+            timeframe,
             start: inputs.start,
             inputs,
             studies: Vec::new(),
+            tested,
             error: None,
             initialized: false,
+            ready: false,
         };
         for id in required {
             let restored = (|| {
@@ -92,20 +117,26 @@ impl Evaluation {
                     .find(|study| study.id == id)
                     .ok_or_else(|| format!("Alert has no saved inputs for study {id}"))?;
                 let study = factory
-                    .create(&saved.name)
+                    .create_registered(&saved.name)
                     .ok_or_else(|| format!("Unknown alert study: {}", saved.name))?;
-                let mut study = ConfiguredStudy::new(study);
-                for (id, value) in &saved.inputs {
-                    study
-                        .set_input(id, value.clone())
-                        .map_err(|error| error.to_string())?;
+                let mut study = StudyTemplate {
+                    name: saved.name.clone(),
+                    inputs: saved.inputs.clone(),
+                    settings: study.settings(),
+                    visible: study.is_visible(),
+                    scale: None,
                 }
-                study.set_timeframe(alert.timeframe.unwrap_or_default());
-                Ok::<_, String>((id, Box::new(study) as Box<dyn Indicator>))
+                .create_with(factory)
+                .map_err(|error| error.to_string())?;
+                study.set_timeframe(timeframe);
+                Ok::<_, String>((id, study))
             })();
             match restored {
                 Ok(study) => result.studies.push(study),
-                Err(error) => result.error = Some(error),
+                Err(error) if result.tested.contains(&id) => result.error = Some(error),
+                // A study only the message reads and that cannot be made reads `NaN`, instead of
+                // stopping the alert's other studies.
+                Err(_) => {}
             }
         }
         result
@@ -119,8 +150,7 @@ impl Evaluation {
                 .into(),
             timeframe: request
                 .and_then(|request| request.timeframe)
-                .or(self.alert.timeframe)
-                .unwrap_or_default(),
+                .unwrap_or(self.timeframe),
             metric: request.and_then(|request| request.metric.clone()),
             timezone: self.inputs.timezone.clone(),
             extended_hours: self.inputs.extended_hours,
@@ -132,7 +162,13 @@ impl Evaluation {
                 .studies
                 .iter()
                 .any(|(_, study)| !study.order_flow_inputs().is_empty())
-                .then(|| (self.alert.id.clone().unwrap(), symbol.to_owned())),
+                .then(|| {
+                    (
+                        self.alert.id.clone().unwrap(),
+                        symbol.to_owned(),
+                        self.timeframe,
+                    )
+                }),
         }
     }
 
@@ -188,7 +224,7 @@ impl Evaluation {
                 .find(|(key, _)| *key == id)
                 .unwrap()
                 .1;
-            study.set_timeframe(self.alert.timeframe.unwrap_or_default());
+            study.set_timeframe(self.timeframe);
             study.set_bar_clock(clock);
             study.set_instrument(instrument);
             study.set_visible_range(self.inputs.visible.map_or(0..bars.len(), |(start, end)| {
@@ -208,13 +244,30 @@ impl Evaluation {
             .iter()
             .flat_map(|(_, study)| {
                 study.data_requests().into_iter().map(|request| {
-                    let start = study
-                        .data_start(&request)
-                        .map_or(first, |start| start.max(first));
+                    let start = study.data_start(&request).unwrap_or(first);
                     (request, start)
                 })
             })
             .collect()
+    }
+
+    /// Whether these study histories hold the run back. One still loading does. One that stopped
+    /// for good does only for a study a condition tests: a study only the message reads gives
+    /// what it can without that history.
+    fn waiting(
+        &self,
+        symbol: &str,
+        requests: &[(StudyDataRequest, DateTime<Utc>)],
+        feeds: &HashMap<Subject, AlertFeed>,
+    ) -> bool {
+        requests.iter().any(|(request, _)| {
+            let reader = &feeds[&self.subject(symbol, Some(request))];
+            !reader.ready()
+                && (!reader.stopped()
+                    || self.studies.iter().any(|(id, study)| {
+                        self.tested.contains(id) && study.data_requests().contains(request)
+                    }))
+        })
     }
 }
 
@@ -276,24 +329,34 @@ impl AlertEvaluator {
                 continue;
             };
             for symbol in engine.subjects(id) {
-                let key = (id.clone(), symbol.clone());
-                armed.insert(key.clone());
-                if self.runs.get(&key).is_none_or(|run| run.alert != alert) {
-                    // Replacing an event definition must also replace its subscription.
-                    self.feeds
-                        .retain(|subject, _| subject.owner.as_ref() != Some(&key));
-                    self.runs
-                        .insert(key.clone(), Evaluation::new(&alert, factory));
-                }
-                let run = self.runs.get_mut(&key).unwrap();
-                if let Some(error) = run.error.take() {
-                    errors.push(FeedError::InvalidData(error));
-                    run.studies.clear();
+                for timeframe in alert.timeframes() {
+                    let key = (id.clone(), symbol.clone(), timeframe);
+                    armed.insert(key.clone());
+                    match self.runs.get_mut(&key) {
+                        // Most polls find the alert unchanged; comparing it copies nothing.
+                        Some(run) if run.alert == alert => {}
+                        // A firing or a marker option leaves the studies and streams as they are.
+                        Some(run) if run.alert.same_monitoring(&alert) => {
+                            run.alert.clone_from(&alert)
+                        }
+                        _ => {
+                            // Replacing an event definition must also replace its subscription.
+                            self.feeds
+                                .retain(|subject, _| subject.owner.as_ref() != Some(&key));
+                            self.runs
+                                .insert(key.clone(), Evaluation::new(&alert, timeframe, factory));
+                        }
+                    }
+                    let run = self.runs.get_mut(&key).unwrap();
+                    if let Some(error) = run.error.take() {
+                        errors.push(FeedError::InvalidData(error));
+                        run.studies.clear();
+                    }
                 }
             }
         }
         self.runs.retain(|key, _| armed.contains(key));
-        for ((_, symbol), run) in &self.runs {
+        for ((_, symbol, _), run) in &self.runs {
             let subject = run.subject(symbol, None);
             let reader = self.feeds.entry(subject.clone()).or_insert_with(|| {
                 let mut reader = subject.open(self.feed.clone());
@@ -324,7 +387,8 @@ impl AlertEvaluator {
                 now,
             ));
         }
-        for ((id, symbol), run) in &mut self.runs {
+        for ((_, symbol, _), run) in &mut self.runs {
+            run.ready = false;
             let subject = run.subject(symbol, None);
             let reader = &self.feeds[&subject];
             let all = reader.bars();
@@ -353,10 +417,7 @@ impl AlertEvaluator {
                 }
                 reader.set_inputs(inputs);
             }
-            if requests
-                .iter()
-                .any(|(request, _)| !self.feeds[&run.subject(symbol, Some(request))].ready())
-            {
+            if run.waiting(symbol, &requests, &self.feeds) {
                 continue;
             }
             let reader = &self.feeds[&subject];
@@ -386,42 +447,76 @@ impl AlertEvaluator {
                     .or_insert_with(|| subject.open(self.feed.clone()))
                     .require_start(*start);
             }
-            if reaches
-                .iter()
-                .any(|(request, _)| !self.feeds[&run.subject(symbol, Some(request))].ready())
-            {
+            if run.waiting(symbol, &reaches, &self.feeds) {
                 continue;
             }
-            let reader = &self.feeds[&subject];
-            let all = reader.bars();
-            let from = all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start));
-            let bars = &all[from..];
-            engine.update_alert(
-                id,
-                symbol,
-                subject.timeframe,
-                bars,
-                now,
-                |source, at| match source {
-                    AlertSource::Study { id, output } => run
+            run.ready = true;
+        }
+        let mut subjects: HashMap<_, Vec<_>> = HashMap::new();
+        for ((id, symbol, _), run) in &self.runs {
+            let reader = &self.feeds[&run.subject(symbol, None)];
+            let from = reader
+                .bars()
+                .partition_point(|bar| run.start.is_some_and(|start| bar.time < start));
+            subjects
+                .entry((id, symbol))
+                .or_default()
+                .push((run, reader, from));
+        }
+        for ((id, symbol), contexts) in subjects {
+            let inputs: Vec<_> = contexts
+                .iter()
+                .map(|(run, reader, from)| {
+                    (
+                        reader.clock(),
+                        if run.ready {
+                            &reader.bars()[*from..]
+                        } else {
+                            &[]
+                        },
+                    )
+                })
+                .collect();
+            let exchange = contexts
+                .iter()
+                .find_map(|(_, reader, _)| reader.instrument()?.exchange.as_deref());
+            let value = |timeframe: Timeframe, source: &AlertSource, at: usize| {
+                let context = contexts
+                    .iter()
+                    .find(|(run, _, _)| run.timeframe == timeframe)?;
+                match source {
+                    AlertSource::Study { id, output } => context
+                        .0
                         .studies
                         .iter()
                         .find(|(key, _)| key.to_string() == *id)
                         .and_then(|(_, study)| study.plot_value(*output, at)),
                     #[cfg(feature = "ui")]
                     AlertSource::Drawing(_) => {
+                        let (run, reader, from) = context;
+                        let bars = &reader.bars()[*from..];
                         let scale = if run.inputs.logarithmic {
                             crate::scales::PriceScaleMode::Logarithmic
                         } else {
                             crate::scales::PriceScaleMode::Normal
                         };
-                        match live.iter().find(|data| reader.matches(data)) {
+                        let holder = live
+                            .iter()
+                            .filter(|data| {
+                                reader.matches_view(data)
+                                    && data
+                                        .drawings
+                                        .iter()
+                                        .any(|drawing| drawing.alert_level(source).is_some())
+                            })
+                            .min_by_key(|data| !reader.matches(data));
+                        match holder {
                             Some(data) => data.drawings.iter().find_map(|drawing| {
                                 let level = drawing.alert_level(source)?;
                                 let index = crate::model::index_at_with_timeframe(
                                     data.bars,
                                     bars[at].time,
-                                    Some(subject.timeframe),
+                                    Some(data.request.timeframe),
                                     reader
                                         .instrument()
                                         .and_then(|instrument| instrument.time_zone.as_ref()),
@@ -432,20 +527,23 @@ impl AlertEvaluator {
                                     .find(|(index, ..)| *index == level)
                                     .map(|(.., value)| value)
                             }),
-                            None => reader.drawing_value(source, from + at, scale),
+                            // Removed from its open chart, whatever storage still holds.
+                            None if live.iter().any(|data| reader.matches(data)) => None,
+                            None => reader.drawing_value(source, *from + at, scale),
                         }
                     }
                     _ => None,
-                },
-            );
+                }
+            };
+            engine.update_matching(Some(id), symbol, exchange, &inputs, now, value);
         }
         // Once alerts and removed watchlist members release their readers in the same frame.
         self.runs
-            .retain(|(id, symbol), _| engine.subjects(id).contains(symbol));
+            .retain(|(id, symbol, _), _| engine.subjects(id).contains(symbol));
         let active: HashSet<_> = self
             .runs
             .iter()
-            .flat_map(|((_, symbol), run)| {
+            .flat_map(|((_, symbol, _), run)| {
                 std::iter::once(run.subject(symbol, None)).chain(
                     run.studies
                         .iter()
@@ -456,5 +554,664 @@ impl AlertEvaluator {
             .collect();
         self.feeds.retain(|subject, _| active.contains(subject));
         errors
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{
+        HistoryPage, MetricPage, MetricPoint, MetricRequest, Reply, Subscription, SubscriptionId,
+    };
+    use crate::model::AlertStatus;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Feed {
+        requests: Mutex<Vec<HistoryRequest>>,
+        subscriptions: Mutex<Vec<Subscription>>,
+        stopped: Mutex<Vec<SubscriptionId>>,
+    }
+
+    fn bar(minute: i64, close: f64) -> Bar {
+        let time = DateTime::from_timestamp(minute * 60, 0).unwrap();
+        Bar::new(time, close, close, close, close, 10.0)
+    }
+
+    impl Datafeed for Feed {
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            if request.symbol == "NO_CANDLES" && request.timeframe == Timeframe::Min1 {
+                return reply.send(Err(FeedError::NotSupported));
+            }
+            let bars = if request.timeframe == Timeframe::Min5 {
+                vec![bar(-5, 50.0), bar(0, 150.0)]
+            } else {
+                vec![bar(-1, 200.0), bar(0, 300.0)]
+            };
+            self.requests.lock().unwrap().push(request);
+            reply.send(Ok(HistoryPage::new(bars, true)));
+        }
+
+        fn subscribe(&self, subscription: Subscription) {
+            self.subscriptions.lock().unwrap().push(subscription);
+        }
+
+        fn unsubscribe(&self, id: SubscriptionId) {
+            self.stopped.lock().unwrap().push(id);
+        }
+
+        /// Only the symbol `HELD` has a metric: 42 from minute 0.
+        fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+            reply.send(if request.symbol == "HELD" {
+                Ok(MetricPage {
+                    points: vec![MetricPoint {
+                        time: bar(0, 0.0).time,
+                        value: 42.0,
+                    }],
+                    end_of_history: true,
+                })
+            } else {
+                Err(FeedError::NotSupported)
+            });
+        }
+    }
+
+    /// A market with more history than any request reaches.
+    #[derive(Default)]
+    struct DeepFeed(Mutex<Vec<Timeframe>>);
+
+    impl Datafeed for DeepFeed {
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.0.lock().unwrap().push(request.timeframe);
+            let step = request.timeframe.duration_ms() / 60_000;
+            let last = request
+                .before
+                .map_or(0, |before| before.timestamp() / 60 - step);
+            let bars = (0..request.count as i64)
+                .rev()
+                .map(|n| bar(last - n * step, 100.0))
+                .collect();
+            reply.send(Ok(HistoryPage::new(bars, false)));
+        }
+
+        fn subscribe(&self, _: Subscription) {}
+
+        fn unsubscribe(&self, _: SubscriptionId) {}
+    }
+
+    #[test]
+    fn saved_start_reaches_back_only_on_the_source_interval() {
+        let feed = Arc::new(DeepFeed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min5", "condition":{"Above":1000.0},
+            "additional_timeframes":["Min1"],
+            "additional_conditions":[{"source":"Volume","condition":{"Above":1000.0}}]
+        }))
+        .unwrap();
+        // 6000 minutes needs a second page of 1000 five-minute bars and six of one-minute bars.
+        alert.inputs = Some(Box::new(AlertInputs {
+            start: Some(bar(-6000, 0.0).time),
+            ..Default::default()
+        }));
+        let engine = AlertEngine::new().with_alerts(vec![alert]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..8 {
+            evaluator.poll(
+                &engine,
+                &IndicatorFactory::new(),
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        }
+        let pages = feed.0.lock().unwrap();
+        let count = |timeframe| pages.iter().filter(|tf| **tf == timeframe).count();
+        assert_eq!(count(Timeframe::Min5), 2, "the source chart's span");
+        assert_eq!(count(Timeframe::Min1), 1, "only the initial bar count");
+    }
+
+    /// An RSI saved with EMA choice 2 under the earlier average ids restores a five-bar EMA,
+    /// now choice 3 of the shared smoothing inputs.
+    #[test]
+    fn rsi_alert_saved_with_earlier_average_ids_evaluates() {
+        use crate::model::InputValue;
+
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min5", "source":{"Study":{"id":"3","output":1}},
+            "condition":{"Above":70.0}
+        }))
+        .unwrap();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![crate::model::AlertStudy {
+                id: 3,
+                name: "RSI".into(),
+                inputs: vec![
+                    ("period".into(), InputValue::Length(14)),
+                    ("ma_type".into(), InputValue::Choice(2)),
+                    ("ma_length".into(), InputValue::Length(5)),
+                ],
+            }],
+            ..Default::default()
+        }));
+        let run = Evaluation::new(&alert, Timeframe::Min5, &IndicatorFactory::new());
+        assert_eq!(run.error, None);
+        let inputs = run.studies[0].1.inputs();
+        let value = |id: &str| {
+            inputs
+                .iter()
+                .find(|input| input.id == id)
+                .map(|input| input.value.clone())
+        };
+        assert_eq!(
+            (value("smoothing"), value("smoothing_length")),
+            (Some(InputValue::Choice(3)), Some(InputValue::Length(5)))
+        );
+    }
+
+    #[test]
+    fn interval_feeds_calculate_saved_studies_independently_and_release_together() {
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", || Box::new(crate::studies::SMA::new(2)));
+        // Means are (50+150)/2=100 on five minutes and (200+300)/2=250 on one minute.
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min5", "source":{"Study":{"id":"7","output":0}},
+            "condition":{"Above":90.0}, "additional_timeframes":["Min1"],
+            "additional_conditions":[{"source":{"Study":{"id":"7","output":0}},"condition":{"Below":110.0}}]
+        })).unwrap();
+        alert.message = "{{value}} on {{timeframe}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![crate::model::AlertStudy {
+                id: 7,
+                name: "Pair mean".into(),
+                inputs: Vec::new(),
+            }],
+            ..Default::default()
+        }));
+        #[cfg(feature = "ui")]
+        let drawing_bars = [bar(-15, 80.0), bar(0, 90.0)];
+        #[cfg(feature = "ui")]
+        let drawing = {
+            use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+            let mut drawing = Drawing::new(9, DrawingToolType::TrendLine);
+            drawing.completed = true;
+            drawing.extend_right = true;
+            drawing.chart_points = vec![ChartPoint::new(0.0, 80.0), ChartPoint::new(1.0, 90.0)];
+            drawing
+        };
+        #[cfg(feature = "ui")]
+        {
+            alert.additional_conditions.push(crate::model::AlertRule {
+                source: drawing.alert_source(0),
+                condition: crate::model::AlertCondition::Below(95.0),
+            });
+            let mut stored = serde_json::to_value(&alert).unwrap();
+            stored["additional_timeframes"] = serde_json::json!(["Min1", "Min1"]);
+            alert = serde_json::from_value(stored).unwrap();
+        }
+        #[cfg(feature = "ui")]
+        // The first chart of this symbol lacks the drawing and must not hide the chart holding it.
+        let live = [
+            AlertData {
+                request: AlertFeed::history_request("SYM", Timeframe::Hour1),
+                bars: &[],
+                history_complete: true,
+                drawings: &[],
+            },
+            AlertData {
+                request: AlertFeed::history_request("SYM", Timeframe::Min15),
+                bars: &drawing_bars,
+                history_complete: true,
+                drawings: std::slice::from_ref(&drawing),
+            },
+        ];
+        #[cfg(not(feature = "ui"))]
+        let live: [AlertData<'_>; 0] = [];
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |alert, event| {
+                sink.lock().unwrap().push((alert.clone(), event.clone()));
+            });
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        let poll = |evaluator: &mut AlertEvaluator| {
+            assert!(
+                evaluator
+                    .poll(
+                        &engine,
+                        &factory,
+                        &live,
+                        #[cfg(feature = "ui")]
+                        &ctx,
+                        DateTime::from_timestamp(1000, 0).unwrap()
+                    )
+                    .is_empty()
+            );
+        };
+        for _ in 0..6 {
+            poll(&mut evaluator);
+        }
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Active);
+        let requests = feed.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| request.symbol == "SYM"));
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.timeframe == Timeframe::Min1)
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.timeframe == Timeframe::Min5)
+        );
+        drop(requests);
+        let push = |timeframe, minute, close| {
+            feed.subscriptions
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|subscription| subscription.timeframe == timeframe)
+                .unwrap()
+                .sink
+                .push_bar(bar(minute, close));
+        };
+        // Make the first processed clause false and the other true, then swap both in one poll.
+        let first = evaluator
+            .runs
+            .values()
+            .next()
+            .unwrap()
+            .subject("SYM", None)
+            .timeframe;
+        if first == Timeframe::Min5 {
+            push(Timeframe::Min5, 0, 30.0); // (50+30)/2=40, below the primary threshold.
+            poll(&mut evaluator);
+            push(Timeframe::Min1, 1, -140.0); // (300-140)/2=80, below the secondary threshold.
+            poll(&mut evaluator);
+        }
+        push(
+            Timeframe::Min5,
+            0,
+            if first == Timeframe::Min5 {
+                150.0
+            } else {
+                30.0
+            },
+        );
+        push(
+            Timeframe::Min1,
+            1,
+            if first == Timeframe::Min5 {
+                200.0
+            } else {
+                -140.0
+            },
+        );
+        poll(&mut evaluator);
+        assert_eq!(
+            engine.alerts()[0].status,
+            AlertStatus::Active,
+            "a poll must not combine old and new snapshots"
+        );
+        assert!(delivered.lock().unwrap().is_empty());
+
+        // Final means are 100 and 80. The live line at minute 1 is 90+10/15, below 95;
+        // evaluating it in one-minute coordinates would incorrectly produce 100.
+        if first == Timeframe::Min5 {
+            push(Timeframe::Min1, 1, -140.0);
+        } else {
+            push(Timeframe::Min5, 0, 150.0);
+        }
+        poll(&mut evaluator);
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Triggered);
+        assert_eq!(feed.stopped.lock().unwrap().len(), 2);
+        assert!(
+            feed.subscriptions
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|subscription| !subscription.sink.is_active())
+        );
+        let delivered = delivered.lock().unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&delivered[0].0).unwrap()["additional_timeframes"],
+            serde_json::json!(vec!["Min1"; if cfg!(feature = "ui") { 2 } else { 1 }])
+        );
+        assert!(
+            matches!(&delivered[0].1, crate::services::AlertEvent::TriggeredForSymbol { message, .. } if message == "100 on 5min")
+        );
+    }
+
+    /// Polls `alert` on `feed` until it settles and returns the messages it fired with.
+    fn fired_messages(
+        feed: Arc<dyn Datafeed>,
+        factory: &IndicatorFactory,
+        alert: Alert,
+    ) -> Vec<String> {
+        let mut evaluator = AlertEvaluator::new(feed);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| {
+                if let crate::services::AlertEvent::TriggeredForSymbol { message, .. } = event {
+                    sink.lock().unwrap().push(message.clone());
+                }
+            });
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..6 {
+            let errors = evaluator.poll(
+                &engine,
+                factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+        delivered.lock().unwrap().clone()
+    }
+
+    /// `prepare_alert` saves every study of the chart with the alert; a price alert's message
+    /// names study 7, which no condition tests. One-minute closes 200 and 300: the mean is 250.
+    /// Study 8 is not saved, the factory does not know study 9, study 11 reads study 12, which
+    /// the factory does not know either, and nothing names study 10.
+    #[test]
+    fn plot_placeholder_reads_a_saved_study_no_condition_tests() {
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", || Box::new(crate::studies::SMA::new(2)));
+        factory.register("Unused", || panic!("a study nothing names is not built"));
+        let saved = |id, name: &str| crate::model::AlertStudy {
+            id,
+            name: name.into(),
+            inputs: Vec::new(),
+        };
+        let mut alert = Alert::new("SYM", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        let mut on_study_12 = saved(11, "Pair mean");
+        on_study_12.inputs.push((
+            "source".into(),
+            crate::model::InputValue::Source(StudySource::Study { id: 12, plot: 0 }),
+        ));
+        alert.message =
+            "{{close}} mean {{plot_7_0}} {{plot_8_0}} {{plot_9_0}} {{plot_11_0}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![
+                saved(7, "Pair mean"),
+                saved(9, "Unregistered"),
+                saved(10, "Unused"),
+                on_study_12,
+                saved(12, "Unregistered"),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(
+            fired_messages(Arc::new(Feed::default()), &factory, alert),
+            ["300 mean 250 NaN NaN NaN"]
+        );
+    }
+
+    /// A watchlist alert on a study whose extra history the feed answers with `NotSupported` for
+    /// one member. The closes are 200 and 300, with volume 10 each. Without its metric the first
+    /// study reads `NaN`. Without one-minute candles the second study falls back to the volume of
+    /// the five-hour bars, so waiting is all that keeps a condition from testing that estimate:
+    /// the two candles sum to the 20 `HELD` shows, and `NO_CANDLES` would read the same.
+    #[test]
+    fn stopped_history_holds_an_alert_only_for_a_study_a_condition_tests() {
+        let mut factory = IndicatorFactory::new();
+        factory.register("Metric", || {
+            Box::new(crate::studies::MetricStudy::new(
+                crate::data::MetricSeries {
+                    id: "oi".into(),
+                    name: "Open interest".into(),
+                    unit: String::new(),
+                    format: crate::scales::StudyFormat::Volume,
+                },
+            ))
+        });
+        factory.register("Volume", || Box::new(crate::studies::Volume24h::new()));
+        let five_hours = Timeframe::Custom(std::num::NonZeroU64::new(18_000).unwrap());
+        let tested = AlertSource::Study {
+            id: "7".into(),
+            output: 0,
+        };
+        for (study, timeframe, source, threshold, lacking, expected) in [
+            (
+                "Metric",
+                Timeframe::Min1,
+                AlertSource::Price,
+                250.0,
+                "LACKING",
+                vec!["HELD 300 42", "LACKING 300 NaN"],
+            ),
+            (
+                "Volume",
+                five_hours,
+                tested,
+                0.0,
+                "NO_CANDLES",
+                vec!["HELD 300 20"],
+            ),
+        ] {
+            let mut alert = Alert::new("HELD", crate::model::AlertCondition::Above(threshold));
+            alert.source = source;
+            alert.timeframe = Some(timeframe);
+            alert.watchlist = Some("list".into());
+            alert.message = "{{ticker}} {{close}} {{plot_7_0}}".into();
+            alert.inputs = Some(Box::new(AlertInputs {
+                studies: vec![crate::model::AlertStudy {
+                    id: 7,
+                    name: study.into(),
+                    inputs: Vec::new(),
+                }],
+                ..Default::default()
+            }));
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| {
+                    if let crate::services::AlertEvent::TriggeredForSymbol { message, .. } = event {
+                        sink.lock().unwrap().push(message.clone());
+                    }
+                });
+            engine.set_watchlist("list", vec!["HELD".into(), lacking.into()]);
+            let mut evaluator = AlertEvaluator::new(Arc::new(Feed::default()));
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            let mut errors = Vec::new();
+            for _ in 0..6 {
+                errors.extend(evaluator.poll(
+                    &engine,
+                    &factory,
+                    &[],
+                    #[cfg(feature = "ui")]
+                    &ctx,
+                    DateTime::from_timestamp(1000, 0).unwrap(),
+                ));
+            }
+            let mut delivered = delivered.lock().unwrap().clone();
+            delivered.sort();
+            assert_eq!(delivered, expected);
+            assert!(
+                matches!(errors.as_slice(), [FeedError::NotSupported]),
+                "reported once: {errors:?}"
+            );
+        }
+    }
+
+    /// A feed that keys symbols without a venue prefix and reports the exchange when it
+    /// resolves them, as the `SymbolSearch` example and the demo do.
+    struct Listed(Feed);
+
+    impl Datafeed for Listed {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_exchange("NASDAQ")));
+        }
+
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.0.history(request, reply);
+        }
+
+        fn subscribe(&self, subscription: Subscription) {
+            self.0.subscribe(subscription);
+        }
+
+        fn unsubscribe(&self, id: SubscriptionId) {
+            self.0.unsubscribe(id);
+        }
+    }
+
+    #[test]
+    fn exchange_placeholder_reads_the_resolved_instrument_exchange() {
+        let mut alert = Alert::new("AAPL", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{exchange}}:{{ticker}} closed at {{close}}".into();
+        assert_eq!(
+            fired_messages(
+                Arc::new(Listed(Feed::default())),
+                &IndicatorFactory::new(),
+                alert
+            ),
+            ["NASDAQ:AAPL closed at 300"]
+        );
+    }
+
+    /// A repeating study alert: one study 7 named `name` on one minute, `Above(100)`.
+    fn repeating_alert(name: &str) -> Alert {
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min1", "source":{"Study":{"id":"7","output":0}},
+            "condition":{"Above":100.0}, "frequency":"EveryTime"
+        }))
+        .unwrap();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![crate::model::AlertStudy {
+                id: 7,
+                name: name.into(),
+                inputs: Vec::new(),
+            }],
+            ..Default::default()
+        }));
+        alert
+    }
+
+    #[test]
+    fn repeating_alert_keeps_its_studies_after_firing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let built = Arc::new(AtomicUsize::new(0));
+        let count = built.clone();
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            Box::new(crate::studies::SMA::new(2))
+        });
+        // The one-minute mean (200+300)/2=250 is above 100 on the first evaluation.
+        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Pair mean")]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            evaluator.poll(
+                &engine,
+                &factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        }
+        assert!(engine.alerts()[0].last_triggered_at.is_some(), "fired");
+        assert_eq!(engine.alerts()[0].status, crate::model::AlertStatus::Active);
+        // Turning the line across the chart off changes nothing the alert monitors.
+        let mut edited = engine.alerts()[0].clone();
+        edited.extend_line = false;
+        let inbox = Arc::new(crate::data::inbox::Inbox::default());
+        crate::services::Alerts::save(&engine, edited, inbox.reply(0));
+        evaluator.poll(
+            &engine,
+            &factory,
+            &[],
+            #[cfg(feature = "ui")]
+            &ctx,
+            DateTime::from_timestamp(1000, 0).unwrap(),
+        );
+        assert!(!engine.alerts()[0].extend_line);
+        // One construction supplies settings; the template constructs the retained study.
+        assert_eq!(built.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn display_only_edit_keeps_the_order_flow_stream() {
+        use crate::services::Alerts;
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut factory = IndicatorFactory::new();
+        factory.register("Spread", || {
+            Box::new(crate::studies::OrderFlowStudy::new(
+                crate::data::OrderFlowKind::Spread,
+            ))
+        });
+        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Spread")]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        let poll = |evaluator: &mut AlertEvaluator| {
+            evaluator.poll(
+                &engine,
+                &factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        };
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        assert_eq!(feed.requests.lock().unwrap().len(), 1);
+        assert_eq!(feed.subscriptions.lock().unwrap().len(), 1);
+        // Turning the line across the chart off changes no condition.
+        let mut edited = engine.alerts()[0].clone();
+        edited.extend_line = false;
+        let inbox = Arc::new(crate::data::inbox::Inbox::default());
+        engine.save(edited, inbox.reply(0));
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        assert!(!engine.alerts()[0].extend_line);
+        // Release the locks before asserting: dropping the evaluator unsubscribes through them.
+        let counts = (
+            feed.stopped.lock().unwrap().len(),
+            feed.requests.lock().unwrap().len(),
+            feed.subscriptions.lock().unwrap().len(),
+        );
+        assert_eq!(
+            counts,
+            (0, 1, 1),
+            "(unsubscribed, history requests, subscriptions)"
+        );
+        // A changed condition is a new evaluation with its own stream.
+        let mut edited = engine.alerts()[0].clone();
+        edited.condition = crate::model::AlertCondition::Above(200.0);
+        engine.save(edited, inbox.reply(1));
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        let counts = (
+            feed.stopped.lock().unwrap().len(),
+            feed.requests.lock().unwrap().len(),
+            feed.subscriptions.lock().unwrap().len(),
+        );
+        assert_eq!(counts, (1, 2, 2));
     }
 }

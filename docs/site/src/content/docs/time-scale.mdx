@@ -1,0 +1,116 @@
+---
+title: Time scale and whitespace
+---
+
+import Example from '../../components/Example.astro';
+import timeScale from '../../../../../examples/docs/scenes/time_scale.rs?raw';
+
+The time scale places bars horizontally. Logical coordinates address this
+chart's slots; UTC coordinates address instants that other charts can share.
+The scene uses the [first chart's](first-chart.mdx) 120 fixed one-minute bars.
+
+## Try fitting, scrolling and ranges
+
+Use **Fit history**, **Back 30 bars**, **Live edge** and **Reset time**. Compare
+**Logical 20..59** with **UTC minutes 20..59**, then select **Future space** to
+extend past the last bar. Readouts describe the last layout; they also update
+when you pan or zoom directly.
+Call the scene's `show(ui, &mut chart)` before `chart.show(ui)` on each frame.
+
+<Example scene="time-scale" title="Navigate a fixed one-minute history"
+  task="Fit and scroll, set a logical or UTC range, then leave future whitespace."
+  code={timeScale} />
+
+## Fit and scroll
+
+[`fit_content`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.fit_content)
+fits the stored history of the main series and of every added series, hidden ones included,
+and keeps the configured right margin.
+[`scroll_to_position`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.scroll_to_position)
+positions the latest bar relative to the right edge in bars: positive positions
+leave space on the right, negative positions scroll into history.
+[`scroll_to_real_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.scroll_to_real_time)
+returns to the live edge while keeping zoom; it is a one-time scroll. Its
+`animated` flag, also used by `scroll_to_position`, animates the move. These
+scenes use fixed data; a host supplies historical and streaming updates.
+
+[`reset_time_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.reset_time_scale)
+restores the configured spacing and right offset. It leaves the price ranges
+alone. [`reset_chart_view`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.reset_chart_view)
+also returns every pane's price scales to autoscale.
+
+## Logical indices and UTC instants
+
+[`visible_logical_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.visible_logical_range)
+returns a [`LogicalRange`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.LogicalRange.html).
+Index 0 is the oldest slot in this chart; bounds can be fractional or outside
+the data. A range spans `right - left + 1` bar widths, so `20..59` spans 40.
+[`set_visible_logical_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_visible_logical_range)
+sets spacing and scroll together. It returns `false` for empty data, non-finite
+bounds or reversed bounds, keeping the view unchanged. Spacing and edge limits
+still apply. Logical indices depend on the chart's history and interval; do not
+copy them between charts with different slots.
+
+[`visible_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.visible_time_range)
+returns a [`VisibleTimeRange`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.VisibleTimeRange.html)
+in UTC, including whitespace. Use
+[`apply_synced_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.apply_synced_time_range)
+to fit those instants to another chart's width. Check its boolean result:
+empty data, invalid or wholly disjoint ranges, and endpoints mapping to one
+element are rejected. Its maximum spacing is the configured limit, or 50 points
+when unlimited, so very short spans may be centred rather than filling the plot.
+
+[`index_to_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.index_to_time)
+and [`time_to_index`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.time_to_index)
+convert between fractional slots and UTC. Times between bars are interpolated;
+outside the history they are extrapolated using the interval or observed edge
+spacing. Calendar month and year intervals follow calendar stepping, as detailed
+in the method documentation. Display time zones affect labels, while the data
+and shared time ranges remain UTC.
+
+## Leave future whitespace
+
+The last sample bar has logical index 119. The scene's `80..139` range leaves
+20 logical slots beyond it without inventing future OHLC values. To include a
+known empty timestamp in supplied history, use
+[`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace).
+
+[`TimeScaleOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html)
+is available through
+[`ChartOptions::time_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html#structfield.time_scale).
+Edit a copy from `chart_options()` and apply it with
+[`set_chart_options`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_options).
+
+- [`right_offset`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.right_offset)
+  sets live-edge space in bars;
+  [`right_offset_pixels`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.right_offset_pixels)
+  takes priority when present.
+- [`bar_spacing`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.bar_spacing),
+  [`min_bar_spacing`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.min_bar_spacing)
+  and [`max_bar_spacing`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.max_bar_spacing)
+  control zoom and constrain fitting.
+- [`fix_left_edge`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.fix_left_edge)
+  and [`fix_right_edge`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.fix_right_edge)
+  constrain scrolling, including requested whitespace.
+- [`lock_visible_time_range_on_resize`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.lock_visible_time_range_on_resize)
+  keeps the visible time range when the chart size changes.
+
+## Wait for plot geometry
+
+Call [`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
+once at the intended size before fitting a range or converting screen positions.
+The range setters use the **last drawn plot width**; after resizing, show again
+before applying a width-dependent range. The scene enables its buttons once
+[`time_scale_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.time_scale_size)
+reports a positive width.
+
+[`index_to_x`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.index_to_x)
+and [`x_to_index`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.x_to_index)
+use screen points in the chart's egui `Ui`, with `x` at the bar centre. They
+return `None` before the first layout. For separate charts, choose one source
+and forward only its changed UTC range and
+[`hover_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.hover_time)
+to [`set_synced_crosshair_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_synced_crosshair_time).
+The [builder guide](../../../../builder-guide.md#synchronize-charts) and
+[synchronized charts example](https://github.com/userFRM/egui-charts/blob/main/examples/synchronized_charts.rs)
+show that integration.

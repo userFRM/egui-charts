@@ -1,0 +1,135 @@
+---
+title: Custom horizontal scales
+---
+
+import Example from '../../components/Example.astro';
+import source from '../../../../../examples/docs/scenes/extensions.rs?raw';
+
+The horizontal axis can represent option strikes, bond maturities or another
+ordered key. The chart still stores a timestamp in each
+[`Bar::time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#structfield.time)
+and retains logical row indices for data access. A
+[`HorizontalScale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html)
+chooses tick marks and formats horizontal labels. Numeric scales space samples
+in proportion to their keys; chronological charts retain ordinal spacing. The
+vertical price scale is independent.
+
+## Encode numeric keys
+
+[`key_time(key)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/fn.key_time.html)
+encodes a number as seconds from the Unix epoch, rounded to nanoseconds.
+[`time_key(time)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/fn.time_key.html)
+decodes it. For example, strike `4500.0` becomes epoch plus 4,500 seconds;
+`30.0` months becomes epoch plus 30 seconds. These are ordering keys, not market
+timestamps. Check the returned `Option`: non-finite keys and values outside
+roughly ±9.2 billion are rejected. Choose units and precision that keep distinct
+keys distinct after nanosecond rounding, and supply bars in ascending key order.
+
+Use the same encoding for every series, whitespace bar and
+[`Marker::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Marker.html#method.new)
+on that chart. A
+[`PriceLine`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.PriceLine.html)
+still refers to a **vertical value**, such as implied volatility in percent.
+Do not synchronize encoded keys with a chronological chart as if they were UTC
+market times; share a domain key only with charts using the same encoding.
+
+## Option strikes
+
+Install a scale with
+[`Chart::set_horizontal_scale(Some(Arc::new(scale)))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_horizontal_scale).
+[`PriceHorizontalScale::precision`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceHorizontalScale.html#structfield.precision)
+controls decimals on the axis and crosshair. The scale prioritizes round strikes
+when labels would overlap. Passing `None` restores the chart's time formatter.
+
+The generated smiles have strikes from 3,800 through 5,200, spaced 25 apart
+near the forward and 100 apart in the wings. The wider gaps occupy four times
+the horizontal distance without placeholder rows.
+The **ATM** marker is anchored to strike 4,500; its horizontal price line marks
+the corresponding 30-day volatility. The curves are illustrative formulas,
+not an option pricing model or a source of market data.
+
+<Example scene="volatility-smile" title="Volatility smiles by option strike"
+  task="Hover the two expiries: the bottom label is a strike and the vertical values are IV in percent."
+  code={source.slice(source.indexOf('/// Compare'), source.indexOf('/// Space')).trim()} />
+
+## Maturities and optional whitespace
+
+[`MaturityScale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html)
+uses **months** as its numeric unit. It formats `3` as `3M`, `30` as `2Y6M`,
+and `360` as `30Y`. Supply only the observed maturities in the main series and
+use the same keys for any added curves. Samples at `1`, `12` and `360` are
+spaced by their actual differences, so the second gap is much wider than the
+first. No monthly grid is required.
+
+<Example scene="yield-curve" title="Yield curves by actual maturity"
+  task="Zoom into the short end, then zoom out: one year and thirty years retain their relative horizontal distances."
+  code={source.slice(source.indexOf('/// Space'), source.indexOf('/// Shade')).trim()} />
+
+[`MaturityScale::whitespace(last)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#method.whitespace)
+remains available when the data model needs explicit empty samples. Its
+[`base_resolution`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#structfield.base_resolution)
+is the months between generated samples (zero is treated as one),
+[`start`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#structfield.start)
+is the first maturity, and
+[`minimum_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#structfield.minimum_range)
+is the minimum endpoint in months. The defaults generate monthly samples from
+zero over at least 120 months. For example, `start: 0`, `base_resolution: 3` and
+`minimum_range: 12` generate `0, 3, 6, 9, 12`; `whitespace(20.0)` ends at 18.
+A finite requested endpoint is capped at 12,000 months before comparison with
+`minimum_range`. A non-finite request uses the minimum. The minimum itself is
+not capped, so keep host ranges bounded.
+
+Logical indices still address rows, including fractional positions between
+samples. Bar spacing and scroll offsets use the first mean key gap as one unit, or
+one key unit until the keys differ. Updates retain this unit so new or inserted
+keys keep the zoom and a scrolled-back view in place. See the
+[time-scale guide](time-scale.mdx) for logical coordinates, fitting and screen conversions.
+
+Snapshots retain the numeric unit alongside the view. Install the horizontal scale
+before restoring a numeric snapshot. A snapshot saved before the keys differ,
+and an older snapshot without a unit, use the loaded mean gap. Complete `ChartSnapshot` literals add `numeric_unit: None`.
+
+## Categorical and structured keys
+
+[`CustomHorizontalScale::new(keys, format)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.CustomHorizontalScale.html)
+takes any `Ord` key, such as an enum whose declaration order is the category
+order, and a formatter shared by the axis and the crosshair. Hosts need not
+encode keys or manufacture dates: `value` and `marker` build a bar and an
+annotation from a key, `Chart::bar_at_key` finds a bar and `Chart::key_to_x`
+gives the screen position of a key. Categories are equally spaced by rank, so a
+category without a bar keeps its space.
+
+Share one domain across every series and annotation on the chart. The domain is
+immutable: include future categories before streaming values, or rebuild it and
+replace the bars and annotations together. An unknown key returns `None`, and
+a repeated key replaces the bar in its slot. The `time` method bridges to APIs
+that still take a timestamp; its result identifies a key within this domain and
+is not a date. The **Categorical keys** tab of the
+[primitives example](https://github.com/userFRM/egui-charts/blob/main/examples/primitives.rs)
+plots five ordered phases this way.
+
+## Implement another label policy
+
+Implement `HorizontalScale` and pass it in an `Arc`:
+
+- [`is_numeric`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html#method.is_numeric)
+  returns `true` for proportional spacing of keys encoded with `key_time`. Its
+  default is `false`, retaining ordinal slots.
+- [`tick_marks`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html#tymethod.tick_marks)
+  receives ordered `(key, index)` points and a
+  [`TickMarkLayout`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.TickMarkLayout.html).
+  For numeric scales, `layout.bar_spacing` is points per key unit.
+  Return [`TickMark`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.TickMark.html)
+  values at keys to label. Points include extrapolated whitespace; before-history
+  points can shift every supplied index, so use their order and differences,
+  rather than treating an index as a stable position in stored data. The renderer
+  places marks at their keys and skips overlapping labels.
+- [`format_crosshair`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html#tymethod.format_crosshair)
+  formats a key for the horizontal crosshair label. `bar_seconds` is useful for
+  clock precision; a numeric domain can ignore it.
+
+The trait requires `Send + Sync`. It supplies labels, while your application
+supplies keys and values. The scene setups are adapted from the native
+[volatility smile](https://github.com/userFRM/egui-charts/blob/main/examples/volatility_smile.rs)
+and [yield curve](https://github.com/userFRM/egui-charts/blob/main/examples/yield_curve.rs)
+examples; their native window startup stays in those examples.

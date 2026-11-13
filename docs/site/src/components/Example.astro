@@ -1,0 +1,121 @@
+---
+import { Code } from '@astrojs/starlight/components';
+
+interface Props {
+  scene: string;
+  title: string;
+  task: string;
+  code: string;
+  run?: 'auto' | 'manual';
+}
+
+const { scene, title, task, code, run = 'auto' } = Astro.props;
+const src = `/egui-charts/docs/examples/widget/?scene=${encodeURIComponent(scene)}`;
+---
+
+<div class="chart-example" data-run={run}>
+  <figure>
+    <figcaption><strong>{title}</strong><a href={src}>Open full size</a></figcaption>
+    <p class="example-task">{task}</p>
+    <div class="example-stage">
+      <iframe data-src={src} title={title} loading="lazy"></iframe>
+      <div class="example-fallback">
+        <p role="status">The interactive example needs JavaScript and WebAssembly. You can still use the chart setup alongside it.</p>
+        <button type="button" hidden>Run example</button>
+      </div>
+    </div>
+  </figure>
+  {run === 'manual' ? (
+    <details>
+      <summary>Compiled Rust source</summary>
+      <Code lang="rust" title={`${scene.replaceAll('-', '_')}.rs`} code={code} />
+    </details>
+  ) : <Code lang="rust" title={`${scene.replaceAll('-', '_')}.rs`} code={code} />}
+</div>
+
+<script>
+  const syncThemes: (() => void)[] = [];
+  document.querySelectorAll<HTMLElement>('.chart-example').forEach((example) => {
+    const frame = example.querySelector<HTMLIFrameElement>('iframe')!;
+    const link = example.querySelector<HTMLAnchorElement>('figcaption a')!;
+    const fallback = example.querySelector<HTMLElement>('.example-fallback')!;
+    const message = fallback.querySelector('p')!;
+    const button = fallback.querySelector('button')!;
+    let timeout: number;
+    let stateObserver: MutationObserver | undefined;
+    let previousFocus: Element | null;
+    document.addEventListener('focusin', (event) => {
+      if (example.dataset.state === 'loading' && event.target !== frame) {
+        previousFocus = document.activeElement;
+      }
+    });
+    const syncTheme = () => {
+      const theme = document.documentElement.dataset.theme ?? 'dark';
+      link.href = `${frame.dataset.src}&theme=${theme}`;
+      const root = frame.contentDocument?.documentElement;
+      if (root) root.dataset.theme = theme;
+    };
+    syncThemes.push(syncTheme);
+    syncTheme();
+    const failed = () => {
+      window.clearTimeout(timeout);
+      example.dataset.state = 'error';
+      fallback.hidden = false;
+      message.textContent = 'The example could not load. Use the chart setup alongside it, or try again.';
+      button.textContent = 'Retry example';
+      button.hidden = false;
+    };
+    const start = () => {
+      stateObserver?.disconnect();
+      example.dataset.state = 'loading';
+      fallback.hidden = false;
+      message.textContent = 'Loading chart example…';
+      button.hidden = true;
+      previousFocus = document.activeElement;
+      syncTheme();
+      frame.src = link.href;
+      timeout = window.setTimeout(failed, 20_000);
+    };
+    frame.addEventListener('load', () => {
+      if (!frame.hasAttribute('src')) return;
+      syncTheme();
+      const root = frame.contentDocument?.documentElement;
+      const update = () => {
+        const state = root?.dataset.exampleState;
+        if (state === 'ready') {
+          window.clearTimeout(timeout);
+          example.dataset.state = 'ready';
+          fallback.hidden = true;
+          if (document.activeElement === frame) {
+            frame.contentDocument?.querySelector<HTMLElement>('input')?.blur();
+            if (previousFocus instanceof HTMLElement) previousFocus.focus({ preventScroll: true });
+          }
+        } else if (state !== 'loading') {
+          failed();
+        }
+      };
+      stateObserver?.disconnect();
+      if (root) {
+        stateObserver = new MutationObserver(update);
+        stateObserver.observe(root, { attributes: true, attributeFilter: ['data-example-state'] });
+      }
+      update();
+    });
+    button.addEventListener('click', start);
+    if (example.dataset.run === 'manual') {
+      message.textContent = 'Run this example when you are ready to explore.';
+      button.hidden = false;
+    } else {
+      message.textContent = 'The chart loads when it comes into view.';
+      const observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          start();
+        }
+      }, { rootMargin: '200px' });
+      observer.observe(example);
+    }
+  });
+  new MutationObserver(() => syncThemes.forEach((sync) => sync()))
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>
