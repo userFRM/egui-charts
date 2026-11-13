@@ -77,6 +77,15 @@ struct Action {
 
 impl Action {
     fn is_empty(&self) -> bool {
+        self.view.is_none() && self.keeps_all_but_the_view()
+    }
+
+    /// Whether the action is a navigation step: it only moved the view.
+    fn is_navigation(&self) -> bool {
+        self.view.is_some() && self.keeps_all_but_the_view()
+    }
+
+    fn keeps_all_but_the_view(&self) -> bool {
         #[cfg(feature = "drawings")]
         let drawings_changed = self.drawings.can_undo() || self.unshown.is_some();
         #[cfg(not(feature = "drawings"))]
@@ -86,7 +95,6 @@ impl Action {
             && self.layout_edit.is_none()
             && self.symbol.is_none()
             && self.series.is_none()
-            && self.view.is_none()
             && self.config.is_none()
             && self.main_series.is_none()
             && self.main_series_visible.is_none()
@@ -311,7 +319,14 @@ impl ChartHistory {
         if action.drawings.can_undo() {
             self.drawing_edits += 1;
         }
-        self.redo.clear();
+        // Moving the view costs the user neither the edits they could undo nor those they could
+        // redo: a navigation step keeps redo, and the one under it already restores the view
+        // from before both.
+        if !action.is_navigation() {
+            self.redo.clear();
+        } else if self.undo.last().is_some_and(Action::is_navigation) {
+            return;
+        }
         if self.undo.len() == 100 {
             self.undo.remove(0);
         }
@@ -399,6 +414,11 @@ fn same_scale(a: &crate::scales::PriceScale, b: &crate::scales::PriceScale) -> b
 impl Chart {
     /// Apply one user action from a host toolbar, menu, dialog or intent as one undo step.
     /// Nested actions belong to the outer action. Unchanged chart/study settings add no history.
+    ///
+    /// An action that only moves the view, such as an arrow-key pan or a navigation button, is a
+    /// navigation step. Consecutive navigation steps are one undo step, which restores the view
+    /// from before the first of them, and a navigation step leaves redo available. Any other
+    /// action is a step of its own and clears redo.
     ///
     /// Chart-owned drawing interactions and shortcuts record themselves. Ordinary host calls
     /// (including data/feed updates, setters and `drawings_mut`) do not enter chart history;

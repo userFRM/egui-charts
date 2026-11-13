@@ -357,6 +357,41 @@ pub(super) mod tests {
             assert_eq!(chart.state.price_scale().is_manual(), manual);
             assert_eq!(chart.state.price_scale().options().mode, mode);
         }
+        // View movements are one undo step that keeps redo, here Left arrow presses after the
+        // grid was hidden: (presses, whether the grid edit is undone before them)
+        for (presses, undone) in [(120, false), (1, true)] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.state.time_scale_mut().set_bar_spacing(20.0);
+            chart.state.time_scale_mut().set_right_offset(-20.0);
+            chart.user_action(|chart| chart.config.show_grid = false);
+            if undone {
+                assert!(chart.undo());
+            }
+            for press in 0..presses {
+                let key = Event::Key {
+                    key: egui::Key::ArrowLeft,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: press > 0,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(&ctx, &mut chart, 1.0 + f64::from(press) * 0.02, vec![key]);
+            }
+            assert_ne!(chart.get_time_scale_state(), (20.0, -20.0));
+            if undone {
+                assert!(chart.redo(), "a view movement keeps redo");
+                assert!(!chart.config.show_grid);
+            } else {
+                assert!(chart.undo());
+                assert_eq!(chart.get_time_scale_state(), (20.0, -20.0));
+                assert!(!chart.config.show_grid);
+                assert!(chart.undo(), "{presses} presses are one step");
+                assert!(chart.config.show_grid);
+                assert!(!chart.can_undo());
+            }
+        }
     }
 
     /// The selected fill follows price-axis scaling/reset and series settings on the next frame,
