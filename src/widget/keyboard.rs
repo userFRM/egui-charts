@@ -112,10 +112,20 @@ impl ShortcutMap {
                             && bound(&input.events[index + 1]).is_some())
                 })
                 .find_map(|(index, event)| Some((index, bound(event)?)))?;
-            let event = input.events.remove(index);
+            let mut event = input.events.remove(index);
             // The press ran a binding, so its text is dropped whatever character it carries.
             if let Some(text) = pairs[index] {
                 input.events.remove(text.min(index));
+            }
+            // A browser reports the paste key and then the clipboard text: one paste, with it.
+            if action == KeyboardAction::PasteDrawing
+                && matches!(event, Event::Key { .. })
+                && let Some(paste) = input
+                    .events
+                    .iter()
+                    .position(|event| matches!(event, Event::Paste(_)))
+            {
+                event = input.events.remove(paste);
             }
             Some((action, event))
         })
@@ -1108,6 +1118,44 @@ mod tests {
             PriceScaleMode::Normal,
             "Alt+L switched the logarithmic scale back"
         );
+    }
+
+    /// The desktop reports a paste as the paste event alone, a browser as the key press and
+    /// then the paste event: either way the host gets one request carrying the text.
+    #[test]
+    fn a_paste_reported_with_its_key_press_is_one_request_with_the_text() {
+        for with_key in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut events = vec![Event::Paste("clip".into())];
+            if with_key {
+                events.insert(
+                    0,
+                    Event::Key {
+                        key: Key::V,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::COMMAND,
+                    },
+                );
+            }
+            ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.take_shortcut_requests(),
+                vec![ShortcutRequest::PasteDrawing("clip".into())],
+                "key press reported: {with_key}"
+            );
+        }
     }
 
     #[test]
