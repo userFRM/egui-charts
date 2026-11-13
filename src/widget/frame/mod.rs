@@ -218,6 +218,7 @@ impl Chart {
         self.sync_volume_study(ui.ctx());
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
+        self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()

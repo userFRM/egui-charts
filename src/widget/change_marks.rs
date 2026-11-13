@@ -20,6 +20,37 @@ struct Mark {
     close: f64,
     up: bool,
     at: Option<f64>,
+    /// The first pass that can show the update and the input time of the pass it was made in;
+    /// `None` for a feed or a chart not yet shown.
+    born: Option<(u64, f64)>,
+}
+
+/// The egui context and viewport of the pass that last showed a chart. An update made while no
+/// frame runs through the chart is dated by it.
+pub(super) struct FrameClock {
+    ctx: egui::Context,
+    viewport: egui::ViewportId,
+    /// Passes the viewport had completed when the chart last ran.
+    shown: u64,
+}
+
+impl FrameClock {
+    /// The clock of the pass in progress, in which the chart runs.
+    pub(super) fn shown_in(ctx: &egui::Context) -> Self {
+        Self {
+            ctx: ctx.clone(),
+            viewport: ctx.viewport_id(),
+            shown: ctx.cumulative_pass_nr(),
+        }
+    }
+
+    /// The first pass that can show an update made now and the input time of the latest pass.
+    fn stamp(&self) -> (u64, f64) {
+        let passes = self.ctx.cumulative_pass_nr_for(self.viewport);
+        // The pass in progress has already run the chart, so only the next one shows the update.
+        let first = passes + u64::from(passes == self.shown);
+        (first, self.ctx.input_for(self.viewport, |input| input.time))
+    }
 }
 
 impl ChangeMarks {
@@ -39,12 +70,14 @@ impl ChangeMarks {
             .collect()
     }
 
-    /// Marks each slot of `before` whose close in `bars` differs from the close it had.
+    /// Marks each slot of `before` whose close in `bars` differs from the close it had, dated
+    /// by `frames` for an update the host made.
     pub(super) fn record(
         &mut self,
         bars: &[Bar],
         clock: &BarClock,
         before: Vec<(DateTime<Utc>, f64)>,
+        frames: Option<&FrameClock>,
     ) {
         self.retain_bars(bars, clock);
         let marks = self.marks.get_mut();
@@ -62,6 +95,7 @@ impl ChangeMarks {
                 close,
                 up: close > old,
                 at: None,
+                born: frames.map(FrameClock::stamp),
             });
         }
     }
@@ -87,13 +121,20 @@ impl ChangeMarks {
         self.marks.get_mut().clear();
     }
 
-    /// Starts the fade of marks recorded since the last frame at `now` and drops the marks whose
-    /// duration has passed, whether or not the series is painted.
-    pub(super) fn expire(&self, now: f64) {
+    /// Starts the fade of marks recorded since the last frame, at the frame of the update when
+    /// frames ran without the chart, and drops the marks whose duration has passed, whether or
+    /// not the series is painted.
+    pub(super) fn expire(&self, ctx: &egui::Context) {
+        let (now, passes) = (ctx.input(|input| input.time), ctx.cumulative_pass_nr());
         let duration = self.options.duration.as_secs_f64();
-        self.marks
-            .borrow_mut()
-            .retain_mut(|mark| now - *mark.at.get_or_insert(now) < duration);
+        self.marks.borrow_mut().retain_mut(|mark| {
+            let start = match mark.born {
+                // A later time belongs to another context or viewport.
+                Some((first, time)) if passes > first && time <= now => time,
+                _ => now,
+            };
+            now - *mark.at.get_or_insert(start) < duration
+        });
     }
 
     /// Paints fading marks placed by `position`, removes expired marks and requests another
@@ -104,7 +145,7 @@ impl ChangeMarks {
         position: impl Fn(DateTime<Utc>, f64) -> Option<Pos2>,
     ) {
         let now = painter.ctx().input(|input| input.time);
-        self.expire(now);
+        self.expire(painter.ctx());
         let duration = self.options.duration.as_secs_f64();
         for mark in self.marks.borrow().iter() {
             let elapsed = now - mark.at.unwrap_or(now);
@@ -153,9 +194,12 @@ impl Chart {
     /// or fell against the close of the bar the update replaced: a dot at the new close with a
     /// chevron above it for a rise and below it for a fall. Each mark fades linearly to
     /// transparent over that duration, and another changed close of the same bar restarts its
-    /// fade. Fades run on egui's frame clock from the first frame after the change, whether or
-    /// not the series is drawn, so a series shown again draws only the marks still within their
-    /// duration. Updates that leave the close unchanged, new bars, whitespace fills and history
+    /// fade. Fades run on egui's frame clock, whether or not the series is drawn. A mark starts to
+    /// fade on the first frame that can show its update; when egui runs frames that do not show
+    /// the chart first, as for a chart in an inactive tab, it starts at the frame of the update,
+    /// so a chart shown again draws only the marks still within their duration. A chart that
+    /// has not been shown yet has no frame to start from, and its marks start on its first
+    /// frame. Updates that leave the close unchanged, new bars, whitespace fills and history
     /// mark nothing. `None` removes the markers.
     ///
     /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
@@ -535,6 +579,77 @@ mod tests {
                 assert!(
                     marks(&chart, main).marks.borrow().is_empty(),
                     "main {main}, renko {renko}"
+                );
+            }
+        }
+    }
+
+    /// A host keeps updating a chart that egui's frames do not show, as in an inactive tab. The
+    /// fade of a mark starts at the frame of its update, not at the chart's next frame; an
+    /// update with no frame between it and the chart's next frame still starts its fade there.
+    /// The 5 s default fade leaves the update of the first row 31 s old at 61 s.
+    #[test]
+    fn marks_recorded_while_the_chart_is_not_shown_age_from_their_update() {
+        let screen = |time| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                Pos2::ZERO,
+                egui::Vec2::new(800.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        for (placement, shown, expected) in [
+            ("in a frame that skips the chart", 61.0, 0),
+            ("between frames", 100.0, 1),
+            ("after the chart in its frame", 100.0, 1),
+        ] {
+            for main in [true, false] {
+                let mut chart = chart(&[100.0], &[110.0]);
+                let id = if main {
+                    SeriesId::MAIN
+                } else {
+                    let id = chart.add_series(Default::default());
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    id
+                };
+                chart.set_change_markers(id, Some(ChangeMarkers::default()));
+                let time = chart.bars(id).last().unwrap().time;
+                let fall = || Bar::new(time, 100.0, 110.0, 100.0, 108.0, 1.0);
+                let ctx = egui::Context::default();
+                crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, Vec::new());
+                match placement {
+                    "in a frame that skips the chart" => {
+                        for second in 1..=60 {
+                            ctx.run_ui(
+                                egui::RawInput {
+                                    time: Some(f64::from(second)),
+                                    ..Default::default()
+                                },
+                                |_| {},
+                            )
+                            .drop_without_applying_deltas();
+                            if second == 30 {
+                                chart.update(id, fall());
+                            }
+                        }
+                    }
+                    "between frames" => chart.update(id, fall()),
+                    _ => ctx
+                        .run_ui(screen(1.0), |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                chart.show(ui);
+                            });
+                            chart.update(id, fall());
+                        })
+                        .drop_without_applying_deltas(),
+                }
+                assert_eq!(marks(&chart, main).marks.borrow().len(), 1);
+                crate::widget::test_frames::shapes(&ctx, &mut chart, shown, Vec::new());
+                let stored = marks(&chart, main).marks.borrow();
+                assert_eq!(stored.len(), expected, "main {main}, {placement}");
+                assert!(
+                    stored.iter().all(|mark| mark.at == Some(shown)),
+                    "main {main}, {placement}"
                 );
             }
         }
