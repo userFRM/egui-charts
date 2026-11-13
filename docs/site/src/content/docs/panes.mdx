@@ -32,10 +32,18 @@ returned by [`add_series`](https://userfrm.github.io/egui-charts/docs/api/egui_c
 then create a destination with
 [`add_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_pane).
 [`move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
-accepts an added series or study and its destination
-[`PaneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneId.html).
-It returns `false` for the main series, unknown IDs or a custom study that
-rejects the placement. Use `PaneId::MAIN` to move an added series back while the original pane exists.
+moves the main series, an added series or a study to another pane. Pass the main
+series' [`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html)
+and the destination [`PaneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneId.html);
+`PaneId::MAIN` brings a series back to the price pane while it exists. Each series keeps its price scale
+and the shared time mapping. It returns `false` for an unknown series or pane and for a
+study whose custom presentation rejects the placement.
+
+```rust
+let pane = chart.add_pane();
+chart.move_series_to_pane(SeriesId::MAIN, pane); // true: the candles move to the new pane
+chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN); // true: they return
+```
 
 In every pane, the added series follows
 [`SeriesOptions::scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.scale).

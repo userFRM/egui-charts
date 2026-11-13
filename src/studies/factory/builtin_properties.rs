@@ -32,6 +32,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(TripleMA::new(l(0), l(1), l(2))),
         Box::new(MARibbon::new()),
         Box::new(RSI::new(l(0))),
+        Box::new(RSI::new(l(0)).with_divergence(true)),
         Box::new(MACD::new(l(0), l(1), l(2))),
         Box::new(
             MACD::new(l(0), l(1), l(2))
@@ -194,8 +195,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(NetVolume::new()),
         Box::new(VolumePriceTrend::new()),
         Box::new(PriceVolumeTrendStudy::new(l(0))),
-        Box::new(NegativeVolumeIndex::new()),
-        Box::new(PositiveVolumeIndex::new()),
+        Box::new(NegativeVolumeIndex::new().with_signal_length(l(0))),
+        Box::new(PositiveVolumeIndex::new().with_signal_length(l(0))),
         Box::new(WilliamsAD::new()),
         Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
         Box::new(PivotPoints::new().with_pivots_back(l(0))),
