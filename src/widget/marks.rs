@@ -1615,13 +1615,11 @@ mod tests {
                     usize::from(marked),
                     "secondary={secondary}, cover={cover}: {events:?}"
                 );
-                if cover != "eraser" {
-                    assert_eq!(
-                        chart.selected_element(),
-                        unmarked,
-                        "secondary={secondary}, cover={cover}"
-                    );
-                }
+                assert_eq!(
+                    chart.selected_element(),
+                    unmarked,
+                    "secondary={secondary}, cover={cover}"
+                );
                 #[cfg(feature = "drawings")]
                 if cover == "top" {
                     assert_eq!(chart.drawings.selected_ids().count(), 0);
@@ -1631,6 +1629,67 @@ mod tests {
                     assert!(chart.drawings.is_selected(77), "secondary={secondary}");
                 }
             }
+        }
+    }
+
+    /// With the eraser on, a click erases the drawing under it and leaves the element selection
+    /// as it was, in the price pane as in a secondary pane.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn eraser_click_keeps_the_element_selection() {
+        use crate::widget::{ChartElementId, SeriesOptions};
+        for secondary in [false, true] {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config.show_volume = false;
+            let id = if secondary {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: crate::model::ChartType::Candles,
+                    ..Default::default()
+                });
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                chart.move_series_to_pane(id, pane);
+                id
+            } else {
+                SeriesId::MAIN
+            };
+            chart.drawings_mut().eraser_mode = true;
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let pos = egui::pos2(
+                chart.get_chart_mapping().idx_to_x(70),
+                chart.series_price_map(id).unwrap().price_to_y(100.0),
+            );
+            let click = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![egui::Event::PointerMoved(pos)]);
+
+            // A click on a bar that erases nothing selects nothing.
+            test_frames::frame(&ctx, &mut chart, 0.2, vec![click(true), click(false)]);
+            assert_eq!(chart.selected_element(), None, "secondary={secondary}");
+
+            // A click on a drawing erases it and keeps the series selected.
+            let mut drawing = crate::drawings::Drawing::with_color(
+                77,
+                crate::drawings::DrawingToolType::HorizontalLine,
+                [0, 0, 255, 255],
+            );
+            drawing.chart_points = vec![crate::drawings::ChartPoint::new(70.0, 100.0)];
+            drawing.pane = secondary.then_some(id.0);
+            chart.drawings_mut().drawings.push(drawing);
+            chart.selection.select(ChartElementId::Series(id), None);
+            test_frames::frame(&ctx, &mut chart, 0.3, vec![egui::Event::PointerMoved(pos)]);
+            test_frames::frame(&ctx, &mut chart, 0.4, vec![click(true), click(false)]);
+            assert!(chart.drawings.drawings.is_empty(), "secondary={secondary}");
+            assert_eq!(
+                chart.selected_element(),
+                Some(ChartElementId::Series(id)),
+                "secondary={secondary}"
+            );
         }
     }
 
