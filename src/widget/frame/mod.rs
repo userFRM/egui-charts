@@ -1299,6 +1299,7 @@ impl Chart {
         }
         self.fit_marker_scales(&painter, price_rect, &margins);
         if let Some((flow, config)) = zoomed_rows
+            && let Some(height) = crate::chart::overlays::automatic_row_height(config)
             && !self.state.price_scale().is_manual()
         {
             // Zoom raises an automatic group and its rows start at multiples of it, so add the
@@ -1309,9 +1310,9 @@ impl Chart {
                 .copied()
                 .unwrap_or_default();
             let mut fitted = data_range;
-            // shortcut: the rounds are bounded to bound a frame's work; a plot short of room
-            // for its automatic rows can need more and then leaves the group of the last
-            // round unfitted. Raise the bound if such plots must fit.
+            // shortcut: the rounds are bounded to bound a frame's work; a plot with room for
+            // little more than two automatic rows can need more and then leaves the group of
+            // the last round unfitted. Raise the bound if such plots must fit.
             for _ in 0..32 {
                 let mapping = ChartMapping {
                     price: self.state.price_scale().map(
@@ -1321,6 +1322,13 @@ impl Chart {
                     ),
                     ..self.get_chart_mapping()
                 };
+                // A round adds less than one row at either end, so the rounds are sure to settle
+                // only while the fitted prices span more than two automatic rows: a shorter plot
+                // keeps the range of the minimum group instead of widening round after round.
+                let span = mapping.price.scale_to_y(fitted.0) - mapping.price.scale_to_y(fitted.1);
+                if span.abs() <= 2.0 * height {
+                    break;
+                }
                 let bars = &self.state.shown()[start_idx..end_idx];
                 let edges = crate::chart::overlays::row_edges(bars, flow, |bar| {
                     crate::chart::overlays::row_group(&mapping, bar, flow, config)

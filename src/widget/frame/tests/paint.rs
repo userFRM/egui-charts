@@ -162,6 +162,32 @@ fn footprint_drawn_as_candles_keeps_the_candle_fit() {
     );
 }
 
+/// A plot 70 points high leaves 8 between its scale margins and the summary's room, half an
+/// automatic row. No range holds the rows zoom groups there, since each wider fit groups more
+/// ticks than the last, so the fit must stay the one fixed rows of `row_ticks` get.
+#[test]
+fn footprint_short_of_two_automatic_rows_keeps_the_minimum_group_fit() {
+    use crate::chart::overlays::FootprintConfig;
+    let ranges: Vec<_> = [None, Some(16.0)]
+        .into_iter()
+        .map(|auto_row_height| {
+            let config = FootprintConfig {
+                auto_row_height,
+                row_ticks: 4,
+                ..Default::default()
+            };
+            let mut bars = chart(&[101.0, 105.0], &[107.0, 250.0]);
+            bars.set_size(Some(egui::vec2(1440.0, 105.0)));
+            let (_, mut chart) = host_footprint(bars, &config, 160.0);
+            chart.price_scale_mut().range()
+        })
+        .collect();
+    assert_eq!(
+        ranges[0], ranges[1],
+        "fixed four-tick rows, then automatic rows"
+    );
+}
+
 #[test]
 fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
     use crate::chart::overlays::{FootprintColor, FootprintConfig};
