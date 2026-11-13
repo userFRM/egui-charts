@@ -509,11 +509,12 @@ mod tests {
         let rows: Vec<Box<dyn Indicator>> = vec![
             // Exported studies outside the catalogue.
             Box::new(CVD::default()),
-            Box::new(CloseToCloseVol::default()),
             Box::new(HL2::default()),
             Box::new(HLC3::default()),
             Box::new(PriceChannel::default()),
             Box::new(EhlersFisher::default()),
+            // A catalogue study with the bars per year it is annualized over.
+            Box::new(CloseToCloseVol::default().with_trading_days(365.0)),
             // Fewer averages than the ribbon that the name creates, with a crossing pair.
             Box::new(
                 MACombination::new(vec![
@@ -751,6 +752,27 @@ mod tests {
                 "Higher Interval Candles",
                 vec![("auto_interval", Toggle(true))],
                 vec![("auto_interval", Toggle(true))],
+            ),
+            // Saved before the bars per year could be set, when every volatility used 252.
+            (
+                "C2C Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "GK Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("trading_days", Number(365.0))],
+                vec![("trading_days", Number(365.0))],
             ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (
