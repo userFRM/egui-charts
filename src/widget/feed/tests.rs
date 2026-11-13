@@ -1599,6 +1599,67 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
     }
 }
 
+/// Hand counts on 2t at price 100: live buys of 1, 2, 4, 8 and 16 one a second from 0 s, so the
+/// chart's bars are 1 and 2 (delta 3) at 0 s, 4 and 8 (12) at 2 s and 16 at 4 s. A trade page
+/// answered in the drain that streams them without an id stands in for the buy of 1, or for the
+/// buys of 1 to 8, which leaves no live execution in the first two bars, or for the buys of 1 to
+/// 4 on a chart limited to two bars, which keeps the 2 s and 4 s bars while the study's source
+/// keeps the 0 s one. The replay cutoff at 3 s is exclusive and falls in the 2 s bar, before
+/// which only the buy of 4 came.
+#[cfg(feature = "studies")]
+#[test]
+fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
+    use crate::model::OrderSide::Buy;
+    use crate::studies::OrderFlowStudy;
+    use std::num::NonZeroUsize;
+    let start = bars(1)[0].time;
+    let tape: Vec<_> = [1.0, 2.0, 4.0, 8.0, 16.0]
+        .iter()
+        .enumerate()
+        .map(|(second, size)| {
+            let at = start + TimeDelta::seconds(second as i64);
+            Tick::new(at, 100.0, *size, Some(Buy))
+        })
+        .collect();
+    // The executions the page holds, the bar limit (none for 0), and the deltas before and during
+    // the replay.
+    let rows: [(usize, usize, &[f64], &[f64]); 3] = [
+        (1, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
+        (4, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
+        (3, 2, &[12.0, 16.0], &[4.0]),
+    ];
+    for (paged, limit, live, replayed) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe("2t".parse().unwrap());
+        chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(limit));
+        chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        let page = TradePage::new(tape[..paged].to_vec(), false);
+        feed.trades.lock().unwrap().remove(0).send(Ok(page));
+        let sink = feed.sink();
+        tape.iter().for_each(|trade| sink.push_tick(trade.clone()));
+        let mut deltas = |chart: &mut Chart| {
+            for _ in 0..8 {
+                frames.run(chart);
+            }
+            let study = chart.indicators().next().unwrap().1;
+            study.values().line(0).to_vec()
+        };
+        assert_eq!(deltas(&mut chart), live, "{paged} paged");
+        chart.set_feed_paused(true);
+        chart.set_replay_time(Some(start + TimeDelta::seconds(3)));
+        assert_eq!(deltas(&mut chart), replayed, "{paged} paged, replay");
+        chart.set_replay_time(None);
+        assert_eq!(deltas(&mut chart), live, "{paged} paged, left");
+    }
+}
+
 type PagedCells = Option<Vec<(i64, f64, f64)>>;
 
 /// What the stream sends before the trade page. The history page holds the bars of the tape
@@ -4391,6 +4452,60 @@ fn market_replay_profile_drawings_follow_the_cursor() {
     assert_eq!(row(top(&mut chart)), 100.5, "sought back");
     driver.seek(second(135));
     assert_eq!(row(top(&mut chart)), 101.5, "sought to where it played");
+}
+
+/// An order-flow study present when a market replay starts follows the driver's cursor through
+/// playback and seeks. Bars open at 0, 60 and 120 s and the per-bar delta is each buy's size: 1 at
+/// 10 s, 2 at 70 s and 4 at 130 s, so 75 s shows [1, 2] over two bars and 140 s [1, 2, 4] over three.
+#[cfg(feature = "studies")]
+#[test]
+fn market_replay_order_flow_studies_follow_the_cursor() {
+    use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+    use crate::model::OrderSide::Buy;
+    use crate::studies::OrderFlowStudy;
+    let start = DateTime::UNIX_EPOCH;
+    let second = |seconds| start + TimeDelta::seconds(seconds);
+    let events = [(10, 1.0), (70, 2.0), (130, 4.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (seconds, size))| {
+            let fill = Tick::new(second(seconds), 100.0, size, Some(Buy)).with_id(at as u64);
+            ReplayEvent::new("A", second(seconds), at as u64, MarketEvent::Trade(fill))
+        })
+        .collect();
+    let instruments = vec![Instrument::new("A").with_tick_size(1.0)];
+    let driver = Arc::new(ReplayDriver::new(events, instruments).unwrap());
+    driver.set_speed(0.0).unwrap();
+    driver.seek(second(75));
+    let mut chart = Chart::new(BarData::new());
+    chart.set_symbol("A");
+    chart.set_timeframe(Timeframe::Min1);
+    chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+    chart.set_market_replay(Some(driver.clone()));
+    let mut frames = Frames::new();
+    let mut deltas = |chart: &mut Chart| {
+        for _ in 0..8 {
+            frames.run(chart);
+        }
+        let bars = chart.bars(SeriesId::MAIN).len();
+        let study = chart.indicators().next().unwrap().1;
+        (bars, study.values().line(0).to_vec())
+    };
+    let sought = deltas(&mut chart);
+    driver.set_speed(1.0).unwrap();
+    driver.advance(std::time::Duration::from_secs(65)).unwrap();
+    driver.set_speed(0.0).unwrap();
+    let played = deltas(&mut chart);
+    driver.seek(second(75));
+    let sought_back = deltas(&mut chart);
+    assert_eq!(
+        (sought, played, sought_back),
+        (
+            (2, vec![1.0, 2.0]),
+            (3, vec![1.0, 2.0, 4.0]),
+            (2, vec![1.0, 2.0])
+        )
+    );
 }
 
 /// Answers every request at once with bars closing at the symbol's base plus their index:

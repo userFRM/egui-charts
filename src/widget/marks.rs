@@ -117,6 +117,17 @@ impl Chart {
         coords: &ChartMapping,
         layer: MarkerZOrder,
     ) {
+        if layer == MarkerZOrder::Normal {
+            // Marks age on the frame clock even while their series is not drawn.
+            let now = ctx.painter.ctx().input(|input| input.time);
+            for marks in self.change_marks.iter().chain(
+                self.price_series
+                    .iter()
+                    .filter_map(|item| item.change_marks.as_ref()),
+            ) {
+                marks.expire(now);
+            }
+        }
         // Normal markers of added series, and all markers in other panes, are painted with
         // each series.
         for item in self

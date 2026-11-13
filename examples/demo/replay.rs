@@ -560,7 +560,7 @@ impl DemoApp {
     }
 
     pub(super) fn restore_layout_groups(&mut self, groups: Option<LayoutGroups>) {
-        // A copy owns its sizes, so undo steps left in chart histories cannot change the restored ones.
+        // A copy drops a divider drag in progress, which would overwrite the restored sizes.
         self.layout = self.layout.clone();
         self.layout.reset_sizes(true);
         if let Some(groups) = &groups

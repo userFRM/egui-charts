@@ -1855,11 +1855,13 @@ pub(super) mod tests {
 
     /// Guards #2111: Performance's 1Y target on a one-minute chart lies far before the chart's
     /// first bar, so its daily history pages back to the target, whatever the feed's page size
-    /// and even when a study with no stated start reads the same history. Then it stops.
+    /// and even when a study with no stated start reads the same history. Then it stops. An error
+    /// on the daily bars' live stream leaves that paging as it was and is reported.
     #[test]
     fn performance_daily_history_reaches_a_year_with_short_pages() {
         use crate::studies::Indicator;
-        for shared in [false, true] {
+        let dropped = FeedError::Network("stream dropped".into());
+        for (shared, error) in [(false, None), (true, None), (false, Some(dropped))] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
             let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
             if shared {
@@ -1872,7 +1874,11 @@ pub(super) mod tests {
                     .unwrap();
                 chart.add_indicator(Box::new(average));
             }
-            let pages = page_daily(&mut chart, &daily, None);
+            let pages = page_daily(&mut chart, &daily, error.clone());
+            if let Some(error) = &error {
+                let request = chart.study_data_requests().pop().unwrap();
+                assert_eq!(chart.study_data_error(&request), Some(error));
+            }
             let study = chart
                 .indicators()
                 .find(|(candidate, _)| *candidate == id)
@@ -1880,10 +1886,14 @@ pub(super) mod tests {
                 .1;
             // Every period starts from a close of 50: 100 * (100 - 50) / 50 = 100.
             let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
-            assert_eq!(changes, [Some(100.0); 6], "shared {shared}");
+            assert_eq!(
+                changes,
+                [Some(100.0); 6],
+                "shared {shared}, error {error:?}"
+            );
             // The first page ends on 2023-03-31 and the second passes the target, 2023-03-15; the
             // two-year feed holds a third.
-            assert_eq!(pages, 2, "shared {shared}");
+            assert_eq!(pages, 2, "shared {shared}, error {error:?}");
         }
     }
 
@@ -1996,23 +2006,6 @@ pub(super) mod tests {
                     .all(|(got, want)| got.is_some_and(|got| (got - want).abs() < 1e-9))),
             "(study, [P, R1, S1], pages) {observed:?}, want {want:?}"
         );
-    }
-
-    /// An error on the daily bars' live stream leaves their history paging as it was: a feed
-    /// that serves daily history but reports its daily stream failing still fills 1Y.
-    #[test]
-    fn live_error_does_not_end_daily_history_paging() {
-        let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
-        let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
-        let error = FeedError::Network("stream dropped".into());
-        let pages = page_daily(&mut chart, &daily, Some(error.clone()));
-        let request = chart.study_data_requests().pop().unwrap();
-        assert_eq!(chart.study_data_error(&request), Some(&error));
-        let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
-        let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
-        // Every period starts from a close of 50: 100 * (100 - 50) / 50 = 100; two pages reach
-        // the 1Y target, 2023-03-15, as without the error.
-        assert_eq!((changes, pages), (vec![Some(100.0); 6], 2));
     }
 
     /// Performance on a price-based chart type of one-minute bars pages its daily bars back to
