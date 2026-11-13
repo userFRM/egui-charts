@@ -285,15 +285,23 @@ impl Shared {
 #[cfg(test)]
 pub(crate) mod tests {
     use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
+    use eframe::egui;
+    use egui_charts::data::FeedStatus;
+    use egui_charts::model::Timeframe;
+    use egui_charts::widget::{Chart, ChartBuilder, SeriesId};
     use serde_json::json;
     use tungstenite::handshake::server::{Callback, ErrorResponse, Request, Response};
     use tungstenite::protocol::CloseFrame;
     use tungstenite::{Message, WebSocket};
 
-    use super::super::profile::{BarFields, Route, RouteKind, Segment, Stream, TradeFields};
+    use super::super::feed::MappedFeed;
+    use super::super::profile::{
+        BarFields, Route, RouteKind, Segment, Stream, TimeSpec, TimeUnit, TradeFields,
+    };
     use super::{Routed, Session, StreamEvent, route};
 
     /// One step of a scripted connection.
@@ -336,6 +344,7 @@ pub(crate) mod tests {
         pub(crate) url: String,
         asked: Arc<Mutex<Vec<String>>>,
         received: Arc<Mutex<Vec<Vec<String>>>>,
+        ended: Arc<AtomicUsize>,
         held: mpsc::Sender<()>,
     }
 
@@ -347,6 +356,8 @@ pub(crate) mod tests {
             let targets = asked.clone();
             let received = Arc::new(Mutex::new(Vec::new()));
             let log = received.clone();
+            let ended = Arc::new(AtomicUsize::new(0));
+            let over = ended.clone();
             let (held, released) = mpsc::channel();
             std::thread::spawn(move || {
                 // The scripts come first in the pair, so that no connection is accepted after
@@ -395,12 +406,15 @@ pub(crate) mod tests {
                     }
                     // Dropping the socket here ends the connection; without a `Close` step no
                     // close frame was sent.
+                    drop(socket);
+                    over.fetch_add(1, Ordering::Release);
                 }
             });
             Self {
                 url,
                 asked,
                 received,
+                ended,
                 held,
             }
         }
@@ -414,6 +428,11 @@ pub(crate) mod tests {
         /// The text messages received so far, one list per connection in the order they arrived.
         pub(crate) fn received(&self) -> Vec<Vec<String>> {
             self.received.lock().unwrap().clone()
+        }
+
+        /// How many connections have ended: their scripts are over and their sockets are closed.
+        pub(crate) fn ended(&self) -> usize {
+            self.ended.load(Ordering::Acquire)
         }
 
         /// Lets the script pass its next `Hold`. A release that comes first is kept for it.
@@ -643,5 +662,237 @@ pub(crate) mod tests {
         assert_eq!(received[0][..3], [LOGIN, SUBSCRIBE, PING]);
         assert!(received[0][3..].iter().all(|text| text == PING));
         assert_eq!(received[1], [LOGIN, SUBSCRIBE]);
+    }
+
+    /// A chart on the mapped feed, with history from the scripted server and trades from the
+    /// scripted peer. A trade that arrives while a page is being fetched is dropped by rule, so
+    /// every message of the peer waits behind a `Hold`, which the test releases only once the
+    /// chart shows the state the message builds on. The fixture is one-minute bars of
+    /// 11 November 2026: 14:35 UTC is second 1,794,407,700, and a trade gives its time in
+    /// milliseconds.
+    #[test]
+    fn a_stream_updates_the_last_bar_and_fills_the_gap() {
+        use super::super::feed::tests::{Server, Shown, pages, profile, shown, until};
+        // History rows as the service sends them: its newest three at the start, what it holds
+        // later, and two of another symbol in the slots of 14:37 and 14:38.
+        const J3: &str = r#"{"t":1794407580,"o":100.75,"h":103.0,"l":100.5,"c":102.5,"v":1500}"#;
+        const J4: &str = r#"{"t":1794407640,"o":102.5,"h":102.75,"l":101.0,"c":101.25,"v":800}"#;
+        const J5: &str = r#"{"t":1794407700,"o":101.25,"h":101.5,"l":100.0,"c":100.25,"v":700}"#;
+        const G6: &str = r#"{"t":1794407760,"o":100.5,"h":101.0,"l":100.25,"c":100.75,"v":40}"#;
+        const G7: &str = r#"{"t":1794407820,"o":100.75,"h":101.25,"l":100.5,"c":101.0,"v":25}"#;
+        const G7F: &str = r#"{"t":1794407820,"o":100.75,"h":101.5,"l":100.5,"c":101.25,"v":60}"#;
+        const G8: &str = r#"{"t":1794407880,"o":101.25,"h":101.5,"l":101.0,"c":101.25,"v":10}"#;
+        const X0: &str = r#"{"t":1794407820,"o":50.0,"h":50.5,"l":49.75,"c":50.25,"v":100}"#;
+        const X1: &str = r#"{"t":1794407880,"o":50.25,"h":50.75,"l":50.0,"c":50.5,"v":80}"#;
+        // The messages of the stream.
+        const LOGIN: &str = r#"{"action":"auth","key":"s3cret-7f3a"}"#;
+        const ABC: &str = r#"{"action":"subscribe","symbol":"ABC","interval":"1m"}"#;
+        const XYZ: &str = r#"{"action":"subscribe","symbol":"XYZ","interval":"1m"}"#;
+        const STATUS: &str = r#"{"type":"status","message":"authenticated"}"#;
+        const IN_LAST_BAR: &str = r#"{"type":"trade","data":[{"p":"101.75","s":3,"t":1794407710000},{"p":99.75,"s":2,"t":1794407715000}]}"#;
+        const NEW_SLOT: &str = r#"{"type":"trade","data":[{"p":100.5,"s":4,"t":1794407765000}]}"#;
+        const AFTER_FILL: &str = r#"{"type":"trade","data":[{"p":101.5,"s":5,"t":1794407850000}]}"#;
+        const AFTER_RESUME: &str =
+            r#"{"type":"trade","data":[{"p":101.75,"s":2,"t":1794407900000}]}"#;
+        const OTHER_SYMBOL: &str =
+            r#"{"type":"trade","data":[{"p":51.0,"s":5,"t":1794407920000}]}"#;
+        // The bars the chart shows.
+        const B3: Shown = (1794407580, Some([100.75, 103.0, 100.5, 102.5, 1500.0]));
+        const B4: Shown = (1794407640, Some([102.5, 102.75, 101.0, 101.25, 800.0]));
+        const B5: Shown = (1794407700, Some([101.25, 101.5, 100.0, 100.25, 700.0]));
+        const B5A: Shown = (1794407700, Some([101.25, 101.75, 99.75, 99.75, 705.0]));
+        const T6: Shown = (1794407760, Some([100.5, 100.5, 100.5, 100.5, 4.0]));
+        const F6: Shown = (1794407760, Some([100.5, 101.0, 100.25, 100.75, 40.0]));
+        const F7: Shown = (1794407820, Some([100.75, 101.25, 100.5, 101.0, 25.0]));
+        const F7C: Shown = (1794407820, Some([100.75, 101.5, 100.5, 101.5, 30.0]));
+        const R7: Shown = (1794407820, Some([100.75, 101.5, 100.5, 101.25, 60.0]));
+        const R8: Shown = (1794407880, Some([101.25, 101.5, 101.0, 101.25, 10.0]));
+        const R8D: Shown = (1794407880, Some([101.25, 101.75, 101.0, 101.75, 12.0]));
+        const Y0: Shown = (1794407820, Some([50.0, 50.5, 49.75, 50.25, 100.0]));
+        const Y1: Shown = (1794407880, Some([50.25, 50.75, 50.0, 50.5, 80.0]));
+        const Y1E: Shown = (1794407880, Some([50.25, 51.0, 50.0, 51.0, 85.0]));
+
+        let list = |rows: &[&str]| format!("[{}]", rows.join(","));
+        let server = Server::start(pages(vec![
+            list(&[J3, J4, J5]),
+            "[]".to_owned(),
+            list(&[G6, G7]),
+            list(&[G6, G7F, G8]),
+            "[]".to_owned(),
+            list(&[X0, X1]),
+            "[]".to_owned(),
+        ]));
+        let peer = Peer::start(vec![
+            vec![
+                Step::Receive(2),
+                Step::Hold,
+                Step::Send(STATUS),
+                Step::Send(IN_LAST_BAR),
+                Step::Hold,
+                Step::Send(NEW_SLOT),
+                Step::Hold,
+                Step::Drop,
+            ],
+            vec![
+                Step::Receive(2),
+                Step::Hold,
+                Step::Send(AFTER_FILL),
+                Step::UntilClosed,
+            ],
+            vec![
+                Step::Receive(2),
+                Step::Hold,
+                Step::Send(AFTER_RESUME),
+                Step::UntilClosed,
+            ],
+            vec![
+                Step::Receive(2),
+                Step::Hold,
+                Step::Send(OTHER_SYMBOL),
+                Step::UntilClosed,
+            ],
+        ]);
+
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let mut profile = profile(&server.origin);
+        profile.keys = vec!["key".to_owned()];
+        profile.stream = Some(Stream {
+            url: format!("{}/stream?key={{key}}", peer.url),
+            connect: vec![
+                r#"{"action":"auth","key":"{key}"}"#.to_owned(),
+                r#"{"action":"subscribe","symbol":"{symbol}","interval":"{interval}"}"#.to_owned(),
+            ],
+            records: key("data"),
+            route_by: key("type"),
+            routes: vec![
+                Route {
+                    value: "status".to_owned(),
+                    kind: RouteKind::Ignore,
+                },
+                Route {
+                    value: "trade".to_owned(),
+                    kind: RouteKind::Trades(TradeFields {
+                        time: TimeSpec::Instant {
+                            field: key("t"),
+                            unit: TimeUnit::Milliseconds,
+                        },
+                        price: key("p"),
+                        size: key("s"),
+                        ..TradeFields::default()
+                    }),
+                },
+            ],
+            ..Stream::default()
+        });
+        let secrets = vec![("key".to_owned(), "s3cret-7f3a".to_owned())];
+        let mut chart = ChartBuilder::new()
+            .with_feed(Arc::new(MappedFeed::new(profile, secrets)))
+            .with_symbol("ABC")
+            .with_timeframe(Timeframe::Min1)
+            .with_initial_bars(3)
+            .build();
+        let ctx = egui::Context::default();
+        let state = |chart: &Chart| {
+            let state = chart.feed_state(SeriesId::MAIN);
+            state.cloned().unwrap_or_default()
+        };
+        // Waits until history has ended and the chart shows exactly `bars`.
+        let see = |chart: &mut Chart, what: &str, bars: &[Shown]| {
+            until(&ctx, chart, what, |chart| {
+                state(chart).history_complete && shown(chart) == bars
+            });
+        };
+
+        // 1. History.
+        see(&mut chart, "history", &[B3, B4, B5]);
+        // 2. Trades in the slot of the newest bar continue that bar. Its open stays the one of
+        // history, 101.75, sent as text, is the high, 99.75 is the low and the close, and the
+        // volume is 700 + 3 + 2.
+        peer.release();
+        see(&mut chart, "trades in the last bar", &[B3, B4, B5A]);
+        // 3. The first trade of the next slot opens the next bar, at its price and with its size.
+        peer.release();
+        see(&mut chart, "a new slot", &[B3, B4, B5A, T6]);
+
+        // 4. The connection is lost. The chart says so with the endpoint, and without the key
+        // that travels in the address.
+        peer.release();
+        until(&ctx, &mut chart, "the drop", |chart| {
+            state(chart).last_error.is_some()
+        });
+        assert_eq!(state(&chart).status, Some(FeedStatus::Disconnected));
+        let error = state(&chart).last_error.unwrap().to_string();
+        let lost = format!("network error: {}/stream: connection lost", peer.url);
+        assert!(error.starts_with(&lost), "{error}");
+        // The session connects again after a second and the feed loads what was missed, from the
+        // slot of the newest bar it knows: the final state of the bar that was forming takes the
+        // place of the bar the one trade built, and the bar after it is new.
+        see(&mut chart, "the gap filled", &[B3, B4, B5A, F6, F7]);
+        assert_eq!(state(&chart).status, Some(FeedStatus::Live));
+        // 5. The next trade continues the newest bar of the fill: 101.5 is its high and its
+        // close, and the volume is 25 + 5.
+        peer.release();
+        see(
+            &mut chart,
+            "a trade after the fill",
+            &[B3, B4, B5A, F6, F7C],
+        );
+
+        // 6. A paused chart has no socket: the peer sees the connection end during the pause.
+        chart.set_feed_paused(true);
+        until(&ctx, &mut chart, "the pause to close the socket", |_| {
+            peer.ended() == 2
+        });
+        // Resuming loads the latest page and subscribes again. The chart drops its last bar and
+        // keeps the others: the row of 14:37 takes the place of the dropped bar and the row of
+        // 14:38 is new.
+        chart.set_feed_paused(false);
+        see(&mut chart, "the resume", &[B3, B4, B5A, F6, R7, R8]);
+        // 7. The next trade continues the newest bar of that page: 101.75 is its high and its
+        // close, and the volume is 10 + 2.
+        peer.release();
+        see(
+            &mut chart,
+            "a trade after the resume",
+            &[B3, B4, B5A, F6, R7, R8D],
+        );
+
+        // 8. Another symbol: its own history and its own subscription, nothing of the old.
+        chart.set_symbol("XYZ");
+        see(&mut chart, "the other symbol", &[Y0, Y1]);
+        // 9. Its trade continues its newest bar, in the slot the old symbol's newest bar had:
+        // 51.0 is the high and the close, and the volume is 80 + 5.
+        peer.release();
+        see(&mut chart, "its trade", &[Y0, Y1E]);
+
+        let lines: Vec<String> = server.seen().iter().map(|seen| seen.line.clone()).collect();
+        assert_eq!(lines.len(), 7, "{lines:?}");
+        // The first load, the gap fill and the load after the resume end at the system clock.
+        for latest in [0, 2, 3] {
+            assert!(
+                lines[latest].starts_with("GET /bars?symbol=ABC&interval=1m&to="),
+                "{lines:?}"
+            );
+            assert!(lines[latest].ends_with("&limit=3"), "{lines:?}");
+        }
+        // Scroll-back asks before the oldest bar held, also after the resume.
+        assert_eq!(
+            lines[1],
+            "GET /bars?symbol=ABC&interval=1m&to=1794407580&limit=3"
+        );
+        assert_eq!(lines[4], lines[1]);
+        assert!(
+            lines[5].starts_with("GET /bars?symbol=XYZ&interval=1m&to="),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines[6],
+            "GET /bars?symbol=XYZ&interval=1m&to=1794407820&limit=3"
+        );
+        // One socket at a time, each opened with the login and the subscription of its symbol.
+        assert_eq!(
+            peer.received(),
+            [[LOGIN, ABC], [LOGIN, ABC], [LOGIN, ABC], [LOGIN, XYZ]]
+        );
     }
 }
