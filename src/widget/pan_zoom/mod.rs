@@ -247,7 +247,7 @@ impl Chart {
                 && self.chart_options.handle_scroll.vert_touch_drag
                 && self.last_rendered_price_rect.height() > 0.0
                 && self.state.price_scale().is_manual()
-                && translation_delta.y.abs() > 0.5
+                && translation_delta.y != 0.0
             {
                 let y = anchor.map_or(0.0, |pos| pos.y);
                 let map = self.last_price_map;
@@ -2169,12 +2169,14 @@ mod tests {
                         contact(2, egui::TouchPhase::Start, start + egui::vec2(100.0, 0.0)),
                     ],
                 );
-                for step in 1..=2 {
-                    let pos = start + egui::vec2(30.0, 30.0) * step as f32;
+                // The second step is under half a point: the fingers are followed however
+                // slowly they move.
+                for (step, moved) in [(1, 30.0), (2, 30.4)] {
+                    let pos = start + egui::vec2(moved, moved);
                     frame(
                         &ctx,
                         &mut chart,
-                        0.02 + step as f64 * 0.02,
+                        0.02 + f64::from(step) * 0.02,
                         vec![
                             Event::PointerMoved(pos),
                             contact(1, egui::TouchPhase::Move, pos),
@@ -2182,7 +2184,7 @@ mod tests {
                         ],
                     );
                 }
-                let pos = start + egui::vec2(60.0, 60.0);
+                let pos = start + egui::vec2(30.4, 30.4);
                 frame(
                     &ctx,
                     &mut chart,
@@ -2193,7 +2195,7 @@ mod tests {
                         pos + egui::vec2(100.0, 0.0),
                     )],
                 );
-                let pos = start + egui::vec2(90.0, 90.0);
+                let pos = start + egui::vec2(60.4, 60.4);
                 frame(
                     &ctx,
                     &mut chart,
@@ -2203,9 +2205,9 @@ mod tests {
                         contact(1, egui::TouchPhase::Move, pos),
                     ],
                 );
-                let expected_offset = offset - if horizontal { 90.0 / spacing } else { 0.0 };
+                let expected_offset = offset - if horizontal { 60.4 / spacing } else { 0.0 };
                 let shift = if vertical {
-                    20.0 * 90.0 / rect.height() as f64
+                    20.0 * 60.4 / rect.height() as f64
                 } else {
                     0.0
                 };
