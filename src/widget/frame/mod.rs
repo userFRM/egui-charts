@@ -219,6 +219,7 @@ impl Chart {
         self.sync_volume_study(ui.ctx());
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
+        self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -2341,8 +2342,11 @@ impl Chart {
         // study's pane. Otherwise overlay indicators take priority over the
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
-        // this rect.
+        // this rect. As there, a click with the eraser or a drawing tool keeps
+        // the selection.
         if response.clicked()
+            && !drawing_tool_active
+            && !eraser_mode
             && let Some(click_pos) = response.interact_pointer_pos()
         {
             #[cfg(feature = "drawings")]

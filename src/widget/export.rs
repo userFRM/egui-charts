@@ -73,17 +73,25 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
-/// A column of a [`DataTable`]: the original id and title of its study, `None` for the main
-/// series, then its plot or main series column. The title keeps a choice off a study of another
-/// title that a restore adds under the id the choice was made for.
-pub(crate) type ColumnId = (Option<(usize, String)>, usize);
+/// A column of a [`DataTable`]. A study column carries the original id and title of its study
+/// and its plot; the title keeps a choice off a study of another title that a restore adds under
+/// the id the choice was made for. An added series column carries its title and its place among
+/// the visible series of that title, which a restore, adding the series again under new ids,
+/// keeps.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ColumnId {
+    Main(usize),
+    Series(String, usize),
+    Study(usize, String, usize),
+}
 
-/// The loaded bars and visible study plots as text, aligned by chart time: what
-/// `Chart::export_csv` (with `csv`) writes and the chart data table lists.
+/// The loaded bars, the closes of visible added series and visible study plots as text, aligned
+/// by chart time: what `Chart::export_csv` (with `csv`) writes and the chart data table lists.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct DataTable {
-    /// Column titles: time, open, high, low, close and volume, then one per visible study plot.
+    /// Column titles: time, open, high, low, close and volume, then one per visible added series,
+    /// titled as its legend shows it, and one per visible study plot.
     pub headers: Vec<String>,
     /// One row per loaded bar, oldest first. A missing or non-finite value is an empty cell.
     pub rows: Vec<Vec<String>>,
@@ -203,7 +211,9 @@ impl Chart {
         }
     }
 
-    /// Exports all loaded source bars and visible study plots as UTF-8 CSV.
+    /// Exports all loaded source bars, the close of each visible added series and visible study
+    /// plots as UTF-8 CSV. An added series fills the rows whose time matches one of its bars and
+    /// leaves the others empty.
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
     /// by source index and plot displacement, rather than mixing element values with source bars.
@@ -219,9 +229,10 @@ impl Chart {
         table.csv(&(0..table.headers.len()).collect::<Vec<_>>())
     }
 
-    /// The cells of `Self::export_csv` (with `csv`) as a table, with the same bars, study plots,
-    /// times and precision. During replay it holds the bars the replay cutoff has completed,
-    /// and on price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
+    /// The cells of `Self::export_csv` (with `csv`) as a table, with the same bars, added series
+    /// closes, study plots, times and precision. During replay it holds the bars the replay
+    /// cutoff has completed, and on price-based chart types still the source bars. Loads
+    /// nothing: only loaded bars are listed.
     pub fn data_table(&self) -> DataTable {
         self.data_table_with_columns().0
     }
@@ -238,6 +249,24 @@ impl Chart {
             .map(|(_, study)| study.clone_box())
             .collect();
         let mut columns = Vec::new();
+        // Each visible added series with its legend title, which falls back to "Series" as the
+        // pane menu does, its place among series of that title and the decimals of its closes.
+        let mut series: Vec<(&[crate::model::Bar], String, usize, usize)> = Vec::new();
+        for item in self.price_series.iter().filter(|item| item.visible) {
+            let title = match item.options.name.as_str() {
+                "" => "Series".to_owned(),
+                name => name.to_owned(),
+            };
+            let place = series.iter().filter(|other| other.1 == title).count();
+            // A series of another scale keeps four significant digits of its smallest close.
+            let precision = item
+                .bars
+                .iter()
+                .filter(|bar| !bar.is_whitespace() && bar.close.is_finite() && bar.close != 0.0)
+                .map(|bar| (3.0 - bar.close.abs().log10().floor()).clamp(0.0, 12.0) as usize)
+                .fold(price_precision, usize::max);
+            series.push((item.bars.as_slice(), title, place, precision));
+        }
         let mut header = vec![
             "time".into(),
             "open".into(),
@@ -246,6 +275,7 @@ impl Chart {
             "close".into(),
             "volume".into(),
         ];
+        header.extend(series.iter().map(|item| item.1.clone()));
         let clock = self.bar_clock();
         for study in &mut studies {
             study.set_instrument(self.instrument());
@@ -306,6 +336,13 @@ impl Chart {
             } else {
                 String::new()
             });
+            row.extend(series.iter().map(|&(bars, _, _, precision)| {
+                bars.binary_search_by_key(&bar.time, |other| other.time)
+                    .ok()
+                    .map(|at| &bars[at])
+                    .filter(|other| !other.is_whitespace())
+                    .map_or_else(String::new, |other| number(other.close, precision))
+            }));
             row.extend(columns.iter().map(|&(study, line, precision)| {
                 studies[study]
                     .plot_value(line, index)
@@ -314,12 +351,17 @@ impl Chart {
             rows.push(row);
         }
         let column_ids = (0..6)
-            .map(|column| (None, column))
+            .map(ColumnId::Main)
+            .chain(
+                series
+                    .iter()
+                    .map(|item| ColumnId::Series(item.1.clone(), item.2)),
+            )
             .chain(columns.iter().map(|&(study, line, _)| {
                 let id = self.study_ids[study].0;
                 #[cfg(feature = "drawings")]
                 let id = self.study_column_ids.get(&id).copied().unwrap_or(id);
-                (Some((id, studies[study].name().to_owned())), line)
+                ColumnId::Study(id, studies[study].name().to_owned(), line)
             }))
             .collect();
         (
@@ -830,6 +872,44 @@ mod tests {
             last.close = 22.0;
             last.high = 23.0;
             chart.update(SeriesId::MAIN, last);
+            // A visible added series lists its closes at the bars it holds, by exact time; a
+            // hidden one has no column.
+            let peer = chart.add_series(crate::widget::SeriesOptions {
+                name: "Peer".into(),
+                ..Default::default()
+            });
+            chart.set_data(
+                peer,
+                vec![
+                    Bar::new(times[0], 5.0, 6.0, 4.0, 5.5, 1.0),
+                    Bar::new(times[2], 7.0, 8.0, 6.0, 7.25, 1.0),
+                    Bar::new(
+                        times[2] + chrono::Duration::hours(1),
+                        7.0,
+                        8.0,
+                        6.0,
+                        9.0,
+                        1.0,
+                    ),
+                ],
+            );
+            let tiny = chart.add_series(crate::widget::SeriesOptions {
+                name: "Tiny".into(),
+                ..Default::default()
+            });
+            chart.set_data(
+                tiny,
+                vec![Bar::new(times[1], 0.0002, 0.0003, 0.0001, 0.000123, 1.0)],
+            );
+            let hidden_series = chart.add_series(crate::widget::SeriesOptions {
+                name: "Off".into(),
+                ..Default::default()
+            });
+            chart.set_data(
+                hidden_series,
+                vec![Bar::new(times[1], 1.0, 1.0, 1.0, 1.0, 1.0)],
+            );
+            chart.set_series_visible(hidden_series, false);
             let csv = chart.export_csv();
             fn assert_send_sync<T: Send + Sync>(_: &T) {}
             assert_send_sync(&csv);
@@ -844,6 +924,8 @@ mod tests {
                     "low",
                     "close",
                     "volume",
+                    "Peer",
+                    "Tiny",
                     "Average, pair: mean",
                     "Average, pair: shifted",
                     "Fixed: Fixed",
@@ -860,14 +942,23 @@ mod tests {
             // Two-bar means are 12 and (14 + 22) / 2 = 18; displacement -1 moves them left.
             assert_eq!(
                 rows.iter().map(|row| &row[6]).collect::<Vec<_>>(),
+                ["5.500", "", "7.250"]
+            );
+            // A series of another scale keeps its digits instead of rounding to the main decimals.
+            assert_eq!(
+                rows.iter().map(|row| &row[7]).collect::<Vec<_>>(),
+                ["", "0.0001230", ""]
+            );
+            assert_eq!(
+                rows.iter().map(|row| &row[8]).collect::<Vec<_>>(),
                 ["", "12.000", "18.000"]
             );
             assert_eq!(
-                rows.iter().map(|row| &row[7]).collect::<Vec<_>>(),
+                rows.iter().map(|row| &row[9]).collect::<Vec<_>>(),
                 ["12.000", "18.000", ""]
             );
-            assert_eq!(&rows[0][8], "1.2346");
-            assert_eq!(&rows[0][9], "9.9");
+            assert_eq!(&rows[0][10], "1.2346");
+            assert_eq!(&rows[0][11], "9.9");
             // Export must not refresh or mutate the chart's scheduled study results.
             assert!(chart.pending_from[0].is_some());
         }

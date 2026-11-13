@@ -21,6 +21,11 @@ egui_kittest = { version = "0.37.0", features = ["wgpu", "eframe"] }
 chrono = "0.4.43"
 log = "0.4.29"
 maudio = "0.1.15"
+# The demo's own-data connections: REST history and the WebSocket stream of a visitor's source.
+ehttp = "0.7.2"
+tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1.0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
