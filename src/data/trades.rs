@@ -272,6 +272,11 @@ impl Trades {
         self.capacity.saturating_sub(self.trades.len())
     }
 
+    /// Whether a held trade has the id `id`.
+    pub(crate) fn holds(&self, id: u64) -> bool {
+        self.ids.contains_key(&id)
+    }
+
     /// Appends a trade validated by the caller unless its id is held, evicting the oldest beyond
     /// capacity. Repeated ids can complete missing order ids without counting the fill again.
     pub(crate) fn push(&mut self, trade: Tick) {

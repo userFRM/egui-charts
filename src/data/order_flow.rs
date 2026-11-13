@@ -1665,6 +1665,38 @@ mod tests {
         }
     }
 
+    /// A repeat queued only to complete a drained execution's order ids is no new execution:
+    /// a source connected while it waits counts the buy once, as one connected from the start
+    /// does, and the drain still gives the held execution its aggressor order id.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn a_source_connected_before_the_drain_skips_a_queued_repeat() {
+        let clock = BarClock::new("2t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let inbox = Arc::new(super::super::inbox::Inbox::default());
+        let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+        let first = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        inbox.study_inputs(sink.id, vec![first.clone()]);
+        let buy = Tick::new(start, 100.0, 1.0, Some(OrderSide::Buy)).with_id(7);
+        sink.push_tick(buy.clone());
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let bars: Vec<_> = updates.bars.values().map(|(bar, _)| bar.clone()).collect();
+        let mut held = super::super::trades::Trades::new(100);
+        held.append(updates.trades, &mut |_, _| ());
+        sink.push_tick(buy.with_aggressor_order_id(9));
+        // The chart adds a study in the frame before its next drain.
+        let added = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        added.forget_trade_bar();
+        added.replace_trades(&clock, &held, &bars);
+        inbox.study_inputs(sink.id, vec![first.clone(), added.clone()]);
+        let once = BTreeMap::from([(start, [1.0, 1.0, 0.0])]);
+        assert_eq!([first.values(), added.values()], [once.clone(), once]);
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        held.append(updates.trades, &mut |_, _| ());
+        let held: Vec<_> = held.iter().map(|t| (t.id, t.aggressor_order_id)).collect();
+        assert_eq!(held, [(Some(7), Some(9))]);
+    }
+
     /// Quotes and books between fills belong to the current three-tick bar, even when
     /// the feed sends the entire burst before the chart drains it. Paging older executions
     /// must keep that allocation during replay too.
