@@ -2180,6 +2180,16 @@ fn an_interval_change_page_fills_the_retained_tape() {
 /// and the 3 tick stream opens at 00:00:09. Grouped from the sell, the three retained executions
 /// match the prices and volume of the bar at 00:00:01 and end there, as (100, 1, 2). The bar's own
 /// are (100, 0, 3), its buy at 00:00:03 is not held, and it draws a candle.
+///
+/// What a second bar proves stays drawn meanwhile, and a trade page that adds nothing proves the
+/// rest. Buys of 1 at 100: nine a second apart from 00:00:01 and three at 00:00:10, all delivered
+/// by the 2 tick stream. The 3 tick bars open at 00:00:01, 00:00:04, 00:00:07 and 00:00:10, and
+/// the 3 tick stream opens at 00:00:12. While the trade page is outstanding the bars at 00:00:01,
+/// 00:00:04 and 00:00:07 draw their own (100, 0, 3), each proven by the bar that opens after it,
+/// also at the instant the retained executions end, and the bar at 00:00:10, which only their end
+/// could prove, draws a candle. The trade page then repeats the retained executions: nothing
+/// traded between the two streams, their end is the page's, and the bar at 00:00:10 draws its
+/// (100, 0, 3) as well.
 #[test]
 fn an_interval_change_page_draws_only_a_bars_own_executions() {
     use crate::model::OrderSide::{self, Buy, Sell};
@@ -2227,22 +2237,53 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
         (9, 100.0, 1.0, Buy),
         3,
     );
+    let quiet: Tape = (
+        ["2t", "3t"],
+        &[
+            (1, 100.0, 1.0, Buy),
+            (2, 100.0, 1.0, Buy),
+            (3, 100.0, 1.0, Buy),
+            (4, 100.0, 1.0, Buy),
+            (5, 100.0, 1.0, Buy),
+            (6, 100.0, 1.0, Buy),
+            (7, 100.0, 1.0, Buy),
+            (8, 100.0, 1.0, Buy),
+            (9, 100.0, 1.0, Buy),
+            (10, 100.0, 1.0, Buy),
+            (10, 100.0, 1.0, Buy),
+            (10, 100.0, 1.0, Buy),
+        ],
+        0..12,
+        (12, 100.0, 1.0, Buy),
+        4,
+    );
     enum Answer {
         Bars,
         Executions,
         NoExecutions,
     }
     use Answer::{Bars, Executions, NoExecutions};
-    // The answers in order; the held executions and the bars are checked after each one from the
-    // history page on.
-    type Row<'a> = (&'a str, bool, &'a Tape<'a>, [Answer; 2], &'a [f64]);
-    let rows: [Row; 6] = [
+    // The cells of the bars drawn, as (level, bid, ask).
+    type Drawn<'a> = &'a [&'a [(i64, f64, f64)]];
+    let buys: &[(i64, f64, f64)] = &[(100, 0.0, 3.0)];
+    // The answers in order; the held executions and the bars drawn are checked after each one
+    // from the history page on.
+    type Row<'a> = (
+        &'a str,
+        bool,
+        &'a Tape<'a>,
+        [Answer; 2],
+        &'a [f64],
+        [Drawn<'a>; 2],
+    );
+    let rows: [Row; 7] = [
         (
             "ids",
             true,
             &volume,
             [Executions, Bars],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 4.0, 1.0],
+            [&[], &[]],
         ),
         (
             "no ids",
@@ -2250,6 +2291,7 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
             &volume,
             [Executions, Bars],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+            [&[], &[]],
         ),
         (
             "no ids, history page first",
@@ -2257,6 +2299,7 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
             &volume,
             [Bars, Executions],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+            [&[], &[]],
         ),
         (
             "ids, no trade history",
@@ -2264,6 +2307,7 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
             &volume,
             [Bars, NoExecutions],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+            [&[], &[]],
         ),
         (
             "no ids, no trade history",
@@ -2271,6 +2315,7 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
             &volume,
             [Bars, NoExecutions],
             &[2.0, 5.0, 6.0, 5.0, 6.0, 6.0, 1.0],
+            [&[], &[]],
         ),
         (
             "ticks, a bar opens between the streams, no trade history",
@@ -2278,10 +2323,19 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
             &ticks,
             [Bars, NoExecutions],
             &[1.0, 1.0, 1.0, 1.0],
+            [&[], &[]],
+        ),
+        (
+            "ticks, nothing traded between the streams, a trade page that adds nothing",
+            true,
+            &quiet,
+            [Bars, Executions],
+            &[1.0; 13],
+            [&[buys, buys, buys], &[buys, buys, buys, buys]],
         ),
     ];
     let mut failures = Vec::new();
-    for (label, ids, (intervals, fills, streamed, live, paged), answers, held) in rows {
+    for (label, ids, (intervals, fills, streamed, live, paged), answers, held, cells) in rows {
         let execution = |&(second, price, size, side): &Fill, id| {
             let trade = Tick::new(start + TimeDelta::seconds(second), price, size, Some(side));
             if ids { trade.with_id(id) } else { trade }
@@ -2349,7 +2403,7 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
                         .collect()
                 })
                 .collect();
-            if !drawn.is_empty() {
+            if drawn != cells[at] {
                 failures.push(format!("{label}: drawn {drawn:?}"));
             }
         }
