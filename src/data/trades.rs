@@ -151,11 +151,12 @@ pub(crate) struct Trades {
     /// Time of the oldest live trades when a page left out its trades at that time, as ids did not
     /// tell them from the live ones: the page may lack trades of that instant.
     left_out_at: Option<DateTime<Utc>>,
-    /// The live trades of one instant that are not held as live ones, in arrival order, each id
-    /// once: those left to a page's trades as repeats, by time or by id. The instant is that of
-    /// the first live trade so left, the only one at which a page's trades can include some that
-    /// the stream never sent.
-    unheld_live: Vec<Tick>,
+    /// The live trades left to a page's trades of one instant as repeats, by time or by id, in
+    /// arrival order, each id once, with that instant: the time of the paged trade holding a
+    /// trade's id, which a page may stamp apart from the stream, or else the trade's own. The
+    /// instant is that of the first live trade so left, the only one at which a page's trades can
+    /// include some that the stream never sent.
+    unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
 }
@@ -173,7 +174,7 @@ impl Trades {
             retained_until: None,
             lost_until: None,
             left_out_at: None,
-            unheld_live: Vec::new(),
+            unheld_live: None,
             revision: next_revision(),
         }
     }
@@ -206,15 +207,16 @@ impl Trades {
         self.left_out_at
     }
 
-    /// The live trades left to a page's trades at the first instant where one was, in arrival
-    /// order: with the held live trades of that instant they are all the stream sent at it, while
-    /// the page's trades there may include some it never sent.
+    /// The first instant, as the page stamps it, where a live trade was left to a page's trades,
+    /// and the live trades left to the page's trades of that instant, in arrival order: with the
+    /// held live trades of that instant they are all the stream sent at it, while the page's
+    /// trades there may include some it never sent.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
     )]
-    pub(crate) fn unheld_live(&self) -> &[Tick] {
-        &self.unheld_live
+    pub(crate) fn unheld_live(&self) -> Option<(DateTime<Utc>, &[Tick])> {
+        (self.unheld_live.as_ref()).map(|(at, kept)| (*at, kept.as_slice()))
     }
 
     /// Held executions that arrived live, including those sharing a page's boundary time.
@@ -240,7 +242,7 @@ impl Trades {
         self.retained_until = self.paged_until;
         // The trades it compared are no longer the live ones.
         self.left_out_at = None;
-        self.unheld_live.clear();
+        self.unheld_live = None;
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -303,7 +305,7 @@ impl Trades {
                 self.left_out_at = None;
             }
             // After a loss the paged trades stand in for no live one.
-            self.unheld_live.clear();
+            self.unheld_live = None;
             changed(&evicted, false);
         }
     }
@@ -335,14 +337,17 @@ impl Trades {
                 Some(at) => at >= self.paged,
                 None => paged_until.is_none_or(|until| trade.ts > until),
             };
-            // shortcut: a scan per trade with an id at this one instant; index the ids if a feed
-            // stamps thousands of trades with one time.
-            if !live
-                && self.lost_until.is_none()
-                && (self.unheld_live.first()).is_none_or(|first| first.ts == trade.ts)
-                && !(trade.id.is_some() && self.unheld_live.iter().any(|kept| kept.id == trade.id))
-            {
-                self.unheld_live.push(trade.clone());
+            if !live && self.lost_until.is_none() {
+                // A page may stamp its copy of a trade with an id apart from the stream.
+                let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+                let (kept_at, kept) = self.unheld_live.get_or_insert_with(|| (time, Vec::new()));
+                // shortcut: a scan per trade with an id at this one instant; index the ids if a
+                // feed stamps thousands of trades with one time.
+                if *kept_at == time
+                    && !(trade.id.is_some() && kept.iter().any(|other| other.id == trade.id))
+                {
+                    kept.push(trade.clone());
+                }
             }
             if held.is_some() || live {
                 self.insert(trade, changed);

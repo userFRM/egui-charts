@@ -906,11 +906,11 @@ impl OrderFlowInput {
     /// the open of an older bar known to hold the sink's allocations. A bar the sink opened a
     /// nanosecond after the one before starts with an execution no later than that one's open,
     /// so a run of such bars counts from the open of its first. Older paged ones belong to
-    /// history bars, which the chart did not fold from them. At the first instant where the
-    /// store left a live execution to a page, the page may hold executions the stream never
-    /// sent, so the live ones the store kept apart count there and none of the page's. Returns
-    /// the parts and the grouping after them, or `None` unless they rebuild every bar through
-    /// the newest.
+    /// history bars, which the chart did not fold from them. At the first instant, as the page
+    /// stamps it, where the store left a live execution to a page, the page may hold executions
+    /// the stream never sent, so the live ones the store kept apart count in place of the page's
+    /// executions of that instant. Returns the parts and the grouping after them, or `None`
+    /// unless they rebuild every bar through the newest.
     #[cfg(feature = "widget")]
     fn chart_run<'a>(
         clock: &BarClock,
@@ -933,11 +933,10 @@ impl OrderFlowInput {
         let live = trades
             .live()
             .filter(|trade| lost.is_none_or(|lost| trade.ts > lost));
-        let unheld = trades.unheld_live();
-        let unheld_at = unheld.first().map(|trade| trade.ts);
+        let (unheld_at, unheld) = trades.unheld_live().unzip();
         let mut held: Vec<_> = (trades.iter().take(paged))
             .filter(|trade| Some(trade.ts) != unheld_at)
-            .chain(unheld)
+            .chain(unheld.into_iter().flatten())
             .filter(|trade| from.is_some_and(|from| trade.ts >= from))
             .chain(live)
             .collect();
@@ -1860,6 +1859,62 @@ mod tests {
             [(start, 2.0, 2.0)]
         );
         assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
+    }
+
+    /// Hand counts on 3t at price 100, every execution of 1 with an id. A trade page answered in
+    /// the drain that streams them holds copies it stamps apart from the stream: the sell of
+    /// 10:00:00, stamped 400 microseconds later, after a buy at 09:59:59 that the page lacks; or
+    /// a buy at 10:00:00 and a sell 400 microseconds later, both stamped 10:00:00. With buys at
+    /// 10:00:01 and 10:00:02, the chart's bars hold the first three executions (volume 3, delta
+    /// 1) and the last (1, 1). A source rebuilt from the held executions counts each copied
+    /// execution once and shows those bars, as the source connected from the start does.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn a_page_copy_stamped_apart_from_its_live_execution_counts_once() {
+        use OrderSide::{Buy, Sell};
+        let clock = BarClock::new("3t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let fill = |(micros, side, id)| {
+            let at = start + TimeDelta::microseconds(micros);
+            Tick::new(at, 100.0, 1.0, Some(side)).with_id(id)
+        };
+        let second = 1_000_000;
+        let rows = [
+            (
+                [(-second, Buy, 1), (0, Sell, 2)],
+                vec![(400, Sell, 2)],
+                -second,
+            ),
+            (
+                [(0, Buy, 1), (400, Sell, 2)],
+                vec![(0, Buy, 1), (0, Sell, 2)],
+                0,
+            ),
+        ];
+        for (first, page, open) in rows {
+            let inbox = Arc::new(super::super::inbox::Inbox::default());
+            let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+            let stayed = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+            inbox.study_inputs(sink.id, vec![stayed.clone()]);
+            let buys = [(second, Buy, 3), (2 * second, Buy, 4)];
+            for trade in first.into_iter().chain(buys) {
+                sink.push_tick(fill(trade));
+            }
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let bars: Vec<_> = updates.bars.values().map(|(bar, _)| bar.clone()).collect();
+            // The chart applies the page before the executions it drains with it.
+            let mut held = super::super::trades::Trades::new(100);
+            held.prepend(page.into_iter().map(fill).collect(), &mut |_, _| ());
+            held.append(updates.trades, &mut |_, _| ());
+            let added = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+            added.replace_trades(&clock, &held, &bars);
+            let expected = BTreeMap::from([
+                (start + TimeDelta::microseconds(open), [3.0, 1.0, 0.0]),
+                (start + TimeDelta::seconds(2), [1.0, 1.0, 0.0]),
+            ]);
+            let values = [stayed.values(), added.values()];
+            assert_eq!(values, [expected.clone(), expected], "first bar at {open}");
+        }
     }
 
     /// Hand counts: three-tick bars of buys of one open at 09:59:57 and 10:00:00, three each.
