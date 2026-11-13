@@ -258,7 +258,10 @@ pub struct MarginsSettings {
     pub top_percent: f32,
     /// Empty space below prices, as a percentage of pane height.
     pub bottom_percent: f32,
-    /// Empty space after the latest bar, in bars.
+    /// Empty space after the latest bar, in bars; a margin set in pixels reads as its width in
+    /// bars at the current bar spacing. Settings without
+    /// [`ScalesAppearanceSettings::font_family`], as saved when this held whole bars, keep the
+    /// chart's margin when this equals its whole bars.
     pub right_bars: f32,
 }
 
