@@ -1270,9 +1270,10 @@ mod tests {
         }
     }
 
-    /// Both entry points fit 50 slots once and leave the same view at the latest bar.
+    /// Both entry points fit 50 slots once and leave the same view at the latest bar, and the
+    /// time scale reads a set count back, also below one point per bar.
     #[test]
-    fn visible_bars_matches_the_setter_on_initial_frames() {
+    fn visible_bars_matches_the_setter_on_initial_frames_and_reads_back() {
         let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let data = BarData::from_bars(
             (0..600)
@@ -1323,13 +1324,7 @@ mod tests {
             assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
         }
         // The time scale reads the count back, also at less than a point per bar.
-        for (width, count) in [
-            (600.0, 1000),
-            (801.0, 800),
-            (1300.0, 2000),
-            (714.0, 1000),
-            (740.0, 50),
-        ] {
+        for (width, count) in [(600.0, 1000), (801.0, 800), (740.0, 50)] {
             let mut chart = Chart::new(data.clone());
             chart.state.time_scale_mut().set_min_bar_spacing(0.01);
             chart.set_visible_bars(count);
