@@ -595,6 +595,9 @@ pub struct ChartTypeParams {
     pub footprint_color_by: FootprintColor,
     /// Footprint: buy, sell, text and neutral colours. None follows the chart theme.
     pub footprint_colors: [Option<egui::Color32>; 4],
+    /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
+    /// imbalance zones. None follows the buy or sell colour.
+    pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom.
     pub footprint_row_ticks: u32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
@@ -733,6 +736,7 @@ impl Default for ChartTypeParams {
             footprint_profile: false,
             footprint_color_by: FootprintColor::VolumeSteps,
             footprint_colors: [None; 4],
+            footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
             footprint_imbalance: true,
             footprint_poc: true,
@@ -905,6 +909,7 @@ mod tests {
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
+            "footprint_imbalance_colors": [[200, 30, 220, 255], null],
             "tpo_letters": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
@@ -953,6 +958,10 @@ mod tests {
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
+        );
+        assert_eq!(
+            legacy["footprint_imbalance_colors"],
+            serde_json::json!([null, null])
         );
         for field in [
             "footprint_stacked_imbalances",

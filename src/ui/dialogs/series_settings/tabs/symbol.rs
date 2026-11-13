@@ -265,22 +265,7 @@ impl SymbolTab {
             .into_iter()
             .enumerate()
             {
-                let label = ui.label(l10n::text(ui.ctx(), name));
-                ui.horizontal(|ui| {
-                    let color = &mut params.footprint_colors[i];
-                    let mut selected = color.unwrap_or(default);
-                    if Self::color_picker(ui, &mut selected) {
-                        *color = Some(selected);
-                    }
-                    if ui
-                        .small_button(l10n::text(ui.ctx(), "Auto"))
-                        .labelled_by(label.id)
-                        .clicked()
-                    {
-                        *color = None;
-                    }
-                });
-                ui.end_row();
+                Self::followed_color(ui, name, &mut params.footprint_colors[i], default, "Auto");
             }
         });
         Self::section(ui, "Rows", true, |ui| {
@@ -341,6 +326,18 @@ impl SymbolTab {
             )
             .labelled_by(label.id);
             ui.end_row();
+            // Unset, the marks of a side take its buy or sell colour.
+            let sides = [
+                params.footprint_colors[0].unwrap_or(up),
+                params.footprint_colors[1].unwrap_or(down),
+            ];
+            for (i, name) in ["Buy imbalance colour", "Sell imbalance colour"]
+                .into_iter()
+                .enumerate()
+            {
+                let color = &mut params.footprint_imbalance_colors[i];
+                Self::followed_color(ui, name, color, sides[i], "Same as cells");
+            }
         });
         Self::section(ui, "Annotations", false, |ui| {
             for (name, value) in [
@@ -437,6 +434,31 @@ impl SymbolTab {
                 }
             }
         });
+    }
+
+    /// A colour row whose `reset` button returns the colour to following `default`.
+    fn followed_color(
+        ui: &mut Ui,
+        name: &str,
+        color: &mut Option<Color32>,
+        default: Color32,
+        reset: &str,
+    ) {
+        let label = ui.label(l10n::text(ui.ctx(), name));
+        ui.horizontal(|ui| {
+            let mut selected = color.unwrap_or(default);
+            if Self::color_picker(ui, &mut selected) {
+                *color = Some(selected);
+            }
+            if ui
+                .small_button(l10n::text(ui.ctx(), reset))
+                .labelled_by(label.id)
+                .clicked()
+            {
+                *color = None;
+            }
+        });
+        ui.end_row();
     }
 
     fn value_area(ui: &mut Ui, share: &mut Option<f64>) {

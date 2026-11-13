@@ -173,7 +173,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Size-filtered cumulative delta has a study pane with its own scale and lot-precision readouts.
 - [x] Combined size-range delta labels its inclusive buckets; rolling volume/delta supports histograms.
 - [x] Delta-percentage and bid/ask-ratio thresholds mark qualifying footprint bars and are available in both Symbol dialogs; `FootprintStudyConfig::min_delta` sets a minimum for the delta POC.
-- [x] Footprint cells offer fixed, delta-opacity and imbalance colouring and a dominant-side column, with abbreviated values, zero display and a font size range that scales with row volume, all in both Symbol dialogs.
+- [x] Footprint cells offer fixed, delta-opacity and imbalance colouring and a dominant-side column, with abbreviated values, zero display and a font size range that scales with row volume, all in both Symbol dialogs. Imbalance strips, imbalance colouring and stacked imbalance zones take the buy and sell colours, or buy and sell imbalance colours of their own.
 - [x] Footprint extreme bid/ask-ratio annotations and pullback highlights are available in both Symbol dialogs, off by default.
 - [x] Imbalance zones can compare at the same price or diagonally, expire after a configurable number of bars through `FootprintStudyConfig::extend_bars`, and report unvisited, revisited or expired state, which the renderer fades and names on hover.
 - [x] Unfinished highs need sell volume at the bar's highest row and unfinished lows need buy volume at its lowest row; their levels extend until a later bar revisits them or the configured number of bars ends.

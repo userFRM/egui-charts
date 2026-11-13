@@ -36,6 +36,12 @@ pub struct FootprintConfig {
     pub ask_color: Color32,
     /// Sell colour.
     pub bid_color: Color32,
+    /// Buy colour of imbalance strips, imbalance colouring and stacked imbalance zones, or
+    /// `None`, the default, for `ask_color`.
+    pub imbalance_ask_color: Option<Color32>,
+    /// Sell colour of imbalance strips, imbalance colouring and stacked imbalance zones, or
+    /// `None`, the default, for `bid_color`.
+    pub imbalance_bid_color: Option<Color32>,
     /// Text colour and POC outline, or POC fill under [`FootprintColor::VolumeSteps`], which
     /// picks black or white numbers for each cell, or each half of a split cell, instead. The
     /// default suits a dark chart; set the theme's text colour on a light one, or the fill, lines
@@ -66,8 +72,8 @@ pub struct FootprintConfig {
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
     /// Put a strip along the outer edge of a side that dominates under the imbalance settings,
-    /// under [`FootprintColor::VolumeSteps`]: in the side's colour, or its strongest shade next to
-    /// a cell of that colour.
+    /// under [`FootprintColor::VolumeSteps`]: in the side's imbalance colour, or its strongest
+    /// shade next to a cell of that colour.
     pub show_imbalance: bool,
     /// Outline the highest-volume row when its cells are large enough for the stroke, or fill it
     /// under [`FootprintColor::VolumeSteps`].
@@ -119,6 +125,8 @@ impl Default for FootprintConfig {
             color_by: FootprintColor::VolumeSteps,
             ask_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bullish,
             bid_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bearish,
+            imbalance_ask_color: None,
+            imbalance_bid_color: None,
             text_color: Color32::WHITE,
             neutral_color: Color32::GRAY,
             background: None,
@@ -159,6 +167,8 @@ impl FootprintConfig {
             color_by: params.footprint_color_by,
             ask_color,
             bid_color,
+            imbalance_ask_color: params.footprint_imbalance_colors[0],
+            imbalance_bid_color: params.footprint_imbalance_colors[1],
             text_color,
             neutral_color,
             auto_row_height: (params.footprint_row_ticks == 0).then_some(16.0),
@@ -203,6 +213,14 @@ impl FootprintConfig {
             }),
             ..Default::default()
         }
+    }
+
+    /// The sell and buy colours of imbalance marks: their own, or else the side's.
+    fn imbalance_colors(&self) -> [Color32; 2] {
+        [
+            self.imbalance_bid_color.unwrap_or(self.bid_color),
+            self.imbalance_ask_color.unwrap_or(self.ask_color),
+        ]
     }
 }
 
@@ -283,6 +301,7 @@ pub fn render_footprint(
         .unwrap_or_else(|| painter.ctx().active_theme().chart.bg)
         .to_opaque();
     let steps = config.color_by == FootprintColor::VolumeSteps;
+    let imbalance_colors = config.imbalance_colors();
     let spine_drawn = !has_ladder(config);
     // Use the existing half-gap so price markers do not shrink execution columns.
     let gutter = (mapping.bar_spacing * 0.04).min(2.5);
@@ -458,14 +477,14 @@ pub fn render_footprint(
                             imbalances.0 && column == 0,
                             rect.left(),
                             -1.0,
-                            config.bid_color,
+                            imbalance_colors[0],
                             shades[0],
                         ),
                         (
                             imbalances.1 && column + 1 == columns,
                             rect.right(),
                             1.0,
-                            config.ask_color,
+                            imbalance_colors[1],
                             shades[1],
                         ),
                     ] {
@@ -539,12 +558,11 @@ pub fn render_footprint(
                         ) == (true, true)
                     {
                         if ladder {
-                            let color = [config.bid_color, config.ask_color][side];
-                            fills[1] = Some((fill, color.gamma_multiply(0.5)));
+                            fills[1] = Some((fill, imbalance_colors[side].gamma_multiply(0.5)));
                         } else {
                             let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
-                            fills[1] = Some((bid, config.bid_color.gamma_multiply(0.5)));
-                            fills[2] = Some((ask, config.ask_color.gamma_multiply(0.5)));
+                            fills[1] = Some((bid, imbalance_colors[0].gamma_multiply(0.5)));
+                            fills[2] = Some((ask, imbalance_colors[1].gamma_multiply(0.5)));
                         }
                     }
                     let inks = if !steps {
@@ -1238,8 +1256,8 @@ fn cell_color(
                 config.diagonal,
                 config.imbalance_min_volume,
             ) {
-                (true, false) => config.bid_color,
-                (false, true) => config.ask_color,
+                (true, false) => config.imbalance_colors()[0],
+                (false, true) => config.imbalance_colors()[1],
                 _ => config.neutral_color,
             }
         }
@@ -1504,6 +1522,7 @@ pub(crate) fn render_footprint_annotations(
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.
 /// Stacks, naked POCs and unfinished levels extend to their first revisit, their expiry or the
 /// last displayed bar, in full colour while unvisited and dimmed once revisited or expired;
+/// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
 /// nearest and the ratio marker beyond it. Captions avoid every footprint and its marker rows; details are
@@ -1581,12 +1600,10 @@ pub fn render_footprint_studies(
             continue;
         }
         let color = match study.kind {
-            FootprintStudyKind::StackedBid
-            | FootprintStudyKind::DeltaBid
-            | FootprintStudyKind::RatioBid => config.bid_color,
-            FootprintStudyKind::StackedAsk
-            | FootprintStudyKind::DeltaAsk
-            | FootprintStudyKind::RatioAsk => config.ask_color,
+            FootprintStudyKind::StackedBid => config.imbalance_colors()[0],
+            FootprintStudyKind::StackedAsk => config.imbalance_colors()[1],
+            FootprintStudyKind::DeltaBid | FootprintStudyKind::RatioBid => config.bid_color,
+            FootprintStudyKind::DeltaAsk | FootprintStudyKind::RatioAsk => config.ask_color,
             _ => config.text_color,
         };
         let color = match study.state {
@@ -2663,11 +2680,13 @@ mod tests {
                     }
                 }
             }
-            for (minimum, middle, zone) in [
-                (0.0, true, true),
-                (9.0, true, true),
-                (10.0, false, false),
-                (0.0, true, true),
+            for (minimum, middle, zone, own) in [
+                (0.0, true, true, None),
+                (9.0, true, true, None),
+                (10.0, false, false, None),
+                (0.0, true, true, None),
+                // An imbalance colour of its own replaces the buy colour in cells and zones.
+                (0.0, true, true, Some(Color32::from_rgb(255, 0, 255))),
             ] {
                 let config = FootprintConfig {
                     color_by: FootprintColor::Imbalance,
@@ -2676,6 +2695,7 @@ mod tests {
                     show_poc: false,
                     auto_row_height: (ticks == 1).then_some(20.0),
                     imbalance_min_volume: minimum,
+                    imbalance_ask_color: own,
                     studies: Some(crate::studies::FootprintStudyConfig {
                         naked_poc: false,
                         delta_poc: false,
@@ -2702,14 +2722,10 @@ mod tests {
                     },
                 );
                 output.textures_delta.clear();
+                let buy = own.unwrap_or(config.ask_color);
                 for (price, active) in [(102.0, true), (104.0, middle), (106.0, true)] {
                     let top = map.price_to_y(price + 1.5);
-                    let color = if active {
-                        config.ask_color
-                    } else {
-                        config.neutral_color
-                    }
-                    .gamma_multiply(0.5);
+                    let color = if active { buy } else { config.neutral_color }.gamma_multiply(0.5);
                     let filled = output.shapes.iter().any(|s| match &s.shape {
                         Shape::Mesh(mesh) => mesh
                             .vertices
@@ -2719,9 +2735,10 @@ mod tests {
                     });
                     assert!(filled, "ticks {ticks}, minimum {minimum}, price {price}");
                 }
-                let has_zone = output.shapes.iter().any(
-                    |s| matches!(&s.shape, Shape::Rect(r) if r.stroke.color == config.ask_color),
-                );
+                let has_zone = output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, Shape::Rect(r) if r.stroke.color == buy));
                 assert_eq!(has_zone, zone, "ticks {ticks}, minimum {minimum}");
             }
         }
@@ -3537,6 +3554,36 @@ mod tests {
             }),
             "(spacing, strip gap from its cell, strip colour, cell colour): {marks:?}"
         );
+    }
+
+    /// A buy imbalance colour of its own paints the strip and leaves the cell it marks in the
+    /// buy colour's shade. Rows as above: 40 bought at 103 is the bar's only imbalance.
+    #[test]
+    fn imbalance_strip_takes_its_own_colour() {
+        let rows = [
+            (104.0, 10.0, 10.0),
+            (103.0, 20.0, 40.0),
+            (102.0, 10.0, 90.0),
+            (101.0, 60.0, 20.0),
+            (100.0, 30.0, 10.0),
+        ];
+        let own = Color32::from_rgb(255, 0, 255);
+        let config = FootprintConfig {
+            auto_row_height: None,
+            text_color: Color32::BLACK,
+            imbalance_ask_color: Some(own),
+            ..Default::default()
+        };
+        let (shapes, map) = paint_themed(&rows, 120.0, &crate::theme::Theme::light(), &config);
+        let quads = quads(&shapes);
+        let y = map.price_to_y(103.0);
+        // The buy cell ends at the outer edge of the bar's only column.
+        let edge = map.idx_to_x(0) - 120.0 * 0.46 + 120.0 * 0.92 - 0.5;
+        let strip = quads.iter().find(|(rect, _)| {
+            rect.width() <= 3.01 && rect.left() >= edge - 0.01 && rect.y_range().contains(y)
+        });
+        assert_eq!(strip.map(|strip| strip.1), Some(own));
+        assert_ne!(color_at(&quads, pos2(edge - 1.0, y)), Some(own));
     }
 
     /// Under the volume step colouring a sell × buy cell is split into a sell half and a buy half.
