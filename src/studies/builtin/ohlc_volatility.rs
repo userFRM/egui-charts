@@ -10,7 +10,8 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct OhlcVolatility {
     period: usize,
-    /// Bars per year the result is annualized over (252 for stocks, 365 for crypto)
+    /// Trading days per year the result is annualized over, one bar per day (252 for stocks, 365
+    /// for crypto); bars shorter than a day need the bars in a year instead
     trading_days: f64,
     values: IndicatorValues,
     colors: Vec<Color32>,
