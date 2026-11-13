@@ -320,6 +320,26 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // A Rank Correlation had no average, and drew no levels, before it opened with an
+            // average, three levels and the band between them filled.
+            "RankCorr" if !has("smoothing") || self.settings.levels.is_empty() => {
+                if !has("smoothing") {
+                    template
+                        .inputs
+                        .push(("smoothing".to_owned(), InputValue::Choice(0)));
+                }
+                if self.settings.levels.is_empty() {
+                    let declared = crate::studies::RankCorrelationIndex::default();
+                    let (levels, ..) = super::settings::declared_levels(&declared);
+                    template.settings.levels = levels
+                        .into_iter()
+                        .map(|level| crate::studies::LevelStyle {
+                            visible: false,
+                            ..level
+                        })
+                        .collect();
+                }
+            }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
                 if self
@@ -345,7 +365,7 @@ mod tests {
     use crate::model::{Bar, PriceSource, SeriesScale, Session, SessionWindow, TimezoneId};
     use crate::studies::{
         AverageLine, AverageType, CVD, CloseToCloseVol, EhlersFisher, HL2, HLC3, MACombination,
-        MARibbon, PriceChannel, RSI, TradingSessions, VolumeWeightedAvgPrice,
+        MARibbon, PriceChannel, RSI, RankCorrelationIndex, TradingSessions, VolumeWeightedAvgPrice,
     };
     use chrono::{NaiveTime, TimeZone, Utc, Weekday};
     use egui::Color32;
@@ -764,7 +784,8 @@ mod tests {
     }
 
     /// An RSI and a VWAP saved before their defaults gained an average and a band restore with the
-    /// plots they had.
+    /// plots they had, and a Rank Correlation saved before it had an average, levels and a filled
+    /// band restores without them.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -839,6 +860,31 @@ mod tests {
         // Saved since then, a filled band stays filled.
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
+
+        // A Rank Correlation as the release before its levels saved it draws none of them and
+        // fills no band, one saved before it had an average draws none, and one saved since draws
+        // the average, all three levels and the band.
+        let older: StudyTemplate = serde_json::from_str(
+            r#"{"name":"RankCorr","inputs":[["period",{"Length":14}],["smoothing",{"Choice":0}],["smoothing_length",{"Length":14}],["smoothing_deviation",{"Number":2.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RankCorrelationIndex.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let shown = |study: &dyn Indicator| {
+            let levels = study.pane().levels.into_iter();
+            levels
+                .filter(|level| level.1 != Color32::TRANSPARENT)
+                .count()
+        };
+        let drawn = |template: &StudyTemplate| {
+            let study = template.create().unwrap();
+            let levels = (study.settings().levels.len(), shown(&*study));
+            (study.line_count(), levels, study.pane().fill_between_levels)
+        };
+        assert_eq!(drawn(&older), (1, (3, 0), false));
+        let mut oldest = older.clone();
+        oldest.inputs.truncate(1);
+        assert_eq!(drawn(&oldest), (1, (3, 0), false));
+        let current = StudyTemplate::from_study(&RankCorrelationIndex::default());
+        assert_eq!(drawn(&current), (2, (3, 3), true));
     }
 
     /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),

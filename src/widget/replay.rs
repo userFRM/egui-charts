@@ -100,7 +100,8 @@ impl Chart {
             });
         let view = self.order_book_view();
         let heatmap_config = self.liquidity_heatmap_config();
-        self.set_replay_time(Some(driver.time()));
+        let entry = driver.time();
+        self.set_replay_time(Some(entry));
         let window = self.replay.take().expect("replay window");
         let feed = self.feed_link.take();
         self.attach_feed(driver.clone(), 1);
@@ -123,6 +124,8 @@ impl Chart {
             feed,
             window,
         });
+        // The driver delivers no execution past its cursor, so lift the cutoff the entry set.
+        self.replay_order_flow(entry);
         // The driver's cutoff is one nanosecond after the time the entry windowed at.
         self.apply_replay_window();
     }
@@ -283,23 +286,28 @@ impl Chart {
         true
     }
 
-    /// Applies the replay cutoff, or its end, to the order-flow inputs of the studies, which the
-    /// paused feed no longer updates, and recalculates those studies from the bar containing
-    /// `since`, the earlier of the old and the new cutoff.
+    /// Applies the candle replay's cutoff, or its end, to the order-flow inputs of the studies,
+    /// which the paused feed no longer updates, and recalculates those studies from the bar
+    /// containing `since`, the earlier of the old and the new cutoff. A market replay's feed
+    /// needs no cutoff, since its driver delivers no execution past its cursor.
     fn replay_order_flow(&mut self, since: DateTime<Utc>) {
-        let time = self.replay_time();
+        let time = self.replay.as_ref().map(|replay| replay.time);
         let link = self.feed_link.as_ref();
         let clock = link.map_or_else(|| self.bar_clock(), |link| link.clock.clone());
         let trades = link.map(|link| &link.trades);
         let open = clock.bar_open(since);
         let from = (self.state.data().bars).partition_point(|bar| clock.bar_open(bar.time) < open);
+        // The window keeps the bars after the cutoff aside; the executions are grouped along all.
+        let history = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
+            .map_or(&[][..], Vec::as_slice);
         for (at, study) in self.studies.indicators().iter().enumerate() {
             let inputs = study.order_flow_inputs();
             if inputs.is_empty() {
                 continue;
             }
             for input in inputs {
-                input.set_replay(&clock, time, trades);
+                input.set_replay(&clock, time, trades, history);
             }
             self.pending_from[at] = Some(self.pending_from[at].map_or(from, |old| old.min(from)));
         }

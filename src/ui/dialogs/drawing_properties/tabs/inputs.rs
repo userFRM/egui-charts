@@ -1882,9 +1882,8 @@ mod tests {
             let mut saved = serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
             saved["levels"][3]["text"] = "Halfway".into();
             saved["levels"][3]["width"] = 4.0.into();
-            if tool != Tool::FibonacciRetracement {
-                saved["levels"][3]["line_style"] = "Dotted".into();
-            }
+            saved["levels"][3]["line_style"] = "Dotted".into();
+
             drawing.fib_config = Some(serde_json::from_value(saved.clone()).unwrap());
             let mut peer = drawing.clone();
             peer.id = 8;
@@ -1904,85 +1903,71 @@ mod tests {
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 enter(&mut dialog, &mut chart, &ctx, "Font size", "20");
                 let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                let labels = if tool == Tool::FibonacciRetracement {
-                    vec![
-                        "Label position",
-                        "Label height",
-                        "Text position",
-                        "Text height",
-                        "Show level text",
-                    ]
-                } else {
-                    vec!["Label position", "Label height"]
-                };
+                let labels = ["Label position", "Label height"];
                 for label in labels {
                     assert!(texts.iter().any(|(text, _)| text == label), "{label}");
                 }
-                if tool != Tool::FibonacciRetracement {
-                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                    let bottom = texts
-                        .iter()
-                        .find(|(text, _)| text == "Bottom")
-                        .unwrap()
-                        .1
-                        .center();
-                    click(&mut dialog, &mut chart, &ctx, bottom);
-                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                    let top = texts
-                        .iter()
-                        .find(|(text, _)| text == "Top")
-                        .unwrap()
-                        .1
-                        .center();
-                    click(&mut dialog, &mut chart, &ctx, top);
-                    assert_eq!(
-                        serde_json::to_value(
-                            chart.drawings().drawings[0].fib_config.as_ref().unwrap()
-                        )
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let bottom = texts
+                    .iter()
+                    .find(|(text, _)| text == "Bottom")
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, bottom);
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let top = texts
+                    .iter()
+                    .find(|(text, _)| text == "Top")
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, top);
+                assert_eq!(
+                    serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
                         .unwrap()["time_label_vertical"],
-                        "Top"
-                    );
-                }
+                    "Top"
+                );
+
                 let mut edited_levels = saved["levels"].clone();
                 let mut peer_levels =
                     serde_json::to_value(&peer.fib_config.as_ref().unwrap().levels).unwrap();
-                if tool != Tool::FibonacciRetracement {
-                    dialog.active_tab = PropertiesTab::Inputs;
-                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                    let styles: Vec<_> = texts.iter().filter(|(text, _)| text == "Solid").collect();
-                    assert!(styles.len() > 1, "each time level offers a pattern");
-                    click(&mut dialog, &mut chart, &ctx, styles[1].1.center());
-                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                    let dashed = texts
-                        .iter()
-                        .find(|(text, _)| text == "Dashed")
-                        .unwrap()
-                        .1
-                        .center();
-                    click(&mut dialog, &mut chart, &ctx, dashed);
-                    let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
-                    let width = field(&texts, "Dashed").1;
-                    click(&mut dialog, &mut chart, &ctx, width);
-                    frame(&mut dialog, &mut chart, &ctx, vec![Event::Text("6".into())]);
-                    for pressed in [true, false] {
-                        frame(
-                            &mut dialog,
-                            &mut chart,
-                            &ctx,
-                            vec![Event::Key {
-                                key: Key::Enter,
-                                physical_key: None,
-                                pressed,
-                                repeat: false,
-                                modifiers: Modifiers::NONE,
-                            }],
-                        );
-                    }
-                    for levels in [&mut edited_levels, &mut peer_levels] {
-                        levels[0]["line_style"] = "Dashed".into();
-                        levels[0]["width"] = 6.0.into();
-                    }
+                dialog.active_tab = PropertiesTab::Inputs;
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let styles: Vec<_> = texts.iter().filter(|(text, _)| text == "Solid").collect();
+                assert!(styles.len() > 1, "each time level offers a pattern");
+                click(&mut dialog, &mut chart, &ctx, styles[1].1.center());
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let dashed = texts
+                    .iter()
+                    .find(|(text, _)| text == "Dashed")
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, dashed);
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let width = field(&texts, "Dashed").1;
+                click(&mut dialog, &mut chart, &ctx, width);
+                frame(&mut dialog, &mut chart, &ctx, vec![Event::Text("6".into())]);
+                for pressed in [true, false] {
+                    frame(
+                        &mut dialog,
+                        &mut chart,
+                        &ctx,
+                        vec![Event::Key {
+                            key: Key::Enter,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                    );
                 }
+                for levels in [&mut edited_levels, &mut peer_levels] {
+                    levels[0]["line_style"] = "Dashed".into();
+                    levels[0]["width"] = 6.0.into();
+                }
+
                 dialog.active_tab = PropertiesTab::Style;
                 let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
                 let pos = texts
