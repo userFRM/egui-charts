@@ -198,7 +198,7 @@ Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;
 Chart,Keyboard shortcuts,Reset chart,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Save layout,verified,library,src/config/keyboard.rs;terminal/src/layouts.rs,
 Chart,Keyboard shortcuts,Scale toggles,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2798;2799;2810
-Chart,Keyboard shortcuts,Shortcut list dialog,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/dialogs/keyboard_shortcuts/mod.rs,2798;2811
+Chart,Keyboard shortcuts,Shortcut list dialog,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/dialogs/keyboard_shortcuts/mod.rs,2798
 Chart,Keyboard shortcuts,Snapshot,incomplete,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs,
 Chart,Keyboard shortcuts,Type to change symbol,incomplete,host,src/widget/keyboard.rs,2798;2799;2800;2810
 Chart,Keyboard shortcuts,Undo and redo,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs;src/widget/layout.rs;src/widget/studies.rs;src/studies/settings.rs,2505;2522;2688;2689;2810;2812;2813;2844
