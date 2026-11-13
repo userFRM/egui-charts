@@ -108,6 +108,12 @@ For feed-built bars, keep the feed's
 and session metadata consistent with the venue. Changing display labels cannot
 reaggregate prebuilt historical OHLC bars. Daily and longer bars identify trading
 dates; follow the [data contract](data-model.mdx) rather than applying an offset
-to every bar. Synchronize charts using the
+to every bar. A chart reads the date of such a bar on the clock it was stamped
+on: the bar clock of the display zone for the bars of the chart's own feed, and
+UTC for bars given with `Chart::new`, `ChartBuilder` or `Chart::set_data`, unless
+those bars sit at midnight in the display zone. A bar stamped at 00:00 UTC on its
+trading date therefore keeps that date in the crosshair, the tooltip,
+`Chart::format_time` and the time axis marks in every display zone. Intraday bars
+always read in the display zone. Synchronize charts using the
 [UTC time range](time-scale.mdx#logical-indices-and-utc-instants), even when their
 display clocks differ.

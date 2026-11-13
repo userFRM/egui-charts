@@ -159,7 +159,7 @@ impl Chart {
 
     /// Calendar zone behind the axis; `None` selects the system's local zone.
     pub(super) fn calendar_timezone(&self) -> Option<crate::model::TimezoneId> {
-        let timezone = self.display_timezone();
+        let timezone = self.label_timezone();
         match timezone {
             crate::scales::TimezoneMode::Local => None,
             _ => Some(timezone.to_tz().unwrap_or_default()),
