@@ -174,7 +174,12 @@ impl Chart {
     /// longer carry their trading date at 00:00 UTC, so they keep it in every display zone,
     /// unless they sit at midnight in the display zone; intraday bars and the bars of the
     /// chart's feed, stamped on the bar clock of the display zone, read in the display zone.
-    pub(crate) fn label_timezone(&self) -> crate::scales::TimezoneMode {
+    /// `bar_seconds` gives [`time_label_seconds`](Self::time_label_seconds), read only for
+    /// supplied bars on a time interval.
+    pub(crate) fn label_timezone(
+        &self,
+        bar_seconds: impl FnOnce() -> i64,
+    ) -> crate::scales::TimezoneMode {
         let zone = self.display_timezone();
         let local_midnight = |bar: &crate::model::Bar| {
             let wall = match &zone {
@@ -190,7 +195,7 @@ impl Chart {
             && !self
                 .timeframe
                 .is_some_and(crate::model::Timeframe::is_trade_based)
-            && self.time_label_seconds() >= 86_400
+            && bar_seconds() >= 86_400
             && !bars
                 .first()
                 .into_iter()
@@ -205,7 +210,7 @@ impl Chart {
 
     /// Dates and the axis marks read in [`label_timezone`](Self::label_timezone).
     pub(crate) fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
-        self.time_formatter_in(self.label_timezone())
+        self.time_formatter_in(self.label_timezone(|| self.time_label_seconds()))
     }
 
     /// Formats in `timezone`, for instants with a clock such as fills, on any interval.

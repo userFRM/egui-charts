@@ -157,9 +157,21 @@ impl Chart {
         }
     }
 
-    /// Calendar zone behind the axis; `None` selects the system's local zone.
+    /// Calendar zone of the time conversions; `None` selects the system's local zone.
     pub(super) fn calendar_timezone(&self) -> Option<crate::model::TimezoneId> {
-        let timezone = self.label_timezone();
+        // Only an interval steps by calendar months; without one the zone is unread, and dating
+        // the bars would sample their spacing on every conversion.
+        Self::calendar_zone(if self.calendar_timeframe().is_some() {
+            self.label_timezone(|| self.time_label_seconds())
+        } else {
+            self.display_timezone()
+        })
+    }
+
+    /// The calendar of `timezone`; `None` selects the system's local zone.
+    pub(super) fn calendar_zone(
+        timezone: crate::scales::TimezoneMode,
+    ) -> Option<crate::model::TimezoneId> {
         match timezone {
             crate::scales::TimezoneMode::Local => None,
             _ => Some(timezone.to_tz().unwrap_or_default()),
