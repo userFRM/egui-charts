@@ -97,6 +97,9 @@ pub struct IndicatorPane {
     pub(super) background: Option<(Rect, crate::config::BackgroundStyle, egui::Color32)>,
     /// The chart's container painted the background, so the pane paints none.
     pub(super) skip_background: bool,
+    /// Colour of the legend text and the axis labels, the scale text colour of the chart showing
+    /// the pane. A pane shown on its own takes them from the egui style and the theme.
+    pub(super) text_color: Option<egui::Color32>,
 }
 
 impl IndicatorPane {
@@ -124,6 +127,7 @@ impl IndicatorPane {
             legend_backdrop: 0.6,
             background: None,
             skip_background: false,
+            text_color: None,
         }
     }
 
@@ -150,7 +154,9 @@ impl IndicatorPane {
         // Get chart background and text colors from theme
         let colors = ui.active_theme().chart;
         let chart_bg = colors.bg;
-        let text_color = ui.style().visuals.text_color();
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| ui.style().visuals.text_color());
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
@@ -244,7 +250,9 @@ impl IndicatorPane {
         // Get chart background and text colors from theme
         let colors = ui.active_theme().chart;
         let chart_bg = colors.bg;
-        let text_color = ui.style().visuals.text_color();
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| ui.style().visuals.text_color());
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
@@ -391,7 +399,9 @@ impl IndicatorPane {
         // Get chart background and text colors from theme
         let colors = ui.active_theme().chart;
         let chart_bg = colors.bg;
-        let text_color = ui.style().visuals.text_color();
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| ui.style().visuals.text_color());
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones

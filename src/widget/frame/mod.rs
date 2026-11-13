@@ -2745,6 +2745,7 @@ impl Chart {
                     axis,
                     &study_axis,
                     None,
+                    colors.text,
                     &|pos| self.background_at(rect, pos),
                 ));
         }

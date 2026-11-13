@@ -342,7 +342,9 @@ impl IndicatorPane {
             },
             |axis| axis.right(),
         );
-        let text_color = painter.ctx().active_theme().chart.axis_text;
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| painter.ctx().active_theme().chart.axis_text);
         let map = self
             .price_map
             .unwrap_or_else(|| {
@@ -1192,6 +1194,7 @@ mod tests {
                                 rect,
                                 &Default::default(),
                                 None,
+                                egui::Color32::WHITE,
                                 &|_| egui::Color32::BLACK,
                             );
                         } else {

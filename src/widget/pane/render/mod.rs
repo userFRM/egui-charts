@@ -580,6 +580,7 @@ impl Chart {
                     self.config.background_color,
                 ));
                 panel.skip_background = self.config.skip_background;
+                panel.text_color = Some(self.config.text_color);
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
