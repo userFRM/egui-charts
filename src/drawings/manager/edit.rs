@@ -901,4 +901,29 @@ mod tests {
         assert!(manager.undo());
         assert_eq!(folders(&manager), before);
     }
+
+    /// Redo restores an added drawing as it was when the add was undone, with the bar spacing
+    /// its text was first displayed at, which the drawing adopts after its undo step is recorded.
+    #[test]
+    fn redo_keeps_the_spacing_added_text_was_first_shown_at() {
+        let mut manager = DrawingManager::new();
+        let mut text = Drawing::new(0, DrawingToolType::TextLabel);
+        text.text = Some("Note".into());
+        text.text_follows_zoom = true;
+        text.chart_points = vec![ChartPoint::new(10.0, 100.0)];
+        let id = manager.add_drawing(text).unwrap();
+        // First shown at 6 points a bar, then zoomed in to 12.
+        manager.update_all_screen_coords(|bar: f32| bar * 6.0, |price: f64| price as f32);
+        let at_12 = |bar: f32| bar * 12.0;
+        manager.update_all_screen_coords(at_12, |price: f64| price as f32);
+        let zoom = |manager: &DrawingManager| {
+            let text = manager.drawings.iter().find(|d| d.id == id).unwrap();
+            text.text_zoom(at_12, at_12(10.0))
+        };
+        // Sized at 6 points a bar and shown at 12, the text is drawn at 12 / 6 = 2 times its size.
+        assert_eq!(zoom(&manager), 2.0, "before the undo");
+        assert!(manager.undo() && manager.redo());
+        manager.update_all_screen_coords(at_12, |price: f64| price as f32);
+        assert_eq!(zoom(&manager), 2.0, "after the redo");
+    }
 }

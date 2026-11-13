@@ -32,6 +32,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(TripleMA::new(l(0), l(1), l(2))),
         Box::new(MARibbon::new()),
         Box::new(RSI::new(l(0))),
+        Box::new(RSI::new(l(0)).with_divergence(true)),
         Box::new(MACD::new(l(0), l(1), l(2))),
         Box::new(
             MACD::new(l(0), l(1), l(2))
