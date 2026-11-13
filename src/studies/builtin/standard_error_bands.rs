@@ -25,7 +25,9 @@ const WITH_LENGTH: [usize; 5] = [1, 2, 3, 4, 5];
 /// The smoothing inputs average the regression value and its standard error before the bands are
 /// formed, so the middle line and the distance of the bands from it follow the chosen average.
 /// With no smoothing, the default, both are the values of the latest `period` closes. The three
-/// lines are undefined while the window or the average lacks bars or holds a missing close.
+/// lines are undefined while the window or the average lacks bars. A missing close makes them
+/// undefined while it is in the window; an SMA, WMA or VWMA stays undefined until it has left the
+/// average too, where an EMA or SMMA resumes from the value it held before the gap.
 #[derive(Clone)]
 pub struct StandardErrorBands {
     period: usize,
