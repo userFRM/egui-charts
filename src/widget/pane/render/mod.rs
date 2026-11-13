@@ -1431,7 +1431,10 @@ impl Chart {
                     let mut cursors = std::mem::take(&mut self.cursor_modes);
                     let timescale = self.state.time_scale().clone();
                     let painter = ui.painter().clone();
-                    let time_formatter = self.build_time_formatter();
+                    // Sampled once: inferred spacing sorts the gaps of the bars in view.
+                    let bar_seconds = self.time_label_seconds();
+                    let time_formatter =
+                        self.time_formatter_in(self.label_timezone(|| bar_seconds));
                     self.handle_pane_drawings(
                         ui,
                         &mut drawings,
@@ -1441,7 +1444,7 @@ impl Chart {
                         &drawing_map,
                         &painter,
                         &timescale,
-                        (time_formatter.as_ref(), self.time_label_seconds()),
+                        (time_formatter.as_ref(), bar_seconds),
                         Some(pane_id),
                     );
                     let drawing_hit = pane_response
