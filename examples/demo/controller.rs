@@ -148,8 +148,12 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         })
         .collect();
     // An anchor or session choice identifies the study, which names its price only once edited.
+    // Flags, which the caption leaves out, can precede that choice.
     let anchored = matches!(
-        inputs.first().map(|input| &input.kind),
+        inputs
+            .iter()
+            .map(|input| &input.kind)
+            .find(|kind| !matches!(kind, InputKind::Toggle)),
         Some(InputKind::Choice(_))
     );
     let edited = inputs
