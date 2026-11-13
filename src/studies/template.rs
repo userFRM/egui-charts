@@ -829,6 +829,21 @@ mod tests {
         );
         assert!(!restored.settings().levels[2].visible);
 
+        // Saved with a banded average by the release before the divergence input, an RSI restores
+        // its four plots as they were styled and calculates no divergences.
+        let banded: StudyTemplate = serde_json::from_str(
+            r#"{"name":"RSI","inputs":[["period",{"Length":14}],["smoothing",{"Choice":2}],["smoothing_length",{"Length":14}],["smoothing_deviation",{"Number":2.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RSI.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[253,216,53,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[13,9,20,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[8,18,8,26],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let restored = banded.create().unwrap();
+        assert_eq!(restored.settings().plots, banded.settings.plots);
+        let divergence = restored.inputs().into_iter().find(|i| i.id == "divergence");
+        assert_eq!(divergence.unwrap().value, InputValue::Toggle(false));
+        // Saved since with the input on, it restores the four divergence plots too.
+        let marked = ConfiguredStudy::new(Box::new(RSI::default().with_divergence(true)));
+        let restored = StudyTemplate::from_study(&marked).create().unwrap();
+        assert_eq!(restored.line_count(), 6);
+
         // Saved with an EMA from the shorter list of types, under the average's earlier ids.
         let mut older = StudyTemplate::from_study(&RSI::default());
         older.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
