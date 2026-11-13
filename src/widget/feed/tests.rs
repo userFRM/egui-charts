@@ -1457,11 +1457,17 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
 /// of the sell of 4 (-1); its last unit, the buy of 2 and 2 of the sell of 6 (-1); its other 4 and
 /// 1 of the buy of 5 (-3); its other 4 (4). One study is away for the last two executions and
 /// another joins at the undo. Holding the last executions before the newest, they lack the first
-/// two bars and match the study that stayed on the others. In the last two rows nothing is lost,
-/// but a trade page answered in the drain that streams them without an id stands in for the first
-/// executions: the buy of 1, or the buys of 1, 2 and 4 at one instant, so that the bar of 4 and 8
-/// opens a nanosecond after the first. 2t bars of 1 and 2 (3), 4 and 8 (12), 16 and 32 (48), which
-/// the rebuilt studies and an added footprint source, buying 3, 12 and 48, match on every bar.
+/// two bars and match the study that stayed on the others. In the other rows nothing is lost, but
+/// a trade page is answered in the drain that streams the first executions. In two rows it stands
+/// in for them without an id: the buy of 1, or the buys of 1, 2 and 4 at one instant, so that the
+/// bar of 4 and 8 opens a nanosecond after the first. 2t bars of 1 and 2 (3), 4 and 8 (12), 16
+/// and 32 (48), which the rebuilt studies and an added footprint source, buying 3, 12 and 48,
+/// match on every bar. In the last three rows the page holds only a sell of 1 at the first
+/// instant, which the stream never sends, and the stream buys 1 each time: once at that instant
+/// and three times a second apart, for 2t bars of two buys each (2, 2); or three times at that
+/// instant and then three more, for bars of two buys (2), the third buy with the fourth a
+/// nanosecond later (2) and the last two (2); or as the first with an id on each buy. The sell
+/// counts in no bar: the rebuilt studies show 2 on every bar and the footprint source buys 2.
 #[cfg(feature = "studies")]
 #[test]
 fn restored_order_flow_study_keeps_the_chart_bars() {
@@ -1482,6 +1488,8 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![3.0, 12.0, 48.0, 64.0],
             0,
+            vec![],
+            false,
         ),
         (
             "5v",
@@ -1495,6 +1503,8 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![5.0, -1.0, -1.0, -3.0, 4.0],
             0,
+            vec![],
+            false,
         ),
         (
             "2t",
@@ -1508,6 +1518,8 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![3.0, 12.0, 48.0],
             1,
+            vec![(1.0, Buy)],
+            false,
         ),
         (
             "2t",
@@ -1521,6 +1533,32 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             ],
             vec![3.0, 12.0, 48.0],
             3,
+            vec![(1.0, Buy), (2.0, Buy), (4.0, Buy)],
+            false,
+        ),
+        (
+            "2t",
+            vec![(1.0, Buy); 4],
+            vec![2.0; 2],
+            1,
+            vec![(1.0, Sell)],
+            false,
+        ),
+        (
+            "2t",
+            vec![(1.0, Buy); 6],
+            vec![2.0; 3],
+            3,
+            vec![(1.0, Sell)],
+            false,
+        ),
+        (
+            "2t",
+            vec![(1.0, Buy); 4],
+            vec![2.0; 2],
+            1,
+            vec![(1.0, Sell)],
+            true,
         ),
     ];
     let start = bars(1)[0].time;
@@ -1530,7 +1568,12 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             .map(|value| (!value.is_nan()).then_some(*value))
             .collect::<Vec<_>>()
     };
-    for (interval, fills, stayed_values, paged) in rows {
+    // The interval, the stream's executions, the deltas of the study that stayed, how many
+    // executions share the first instant, the page's executions at that instant, and whether the
+    // stream's carry ids.
+    for (row, (interval, fills, stayed_values, paged, paged_fills, ids)) in
+        rows.into_iter().enumerate()
+    {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe(interval.parse().unwrap());
@@ -1569,10 +1612,11 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             let at = start + TimeDelta::seconds(i.saturating_sub(paged.max(1) - 1) as i64);
             let tick = |&(size, side)| Tick::new(at, 100.0, size, Some(side));
             if i + 1 == paged {
-                let trades = fills[..paged].iter().map(tick).collect();
+                let trades = paged_fills.iter().map(tick).collect();
                 (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(trades, false)));
             }
-            sink.push_tick(tick(&(size, side)));
+            let sent = tick(&(size, side));
+            sink.push_tick(if ids { sent.with_id(i as u64) } else { sent });
             if i + 1 >= paged {
                 frames.run(&mut chart);
             }
@@ -1581,12 +1625,20 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
             frames.run(&mut chart);
         }
         let all: Vec<_> = stayed_values.iter().copied().map(Some).collect();
-        assert_eq!(values(&chart, stayed), all, "{interval}");
+        assert_eq!(values(&chart, stayed), all, "row {row}, {interval}");
         let held: Vec<_> = (all.iter().enumerate())
             .map(|(bar, value)| value.filter(|_| paged > 0 || bar >= 2))
             .collect();
-        assert_eq!(values(&chart, restored), held, "{interval}, restored");
-        assert_eq!(values(&chart, added.unwrap()), held, "{interval}, added");
+        assert_eq!(
+            values(&chart, restored),
+            held,
+            "row {row}, {interval}, restored"
+        );
+        assert_eq!(
+            values(&chart, added.unwrap()),
+            held,
+            "row {row}, {interval}, added"
+        );
         if paged > 0 {
             let bought: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
                 .iter()
@@ -1594,7 +1646,7 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
                 .collect();
             let opens = chart.bars(SeriesId::MAIN).iter().map(|bar| bar.time);
             let expected: Vec<_> = opens.zip(stayed_values.iter().copied()).collect();
-            assert_eq!(bought, expected, "{interval}, footprint");
+            assert_eq!(bought, expected, "row {row}, {interval}, footprint");
         }
     }
 }
@@ -4540,6 +4592,60 @@ fn market_replay_profile_drawings_follow_the_cursor() {
     assert_eq!(row(top(&mut chart)), 100.5, "sought back");
     driver.seek(second(135));
     assert_eq!(row(top(&mut chart)), 101.5, "sought to where it played");
+}
+
+/// An order-flow study present when a market replay starts follows the driver's cursor through
+/// playback and seeks. Bars open at 0, 60 and 120 s and the per-bar delta is each buy's size: 1 at
+/// 10 s, 2 at 70 s and 4 at 130 s, so 75 s shows [1, 2] over two bars and 140 s [1, 2, 4] over three.
+#[cfg(feature = "studies")]
+#[test]
+fn market_replay_order_flow_studies_follow_the_cursor() {
+    use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+    use crate::model::OrderSide::Buy;
+    use crate::studies::OrderFlowStudy;
+    let start = DateTime::UNIX_EPOCH;
+    let second = |seconds| start + TimeDelta::seconds(seconds);
+    let events = [(10, 1.0), (70, 2.0), (130, 4.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (seconds, size))| {
+            let fill = Tick::new(second(seconds), 100.0, size, Some(Buy)).with_id(at as u64);
+            ReplayEvent::new("A", second(seconds), at as u64, MarketEvent::Trade(fill))
+        })
+        .collect();
+    let instruments = vec![Instrument::new("A").with_tick_size(1.0)];
+    let driver = Arc::new(ReplayDriver::new(events, instruments).unwrap());
+    driver.set_speed(0.0).unwrap();
+    driver.seek(second(75));
+    let mut chart = Chart::new(BarData::new());
+    chart.set_symbol("A");
+    chart.set_timeframe(Timeframe::Min1);
+    chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+    chart.set_market_replay(Some(driver.clone()));
+    let mut frames = Frames::new();
+    let mut deltas = |chart: &mut Chart| {
+        for _ in 0..8 {
+            frames.run(chart);
+        }
+        let bars = chart.bars(SeriesId::MAIN).len();
+        let study = chart.indicators().next().unwrap().1;
+        (bars, study.values().line(0).to_vec())
+    };
+    let sought = deltas(&mut chart);
+    driver.set_speed(1.0).unwrap();
+    driver.advance(std::time::Duration::from_secs(65)).unwrap();
+    driver.set_speed(0.0).unwrap();
+    let played = deltas(&mut chart);
+    driver.seek(second(75));
+    let sought_back = deltas(&mut chart);
+    assert_eq!(
+        (sought, played, sought_back),
+        (
+            (2, vec![1.0, 2.0]),
+            (3, vec![1.0, 2.0, 4.0]),
+            (2, vec![1.0, 2.0])
+        )
+    );
 }
 
 /// Answers every request at once with bars closing at the symbol's base plus their index:

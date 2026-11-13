@@ -262,6 +262,7 @@ impl DrawingPropertiesDialog {
                 drawing.text_wrap = old.text_wrap;
                 drawing.text_wrap_width = old.text_wrap_width;
                 drawing.text_follows_zoom = old.text_follows_zoom;
+                drawing.note_text_style = old.note_text_style;
                 drawing.text_color = old.text_color;
                 drawing.background = old.background;
                 drawing.border = old.border;
@@ -487,7 +488,12 @@ impl DrawingPropertiesDialog {
             )
             .show(ui, |ui| match self.active_tab {
                 PropertiesTab::Style => {
-                    StyleTab::show(ui, &mut self.props, &mut state.pickers);
+                    StyleTab::show(
+                        ui,
+                        &mut self.props,
+                        &mut state.pickers,
+                        &mut state.text_pickers,
+                    );
                 }
                 PropertiesTab::Inputs => {
                     let color = self.props.color_rgba();
@@ -578,7 +584,8 @@ const FOOTER_HEIGHT: f32 = 60.0;
 struct UiState {
     /// Colour and fill colour pickers of the Style tab.
     pickers: [ColorPickerState; 2],
-    /// Text colour, background and border pickers of the Text tab.
+    /// Text colour, background and border pickers of the Text tab, and of the Style tab's rows
+    /// for a price label's badge and a price note's label.
     text_pickers: [ColorPickerState; 3],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
@@ -819,6 +826,13 @@ mod tests {
                 settings.text_wrap = true;
                 settings.text_wrap_width = 120.0;
                 settings.text_follows_zoom = true;
+                let note_text = crate::drawings::NoteTextStyle {
+                    color: [7, 8, 9, 255],
+                    font_size: 18.0,
+                    bold: true,
+                    italic: false,
+                };
+                settings.note_text_style = Some(note_text);
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
                 dialog.coordinates.points[1].price = "125".into();
@@ -837,6 +851,7 @@ mod tests {
                 assert!(preview.italic);
                 assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
                 assert!(preview.text_follows_zoom);
+                assert_eq!(preview.note_text_style, Some(note_text));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
@@ -887,6 +902,7 @@ mod tests {
             );
             assert!(!restored.italic, "{finish}");
             assert!(!restored.text_follows_zoom, "{finish}");
+            assert_eq!(restored.note_text_style, None, "{finish}");
             assert_eq!(
                 (restored.text_wrap, restored.text_wrap_width),
                 (false, 200.0),
