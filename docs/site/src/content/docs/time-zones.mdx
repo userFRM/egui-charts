@@ -7,7 +7,9 @@ import presentation from '../../../../../examples/docs/scenes/theme.rs?raw';
 
 Store historical bars, streaming updates and shared time ranges as UTC instants.
 The display zone changes calendar and clock labels; changing it does not rewrite
-the supplied timestamps or move bars to a new instant.
+the supplied timestamps or move bars to a new instant. Bars of a day or longer
+given without a feed keep the date of their UTC stamp unless they sit at the
+display zone's midnight, as the sessions section below describes.
 
 ## Choose a display zone
 

@@ -36,6 +36,8 @@ impl PriceFormatter for DisplayFormatLabels {
 impl Chart {
     /// Formats a timestamp with the chart's zone, clock visibility and interval, or the median
     /// spacing of the source bars in or nearest the view for inferred and trade-based intervals.
+    /// Bars of a day or longer given without a feed read in UTC, where they carry their trading
+    /// date, unless they sit at the display zone's midnight; see the time zones guide.
     /// On a [horizontal scale](Self::set_horizontal_scale), formats its key as the crosshair does.
     /// Hosts can use this for data windows and other readouts beside the chart.
     pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
