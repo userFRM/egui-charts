@@ -84,6 +84,10 @@ impl Chart {
 
         // Apply this frame's wheel events; smoothing can outlive the pointer's axis or modifiers.
         let raw = raw_wheel_delta(ui);
+        if raw != Vec2::ZERO {
+            // The wheel takes over from the momentum of an earlier flick.
+            self.kinetic_scroll.is_active = false;
+        }
         let scroll_input = ui.input(|i| {
             let mut dx = raw.x;
             let mut dy = raw.y;
@@ -290,6 +294,11 @@ impl Chart {
                 self.chart_options.handle_scroll.pressed_mouse_move
                     && self.chart_options.kinetic_scroll.mouse
             };
+
+        // A press, a click or a touch on the chart stops the momentum of an earlier flick.
+        if response.is_pointer_button_down_on() || response.clicked() {
+            self.kinetic_scroll.is_active = false;
+        }
 
         if !response.dragged() || multi_touch || has_active_drawing_tool || box_zoom_active {
             // Drag ended - handle kinetic scrolling
@@ -1959,6 +1968,81 @@ mod tests {
                 frame(&ctx, &mut chart, released + 0.04, events);
                 assert!(!chart.kinetic_scroll.is_active);
             }
+        }
+    }
+
+    /// A press, a click, a touch, the wheel and the pan and zoom keys each end a coast in the
+    /// frame they arrive, before it moves the view again.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn press_wheel_and_keys_stop_a_coast() {
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let wheel = |delta| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        };
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        for (input, stops) in [
+            ("none", false),
+            ("press", true),
+            ("click", true),
+            ("touch", true),
+            ("wheel zoom", true),
+            ("wheel scroll", true),
+            ("pan key", true),
+            ("zoom key", true),
+        ] {
+            // The same input reaches a coasting chart and one at rest.
+            let [(coasting, moved), (_, rest)] = [true, false].map(|coast| {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.chart_options.kinetic_scroll.enabled = true;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let pos = chart.last_rendered_price_rect.center();
+                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pos)]);
+                if coast {
+                    chart.kinetic_scroll.is_active = true;
+                    chart.kinetic_scroll.velocity = 600.0;
+                    chart.kinetic_scroll.anim_last_time = Some(0.02);
+                }
+                let events = match input {
+                    "none" => vec![],
+                    "press" => vec![button(pos, true)],
+                    "click" => vec![button(pos, true), button(pos, false)],
+                    "touch" => vec![
+                        button(pos, true),
+                        Event::Touch {
+                            device_id: egui::TouchDeviceId(1),
+                            id: egui::TouchId(1),
+                            phase: egui::TouchPhase::Start,
+                            pos,
+                            force: None,
+                        },
+                    ],
+                    "wheel zoom" => vec![wheel(egui::vec2(0.0, -240.0))],
+                    "wheel scroll" => vec![wheel(egui::vec2(120.0, 0.0))],
+                    "pan key" => vec![key(egui::Key::ArrowLeft, Modifiers::NONE)],
+                    _ => vec![key(egui::Key::ArrowUp, Modifiers::COMMAND)],
+                };
+                frame(&ctx, &mut chart, 0.04, events);
+                (chart.kinetic_scroll.is_active, chart.get_time_scale_state())
+            });
+            assert_eq!(coasting, !stops, "{input}");
+            assert_eq!(moved == rest, stops, "{input}: {moved:?}, at rest {rest:?}");
         }
     }
 
