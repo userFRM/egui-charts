@@ -1,6 +1,4 @@
 use crate::studies::{MACD, RSI};
-#[cfg(all(test, feature = "ui"))]
-use crate::ui::context_menu::ChartMenus;
 use crate::widget::test_frames::chart;
 use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
@@ -632,53 +630,6 @@ fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
             pointer(&ctx, &mut chart, axis, pressed);
         }
         assert_eq!(chart.pane_layout.panes[1].scale.is_manual(), !enabled);
-    }
-    #[cfg(feature = "ui")]
-    {
-        let mut menus = ChartMenus::default();
-        let mut shapes = Vec::new();
-        for clicked in [true, false] {
-            let mut output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                    time: Some(ctx.input(|input| input.time) + 0.1),
-                    events: if clicked {
-                        vec![
-                            Event::PointerMoved(axis),
-                            Event::PointerButton {
-                                pos: axis,
-                                button: PointerButton::Secondary,
-                                pressed: true,
-                                modifiers: Modifiers::NONE,
-                            },
-                            Event::PointerButton {
-                                pos: axis,
-                                button: PointerButton::Secondary,
-                                pressed: false,
-                                modifiers: Modifiers::NONE,
-                            },
-                        ]
-                    } else {
-                        Vec::new()
-                    },
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        chart.show(ui);
-                    });
-                    menus.show(&ctx, &mut chart);
-                },
-            );
-            shapes = std::mem::take(&mut output.shapes);
-            output.drop_without_applying_deltas();
-        }
-        assert!(
-            !shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Lock price to bar ratio")),
-            "the main-axis menu must not open over a study axis"
-        );
-        egui::Popup::close_all(&ctx);
     }
     // The same engine maps 10 and 1000 around 100 at the midpoint in logarithmic units.
     let scale = &mut chart.pane_layout.panes[1].scale;

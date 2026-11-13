@@ -142,15 +142,18 @@ impl AxisMenus {
                 return Self::layout_rows(chart, pane);
             };
             let scale = chart.pane_price_scale(pane, key);
-            let mut entries = vec![
-                row("Auto scale", Action::Auto, !scale.is_manual()),
-                row(
+            // The fit and label rows switch settings of the price chart, so only the axes of the
+            // main series' pane offer them.
+            let price_pane = chart.series_pane(SeriesId::MAIN).unwrap_or(PaneId::MAIN) == pane;
+            let mut entries = vec![row("Auto scale", Action::Auto, !scale.is_manual())];
+            if price_pane {
+                entries.push(row(
                     "Scale price chart only",
                     Action::PriceOnly,
                     config.scale_price_chart_only,
-                ),
-                MenuEntry::Separator,
-            ];
+                ));
+            }
+            entries.push(MenuEntry::Separator);
             for (label, mode) in [
                 ("Regular", PriceScaleMode::Normal),
                 ("Percent", PriceScaleMode::Percentage),
@@ -187,30 +190,34 @@ impl AxisMenus {
                     MenuEntry::Separator,
                 ]);
             }
+            if price_pane {
+                entries.extend([
+                    row(
+                        "Last price label",
+                        Action::LastValue,
+                        config.show_symbol_last_val,
+                    ),
+                    row(
+                        "Previous close label",
+                        Action::PreviousClose,
+                        config.show_symbol_prev_close,
+                    ),
+                    row(
+                        "Indicator values",
+                        Action::Studies,
+                        config.price_axis.show_study_values,
+                    ),
+                    row(
+                        "Countdown to bar close",
+                        Action::Countdown,
+                        config.show_countdown,
+                    ),
+                    row("Bid and ask", Action::BidAsk, config.show_bid_ask),
+                    row("High and low", Action::HighLow, config.show_high_low),
+                    MenuEntry::Separator,
+                ]);
+            }
             entries.extend([
-                row(
-                    "Last price label",
-                    Action::LastValue,
-                    config.show_symbol_last_val,
-                ),
-                row(
-                    "Previous close label",
-                    Action::PreviousClose,
-                    config.show_symbol_prev_close,
-                ),
-                row(
-                    "Indicator values",
-                    Action::Studies,
-                    config.price_axis.show_study_values,
-                ),
-                row(
-                    "Countdown to bar close",
-                    Action::Countdown,
-                    config.show_countdown,
-                ),
-                row("Bid and ask", Action::BidAsk, config.show_bid_ask),
-                row("High and low", Action::HighLow, config.show_high_low),
-                MenuEntry::Separator,
                 row("Scale settings…", Action::Settings, false),
                 MenuEntry::Separator,
             ]);

@@ -345,12 +345,13 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
         ]
     };
     for theme in [Theme::light(), Theme::dark()] {
-        for (time, left, ratio, short) in [
-            (false, false, false, false),
-            (false, true, false, false),
-            (true, false, false, false),
-            (false, false, true, false),
-            (false, false, false, true),
+        for (time, left, ratio, short, pane) in [
+            (false, false, false, false, false),
+            (false, true, false, false, false),
+            (true, false, false, false, false),
+            (false, false, true, false, false),
+            (false, false, false, true, false),
+            (false, false, false, false, true),
         ] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -362,11 +363,22 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
             let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
             chart.config_mut().show_left_axis = left;
             chart.config_mut().show_right_axis = !left;
+            let pane = pane
+                .then(|| chart.add_indicator(Box::new(crate::studies::RSI::new(14))))
+                .and_then(|study| chart.series_pane(study));
             let mut menus = ChartMenus::default();
             paint(&ctx, &mut chart, &mut menus, vec![], size);
             let plot = chart.get_rendered_price_rect();
             let anchor = if time {
                 Pos2::new(plot.center().x, plot.bottom() + 10.0)
+            } else if pane.is_some() {
+                Pos2::new(
+                    plot.right() + 25.0,
+                    chart.get_rendered_indicator_panes()[0]
+                        .panel_rect
+                        .center()
+                        .y,
+                )
             } else {
                 Pos2::new(
                     if left {
@@ -415,6 +427,23 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                             .contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
                         "a menu that fits must show its bottom row without scrolling"
                     );
+                }
+            }
+            if pane.is_some() {
+                assert!(chart.menu_open, "a study pane's axis menu is an open menu");
+                // One menu, with the rows of a scale that holds no price chart.
+                for (label, count) in [
+                    ("Invert scale", 1),
+                    ("Lock price to bar ratio", 1),
+                    ("Hide unused axes", 1),
+                    ("Scale price chart only", 0),
+                    ("Last price label", 0),
+                ] {
+                    let rows = shapes
+                        .iter()
+                        .filter(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == label))
+                        .count();
+                    assert_eq!(rows, count, "{label} on a study pane's axis");
                 }
             }
             let label = if short {
@@ -467,6 +496,12 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                 assert_eq!(
                     chart.chart_options().time_scale.timezone,
                     TimezoneMode::Local
+                );
+            } else if let Some(pane) = pane {
+                let axis = crate::widget::PaneScale::Named(crate::model::SeriesScale::Right);
+                assert_eq!(
+                    chart.pane_scale(pane, axis).unwrap().options().mode,
+                    PriceScaleMode::Percentage
                 );
             } else {
                 assert_eq!(
