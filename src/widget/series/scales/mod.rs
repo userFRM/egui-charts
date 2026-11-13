@@ -899,18 +899,11 @@ impl Chart {
         rect: Rect,
         margins: &std::collections::HashMap<SeriesScale, AutoscaleMargins>,
     ) {
-        let map = self.state.price_scale().map(
-            self.state.price_scale().transform(),
-            rect.top(),
-            rect.bottom(),
-        );
-        let mut main = self.series_marker_bounds(painter, SeriesId::MAIN, map);
         let mut other = std::collections::HashMap::<SeriesScale, Vec<_>>::new();
         for item in self.main_pane_series() {
-            let bounds = self.series_marker_bounds(painter, item.id, self.series_map(item, rect));
-            if item.options.scale == self.main_series_scale {
-                main.extend(bounds);
-            } else {
+            if item.options.scale != self.main_series_scale {
+                let bounds =
+                    self.series_marker_bounds(painter, item.id, self.series_map(item, rect));
                 other.entry(item.options.scale).or_default().extend(bounds);
             }
         }
@@ -921,7 +914,7 @@ impl Chart {
             .get(&self.main_series_scale)
             .copied()
             .unwrap_or_default();
-        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main, main_margins);
+        self.fit_main_marker_scale(painter, rect, main_margins);
         for (key, bounds) in other {
             let scale = self.pane_price_scale_mut(self.main_series_pane(), key);
             Self::fit_marker_bounds(
@@ -931,6 +924,32 @@ impl Chart {
                 margins.get(&key).copied().unwrap_or_default(),
             );
         }
+    }
+
+    /// Fits the pixel contributions of the main series' scale alone, so a range fitted again
+    /// within a frame gets them again without touching the other scales.
+    pub(in crate::widget) fn fit_main_marker_scale(
+        &mut self,
+        painter: &Painter,
+        rect: Rect,
+        margins: AutoscaleMargins,
+    ) {
+        let map = self.state.price_scale().map(
+            self.state.price_scale().transform(),
+            rect.top(),
+            rect.bottom(),
+        );
+        let mut main = self.series_marker_bounds(painter, SeriesId::MAIN, map);
+        for item in self.main_pane_series() {
+            if item.options.scale == self.main_series_scale {
+                main.extend(self.series_marker_bounds(
+                    painter,
+                    item.id,
+                    self.series_map(item, rect),
+                ));
+            }
+        }
+        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main, margins);
     }
 
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {

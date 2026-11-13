@@ -85,8 +85,9 @@ Footprint and Session Volume Profile are accepted as options but the added-serie
 renderer draws their bars as candles; it does not build a second execution view.
 
 Added series share the main time axis, including its whitespace slots. Supply
-the main history, or explicit whitespace, to cover their timestamps. On a
-time-independent main chart, added series are retained but hidden; their bar
-timestamps cannot share the brick or column axis. [Transforms](/egui-charts/docs/chart-types/transforms/)
-explains the other overlays hidden on that axis. Use the [series lifecycle](series.mdx#lifecycle)
+the main history, or explicit whitespace, to cover their timestamps. On Renko,
+Kagi, Line Break, Point and Figure and Range charts the axis holds one slot per
+element, and each bar of an added series is placed by its time on that axis, so
+the series is drawn. [Transforms](/egui-charts/docs/chart-types/transforms/)
+describes that placement and the other overlays on those types. Use the [series lifecycle](series.mdx#lifecycle)
 to retain and update each series by id, and [scales](scales.mdx) to choose its price scale.

@@ -215,7 +215,9 @@ impl Drawing {
             return;
         }
         if let Shape::Text(t) = shape {
-            if self.font_weight == FontWeight::Bold {
+            // A price note weights its price and its typed text apart, in its renderer.
+            if self.font_weight == FontWeight::Bold && self.tool_type != DrawingToolType::PriceNote
+            {
                 // Synthetic weight keeps host font families and fallback glyphs intact. The copy
                 // moves along the baseline, which text turned along a line turns with it.
                 let mut weighted = t.clone();

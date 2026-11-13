@@ -877,24 +877,20 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
     use egui::{Color32, Stroke};
 
     let ring = crate::tokens::DESIGN_TOKENS.stroke.thick;
-    // Each row: main and added styles, then the expected main, added and separate-pane
-    // circles. Hidden markers are `None`; default rings match the plot or pane fill.
-    let rows: [(MarkerStyle, MarkerStyle, _, _, _); 5] = [
+    // Each row: main and added styles, then the expected main and added circles, the added
+    // one the same in the price pane and in a pane of its own. Hidden markers are `None`;
+    // default rings match the chart background, which covers every pane.
+    let rows: [(MarkerStyle, MarkerStyle, _, _); 5] = [
         (
             (5.0, None, None, ring),
             (7.0, None, None, ring),
             Some((Color32::BLUE, Stroke::new(ring, Color32::LIGHT_GRAY))),
             Some((Color32::GREEN, Stroke::new(ring, Color32::LIGHT_GRAY))),
-            Some((
-                Color32::GREEN,
-                Stroke::new(ring, crate::theme::Theme::default().chart.bg),
-            )),
         ),
         (
             (5.0, Some(Color32::GOLD), Some(Color32::MAGENTA), 3.0),
             (7.0, None, Some(Color32::CYAN), 0.0),
             Some((Color32::GOLD, Stroke::new(3.0, Color32::MAGENTA))),
-            Some((Color32::GREEN, Stroke::NONE)),
             Some((Color32::GREEN, Stroke::NONE)),
         ),
         (
@@ -902,22 +898,16 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
             (7.0, Some(Color32::YELLOW), None, 4.0),
             Some((Color32::TRANSPARENT, Stroke::new(1.0, Color32::RED))),
             Some((Color32::YELLOW, Stroke::new(4.0, Color32::LIGHT_GRAY))),
-            Some((
-                Color32::YELLOW,
-                Stroke::new(4.0, crate::theme::Theme::default().chart.bg),
-            )),
         ),
         (
             (5.0, None, None, -1.0),
             (7.0, None, None, f32::NAN),
             Some((Color32::BLUE, Stroke::NONE)),
             Some((Color32::GREEN, Stroke::NONE)),
-            Some((Color32::GREEN, Stroke::NONE)),
         ),
         (
             (0.0, None, None, ring),
             (f32::NAN, None, None, ring),
-            None,
             None,
             None,
         ),
@@ -930,17 +920,12 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
         ChartType::Baseline,
     ] {
         for pane in [false, true] {
-            for (main, added, expect_main, expect_added, expect_pane) in rows {
+            for (main, added, expect_main, expect_added) in rows {
                 let (circles, x, main_rect, added_rect) =
                     hover_markers(kind, pane, (main, added), |_, _| {});
                 for (radius, rect, fraction, expected) in [
                     (5.0, main_rect, 0.25, expect_main),
-                    (
-                        7.0,
-                        added_rect,
-                        0.75,
-                        if pane { expect_pane } else { expect_added },
-                    ),
+                    (7.0, added_rect, 0.75, expect_added),
                 ] {
                     let found = circles.iter().find(|circle| circle.radius == radius);
                     let case = format!("{kind:?}, pane {pane}, {main:?} {added:?}");
@@ -2001,7 +1986,6 @@ fn default_marker_ring_matches_the_background_behind_it() {
                             left_color,
                             right_color,
                         } => left_color.lerp_to_gamma(right_color, (circle.center.x - 8.0) / 784.0),
-                        BackgroundStyle::Solid if circle.radius == 7.0 => theme.chart.bg,
                         BackgroundStyle::Solid => Color32::LIGHT_GRAY,
                     };
                     assert_eq!(
