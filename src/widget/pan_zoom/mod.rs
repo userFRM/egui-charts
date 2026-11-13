@@ -20,7 +20,6 @@ pub(super) mod state;
 pub(super) use box_zoom::render_box_zoom;
 
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
-use web_time::Instant;
 
 use crate::scales::PriceTransform;
 use crate::widget::Chart;
@@ -270,13 +269,15 @@ impl Chart {
     ) {
         // CRITICAL: Skip panning if box zoom is active (right-click drag)
         let box_zoom_active = self.box_zoom.active;
-        let (is_touch, multi_touch) = ui.input(|i| {
+        // The frame clock times the samples, as it times the input they come from.
+        let (is_touch, multi_touch, now) = ui.input(|i| {
             (
                 i.any_touches()
                     || i.events
                         .iter()
                         .any(|event| matches!(event, Event::Touch { .. })),
                 i.multi_touch().is_some(),
+                i.time,
             )
         });
 
@@ -298,6 +299,10 @@ impl Chart {
                 && kinetic
                 && self.scroll_start_pos.is_some()
             {
+                // The release can carry the pointer's last movement itself.
+                if let Some(pos) = response.interact_pointer_pos() {
+                    self.sample_kinetic_speed(pos, now);
+                }
                 let move_distance = self
                     .kinetic_scroll
                     .last_pos
@@ -307,13 +312,20 @@ impl Chart {
                 let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
                 let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
 
-                if move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
+                // A pointer that came to rest before the release throws nothing.
+                let moving = self
+                    .kinetic_scroll
+                    .last_time
+                    .is_some_and(|last| now - last <= 0.05);
+
+                if moving
+                    && move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
                     && self.kinetic_scroll.velocity.abs() >= min_v_px_s
                 {
                     self.kinetic_scroll.is_active = true;
                     self.kinetic_scroll.velocity =
                         self.kinetic_scroll.velocity.clamp(-max_v_px_s, max_v_px_s);
-                    self.kinetic_scroll.anim_last_time = Some(Instant::now());
+                    self.kinetic_scroll.anim_last_time = Some(now);
                 }
             }
 
@@ -328,6 +340,10 @@ impl Chart {
             }
             self.kinetic_scroll.last_pos = None;
             self.kinetic_scroll.last_time = None;
+            if !self.kinetic_scroll.is_active {
+                // Only a coast carries the speed of a drag past its release.
+                self.kinetic_scroll.velocity = 0.0;
+            }
             return;
         }
 
@@ -402,17 +418,7 @@ impl Chart {
                     self.state.time_scale_mut().set_right_offset(new_offset);
 
                     if kinetic {
-                        let now = Instant::now();
-                        if let (Some(last_pos), Some(last_time)) =
-                            (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
-                        {
-                            let dt = now.duration_since(last_time).as_secs_f32();
-                            if dt > 0.0 {
-                                self.kinetic_scroll.velocity = (curr_pos.x - last_pos.x) / dt;
-                            }
-                        }
-                        self.kinetic_scroll.last_pos = Some(curr_pos);
-                        self.kinetic_scroll.last_time = Some(now);
+                        self.sample_kinetic_speed(curr_pos, now);
                     }
                 }
 
@@ -431,6 +437,24 @@ impl Chart {
                 }
             }
         }
+    }
+
+    /// Measures the drag speed from the pointer at `pos` at frame time `now`. A resting pointer
+    /// adds no sample, so the age of the last one tells a release how long ago it moved.
+    fn sample_kinetic_speed(&mut self, pos: Pos2, now: f64) {
+        if self.kinetic_scroll.last_pos == Some(pos) {
+            return;
+        }
+        if let (Some(last_pos), Some(last_time)) =
+            (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
+        {
+            let dt = (now - last_time) as f32;
+            if dt > 0.0 {
+                self.kinetic_scroll.velocity = (pos.x - last_pos.x) / dt;
+            }
+        }
+        self.kinetic_scroll.last_pos = Some(pos);
+        self.kinetic_scroll.last_time = Some(now);
     }
 
     /// Advance the kinetic scrolling animation by one frame.
@@ -453,13 +477,11 @@ impl Chart {
             return;
         }
 
-        let now = Instant::now();
-        let dt = if let Some(t0) = self.kinetic_scroll.anim_last_time {
-            now.duration_since(t0).as_secs_f32().max(0.0)
-        } else {
-            self.kinetic_scroll.anim_last_time = Some(now);
-            0.0
-        };
+        let now = ui.input(|i| i.time);
+        let dt = self
+            .kinetic_scroll
+            .anim_last_time
+            .map_or(0.0, |t0| (now - t0).max(0.0) as f32);
         self.kinetic_scroll.anim_last_time = Some(now);
 
         if dt > 0.0 {
@@ -775,10 +797,9 @@ mod tests {
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 chart.kinetic_scroll.is_active = true;
                 chart.kinetic_scroll.velocity = 600.0;
+                chart.kinetic_scroll.anim_last_time = Some(0.0);
                 // At the default damping, 600 * 0.997^(40 * 60) < 12 px/s.
                 for i in 1..=40 {
-                    chart.kinetic_scroll.anim_last_time =
-                        Some(web_time::Instant::now() - std::time::Duration::from_secs(1));
                     frame(&ctx, &mut chart, f64::from(i), vec![]);
                     assert!(chart.state.time_scale().right_offset_precise().is_finite());
                 }
@@ -810,9 +831,7 @@ mod tests {
             let offset = chart.state.time_scale().right_offset_precise();
             chart.kinetic_scroll.is_active = true;
             chart.kinetic_scroll.velocity = velocity;
-            chart.kinetic_scroll.anim_last_time = elapsed.map(|seconds| {
-                web_time::Instant::now() - std::time::Duration::from_secs_f32(seconds)
-            });
+            chart.kinetic_scroll.anim_last_time = elapsed.map(|seconds| 0.05 - seconds);
             chart.chart_options.handle_scroll.enabled = enabled;
             frame(&ctx, &mut chart, 0.05, vec![]);
             assert!(!chart.kinetic_scroll.is_active, "velocity={velocity}");
@@ -889,7 +908,7 @@ mod tests {
                 chart.chart_options.kinetic_scroll.enabled = true;
                 chart.kinetic_scroll.is_active = true;
                 chart.kinetic_scroll.velocity = 120.0;
-                chart.kinetic_scroll.anim_last_time = Some(web_time::Instant::now());
+                chart.kinetic_scroll.anim_last_time = Some(0.04);
             }
             let (spacing, offset) = chart.get_time_scale_state();
             let mut events = Vec::new();
@@ -1854,11 +1873,24 @@ mod tests {
     }
 
     /// A fast horizontal drag continues after release only when inertia is enabled for its
-    /// device, and a new drag stops it.
+    /// device and the pointer was still moving, and a new drag stops it.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn released_drag_continues_under_its_device_inertia() {
-        for touch in [false, true] {
+        // The seconds from the last movement frame to the release, whether frames are drawn
+        // meanwhile, and how far the pointer has moved on when the release arrives.
+        for (touch, rest, frames, slide) in [
+            (false, 0.02, false, 0.0),
+            (true, 0.02, false, 0.0),
+            (false, 0.04, true, 0.0),
+            (true, 0.04, true, 0.0),
+            (false, 0.5, false, 0.0),
+            (true, 0.5, false, 0.0),
+            (false, 0.5, true, 0.0),
+            (true, 0.5, true, 0.0),
+            (false, 0.1, false, 15.0),
+            (true, 0.1, false, 15.0),
+        ] {
             for (touch_inertia, mouse_inertia) in
                 [(false, false), (true, false), (false, true), (true, true)]
             {
@@ -1897,19 +1929,34 @@ mod tests {
                     let events = input(Event::PointerMoved(end), egui::TouchPhase::Move, end);
                     frame(&ctx, &mut chart, 0.04 + i as f64 * 0.02, events);
                 }
+                let released = 0.12 + rest;
+                if frames {
+                    for time in (1..).map(|i| 0.12 + f64::from(i) * 0.02) {
+                        if time > released - 0.01 {
+                            break;
+                        }
+                        frame(&ctx, &mut chart, time, vec![]);
+                    }
+                }
+                end.x -= slide;
                 let release = input(button(end, false), egui::TouchPhase::End, end);
-                frame(&ctx, &mut chart, 0.2, release);
-                let expected = if touch { touch_inertia } else { mouse_inertia };
+                frame(&ctx, &mut chart, released, release);
+                let inertia = if touch { touch_inertia } else { mouse_inertia };
+                // Only a rest of more than 50 ms ends the motion, whether or not frames were
+                // drawn, and a release that brings movement with it is no rest, however slow
+                // the frames.
                 assert_eq!(
-                    chart.kinetic_scroll.is_active, expected,
-                    "touch={touch}, touch inertia={touch_inertia}, mouse inertia={mouse_inertia}"
+                    chart.kinetic_scroll.is_active,
+                    inertia && (rest <= 0.05 || slide > 0.0),
+                    "touch={touch}, rest={rest}, frames={frames}, slide={slide}, touch \
+                     inertia={touch_inertia}, mouse inertia={mouse_inertia}"
                 );
 
                 let press = input(button(end, true), egui::TouchPhase::Start, end);
-                frame(&ctx, &mut chart, 0.22, press);
+                frame(&ctx, &mut chart, released + 0.02, press);
                 end.x += 20.0;
                 let events = input(Event::PointerMoved(end), egui::TouchPhase::Move, end);
-                frame(&ctx, &mut chart, 0.24, events);
+                frame(&ctx, &mut chart, released + 0.04, events);
                 assert!(!chart.kinetic_scroll.is_active);
             }
         }
