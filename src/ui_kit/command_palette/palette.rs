@@ -164,8 +164,8 @@ impl CommandPalette {
         if move_down && self.selected_index + 1 < self.filtered.len() {
             self.selected_index += 1;
         }
-        // Only a key scrolls to the highlight, so the wheel still scrolls freely.
-        let reveal_selected = self.selected_index != before;
+        // Only a key or a new query scrolls to the highlight, so the wheel still scrolls freely.
+        let mut reveal_selected = self.selected_index != before;
 
         if execute && !self.filtered.is_empty() {
             ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Enter));
@@ -214,6 +214,7 @@ impl CommandPalette {
                         }
                         if response.changed() {
                             self.update_filter();
+                            reveal_selected = true;
                         }
                     },
                 );
@@ -716,30 +717,20 @@ mod tests {
                     .collect(),
             ),
         );
-        p.search_query = "action".into();
+        p.search_query = "ction".into();
         frame(&ctx, &mut p, None);
         frame(&ctx, &mut p, None);
         let selected = ctx.global_style().visuals.selection.bg_fill;
-        let mut visible_highlights = 0;
-        // Down and Up past the rows that fit, then settle.
-        for key in std::iter::repeat_n(Some(Key::ArrowDown), 35)
-            .chain(std::iter::repeat_n(Some(Key::ArrowUp), 3))
-            .chain([None, None])
-        {
-            let events = key
-                .map(|key| Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::NONE,
-                })
-                .into_iter()
-                .collect();
+        // Runs one frame, a second after the last so the scroll animation completes, and counts
+        // the highlight rows painted inside the list.
+        let mut time = 0.0;
+        let mut run = |event: Option<Event>| {
             let mut open = true;
+            time += 1.0;
             let output = ctx.run_ui(
                 RawInput {
-                    events,
+                    time: Some(time),
+                    events: event.into_iter().collect(),
                     screen_rect: Some(Rect::from_min_size(
                         egui::Pos2::ZERO,
                         Vec2::new(1440.0, 900.0),
@@ -750,7 +741,7 @@ mod tests {
                     p.show(ui.ctx(), &mut open);
                 },
             );
-            visible_highlights = output
+            let visible = output
                 .shapes
                 .iter()
                 .filter(|clipped| {
@@ -759,11 +750,35 @@ mod tests {
                 })
                 .count();
             output.drop_without_applying_deltas();
+            visible
+        };
+        let key = |key| {
+            Some(Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            })
+        };
+        // Down and Up past the rows that fit, then settle.
+        let mut visible_highlights = 0;
+        for event in std::iter::repeat_n(key(Key::ArrowDown), 35)
+            .chain(std::iter::repeat_n(key(Key::ArrowUp), 3))
+            .chain([None, None])
+        {
+            visible_highlights = run(event);
         }
-        assert_eq!(p.selected_index, 32);
         assert_eq!(
             visible_highlights, 1,
             "the highlighted row is painted in view"
         );
+        // More text (typed at the start, where the field's cursor begins) puts the highlight on the
+        // first row, which must come into view as well.
+        for event in [Some(Event::Text("a".into())), None, None] {
+            visible_highlights = run(event);
+        }
+        assert_eq!(visible_highlights, 1, "the first result is painted in view");
+        assert_eq!((p.search_query.as_str(), p.selected_index), ("action", 0));
     }
 }
