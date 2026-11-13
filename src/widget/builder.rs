@@ -119,8 +119,12 @@ impl Chart {
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
             readout_revision: crate::model::next_revision(),
+            // Unique also among the charts of other runs, whose snapshots a host may keep.
             #[cfg(feature = "ui")]
-            data_table_identity: crate::model::next_revision(),
+            data_table_identity: std::hash::BuildHasher::hash_one(
+                &std::hash::RandomState::new(),
+                (chrono::Utc::now(), crate::model::next_revision()),
+            ),
             study_data: Default::default(),
             element_studies: Default::default(),
             execution_ranges: Default::default(),
