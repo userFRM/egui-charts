@@ -1339,7 +1339,10 @@ pub fn render_footprint_statistics_rows(
     // The first bar of each session in view, from the session the first bar in view belongs to:
     // sessions before it end before any column.
     let mut restarts = Vec::new();
-    if let (Some(sessions), Some(last)) = (sessions, bars.len().checked_sub(1)) {
+    if let (Some(sessions), Some(last)) = (
+        sessions.filter(|_| rows.contains(&FootprintStatistic::CumulativeDelta)),
+        bars.len().checked_sub(1),
+    ) {
         let shown = mapping
             .x_to_idx(mapping.rect.left())
             .saturating_sub(1)
