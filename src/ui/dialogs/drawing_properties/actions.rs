@@ -242,7 +242,7 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
-                drawing.color[..3].copy_from_slice(&[r, g, b]);
+                drawing.recolor([r, g, b, drawing.color[3]]);
             }
             if a != target.color[3] {
                 drawing.color[3] = a;
@@ -302,6 +302,7 @@ impl DrawingProps {
                     text_wrap,
                     text_wrap_width,
                     text_follows_zoom,
+                    note_text_style,
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
@@ -470,6 +471,12 @@ impl DrawingProps {
             if !settings.position_readout.is_valid() {
                 return Err("Invalid position readout settings");
             }
+            if settings
+                .note_text_style
+                .is_some_and(|style| !style.is_valid())
+            {
+                return Err("Price note text size must be 1 to 256");
+            }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
@@ -614,7 +621,12 @@ mod tests {
                     crate::ui_kit::ColorPickerState::new(props.color),
                     crate::ui_kit::ColorPickerState::new(props.color),
                 ];
-                super::super::tabs::StyleTab::show(ui, &mut props, &mut pickers);
+                super::super::tabs::StyleTab::show(
+                    ui,
+                    &mut props,
+                    &mut pickers,
+                    &mut Default::default(),
+                );
             });
             let labels: Vec<_> = output
                 .shapes
@@ -735,6 +747,13 @@ mod tests {
             settings.text_wrap = true;
             settings.text_wrap_width = 120.0;
             settings.text_follows_zoom = true;
+            let note_text = crate::drawings::NoteTextStyle {
+                color: [7, 8, 9, 255],
+                font_size: 18.0,
+                bold: true,
+                italic: false,
+            };
+            settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
@@ -777,6 +796,7 @@ mod tests {
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
             assert_eq!((saved.text_wrap, saved.text_wrap_width), (true, 120.0));
             assert!(saved.text_follows_zoom);
+            assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
@@ -786,6 +806,7 @@ mod tests {
             assert_eq!((peer.text_color, peer.border_color), (None, None));
             assert_eq!((peer.text_wrap, peer.text_wrap_width), (false, 200.0));
             assert!(!peer.text_follows_zoom);
+            assert_eq!(peer.note_text_style, None);
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(
@@ -884,10 +905,14 @@ mod tests {
 
     /// Confirming the dialog of one drawing in a selection changes the others only where it was
     /// edited: each keeps its own text, width, extension, visibility and tool settings, and an
-    /// edited text reaches only the drawings that show text.
+    /// edited text reaches only the drawings that show text. A recoloured price label keeps its
+    /// badge one colour.
     #[test]
     fn selection_edits_change_only_the_edited_values() {
-        use crate::drawings::FontWeight;
+        use crate::drawings::{
+            DrawingToolType::{PriceLabel, Sticker},
+            FontWeight,
+        };
         let mut alpha = Drawing::new(1, DrawingToolType::TextLabel);
         alpha.text = Some("Alpha".into());
         let mut beta = Drawing::new(2, DrawingToolType::TextLabel);
@@ -902,10 +927,12 @@ mod tests {
         line.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
         // A sticker keeps its kind in its text, which it does not show.
         let sticker = Drawing::new(4, DrawingToolType::Sticker);
-        let drawings = vec![alpha, beta, line, sticker];
+        // A price label shows no text, and its border shares the colour of its badge.
+        let label = Drawing::new(5, DrawingToolType::PriceLabel);
+        let drawings = vec![alpha, beta, line, sticker, label];
         let mut chart = Chart::new(crate::model::BarData::new());
         chart.drawings_mut().drawings = drawings.clone();
-        chart.drawings_mut().select_drawings([1, 2, 3, 4]);
+        chart.drawings_mut().select_drawings([1, 2, 3, 4, 5]);
         let opened = DrawingProps::from_drawing(&drawings[0], &chart);
         // Each case: the edit made in the dialog, then what it changes on each drawing.
         type Case = (&'static str, fn(&mut DrawingProps), fn(&mut Drawing));
@@ -923,13 +950,18 @@ mod tests {
             (
                 "colour",
                 |props| props.color = Color32::BLUE,
-                |d| d.color = [0, 0, 255, 255],
+                |d| {
+                    d.color = [0, 0, 255, 255];
+                    if d.tool_type == PriceLabel {
+                        d.border_color = Some([0, 0, 255, 255]);
+                    }
+                },
             ),
             (
                 "text",
                 |props| props.label = "Gamma".into(),
                 |d| {
-                    if d.tool_type != DrawingToolType::Sticker {
+                    if !matches!(d.tool_type, Sticker | PriceLabel) {
                         d.text = Some("Gamma".into());
                     }
                 },
@@ -938,7 +970,7 @@ mod tests {
                 "text cleared",
                 |props| props.label.clear(),
                 |d| {
-                    if d.tool_type != DrawingToolType::Sticker {
+                    if !matches!(d.tool_type, Sticker | PriceLabel) {
                         d.text = None;
                     }
                 },

@@ -1113,6 +1113,26 @@ impl PositionStyle {
     }
 }
 
+/// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NoteTextStyle {
+    /// Text colour as RGBA.
+    pub color: [u8; 4],
+    /// Size of the text, in points.
+    pub font_size: f32,
+    /// Whether the text is bold.
+    pub bold: bool,
+    /// Whether the text is slanted.
+    pub italic: bool,
+}
+
+impl NoteTextStyle {
+    /// Whether the font size lies in 1 to 256 points.
+    pub fn is_valid(&self) -> bool {
+        (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
 /// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineMeasurementPosition {

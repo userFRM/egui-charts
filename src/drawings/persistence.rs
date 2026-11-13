@@ -197,6 +197,9 @@ impl StoredDrawing {
         {
             return Some("text_zoom_spacing".into());
         }
+        if d.note_text_style.is_some_and(|style| !style.is_valid()) {
+            return Some("note_text_style.font_size".into());
+        }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
@@ -1354,6 +1357,12 @@ mod tests {
         d.text_wrap_width = 120.0;
         d.text_follows_zoom = true;
         d.text_zoom_spacing = Some(6.5);
+        d.note_text_style = Some(crate::drawings::NoteTextStyle {
+            color: [21, 22, 23, 24],
+            font_size: 18.0,
+            bold: true,
+            italic: true,
+        });
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1642,6 +1651,7 @@ mod tests {
             want.text_wrap_width = 200.0;
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
+            want.note_text_style = None;
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2481,6 +2491,28 @@ mod tests {
         }
     }
 
+    /// The fixture is a price label and a price note as the release before their badge and text
+    /// settings saved them: the label stored no border colour and drew a plain badge, and the
+    /// note drew its typed text as its price. A new label has a border colour of its own.
+    #[test]
+    fn price_label_and_note_saved_before_their_settings_keep_their_look() {
+        let saved = include_str!("fixtures/storage_v9_price_label_note.json");
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let blue = egui::Color32::from_rgb(41, 98, 255);
+        let label = restore(&storage.drawings[0], 1);
+        let colors = label.price_label_colors();
+        assert_eq!(
+            (colors.text, colors.fill, colors.border),
+            (egui::Color32::WHITE, blue, egui::Stroke::NONE)
+        );
+        let note = restore(&storage.drawings[1], 2);
+        assert_eq!(note.text.as_deref(), Some("Entry"));
+        assert_eq!(note.note_text_style, None);
+        let colors = note.text_box_colors(&egui::Context::default());
+        assert_eq!((colors.text, colors.fill), (egui::Color32::WHITE, blue));
+    }
+
     /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
     /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
     /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
@@ -2575,7 +2607,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 37] = [
+        let cases: [(Spoil, &str); 38] = [
             (
                 |s| {
                     first(s)
@@ -2666,6 +2698,13 @@ mod tests {
             (
                 |s| first(s).drawing.text_zoom_spacing = Some(0.0),
                 "invalid text_zoom_spacing",
+            ),
+            (
+                |s| {
+                    let style = first(s).drawing.note_text_style.as_mut().unwrap();
+                    style.font_size = 0.0;
+                },
+                "invalid note_text_style.font_size",
             ),
             (
                 |s| first(s).points[1].price = f64::NAN,
