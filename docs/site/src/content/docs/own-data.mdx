@@ -1,0 +1,385 @@
+---
+title: Your own data in the demo
+---
+
+The [demo](https://userfrm.github.io/egui-charts/demo/) can chart your own market data
+without a line of code. You describe a REST history endpoint and a WebSocket stream in a
+dialog, map their JSON fields to bars and trades by clicking them, and the chart then runs
+on that data. This is meant for evaluating the library on the data you know.
+
+The demo builds a [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html)
+of its own from the description. That mapped feed is part of the demo, not of the library's
+API: its source is in
+[`examples/demo/owndata`](https://github.com/userFRM/egui-charts/tree/main/examples/demo/owndata).
+To connect a source in your own application, write a feed as
+[historical and streaming data](data.mdx) describes.
+
+Not covered: quotes, depth, orders, signed requests and the symbol search of a service.
+
+## Open the dialog
+
+On the first visit the demo asks whether to *Use synthetic data* or to
+*Connect my own data*. The answer is remembered and the question is not asked again.
+*Data source* in the top-left menu opens the dialog at any time.
+
+The dialog has three steps, *Source*, *History* and *Live*. *Save* stores the profile
+without connecting, *Connect* stores it and shows it on the chart, and *Cancel* closes the
+dialog and keeps what you typed. While your own data is on the chart, *Use synthetic data*
+in the *Source* step brings the synthetic session back as you left it.
+
+## Describe the source
+
+A profile is the description of one source. The *Source* step holds what it is and what it
+offers:
+
+- **Name.** How the profile is listed. Saved profiles have different names.
+- **Symbols.** Spelled as the service expects them. The symbol search offers these and no
+  others, and the chart opens on the first.
+- **Intervals.** A table of chart intervals and, for each, the text the service expects,
+  such as `1m`, `60` or `60000`. The text is sent as typed. Only intervals with a duration
+  can be listed, and the chart opens on the first row.
+- **Time zone.** The zone of every time that names none and of bounds printed as dates.
+  It is UTC unless you change it.
+- **Keys.** A name and a value. Write the name in braces, such as `{key}`, where the value
+  belongs in an address, a header, a body or a message. Values are sent only to the
+  endpoints of the profile. *Keep keys in this browser* is off unless you tick it; a kept
+  key is plain text in the browser's storage for the site.
+
+A key typed straight into an address, a header or a message, instead of as a name in
+braces, is part of the profile. It is saved and exported with it.
+
+## History over REST
+
+### The request
+
+The address is a template. The demo fills these placeholders:
+
+| Placeholder | Filled with |
+| --- | --- |
+| `{symbol}` | The symbol on the chart |
+| `{interval}` | The text of the interval table for the chart's interval |
+| `{from}` | The start of the range asked for |
+| `{to}` | The end of the range asked for |
+| `{limit}` | The number of bars asked for, at most the page size |
+| `{name}` | The value of the key of that name |
+
+Values are percent-encoded in the address and sent as typed in headers and in the body.
+Headers are rows of a name and a value. An empty body sends `GET`. An address, and a
+header that carries a key:
+
+```text
+https://api.example.com/v1/bars?symbol={symbol}&interval={interval}&to={to}&limit={limit}
+Authorization: Bearer {key}
+```
+
+Any other body is sent with `POST`, as `application/json` unless a header names another
+content type. The braces of JSON need no escaping:
+
+```text
+{"symbol": "{symbol}", "resolution": "{interval}", "end": {to}, "count": {limit}}
+```
+
+### Bounds and paging
+
+`{from}` and `{to}` are printed in one of seven forms:
+
+| Form | Example |
+| --- | --- |
+| Unix seconds | `1794407400` |
+| Unix milliseconds | `1794407400000` |
+| Unix microseconds | `1794407400000000` |
+| Unix nanoseconds | `1794407400000000000` |
+| ISO 8601 | `2026-11-11T14:30:00Z` |
+| Date | `2026-11-11` |
+| Date | `20261111` |
+
+`{to}` is the first instant that is not asked for. In the two date forms it is the last day
+asked for, in the profile's time zone.
+
+The page size is the most bars asked for in one request. Scrolling to the left pages back
+in time:
+
+- With `{to}` alone, the demo asks for the bars before the oldest one it holds until the
+  service answers an empty page.
+- With `{from}` as well, it asks in windows of page size times interval. An empty window,
+  such as a weekend, is crossed. 64 empty windows in a row, or a year without a bar, end
+  history.
+- Without either, the chart shows the newest bars only.
+
+With dates as bounds on an interval shorter than a day, set the page size to at least the
+bars of one day, or use one of the other forms. Otherwise a day with more bars than the
+page size can leave a hole. For sparse data a larger page size widens the windows.
+
+### Response shapes
+
+A response is read as one of four layouts. Rows may sit at the root or under a path such as
+`data.candles`.
+
+A list of objects, with fields named by their keys:
+
+```json
+[{"t": 1794407400, "o": 100.75, "h": 103.0, "l": 100.5, "c": 102.5, "v": 1500}]
+```
+
+A list of arrays, with fields named by their column number:
+
+```json
+[[1794407400, 100.75, 103.0, 100.5, 102.5, 1500]]
+```
+
+A list of arrays whose columns a header array elsewhere in the response names:
+
+```json
+{"columns": ["time", "open", "high", "low", "close", "volume"],
+ "rows": [[1794407400, 100.75, 103.0, 100.5, 102.5, 1500]]}
+```
+
+Columns as parallel arrays:
+
+```json
+{"t": [1794407400], "o": [100.75], "h": [103.0], "l": [100.5], "c": [102.5], "v": [1500]}
+```
+
+A page without rows is one whose list is absent, `null` or empty.
+
+### Fields
+
+A bar has a time, an open, a high, a low, a close and a volume. The volume may be left
+unmapped. Numbers may arrive as text.
+
+- A row without a readable time is skipped.
+- A row whose four prices are all missing is an empty slot.
+- A row with some prices missing, or with a high below its close, is dropped by the chart
+  and counted in the status line of the dialog.
+- Rows may come in any order. Of two rows for one slot the later one wins.
+
+### Test and map
+
+*Test* fetches the newest page and shows the response as a tree. The demo proposes the
+place of the rows, their layout and the fields it recognises by name. To change the
+mapping, click a slot, such as `rows`, `time` or `volume`, and then the field in the tree:
+the place of the rows under *Response*, a field under *First row*.
+
+The preview shows the first five bars and the last one, their count and the rows skipped.
+Beside the `time` slot the dialog prints the time of the first row as it is read, in the
+profile's zone and in UTC. A wrong unit shows there before anything is charted.
+
+## Times
+
+| Reading | Value |
+| --- | --- |
+| Unix seconds, milliseconds, microseconds or nanoseconds | A number or numeric text |
+| ISO 8601 text with `Z` or an offset | An instant |
+| ISO 8601 text without an offset | A wall time in the profile's zone |
+| ISO 8601 text that is a bare date | A bar dated on that day |
+| A date, `20261111` or `2026-11-11` | A bar dated on that day |
+| A date and a time of day | A wall time in the profile's zone |
+
+The time of day is milliseconds since midnight, seconds since midnight or text such as
+`09:30:00`. It is a reading of the wall clock: 09:30 is the same value on every day of the
+year. When clocks go back, a wall time that occurs twice is its first occurrence. When
+clocks go forward, a wall time that does not occur is the moment of the change.
+
+Bars of a day, a week or a month are dated, not timed. The date is the row's date field,
+or the day of its instant in the profile's zone. Set the zone to the exchange's when the
+service stamps such bars at local midnight, and leave it at UTC when it stamps them at
+00:00 UTC. [Time zones and sessions](time-zones.mdx) explains how the chart displays them.
+
+- With the chart's display zone west of UTC-10:00 or at UTC+14:00, such bars are dated one
+  day off.
+- A change of the display zone loads the bars again and dates them in the new zone.
+- A time far ahead of the clock is dropped, which is what a wrong unit looks like.
+
+## Live data over WebSocket
+
+### The connection
+
+The address starts with `ws://` or `wss://` and takes `{symbol}`, `{interval}` and the
+names of the keys. Offer a subprotocol only when the service answers with it: a connection
+that offers subprotocols ends when the server selects none.
+
+Connect messages are sent in their order every time the socket opens: the login first, then
+the subscribe message.
+
+```json
+{"action": "auth", "key": "{key}"}
+```
+
+```json
+{"action": "subscribe", "symbol": "{symbol}", "interval": "{interval}"}
+```
+
+A keep-alive message is sent at its period for as long as the socket is open.
+
+A browser sends no headers when it opens a WebSocket, so a key travels in one of three
+places: the address, a subprotocol or a connect message.
+
+- The subscribe message is sent right after the login, without waiting for its answer.
+- A hidden browser tab slows timers, so a keep-alive period under a minute is not kept
+  there.
+- Every chart, study data stream and alert that subscribes opens a connection of its own.
+  A service that allows one connection per key refuses the second.
+
+### Test and the log
+
+*Test* connects and lists each message with the route it takes. *Stop* ends the Test. The
+first message without a route stays in view above the log until every record of it has
+one. While your own data is on the chart, *Test* opens a second connection beside the
+chart's.
+
+### Records and routes
+
+A message holds one record or several. The `records` slot is their place in the message:
+a list there is one record per element, an object is one record, and a message without
+that place is itself the record.
+
+The `route by` slot is the field that tells the kinds of message apart. It is looked up in
+the record and then in the message. Each route has a value of that field and is one of
+*Ignore*, *Bars* or *Trades*. A message that is not JSON, such as a plain `pong`, is routed
+by its own text. For a stream with one kind of message, *Route every message here* makes a
+route that takes every record.
+
+Binary messages that are not text, as a stream that compresses its messages itself sends,
+cannot be mapped.
+
+### Bars
+
+A bar route maps a time and the five values. A bar takes the place of the bar with the
+same open time. The bars must be those of the chart's interval, so the subscribe message
+carries `{interval}`, and a stream of one fixed interval serves charts of that interval
+only. Map bars or trades for a chart, not both.
+
+### Trades and conditions
+
+A trades route maps a time, a price, a size and, optionally, a condition, which may be one
+value or a list. Trades are folded into bars of the chart's interval. Each condition value
+has one of three rules:
+
+| Rule | Effect on the bar |
+| --- | --- |
+| *Price and volume* | The price moves high, low and close, and the size is added to the volume |
+| *Volume only* | The size is added to the volume |
+| *Ignore* | None |
+
+With several conditions the strictest rule applies. The list fills from the log, and a
+value that is not listed counts price and volume. A *Volume only* trade that opens a slot
+shows as a flat bar at the last close.
+
+- A trade for a slot older than the bar being built is dropped, and a trade the service
+  sends twice is counted twice.
+- A trade between the history page and the first trade of the stream is in neither until
+  the symbol is loaded again.
+- Trades reach the chart as bars only, so time and sales, the footprint and the order-flow
+  studies stay empty.
+
+## Reconnecting, pausing and changing symbol
+
+After a drop the demo waits one second, then twice as long each time up to a minute, sends
+the connect messages again and loads the bars it missed from REST. *Pause data feed* in
+the menu closes the socket, and resuming loads what the pause missed. A change of symbol
+or interval asks history again and moves the subscription.
+
+- A gap longer than one page is filled for its newest page only, and a profile without
+  REST history fills nothing.
+- A connection that dies without a close is noticed late. A keep-alive message shortens
+  that.
+
+## Profiles
+
+A profile is saved in the browser by *Save* and by *Connect*. *Export* shows the whole
+file before it saves it; the file holds no key value. In another browser, *Import* the
+file, enter the keys and *Connect*. An imported profile never replaces a saved one, and a
+file written by a newer version of the demo is refused.
+
+## What the browser requires
+
+### Requests to another origin
+
+A browser lets a page read a response from another origin only when the server allows it.
+For a `GET` without headers of your own, the response must carry
+`Access-Control-Allow-Origin`. For a request with a header such as `Authorization`, or a
+`POST` with a JSON body, the browser first sends an `OPTIONS` request. Its answer must
+carry `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods` and
+`Access-Control-Allow-Headers` with every header name used, `Content-Type` included.
+
+The demo sends no cookies, so `*` is accepted as the origin. A refusal shows in the dialog
+as `no response (..)`: a browser does not tell the page why.
+
+### Allow the demo's origin on a local server
+
+The origin is `https://userfrm.github.io`, or the address a locally served build runs at.
+The answer to `OPTIONS`:
+
+```http
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://userfrm.github.io
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Authorization, Content-Type
+```
+
+The answer with the data:
+
+```http
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: https://userfrm.github.io
+Content-Type: application/json
+```
+
+A server that cannot be changed is used from the native demo, which has no such rule:
+
+```text
+cargo run --manifest-path examples/demo/Cargo.toml
+```
+
+### Secure pages
+
+The demo is served over HTTPS, so a remote endpoint must be `https://` or `wss://`.
+`localhost` and `127.0.0.1` may be plain. A browser may ask for permission before a public
+page reaches a local address.
+
+### WebSocket
+
+No headers can be sent. The server sees the page's origin in `Origin` and may refuse it. A
+connection that fails gives the page no cause, so the dialog names what to check. The
+browser's own console shows the address of a failed connection, with a key that travels in
+it.
+
+## While own data is on
+
+The demo shows one chart, in the profile's zone.
+
+- **Keeps working:** chart types, studies, drawings, the data table, the exports, go to
+  date, the settings and the paper order ticket.
+- **Off, and says so:** alerts, compare, layouts, replay, the samples, the strategy tester
+  and watchlists. The market panels show an empty state. The liquidity heatmap, the price
+  unit and the market recording are unavailable.
+
+Studies and drawings made on own data are not saved, and connecting a changed profile
+starts a new chart. The paper account is the same on both data sources and is priced at
+the chart's last close. Extended hours, dividend adjustment and currency conversion are
+not sent: the bars are shown as the service returns them. The price-based chart types take
+their sizes from the first page of history, so a profile without REST history keeps the
+default sizes.
+
+## Errors
+
+Every error is the endpoint, without its query, then the reason.
+
+| Reason | Meaning | Check |
+| --- | --- | --- |
+| `no response (..)` | No response arrived. In a browser the sentence adds that the server is unreachable or does not allow this page's origin or these request headers. | The address, and the cross-origin answers above |
+| `rejected as unauthorised (HTTP 401): check the key and where it is sent` | The service refused the key. The same for 403. | The key and its place |
+| `HTTP 500` | Any other status outside 200 to 299 | The service |
+| `unreadable response: ..` | The body is not JSON, the rows are not where the mapping says, or no row has a readable time | The mapping, in the tree of the response |
+| `not a usable WebSocket address (..)` | The address does not parse, or the browser refuses to open it | The address, and `wss://` on a secure page |
+| `cannot connect (..)` | No address resolves or connects | The address |
+| `handshake failed (..)` | TLS or the handshake failed | The address and the subprotocols |
+| `handshake refused (HTTP ..)` | The service answered the handshake with a status | The address and the key |
+| `no answer to the handshake within 10 seconds` | The service accepted the connection and stayed silent | The service |
+| `could not connect. The browser gives no cause: ..` | A browser's connection failed before it opened | The address, that the server accepts this page, and the key |
+| `closed by the server (code ..)` | The service ended the connection | The connect messages and the key |
+| `connection lost` | The connection ended without a close | The network |
+
+While your own data is on the chart, the dialog shows a status line: the profile, then
+`live`, `connecting`, `disconnected, reconnecting` or `no live stream`, and the count of
+bars dropped as invalid.
