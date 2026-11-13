@@ -1411,3 +1411,99 @@ fn collapsing_the_price_pane_of_a_short_chart_leaves_no_blank_area() {
     }
     assert_eq!(heights(&chart), [90.0, 24.0]);
 }
+
+/// A chart's own background covers its study panes. Solid, neither a pane nor the fills that
+/// keep legend text and the labels of a study's own axis readable paint the theme's background.
+/// A gradient spans the chart frame, from 8 to 592 points down the 600 point test frame, and
+/// each pane paints the part behind it. A chart that leaves its background to a container
+/// paints none behind a study pane either.
+#[test]
+fn custom_background_reaches_study_panes() {
+    use crate::config::BackgroundStyle;
+    use crate::studies::{SMA, StudyScale};
+    use crate::widget::test_frames::{frame, shapes};
+    use egui::{Color32, Shape};
+    let solid = Color32::from_rgb(120, 10, 10);
+    let (top, bottom) = (Color32::from_rgb(200, 0, 0), Color32::from_rgb(0, 0, 200));
+    let gradient = BackgroundStyle::VerticalGradient {
+        top_color: top,
+        bottom_color: bottom,
+    };
+    let at = |y: f32| top.lerp_to_gamma(bottom, (y - 8.0) / 584.0);
+    let theme = crate::theme::Theme::dark();
+    for (style, skip) in [
+        (BackgroundStyle::Solid, false),
+        (BackgroundStyle::Solid, true),
+        (gradient, false),
+        (gradient, true),
+    ] {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        chart.set_theme(&ctx, &theme);
+        chart.add_indicator(Box::new(RSI::new(14)));
+        let average = chart.add_indicator(Box::new(SMA::new(5)));
+        assert!(chart.set_indicator_scale(average, StudyScale::Independent));
+        chart.config_mut().background_color = solid;
+        chart.config_mut().background_style = style;
+        chart.config_mut().skip_background = skip;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let pane = chart.get_rendered_indicator_panes()[0].panel_rect;
+        // A background fill is one colour, or a mesh's corner colours clockwise from the top left.
+        let fills = |rect: Rect| -> Vec<Vec<Color32>> {
+            let corners = [
+                rect.left_top(),
+                rect.right_top(),
+                rect.right_bottom(),
+                rect.left_bottom(),
+            ];
+            painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(shape) if shape.rect == rect && shape.stroke.width == 0.0 => {
+                        Some(vec![shape.fill])
+                    }
+                    Shape::Mesh(mesh) if mesh.vertices.iter().map(|v| v.pos).eq(corners) => {
+                        Some(mesh.vertices.iter().map(|v| v.color).collect())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let slice = |rect: Rect| {
+            if style == BackgroundStyle::Solid {
+                vec![solid]
+            } else {
+                let (top, bottom) = (at(rect.top()), at(rect.bottom()));
+                vec![top, top, bottom, bottom]
+            }
+        };
+        let label = format!("{style:?}, skip_background {skip}");
+        if skip {
+            assert_eq!(fills(pane), Vec::<Vec<Color32>>::new(), "{label}");
+            continue;
+        }
+        assert_eq!(fills(pane), [slice(pane)], "{label}");
+        let price_height = chart.pane_height(crate::widget::PaneId::MAIN).unwrap();
+        let price_frame = Rect::from_min_size(Pos2::new(8.0, 8.0), Vec2::new(784.0, price_height));
+        assert_eq!(fills(price_frame), [slice(price_frame)], "{label}");
+        if style == BackgroundStyle::Solid {
+            // The theme's background, opaque and at the 60% opacity of a study's legend row.
+            let stale: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(shape)
+                        if shape.stroke.width == 0.0
+                            && (shape.fill == Color32::BLACK
+                                || shape.fill == Color32::from_black_alpha(153)) =>
+                    {
+                        Some(shape.rect)
+                    }
+                    _ => None,
+                })
+                .filter(|rect| *rect != Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)))
+                .collect();
+            assert!(stale.is_empty(), "theme background at {stale:?}");
+        }
+    }
+}

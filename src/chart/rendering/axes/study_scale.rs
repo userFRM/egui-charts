@@ -106,7 +106,8 @@ pub(crate) fn fit_study_mapping(
     }
 }
 
-/// Paint an independent study axis in its reserved gutter beside the plot.
+/// Paint an independent study axis in its reserved gutter beside the plot. Each label lies on a
+/// plate in the colour `background` gives for the chart background behind it.
 pub(crate) fn render_study_axis(
     painter: &Painter,
     studies: &[&dyn Indicator],
@@ -114,6 +115,7 @@ pub(crate) fn render_study_axis(
     axis: Rect,
     axis_options: &crate::config::PriceAxisOptions,
     relative_formatter: Option<&dyn crate::scales::PriceFormatter>,
+    background: &dyn Fn(Pos2) -> egui::Color32,
 ) -> f32 {
     let Some(&study) = studies.first() else {
         return 0.0;
@@ -203,7 +205,11 @@ pub(crate) fn render_study_axis(
         {
             continue;
         }
-        painter.rect_filled(rect, 0.0, color.unwrap_or(theme.chart.bg));
+        painter.rect_filled(
+            rect,
+            0.0,
+            color.unwrap_or_else(|| background(rect.center())),
+        );
         painter.galley(
             rect.min + egui::vec2(2.0, 2.0),
             galley,
@@ -287,6 +293,7 @@ mod tests {
                         axis,
                         &Default::default(),
                         None,
+                        &|_| egui::Color32::BLACK,
                     );
                 }
             });

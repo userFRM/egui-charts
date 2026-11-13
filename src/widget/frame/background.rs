@@ -62,17 +62,36 @@ pub(in crate::widget) fn paint_background(
 }
 
 impl Chart {
+    /// The rect the background spans: `rect`, the price frame, with the other panes and the time
+    /// axis below them, so that a gradient runs once through the chart.
+    pub(in crate::widget) fn background_frame(&self, rect: Rect) -> Rect {
+        let mut panes = self
+            .pane_layout
+            .panes
+            .iter()
+            .fold(Rect::NOTHING, |frame, pane| frame.union(pane.rect));
+        // Stacked panes share the time axis below the last of them.
+        if self.has_panes() {
+            panes.max.y += self.time_axis_height();
+        }
+        rect.union(panes)
+    }
+
+    /// The colour of the chart's background at `pos`, whether the chart or its container paints
+    /// it; `rect` is the price frame.
+    pub(in crate::widget) fn background_at(&self, rect: Rect, pos: Pos2) -> Color32 {
+        background_at(
+            self.background_frame(rect),
+            self.config.background_style,
+            self.config.background_color,
+            pos,
+        )
+    }
+
     /// The background colour at `pos` within the frame painted by [`Self::draw_background`],
     /// or `None` when something else paints it.
     pub(super) fn plot_background(&self, rect: Rect, pos: Pos2) -> Option<Color32> {
-        (!self.config.skip_background).then(|| {
-            background_at(
-                rect,
-                self.config.background_style,
-                self.config.background_color,
-                pos,
-            )
-        })
+        (!self.config.skip_background).then(|| self.background_at(rect, pos))
     }
 
     /// Draw the chart background (solid or gradient)
@@ -83,7 +102,7 @@ impl Chart {
         }
         paint_background(
             painter,
-            rect,
+            self.background_frame(rect),
             rect,
             self.config.background_style,
             self.config.background_color,

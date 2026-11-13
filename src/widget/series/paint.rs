@@ -639,6 +639,7 @@ impl Chart {
                         axis,
                         &study_axis,
                         self.percentage_formatter.as_deref(),
+                        &|pos| self.background_at(widget, pos),
                     ));
                 }
                 continue;

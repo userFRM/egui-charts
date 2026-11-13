@@ -92,6 +92,11 @@ pub struct IndicatorPane {
     pub(super) primitive_axis_labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
     pub(super) axis_options: crate::config::PriceAxisOptions,
     pub(super) legend_backdrop: f32,
+    /// The background of the chart showing the pane: the rect its gradient spans, its style and
+    /// its solid colour. A pane shown on its own has the theme's chart background.
+    pub(super) background: Option<(Rect, crate::config::BackgroundStyle, egui::Color32)>,
+    /// The chart's container painted the background, so the pane paints none.
+    pub(super) skip_background: bool,
 }
 
 impl IndicatorPane {
@@ -117,7 +122,17 @@ impl IndicatorPane {
             primitive_axis_labels: Vec::new(),
             axis_options,
             legend_backdrop: 0.6,
+            background: None,
+            skip_background: false,
         }
+    }
+
+    /// The colour of the background behind `pos`.
+    pub(super) fn background_at(&self, ctx: &egui::Context, pos: Pos2) -> egui::Color32 {
+        self.background.map_or_else(
+            || ctx.active_theme().chart.bg,
+            |(frame, style, color)| crate::widget::frame::background_at(frame, style, color, pos),
+        )
     }
 
     /// Render the indicator panel with proper x-axis alignment
@@ -401,9 +416,16 @@ impl IndicatorPane {
 
         let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 
-        // Fill background
-        if !self.overlay {
-            painter.rect_filled(rect, 0.0, chart_bg);
+        // Fill background: the part of the chart's that lies behind the pane
+        if !self.overlay && !self.skip_background {
+            match self.background {
+                Some((frame, style, color)) => {
+                    crate::widget::frame::paint_background(painter, frame, rect, style, color);
+                }
+                None => {
+                    painter.rect_filled(rect, 0.0, chart_bg);
+                }
+            }
         }
 
         // Calculate drawing area to match main chart layout

@@ -146,6 +146,9 @@ pub struct Legend<'a> {
     /// The rects the chart shades as extended hours under the legend, left to right, and their
     /// shading. The chart sets it.
     pub(crate) extended_hours: (&'a [Rect], Color32),
+    /// The colour of the chart background at a point under the legend, which the backdrops take.
+    /// The chart sets it; a legend shown on its own has the theme's chart background.
+    pub(crate) background: Option<&'a dyn Fn(Pos2) -> Color32>,
 }
 
 impl<'a> Legend<'a> {
@@ -183,6 +186,7 @@ impl<'a> Legend<'a> {
             quantity: None,
             thousands_sep: None,
             extended_hours: (&[], Color32::TRANSPARENT),
+            background: None,
         }
     }
 
@@ -241,15 +245,14 @@ impl<'a> Legend<'a> {
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(plot);
+        let theme_background = |_: Pos2| theme.chart.bg;
         let mut layout = Layout::new(
             &painter,
             bounds,
             colors,
             (first_row_end - theme.spacing.lg).min(bounds.right()),
-            (
-                self.extended_hours.0,
-                theme.chart.bg.blend(self.extended_hours.1),
-            ),
+            self.background.unwrap_or(&theme_background),
+            self.extended_hours,
         );
         #[cfg(feature = "icons")]
         let (title_start, title_end) = (layout.pos, layout.row_end);
@@ -500,7 +503,7 @@ impl<'a> Legend<'a> {
                     Stroke::new(1.0, theme.ui.accent),
                     egui::StrokeKind::Inside,
                 );
-                painter.add(layout.fill(controls, theme.chart.bg));
+                painter.add(layout.fill(controls, 1.0));
                 let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
                 crate::icons::icons::FLAG_MARK
                     .as_image_tinted(
@@ -634,10 +637,7 @@ impl<'a> Legend<'a> {
             action
         });
 
-        layout.backdrop = theme
-            .chart
-            .bg
-            .gamma_multiply(self.study_backdrop.clamp(0.0, 1.0));
+        layout.backdrop = self.study_backdrop.clamp(0.0, 1.0);
         let mut study_settings = None;
         let collapsed = ui
             .ctx()
@@ -836,7 +836,7 @@ impl<'a> Legend<'a> {
             painter.rect(
                 rect,
                 3.0,
-                painter.ctx().active_theme().chart.bg,
+                (layout.chart_background)(rect.center()),
                 Stroke::new(
                     1.0,
                     if theme.dark {
@@ -978,9 +978,11 @@ struct Layout<'a> {
     row_end: f32,
     height: f32,
     background: egui::layers::ShapeIdx,
-    /// Fill of the current row's background.
-    backdrop: Color32,
-    /// The rects shaded as extended hours and the background as shaded there.
+    /// The colour of the chart background at a point.
+    chart_background: &'a dyn Fn(Pos2) -> Color32,
+    /// Opacity of the current row's background.
+    backdrop: f32,
+    /// The rects shaded as extended hours and their shading.
     tint: (&'a [Rect], Color32),
     colors: &'a StyleColors,
 }
@@ -991,6 +993,7 @@ impl<'a> Layout<'a> {
         bounds: Rect,
         colors: &'a StyleColors,
         first_row_end: f32,
+        chart_background: &'a dyn Fn(Pos2) -> Color32,
         tint: (&'a [Rect], Color32),
     ) -> Self {
         Self {
@@ -1000,45 +1003,52 @@ impl<'a> Layout<'a> {
             row_end: first_row_end,
             height: 24.0,
             background: painter.add(egui::Shape::Noop),
-            backdrop: painter.ctx().active_theme().chart.bg,
+            chart_background,
+            backdrop: 1.0,
             tint,
             colors,
         }
     }
 
-    /// `rect` in `fill`, the chart background at some opacity, and over the extended hours shading
+    /// `rect` in the chart background behind it at `opacity`, and over the extended hours shading
     /// in the shaded background at the same opacity, so each part matches the plot beneath.
-    fn fill(&self, rect: Rect, fill: Color32) -> egui::Shape {
-        let (shaded, color) = self.tint;
-        let color = color.gamma_multiply_u8(fill.a());
+    fn fill(&self, rect: Rect, opacity: f32) -> egui::Shape {
+        let (shaded, shade) = self.tint;
+        let part = |part: Rect, shaded: bool| {
+            // shortcut: one colour per part, so a steep horizontal gradient shows a step at the
+            // ends of a wide row; paint the part as a slice of the gradient if that is seen.
+            let color = (self.chart_background)(part.center());
+            let color = if shaded { color.blend(shade) } else { color };
+            egui::Shape::rect_filled(part, 0.0, color.gamma_multiply(opacity))
+        };
         let mut parts = Vec::new();
         let mut left = rect.left();
         // The parts are disjoint: a shaded part laid over a translucent fill would apply the
         // opacity twice.
-        for part in shaded
+        for shaded in shaded
             .iter()
             .map(|shaded| rect.intersect(*shaded))
             .filter(Rect::is_positive)
         {
             parts.push((
-                Rect::from_x_y_ranges(left..=part.left(), rect.y_range()),
-                fill,
+                Rect::from_x_y_ranges(left..=shaded.left(), rect.y_range()),
+                false,
             ));
-            parts.push((part, color));
-            left = part.right();
+            parts.push((shaded, true));
+            left = shaded.right();
         }
         if parts.is_empty() {
-            return egui::Shape::rect_filled(rect, 0.0, fill);
+            return part(rect, false);
         }
         parts.push((
             Rect::from_x_y_ranges(left..=rect.right(), rect.y_range()),
-            fill,
+            false,
         ));
         egui::Shape::Vec(
             parts
                 .into_iter()
-                .filter(|(part, _)| part.is_positive())
-                .map(|(part, fill)| egui::Shape::rect_filled(part, 0.0, fill))
+                .filter(|(rect, _)| rect.is_positive())
+                .map(|(rect, shaded)| part(rect, shaded))
                 .collect(),
         )
     }
@@ -1079,13 +1089,11 @@ impl<'a> Layout<'a> {
                 self.backdrop,
             ),
         );
-        let background = self.painter.ctx().active_theme().chart.bg;
-        if self.backdrop != background {
+        let background = (self.chart_background)(rect.center());
+        if background.gamma_multiply(self.backdrop) != background {
             // Profiles can be opaque or contain letters; protect the full content bounds.
-            self.painter.add(self.fill(
-                rect.expand(2.0).intersect(self.bounds.expand(2.0)),
-                background,
-            ));
+            self.painter
+                .add(self.fill(rect.expand(2.0).intersect(self.bounds.expand(2.0)), 1.0));
         }
         rect
     }
