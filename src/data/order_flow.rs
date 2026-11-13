@@ -1865,9 +1865,9 @@ mod tests {
     /// the drain that streams them holds copies it stamps apart from the stream: the sell of
     /// 10:00:00, stamped 400 microseconds later, after a buy at 09:59:59 that the page lacks; or
     /// a buy at 10:00:00 and a sell 400 microseconds later, both stamped 10:00:00. With buys at
-    /// 10:00:01 and 10:00:02, the chart's bars hold the first three executions (volume 3, delta
-    /// 1) and the last (1, 1). A source rebuilt from the held executions counts each copied
-    /// execution once and shows those bars, as the source connected from the start does.
+    /// 10:00:01 and 10:00:02, the chart's bars hold the first three executions, of volume 3 and
+    /// delta 1, and the last, of 1 and 1. A source rebuilt from the held executions counts each
+    /// copied execution once and shows those bars, as the source connected from the start does.
     #[cfg(feature = "widget")]
     #[test]
     fn a_page_copy_stamped_apart_from_its_live_execution_counts_once() {
