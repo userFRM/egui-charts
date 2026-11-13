@@ -14,7 +14,7 @@ use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Sea
 use super::price_decimals;
 use super::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
-use crate::data::{Datafeed, FeedError, SymbolDetails};
+use crate::data::{CompanyFinancials, Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
 use crate::model::{ExtendedSession, Instrument, Quote, TimezoneId};
 use crate::scales::StudyFormat;
@@ -59,6 +59,7 @@ struct Notes {
 /// What an inbox answer is for.
 enum Request {
     Details(String),
+    Financials(String),
     Load(String),
     Save(String, String),
 }
@@ -76,13 +77,16 @@ enum Request {
 /// [`SymbolDetails::url`] gets a link to the instrument beside its name, and one that supplies
 /// [`SymbolDetails::category`] gets the category under it. For each new symbol the panel asks the
 /// feed for [`Datafeed::symbol_details`] and shows the statistics, on a card, and the profile it
-/// answers; an empty section, or a feed that does not support the request, shows nothing. Notes
+/// answers; an empty section, or a feed that does not support the request, shows nothing. It also
+/// asks for [`Datafeed::financials`] and holds a nonempty answer in
+/// [`financials`](Self::financials). Notes
 /// are kept in memory per symbol, and with a storage service attached they are read from and
 /// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
 /// document at a time. Call [`poll`](Self::poll) each frame, even while the panel is hidden, then
 /// [`show`](Self::show) while it is open. The More menu's Financials item is reported by
 /// [`take_financials_request`](Self::take_financials_request), for the host to open a
-/// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures.
+/// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures, such
+/// as [`financials`](Self::financials).
 ///
 /// The Performance and Seasonality sections show what the host supplies. Call
 /// [`take_market_requests`](Self::take_market_requests) each frame: the first call for a symbol
@@ -99,6 +103,7 @@ pub struct SymbolDetailsPanel {
     timezone: TimezoneId,
     hidden: HashSet<&'static str>,
     details: Option<SymbolDetails>,
+    financials: Option<CompanyFinancials>,
     returns: Option<MarketDetail<Vec<PeriodReturn>>>,
     seasonality: Option<MarketDetail<Seasonality>>,
     error: Option<String>,
@@ -118,7 +123,8 @@ impl SymbolDetailsPanel {
         Self::default()
     }
 
-    /// Ask `feed` for the details of each symbol from now on, starting with the shown one.
+    /// Ask `feed` for the details and financials of each symbol from now on, starting with the
+    /// shown one.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
         self.feed = Some(feed);
         if let Some(symbol) = self.symbol().map(str::to_owned) {
@@ -147,6 +153,7 @@ impl SymbolDetailsPanel {
             self.quote = None;
             self.average_volume = None;
             self.details = None;
+            self.financials = None;
             self.returns = None;
             self.seasonality = None;
             self.error = None;
@@ -190,6 +197,11 @@ impl SymbolDetailsPanel {
         if !visible {
             self.financials_requested = false;
         }
+    }
+
+    /// The shown symbol's [`Datafeed::financials`] once the feed answers with at least one page.
+    pub fn financials(&self) -> Option<&CompanyFinancials> {
+        self.financials.as_ref()
     }
 
     /// Whether the user chose Financials in the More menu since the last call.
@@ -251,6 +263,8 @@ impl SymbolDetailsPanel {
         if let Some(feed) = self.feed.clone() {
             let key = self.key(Request::Details(symbol.clone()));
             feed.symbol_details(&symbol, self.inbox.reply(key));
+            let key = self.key(Request::Financials(symbol.clone()));
+            feed.financials(&symbol, self.inbox.reply(key));
         }
     }
 
@@ -291,6 +305,28 @@ impl SymbolDetailsPanel {
                             self.error = Some(l10n::format_text(
                                 ctx,
                                 "Details unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ))
+                        }
+                    }
+                }
+                Request::Financials(symbol) => {
+                    let result = *answer
+                        .downcast::<Result<CompanyFinancials, FeedError>>()
+                        .expect("company financials");
+                    if !current(&symbol) {
+                        continue;
+                    }
+                    match result {
+                        Ok(financials) => {
+                            self.financials =
+                                Some(financials).filter(|figures| !figures.pages.is_empty());
+                        }
+                        Err(FeedError::NotSupported) => {}
+                        Err(error) => {
+                            self.error = Some(l10n::format_text(
+                                ctx,
+                                "Financials unavailable: {error}",
                                 &[("error", error.to_string().as_str())],
                             ))
                         }

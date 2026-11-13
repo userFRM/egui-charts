@@ -1,18 +1,14 @@
 //! A company's financials in place of the price chart: a chart of one row over the periods and
 //! the table of every row, page by page, from figures the host supplies.
 
-use crate::data::inbox::Inbox;
 pub use crate::data::{CompanyFinancials, FinancialPage, FinancialRow};
-use crate::data::{Datafeed, FeedError};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::Instrument;
 use crate::scales::StudyFormat;
 use crate::theme::ThemeExt;
 use crate::ui_kit::EmptyState;
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::{Align, Align2, FontId, Layout, Rect, RichText, Sense, Ui, pos2, vec2};
-use std::sync::Arc;
 
 /// Height of the chart above the table.
 const CHART_HEIGHT: f32 = 200.0;
@@ -45,8 +41,6 @@ pub struct FinancialsPanel {
     financials: Option<CompanyFinancials>,
     page: usize,
     charted: usize,
-    inbox: Arc<Inbox>,
-    loading: bool,
 }
 
 impl FinancialsPanel {
@@ -58,49 +52,7 @@ impl FinancialsPanel {
             financials: financials.filter(|financials| !financials.pages.is_empty()),
             page: 0,
             charted: 0,
-            inbox: Arc::default(),
-            loading: false,
         }
-    }
-
-    /// Requests `instrument`'s figures from `feed`, clearing the previous figures and ignoring
-    /// their late replies. Call [`poll`](Self::poll) each frame, including while hidden.
-    pub fn request(&mut self, feed: &dyn Datafeed, instrument: &Instrument) {
-        *self = Self::new(
-            instrument
-                .description
-                .as_deref()
-                .unwrap_or(&instrument.symbol),
-            None,
-        );
-        self.loading = true;
-        feed.financials(&instrument.symbol, self.inbox.reply(0));
-    }
-
-    /// Receives the requested figures and wakes the UI when an answer arrives. Returns a host
-    /// error once, except [`FeedError::NotSupported`], which leaves the panel unavailable.
-    pub fn poll(&mut self, ctx: &egui::Context) -> Option<FeedError> {
-        let repaint = ctx.clone();
-        self.inbox.set_waker(move || repaint.request_repaint());
-        for (_, answer) in self.inbox.drain().answers {
-            self.loading = false;
-            let result = *answer
-                .downcast::<Result<CompanyFinancials, FeedError>>()
-                .expect("company financials");
-            match result {
-                Ok(figures) => {
-                    self.financials = Some(figures).filter(|figures| !figures.pages.is_empty());
-                }
-                Err(FeedError::NotSupported) => {}
-                Err(error) => return Some(error),
-            }
-        }
-        None
-    }
-
-    /// Whether figures with at least one page are ready to show.
-    pub fn is_available(&self) -> bool {
-        self.financials.is_some()
     }
 
     /// Shows the financials; returns whether the user asked to go back to the chart.
@@ -139,11 +91,6 @@ impl FinancialsPanel {
             });
         });
         ui.add_space(theme.spacing.md);
-        if self.loading {
-            ui.spinner();
-            ui.label(l10n::text(ui.ctx(), "Loading financials…"));
-            return back;
-        }
         let Some(financials) = &self.financials else {
             back |= EmptyState::new("No financial data is available for this symbol")
                 .icon(&icons::CHART_COLUMNS)

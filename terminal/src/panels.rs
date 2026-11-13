@@ -5,7 +5,6 @@ use super::layout::{Region, panel_frame};
 use super::{Action, ExportContents, Terminal};
 use chrono::{DateTime, Datelike, TimeDelta, TimeZone, Utc};
 use egui_charts::config::KeyboardAction;
-use egui_charts::data::FeedService;
 use egui_charts::icons::{Icon, icons};
 use egui_charts::localization as l10n;
 use egui_charts::model::Tick;
@@ -122,10 +121,9 @@ pub(super) struct State {
     tape_symbol: String,
     /// The newest trade listed: its time and how many trades share that time.
     tape_cursor: Option<(DateTime<Utc>, usize)>,
-    financials: FinancialsPanel,
-    /// The symbol and service availability last requested, including unsupported answers.
-    financials_input: Option<(String, bool)>,
-    financials_open: bool,
+    /// Open financials in place of the charts: the symbol and whether its figures had arrived
+    /// when the panel was made.
+    financials: Option<((String, bool), FinancialsPanel)>,
 }
 
 impl Default for State {
@@ -157,9 +155,7 @@ impl Default for State {
             adding_symbol: false,
             tape_symbol: String::new(),
             tape_cursor: None,
-            financials: FinancialsPanel::new("", None),
-            financials_input: None,
-            financials_open: false,
+            financials: None,
         }
     }
 }
@@ -235,7 +231,6 @@ impl Terminal {
         if let Some(storage) = &self.services.storage {
             market.details.set_storage(storage.clone());
         }
-        market.details.set_financials_visible(false);
         market.details.set_feed(self.feed.clone());
         market.highlights.set_feed(self.feed.clone());
         market.news.set_feed(self.feed.clone());
@@ -281,61 +276,46 @@ impl Terminal {
             .set_notification_cnt(RightBarIcon::Notifications, unread);
         self.feed_heatmap(ctx);
         self.feed_market_panels(ctx);
-        self.feed_financials(ctx);
+        self.feed_financials();
     }
 
-    /// Only offer Financials once the host has answered with figures for the active symbol.
-    fn feed_financials(&mut self, ctx: &egui::Context) {
-        let chart = &self.charts[self.active];
-        let instrument = chart
-            .instrument()
-            .filter(|instrument| instrument.symbol == chart.symbol());
-        if instrument.is_none() && !self.panels.financials_open {
-            self.panels.market.details.set_financials_visible(false);
+    /// Offers Financials once the feed has answered with figures for the details' symbol, and
+    /// keeps open financials on that symbol, showing its figures once they arrive.
+    fn feed_financials(&mut self) {
+        let details = &mut self.panels.market.details;
+        let available = details.financials().is_some();
+        details.set_financials_visible(available);
+        let key = (details.symbol().unwrap_or_default().to_owned(), available);
+        if details.take_financials_request() {
+            self.panel = None;
+        } else if self
+            .panels
+            .financials
+            .as_ref()
+            .is_none_or(|(shown, _)| *shown == key)
+        {
             return;
         }
-        let instrument = instrument
-            .cloned()
-            .unwrap_or_else(|| egui_charts::model::Instrument::new(chart.symbol()));
-        let offered = chart
-            .feed_capabilities()
-            .is_none_or(|capabilities| capabilities.offers(FeedService::Financials))
-            && instrument
-                .services
-                .as_ref()
-                .is_none_or(|services| services.contains(&FeedService::Financials));
-        let input = (instrument.symbol.clone(), offered);
-        let panels = &mut self.panels;
-        if panels.financials_input.as_ref() != Some(&input) {
-            panels.financials = FinancialsPanel::new(chart.symbol(), None);
-            if offered {
-                panels.financials.request(self.feed.as_ref(), &instrument);
-            }
-            panels.financials_input = Some(input);
-        }
-        if let Some(error) = panels.financials.poll(ctx) {
-            self.toasts.error(error.to_string());
-        }
-        panels
-            .market
-            .details
-            .set_financials_visible(panels.financials.is_available());
-        if panels.market.details.take_financials_request() {
-            panels.financials_open = true;
-            self.panel = None;
-        }
+        let title = self.charts[self.active]
+            .instrument()
+            .filter(|instrument| instrument.symbol == key.0)
+            .and_then(|instrument| instrument.description.clone())
+            .unwrap_or_else(|| key.0.clone());
+        let panel = FinancialsPanel::new(title, details.financials().cloned());
+        self.panels.financials = Some((key, panel));
     }
 
     /// Replaces the chart workspace until the user returns to it.
     pub(super) fn show_financials(&mut self, ui: &mut egui::Ui) -> bool {
-        if !self.panels.financials_open {
+        let Some((_, panel)) = &mut self.panels.financials else {
             return false;
+        };
+        let back = egui::Frame::NONE
+            .inner_margin(12.0)
+            .show(ui, |ui| panel.show(ui));
+        if back.inner {
+            self.panels.financials = None;
         }
-        egui::Frame::NONE.inner_margin(12.0).show(ui, |ui| {
-            if self.panels.financials.show(ui) {
-                self.panels.financials_open = false;
-            }
-        });
         true
     }
 
@@ -837,7 +817,7 @@ impl Terminal {
         self.panels.import.is_some()
             || self.panels.wide_watchlist
             || self.panels.profile.is_some()
-            || self.panels.financials_open
+            || self.panels.financials.is_some()
     }
 }
 

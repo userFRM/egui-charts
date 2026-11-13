@@ -330,7 +330,8 @@ pub trait Datafeed: MaybeSend + 'static {
     /// Reported company figures for `symbol`, with periods oldest first and missing figures
     /// left as `None`. The host supplies the statements and their currency; no analytics or
     /// currency conversion run in the library. The default answers [`FeedError::NotSupported`],
-    /// which keeps the terminal's Financials entry hidden. Declared by [`FeedService::Financials`].
+    /// which keeps Financials out of the symbol details' More menu in the terminal. Declared by
+    /// [`FeedService::Financials`].
     fn financials(&self, symbol: &str, reply: Reply<CompanyFinancials>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));

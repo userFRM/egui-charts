@@ -973,6 +973,7 @@ Terminal,Trading panel,Trading notifications,unverified,host,src/ui/trading/mod.
 Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,unverified,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Advanced watchlist view,incomplete,library,src/ui/widget_bar/panels/watchlist.rs;src/ui/widget_bar/panels/market_details.rs;src/ui/widget_bar/panels/symbol_details.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Colour flags and the flagged list,unverified,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs,
+Terminal,Watchlists and screeners,Company financials in place of the chart,unverified,host,src/data/financials.rs;src/data/mod.rs;src/ui/financials.rs;src/ui/widget_bar/panels/symbol_details.rs;terminal/src/panels.rs;terminal/src/layout.rs,205
 Terminal,Watchlists and screeners,"ETF, bond, crypto coin, CEX pair and DEX pair screeners",unverified,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Flip through list symbols on the chart,incomplete,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Hotlists,incomplete,host,src/ui/widget_bar/panels/hotlists.rs;terminal/src/panels.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/controller.rs,
