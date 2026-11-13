@@ -130,6 +130,16 @@ impl DrawingProps {
         Color32::from_rgba_unmultiplied(r, g, b, self.color.a()) == self.color
     }
 
+    /// Whether one RGB shows as `paint` at that colour's opacity and as the paint colour at its
+    /// own, so that the two differ in opacity only as far as either holds its hue.
+    fn keeps_hue_of(&self, paint: Color32) -> bool {
+        let at = |c: u8, a: u8| Color32::from_rgba_unmultiplied(c, c, c, a).r();
+        (0..3).all(|i| {
+            (0..=255)
+                .any(|c| at(c, paint.a()) == paint[i] && at(c, self.color.a()) == self.color[i])
+        })
+    }
+
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
     /// drawing `id`'s, which these properties were read from, was edited, and only edited values
     /// change the drawings: text only those that show text, tool inputs only drawings of the same
@@ -208,6 +218,12 @@ impl DrawingProps {
                 Color32::from_rgba_unmultiplied(r, g, b, a)
             })
         });
+        let [r, g, b, a] = self.color_rgba();
+        let [tr, tg, tb, _] = target.color;
+        // Without tool settings only the paint colour is held, and it reads back as another hue
+        // at each opacity: the hue was edited unless one RGB paints both it and the target's.
+        let hue_edited = [r, g, b] != [tr, tg, tb]
+            && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()));
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
@@ -225,13 +241,7 @@ impl DrawingProps {
         {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
-            let [r, g, b, a] = self.color_rgba();
-            let [tr, tg, tb, _] = target.color;
-            // Without tool settings no exact RGB is held: a colour that still paints as the
-            // target's at this opacity was not edited.
-            if [r, g, b] != [tr, tg, tb]
-                && (self.tool_settings.is_some() || !self.paints(target.color))
-            {
+            if hue_edited {
                 drawing.color[..3].copy_from_slice(&[r, g, b]);
             }
             if a != target.color[3] {
@@ -1072,6 +1082,20 @@ mod tests {
         assert_eq!(
             edits.iter().map(|d| d.color).collect::<Vec<_>>(),
             drawings.iter().map(|d| d.color).collect::<Vec<_>>()
+        );
+        // The editor may still hold the hue of an earlier dialog, here [240, 55, 70], which the
+        // default highlighter read back at 20% and paints the same at alpha 52: its opacity
+        // dragged to 153 is still an opacity edit.
+        chart.drawings_mut().drawings[0].color = [242, 54, 69, 52];
+        let props = DrawingProps {
+            tool_settings: None,
+            color: Color32::from_rgba_unmultiplied(240, 55, 70, 153),
+            ..DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart)
+        };
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        assert_eq!(
+            edits.iter().map(|d| d.color).collect::<Vec<_>>(),
+            [[242, 54, 69, 153], [41, 98, 255, 153]]
         );
     }
 
