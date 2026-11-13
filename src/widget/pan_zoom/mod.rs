@@ -20,7 +20,6 @@ pub(super) mod state;
 pub(super) use box_zoom::render_box_zoom;
 
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
-use web_time::Instant;
 
 use crate::scales::PriceTransform;
 use crate::widget::Chart;
@@ -85,6 +84,10 @@ impl Chart {
 
         // Apply this frame's wheel events; smoothing can outlive the pointer's axis or modifiers.
         let raw = raw_wheel_delta(ui);
+        if raw != Vec2::ZERO {
+            // The wheel takes over from the momentum of an earlier flick.
+            self.kinetic_scroll.is_active = false;
+        }
         let scroll_input = ui.input(|i| {
             let mut dx = raw.x;
             let mut dy = raw.y;
@@ -150,8 +153,9 @@ impl Chart {
 
     /// Handles pinch-to-zoom for touch/trackpad gestures
     ///
-    /// Native zoom events and contact-based pinches share the pointer anchor.
-    /// Contact gestures take precedence when a backend reports both.
+    /// A contact pinch zooms around the midpoint between the fingers and pans by its movement,
+    /// so the bars under the fingers stay under them; a native zoom event zooms around the
+    /// pointer. Contact gestures take precedence when a backend reports both.
     pub(crate) fn handle_pinch_zoom(
         &mut self,
         ui: &Ui,
@@ -166,7 +170,8 @@ impl Chart {
         // Get multi-touch zoom delta (1.0 = no zoom, >1.0 = zoom in, <1.0 = zoom out)
         let zoom_info = ui.input(|i| {
             i.multi_touch()
-                .map(|mt| (mt.zoom_delta, mt.translation_delta, i.pointer.hover_pos()))
+                // The pointer follows the first finger; the gesture turns about their midpoint.
+                .map(|mt| (mt.zoom_delta, mt.translation_delta, Some(mt.center_pos)))
                 .or_else(|| {
                     // Wheel zoom is handled separately, including its Ctrl/Cmd variant.
                     let native_zoom: f32 = i
@@ -187,7 +192,19 @@ impl Chart {
                 })
         });
 
-        if let Some((zoom_delta, translation_delta, hover_pos)) = zoom_info {
+        if let Some((zoom_delta, translation_delta, anchor)) = zoom_info {
+            // Handle two-finger pan (translation during pinch) first: the zoom below then keeps
+            // the bar under the midpoint where the fingers have taken it.
+            if self.chart_options.handle_scroll.enabled
+                && self.chart_options.handle_scroll.horz_touch_drag
+                && translation_delta.x != 0.0
+            {
+                self.pending_scroll_time = None;
+                self.state
+                    .time_scale_mut()
+                    .scroll_pixels(translation_delta.x);
+            }
+
             // Handle pinch zoom
             if self.chart_options.handle_scale.enabled
                 && self.chart_options.handle_scale.pinch
@@ -201,9 +218,9 @@ impl Chart {
                 self.tracking_mode_active = false;
                 self.kinetic_scroll.is_active = false;
 
-                // Use hover position or center of chart as zoom anchor
+                // Use the gesture's anchor or center of chart as zoom anchor
                 let zoom_point_x = self.zoom_anchor(
-                    hover_pos.map_or(chart_width / 2.0, |p| p.x - chart_rect_min_x),
+                    anchor.map_or(chart_width / 2.0, |p| p.x - chart_rect_min_x),
                     chart_width,
                 );
 
@@ -225,23 +242,14 @@ impl Chart {
                 }
             }
 
-            // Handle two-finger pan (translation during pinch)
-            if self.chart_options.handle_scroll.enabled
-                && self.chart_options.handle_scroll.horz_touch_drag
-                && translation_delta.x.abs() > 0.5
-            {
-                self.pending_scroll_time = None;
-                self.state
-                    .time_scale_mut()
-                    .scroll_pixels(translation_delta.x);
-            }
+            // The vertical part of the two-finger pan moves a manual price range.
             if self.chart_options.handle_scroll.enabled
                 && self.chart_options.handle_scroll.vert_touch_drag
                 && self.last_rendered_price_rect.height() > 0.0
                 && self.state.price_scale().is_manual()
-                && translation_delta.y.abs() > 0.5
+                && translation_delta.y != 0.0
             {
-                let y = hover_pos.map_or(0.0, |pos| pos.y);
+                let y = anchor.map_or(0.0, |pos| pos.y);
                 let map = self.last_price_map;
                 let shift = map.y_to_scale(y - translation_delta.y) - map.y_to_scale(y);
                 let range = self.state.price_scale().range();
@@ -270,13 +278,15 @@ impl Chart {
     ) {
         // CRITICAL: Skip panning if box zoom is active (right-click drag)
         let box_zoom_active = self.box_zoom.active;
-        let (is_touch, multi_touch) = ui.input(|i| {
+        // The frame clock times the samples, as it times the input they come from.
+        let (is_touch, multi_touch, now) = ui.input(|i| {
             (
                 i.any_touches()
                     || i.events
                         .iter()
                         .any(|event| matches!(event, Event::Touch { .. })),
                 i.multi_touch().is_some(),
+                i.time,
             )
         });
 
@@ -290,6 +300,11 @@ impl Chart {
                     && self.chart_options.kinetic_scroll.mouse
             };
 
+        // A press, a click or a touch on the chart stops the momentum of an earlier flick.
+        if response.is_pointer_button_down_on() || response.clicked() {
+            self.kinetic_scroll.is_active = false;
+        }
+
         if !response.dragged() || multi_touch || has_active_drawing_tool || box_zoom_active {
             // Drag ended - handle kinetic scrolling
             if response.drag_stopped()
@@ -298,6 +313,16 @@ impl Chart {
                 && kinetic
                 && self.scroll_start_pos.is_some()
             {
+                // A pointer that came to rest before the release throws nothing.
+                let moving = |last: Option<f64>| last.is_some_and(|last| now - last <= 0.05);
+                // Frames slower than that rest leave the release to carry the pointer's last
+                // movement itself. Faster frames have measured the speed over a whole frame,
+                // which a release that arrives part way through its own would understate.
+                if !moving(self.kinetic_scroll.last_time)
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
+                    self.sample_kinetic_speed(pos, now);
+                }
                 let move_distance = self
                     .kinetic_scroll
                     .last_pos
@@ -307,13 +332,14 @@ impl Chart {
                 let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
                 let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
 
-                if move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
+                if moving(self.kinetic_scroll.last_time)
+                    && move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
                     && self.kinetic_scroll.velocity.abs() >= min_v_px_s
                 {
                     self.kinetic_scroll.is_active = true;
                     self.kinetic_scroll.velocity =
                         self.kinetic_scroll.velocity.clamp(-max_v_px_s, max_v_px_s);
-                    self.kinetic_scroll.anim_last_time = Some(Instant::now());
+                    self.kinetic_scroll.anim_last_time = Some(now);
                 }
             }
 
@@ -328,6 +354,10 @@ impl Chart {
             }
             self.kinetic_scroll.last_pos = None;
             self.kinetic_scroll.last_time = None;
+            if !self.kinetic_scroll.is_active {
+                // Only a coast carries the speed of a drag past its release.
+                self.kinetic_scroll.velocity = 0.0;
+            }
             return;
         }
 
@@ -402,17 +432,7 @@ impl Chart {
                     self.state.time_scale_mut().set_right_offset(new_offset);
 
                     if kinetic {
-                        let now = Instant::now();
-                        if let (Some(last_pos), Some(last_time)) =
-                            (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
-                        {
-                            let dt = now.duration_since(last_time).as_secs_f32();
-                            if dt > 0.0 {
-                                self.kinetic_scroll.velocity = (curr_pos.x - last_pos.x) / dt;
-                            }
-                        }
-                        self.kinetic_scroll.last_pos = Some(curr_pos);
-                        self.kinetic_scroll.last_time = Some(now);
+                        self.sample_kinetic_speed(curr_pos, now);
                     }
                 }
 
@@ -431,6 +451,24 @@ impl Chart {
                 }
             }
         }
+    }
+
+    /// Measures the drag speed from the pointer at `pos` at frame time `now`. A resting pointer
+    /// adds no sample, so the age of the last one tells a release how long ago it moved.
+    fn sample_kinetic_speed(&mut self, pos: Pos2, now: f64) {
+        if self.kinetic_scroll.last_pos == Some(pos) {
+            return;
+        }
+        if let (Some(last_pos), Some(last_time)) =
+            (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
+        {
+            let dt = (now - last_time) as f32;
+            if dt > 0.0 {
+                self.kinetic_scroll.velocity = (pos.x - last_pos.x) / dt;
+            }
+        }
+        self.kinetic_scroll.last_pos = Some(pos);
+        self.kinetic_scroll.last_time = Some(now);
     }
 
     /// Advance the kinetic scrolling animation by one frame.
@@ -453,13 +491,11 @@ impl Chart {
             return;
         }
 
-        let now = Instant::now();
-        let dt = if let Some(t0) = self.kinetic_scroll.anim_last_time {
-            now.duration_since(t0).as_secs_f32().max(0.0)
-        } else {
-            self.kinetic_scroll.anim_last_time = Some(now);
-            0.0
-        };
+        let now = ui.input(|i| i.time);
+        let dt = self
+            .kinetic_scroll
+            .anim_last_time
+            .map_or(0.0, |t0| (now - t0).max(0.0) as f32);
         self.kinetic_scroll.anim_last_time = Some(now);
 
         if dt > 0.0 {
@@ -671,9 +707,8 @@ impl Chart {
         if !chart_width.is_finite() || chart_width < 2.0 {
             return;
         }
-        self.state.time_scale_mut().set_width(chart_width);
-
         if self.apply_visible_bars_once {
+            self.state.time_scale_mut().set_width(chart_width);
             if let Some(desired) = self.desired_visible_bars
                 && desired > 0
             {
@@ -689,11 +724,15 @@ impl Chart {
             .time_scale
             .lock_visible_time_range_on_resize
             && let Some(prev_width) = self.prev_width
-            && (chart_width - prev_width).abs() > 1.0
+            && chart_width != prev_width
         {
+            // Sets the new width with the rescaled spacing, so a fixed edge never clamps
+            // against the new width at the old spacing.
             self.state
                 .time_scale_mut()
                 .keep_slots_on_resize(prev_width, chart_width);
+        } else {
+            self.state.time_scale_mut().set_width(chart_width);
         }
         self.prev_width = Some(chart_width);
 
@@ -750,17 +789,18 @@ mod tests {
     use crate::widget::test_frames::{chart, frame};
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
-    /// Invalid damping falls back at both option entry points and the animation still ends.
+    /// Invalid damping falls back at both option entry points and the animation still ends;
+    /// under the defaults a flick keeps its speed and settles in under two seconds.
     #[test]
     fn kinetic_damping_options_decay_to_a_stop() {
         for runtime in [false, true] {
             for (coefficient, expected) in [
-                (f32::NAN, 0.997),
-                (f32::INFINITY, 0.997),
-                (f32::NEG_INFINITY, 0.997),
-                (-0.5, 0.997),
-                (1.0, 0.997),
-                (1.5, 0.997),
+                (f32::NAN, 0.95),
+                (f32::INFINITY, 0.95),
+                (f32::NEG_INFINITY, 0.95),
+                (-0.5, 0.95),
+                (1.0, 0.95),
+                (1.5, 0.95),
                 (0.0, 0.0),
                 (0.5, 0.5),
                 (0.997, 0.997),
@@ -778,10 +818,9 @@ mod tests {
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 chart.kinetic_scroll.is_active = true;
                 chart.kinetic_scroll.velocity = 600.0;
-                // At the default damping, 600 * 0.997^(40 * 60) < 12 px/s.
+                chart.kinetic_scroll.anim_last_time = Some(0.0);
+                // At the slowest damping here, 600 * 0.997^(40 * 60) < 12 points per second.
                 for i in 1..=40 {
-                    chart.kinetic_scroll.anim_last_time =
-                        Some(web_time::Instant::now() - std::time::Duration::from_secs(1));
                     frame(&ctx, &mut chart, f64::from(i), vec![]);
                     assert!(chart.state.time_scale().right_offset_precise().is_finite());
                 }
@@ -793,6 +832,38 @@ mod tests {
                 assert_eq!(chart.chart_options().kinetic_scroll.damping_coeff, expected);
             }
         }
+
+        // A drag of 20 points every 10 ms is released at 2000 points per second, under the
+        // default limit of 3000. At 60 frames per second each frame keeps 0.95 of the speed,
+        // and 2000 * 0.95^100 = 11.8 is the first below the minimum of 12 points per second.
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[95.0], &[105.0]);
+        chart.chart_options.kinetic_scroll.mouse = true;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let start = chart.last_rendered_price_rect.center();
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
+        frame(&ctx, &mut chart, 0.02, vec![button(start, true)]);
+        let mut end = start;
+        for i in 1..=4 {
+            end.x = start.x + 20.0 * i as f32;
+            let time = 0.02 + f64::from(i) * 0.01;
+            frame(&ctx, &mut chart, time, vec![Event::PointerMoved(end)]);
+        }
+        frame(&ctx, &mut chart, 0.07, vec![button(end, false)]);
+        assert!(chart.kinetic_scroll.is_active);
+        let speed = chart.kinetic_scroll.velocity;
+        assert!((speed - 2000.0).abs() < 1.0, "released at {speed}");
+        let frames = (1..=1200).find(|&i| {
+            frame(&ctx, &mut chart, 0.07 + f64::from(i) / 60.0, vec![]);
+            !chart.kinetic_scroll.is_active
+        });
+        assert_eq!(frames, Some(100));
     }
 
     /// Invalid motion and a disabled scroll group stop momentum without changing the viewport.
@@ -813,9 +884,7 @@ mod tests {
             let offset = chart.state.time_scale().right_offset_precise();
             chart.kinetic_scroll.is_active = true;
             chart.kinetic_scroll.velocity = velocity;
-            chart.kinetic_scroll.anim_last_time = elapsed.map(|seconds| {
-                web_time::Instant::now() - std::time::Duration::from_secs_f32(seconds)
-            });
+            chart.kinetic_scroll.anim_last_time = elapsed.map(|seconds| 0.05 - seconds);
             chart.chart_options.handle_scroll.enabled = enabled;
             frame(&ctx, &mut chart, 0.05, vec![]);
             assert!(!chart.kinetic_scroll.is_active, "velocity={velocity}");
@@ -828,21 +897,27 @@ mod tests {
         }
     }
 
-    /// Native zoom and contact pinch each scale once, retaining the bar under the pointer.
+    /// Native zoom and contact pinch each scale once: a native zoom keeps the bar under the
+    /// pointer, and a pinch keeps the bars under both fingers.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn native_and_contact_pinch_keep_the_zoom_anchor() {
+        // Contacts are how far each finger moves while they spread from 100 to 150 points
+        // apart: the first rests, both move or the second rests.
+        let (first_rests, both_move, second_rests) = ([0.0, 50.0], [-25.0, 25.0], [-50.0, 0.0]);
         for (contacts, native, enabled, tracking, kinetic, maximized, group_enabled) in [
-            (false, true, true, false, false, false, true),
-            (true, false, true, false, false, false, true),
-            (true, true, true, false, false, false, true),
-            (false, true, false, false, false, false, true),
-            (false, true, true, true, false, false, true),
-            (false, true, true, false, true, false, true),
-            (false, true, true, false, false, true, true),
-            (true, false, true, false, false, true, true),
-            (false, true, true, false, false, false, false),
-            (true, false, true, false, false, false, false),
+            (None, true, true, false, false, false, true),
+            (Some(first_rests), false, true, false, false, false, true),
+            (Some(both_move), false, true, false, false, false, true),
+            (Some(second_rests), false, true, false, false, false, true),
+            (Some(both_move), true, true, false, false, false, true),
+            (None, true, false, false, false, false, true),
+            (None, true, true, true, false, false, true),
+            (None, true, true, false, true, false, true),
+            (None, true, true, false, false, true, true),
+            (Some(first_rests), false, true, false, false, true, true),
+            (None, true, true, false, false, false, false),
+            (Some(second_rests), false, true, false, false, false, false),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
@@ -874,14 +949,21 @@ mod tests {
                 pos: Pos2::new(x, pointer.y),
                 force: None,
             };
-            if contacts {
+            // A backend keeps the pointer on the first finger.
+            if contacts.is_some() {
                 frame(
                     &ctx,
                     &mut chart,
                     0.04,
                     vec![
-                        touch(1, egui::TouchPhase::Start, pointer.x - 50.0),
-                        touch(2, egui::TouchPhase::Start, pointer.x + 50.0),
+                        Event::PointerButton {
+                            pos: pointer,
+                            button: PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        },
+                        touch(1, egui::TouchPhase::Start, pointer.x),
+                        touch(2, egui::TouchPhase::Start, pointer.x + 100.0),
                     ],
                 );
             }
@@ -892,14 +974,15 @@ mod tests {
                 chart.chart_options.kinetic_scroll.enabled = true;
                 chart.kinetic_scroll.is_active = true;
                 chart.kinetic_scroll.velocity = 120.0;
-                chart.kinetic_scroll.anim_last_time = Some(web_time::Instant::now());
+                chart.kinetic_scroll.anim_last_time = Some(0.04);
             }
             let (spacing, offset) = chart.get_time_scale_state();
             let mut events = Vec::new();
-            if contacts {
+            if let Some([first, second]) = contacts {
                 events.extend([
-                    touch(1, egui::TouchPhase::Move, pointer.x - 75.0),
-                    touch(2, egui::TouchPhase::Move, pointer.x + 75.0),
+                    Event::PointerMoved(Pos2::new(pointer.x + first, pointer.y)),
+                    touch(1, egui::TouchPhase::Move, pointer.x + first),
+                    touch(2, egui::TouchPhase::Move, pointer.x + 100.0 + second),
                 ]);
             }
             if native {
@@ -912,11 +995,20 @@ mod tests {
             let expected_spacing = if enabled { spacing * 1.5 } else { spacing };
             assert!(
                 (zoomed - expected_spacing).abs() < 1e-5,
-                "contacts={contacts}, native={native}, enabled={enabled}: {zoomed}"
+                "contacts={contacts:?}, native={native}, enabled={enabled}: {zoomed}"
             );
+            // The bar under the fingers' midpoint follows it, and the other bars spread around
+            // it by the pinch ratio; a native zoom turns about the pointer, which stays.
+            let (from, to) = contacts.map_or((pointer.x, pointer.x), |[first, second]| {
+                (pointer.x + 50.0, pointer.x + 50.0 + (first + second) / 2.0)
+            });
             let expected_offset =
-                offset + (rect.right() - pointer.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
-            assert!((moved - expected_offset).abs() < 1e-4);
+                offset + (rect.right() - to - 1.0) / zoomed - (rect.right() - from - 1.0) / spacing;
+            assert!(
+                (moved - expected_offset).abs() < 1e-4,
+                "contacts={contacts:?}, native={native}, enabled={enabled}: {moved}, expected \
+                 {expected_offset}"
+            );
             frame(&ctx, &mut chart, 0.08, vec![]);
             assert_eq!(chart.get_time_scale_state(), (zoomed, moved));
             if tracking {
@@ -1197,15 +1289,19 @@ mod tests {
                 show(&mut chart, 1064.0);
                 assert!((chart.state.time_scale().bar_spacing() - spacing).abs() < 1e-5);
                 assert_eq!(chart.state.time_scale().right_offset(), -20.0);
-                show(&mut chart, 1564.0);
-                // A locked resize keeps the `width - 1` pixels of slots the plot spans.
-                let expected = if lock {
-                    (chart.last_rendered_price_rect.width() - 1.0) / 100.0
-                } else {
-                    spacing
-                };
-                assert!((chart.state.time_scale().bar_spacing() - expected).abs() < 1e-5);
-                assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                // A locked resize keeps the `width - 1` pixels of slots the plot spans, also when
+                // the window grows by less than a pixel per frame.
+                for step in 0..=20 {
+                    show(&mut chart, 1564.0 + 0.5 * step as f32);
+                    let expected = if lock {
+                        (chart.last_rendered_price_rect.width() - 1.0) / 100.0
+                    } else {
+                        spacing
+                    };
+                    let actual = chart.state.time_scale().bar_spacing();
+                    assert!((actual - expected).abs() < 1e-5, "step={step}");
+                    assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                }
                 chart.set_visible_bars(80);
                 show(&mut chart, 1264.0);
                 assert!(
@@ -1216,6 +1312,43 @@ mod tests {
                     "a pending view must take precedence over a locked resize"
                 );
             }
+        }
+    }
+
+    /// A locked resize at the fixed left edge's stop keeps the first bar at the left edge.
+    #[test]
+    fn locked_resize_at_the_left_edge_stop_keeps_the_first_bar() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[95.0], &[105.0]).visible_bars(50);
+        let options = &mut chart.chart_options.time_scale;
+        options.lock_visible_time_range_on_resize = true;
+        options.fix_left_edge = true;
+        let options = chart.chart_options.clone();
+        chart = chart.with_chart_options(options);
+        let show = |chart: &mut Chart, width| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 600.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        show(&mut chart, 1064.0);
+        chart.scroll_to_position(-1000.0, false);
+        for width in [1064.0, 1364.0, 1364.5, 864.0] {
+            show(&mut chart, width);
+            let scale = chart.state.time_scale();
+            let left = scale.visible_logical_range().left;
+            assert!(left.abs() < 1e-4, "width={width}: left={left}");
+            let spacing = (chart.last_rendered_price_rect.width() - 1.0) / 50.0;
+            assert!(
+                (scale.bar_spacing() - spacing).abs() < 1e-4,
+                "width={width}"
+            );
         }
     }
 
@@ -1857,12 +1990,26 @@ mod tests {
         }
     }
 
-    /// A fast horizontal drag continues after release only when inertia is enabled for its
-    /// device, and a new drag stops it.
+    /// A fast horizontal drag continues after release, at its speed, only when inertia is
+    /// enabled for its device and the pointer was still moving, and a new drag stops it.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn released_drag_continues_under_its_device_inertia() {
-        for touch in [false, true] {
+        // The seconds from the last movement frame to the release, whether frames are drawn
+        // meanwhile, and how far the pointer has moved on when the release arrives.
+        for (touch, rest, frames, slide) in [
+            (false, 0.02, false, 0.0),
+            (true, 0.02, false, 0.0),
+            (false, 0.04, true, 0.0),
+            (true, 0.04, true, 0.0),
+            (false, 0.5, false, 0.0),
+            (true, 0.5, false, 0.0),
+            (false, 0.5, true, 0.0),
+            (true, 0.5, true, 0.0),
+            (false, 0.1, false, 15.0),
+            (true, 0.1, false, 15.0),
+            (true, 0.02, false, 2.0),
+        ] {
             for (touch_inertia, mouse_inertia) in
                 [(false, false), (true, false), (false, true), (true, true)]
             {
@@ -1901,21 +2048,125 @@ mod tests {
                     let events = input(Event::PointerMoved(end), egui::TouchPhase::Move, end);
                     frame(&ctx, &mut chart, 0.04 + i as f64 * 0.02, events);
                 }
+                let released = 0.12 + rest;
+                if frames {
+                    for time in (1..).map(|i| 0.12 + f64::from(i) * 0.02) {
+                        if time > released - 0.01 {
+                            break;
+                        }
+                        frame(&ctx, &mut chart, time, vec![]);
+                    }
+                }
+                end.x -= slide;
                 let release = input(button(end, false), egui::TouchPhase::End, end);
-                frame(&ctx, &mut chart, 0.2, release);
-                let expected = if touch { touch_inertia } else { mouse_inertia };
+                frame(&ctx, &mut chart, released, release);
+                let inertia = if touch { touch_inertia } else { mouse_inertia };
+                // Only a rest of more than 50 ms ends the motion, whether or not frames were
+                // drawn, and a release that brings movement with it is no rest, however slow
+                // the frames.
                 assert_eq!(
-                    chart.kinetic_scroll.is_active, expected,
-                    "touch={touch}, touch inertia={touch_inertia}, mouse inertia={mouse_inertia}"
+                    chart.kinetic_scroll.is_active,
+                    inertia && (rest <= 0.05 || slide > 0.0),
+                    "touch={touch}, rest={rest}, frames={frames}, slide={slide}, touch \
+                     inertia={touch_inertia}, mouse inertia={mouse_inertia}"
+                );
+                // The drag moved 15 points every 20 ms. A release within 50 ms continues at that
+                // speed, whatever part of its own frame's movement it brings, and a later one
+                // at the speed of the movement it brings.
+                let speed = if rest <= 0.05 {
+                    -750.0
+                } else {
+                    -slide / rest as f32
+                };
+                assert!(
+                    !chart.kinetic_scroll.is_active
+                        || (chart.kinetic_scroll.velocity - speed).abs() < 1.0,
+                    "touch={touch}, rest={rest}, slide={slide}: {}",
+                    chart.kinetic_scroll.velocity
                 );
 
                 let press = input(button(end, true), egui::TouchPhase::Start, end);
-                frame(&ctx, &mut chart, 0.22, press);
+                frame(&ctx, &mut chart, released + 0.02, press);
                 end.x += 20.0;
                 let events = input(Event::PointerMoved(end), egui::TouchPhase::Move, end);
-                frame(&ctx, &mut chart, 0.24, events);
+                frame(&ctx, &mut chart, released + 0.04, events);
                 assert!(!chart.kinetic_scroll.is_active);
             }
+        }
+    }
+
+    /// A press, a click, a touch, the wheel and the pan and zoom keys each end a coast in the
+    /// frame they arrive, before it moves the view again.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn press_wheel_and_keys_stop_a_coast() {
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let wheel = |delta| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        };
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        for (input, stops) in [
+            ("none", false),
+            ("press", true),
+            ("click", true),
+            ("touch", true),
+            ("wheel zoom", true),
+            ("wheel scroll", true),
+            ("pan key", true),
+            ("zoom key", true),
+        ] {
+            // The same input reaches a coasting chart and one at rest.
+            let [(coasting, moved), (_, rest)] = [true, false].map(|coast| {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.chart_options.kinetic_scroll.enabled = true;
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let pos = chart.last_rendered_price_rect.center();
+                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pos)]);
+                if coast {
+                    chart.kinetic_scroll.is_active = true;
+                    chart.kinetic_scroll.velocity = 600.0;
+                    chart.kinetic_scroll.anim_last_time = Some(0.02);
+                }
+                let events = match input {
+                    "none" => vec![],
+                    "press" => vec![button(pos, true)],
+                    "click" => vec![button(pos, true), button(pos, false)],
+                    "touch" => vec![
+                        button(pos, true),
+                        Event::Touch {
+                            device_id: egui::TouchDeviceId(1),
+                            id: egui::TouchId(1),
+                            phase: egui::TouchPhase::Start,
+                            pos,
+                            force: None,
+                        },
+                    ],
+                    "wheel zoom" => vec![wheel(egui::vec2(0.0, -240.0))],
+                    "wheel scroll" => vec![wheel(egui::vec2(120.0, 0.0))],
+                    "pan key" => vec![key(egui::Key::ArrowLeft, Modifiers::NONE)],
+                    _ => vec![key(egui::Key::ArrowUp, Modifiers::COMMAND)],
+                };
+                frame(&ctx, &mut chart, 0.04, events);
+                (chart.kinetic_scroll.is_active, chart.get_time_scale_state())
+            });
+            assert_eq!(coasting, !stops, "{input}");
+            assert_eq!(moved == rest, stops, "{input}: {moved:?}, at rest {rest:?}");
         }
     }
 
@@ -1966,12 +2217,14 @@ mod tests {
                         contact(2, egui::TouchPhase::Start, start + egui::vec2(100.0, 0.0)),
                     ],
                 );
-                for step in 1..=2 {
-                    let pos = start + egui::vec2(30.0, 30.0) * step as f32;
+                // The second step is under half a point: the fingers are followed however
+                // slowly they move.
+                for (step, moved) in [(1, 30.0), (2, 30.4)] {
+                    let pos = start + egui::vec2(moved, moved);
                     frame(
                         &ctx,
                         &mut chart,
-                        0.02 + step as f64 * 0.02,
+                        0.02 + f64::from(step) * 0.02,
                         vec![
                             Event::PointerMoved(pos),
                             contact(1, egui::TouchPhase::Move, pos),
@@ -1979,7 +2232,7 @@ mod tests {
                         ],
                     );
                 }
-                let pos = start + egui::vec2(60.0, 60.0);
+                let pos = start + egui::vec2(30.4, 30.4);
                 frame(
                     &ctx,
                     &mut chart,
@@ -1990,7 +2243,7 @@ mod tests {
                         pos + egui::vec2(100.0, 0.0),
                     )],
                 );
-                let pos = start + egui::vec2(90.0, 90.0);
+                let pos = start + egui::vec2(60.4, 60.4);
                 frame(
                     &ctx,
                     &mut chart,
@@ -2000,9 +2253,9 @@ mod tests {
                         contact(1, egui::TouchPhase::Move, pos),
                     ],
                 );
-                let expected_offset = offset - if horizontal { 90.0 / spacing } else { 0.0 };
+                let expected_offset = offset - if horizontal { 60.4 / spacing } else { 0.0 };
                 let shift = if vertical {
-                    20.0 * 90.0 / rect.height() as f64
+                    20.0 * 60.4 / rect.height() as f64
                 } else {
                     0.0
                 };

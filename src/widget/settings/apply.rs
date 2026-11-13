@@ -2364,11 +2364,14 @@ mod tests {
     }
 
     /// The saved scale font size, axis line colour and pane button visibility render on the main,
-    /// study and time axes and in a maximized pane, and read back from the chart.
+    /// study and time axes and in a maximized pane, and read back from the chart. So does the
+    /// scale text colour, which also reaches the axis of a study on a scale of its own.
     #[test]
     fn scale_appearance_and_pane_button_settings_render_and_read_back() {
-        use crate::studies::RSI;
+        use crate::studies::{RSI, SMA, StudyScale};
+        use crate::widget::PaneId;
         use crate::widget::test_frames::{chart, frame, shapes};
+        const TEXT: Color32 = Color32::from_rgb(1, 2, 3);
         for (visibility, maximized) in [
             (ButtonVisibility::AlwaysVisible, false),
             (ButtonVisibility::VisibleOnMouseOver, false),
@@ -2379,10 +2382,13 @@ mod tests {
             let ctx = Context::default();
             let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
             let study = chart.add_indicator(Box::new(RSI::new(14)));
+            let average = chart.add_indicator(Box::new(SMA::new(5)));
+            assert!(chart.set_indicator_scale(average, StudyScale::Independent));
             frame(&ctx, &mut chart, 0.0, Vec::new());
             chart.pane_layout.maximized = maximized.then(|| chart.series_pane(study).unwrap());
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.scales_appearance.font_size = 18;
+            settings.scales_appearance.text_color = TEXT;
             settings.scales_appearance.lines_color = Color32::RED;
             settings.btns.pane = visibility;
             settings.apply_to_chart(&mut chart).unwrap();
@@ -2421,6 +2427,33 @@ mod tests {
                         && rect.y_range().contains(points[0].y.max(points[1].y) - 1.0))
                 });
                 assert!(line, "axis line beside {rect:?}");
+            }
+            // The price axis and the average's own axis beside the price pane, the study pane's
+            // axis and the time axis.
+            let mut axes = vec![
+                egui::Rect::from_x_y_ranges(
+                    pane.chart_rect.right()..=pane.panel_rect.right(),
+                    pane.chart_rect.y_range(),
+                ),
+                chart.time_axis_rect,
+            ];
+            if !maximized {
+                let price_pane = &chart.pane_layout.panes[0];
+                assert_eq!(price_pane.id, PaneId::MAIN);
+                let beside: Vec<_> = chart
+                    .pane_scale_axes(PaneId::MAIN, price_pane.rect, plot)
+                    .map(|(_, axis)| axis)
+                    .collect();
+                assert_eq!(beside.len(), 2, "{beside:?}");
+                axes.extend(beside);
+            }
+            for axis in axes {
+                let label = painted.iter().any(|shape| {
+                    matches!(shape, Shape::Text(text)
+                    if axis.contains(text.pos)
+                        && text.galley.job.sections[0].format.color == TEXT)
+                });
+                assert!(label, "no label in the text colour on the axis at {axis:?}");
             }
             let button = egui::Rect::from_min_size(
                 egui::Pos2::new(pane.chart_rect.right() - 22.0, pane.panel_rect.top() + 2.0),
