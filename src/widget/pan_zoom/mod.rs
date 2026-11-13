@@ -153,8 +153,9 @@ impl Chart {
 
     /// Handles pinch-to-zoom for touch/trackpad gestures
     ///
-    /// Native zoom events and contact-based pinches share the pointer anchor.
-    /// Contact gestures take precedence when a backend reports both.
+    /// A contact pinch zooms around the midpoint between the fingers and pans by its movement,
+    /// so the bars under the fingers stay under them; a native zoom event zooms around the
+    /// pointer. Contact gestures take precedence when a backend reports both.
     pub(crate) fn handle_pinch_zoom(
         &mut self,
         ui: &Ui,
@@ -169,7 +170,8 @@ impl Chart {
         // Get multi-touch zoom delta (1.0 = no zoom, >1.0 = zoom in, <1.0 = zoom out)
         let zoom_info = ui.input(|i| {
             i.multi_touch()
-                .map(|mt| (mt.zoom_delta, mt.translation_delta, i.pointer.hover_pos()))
+                // The pointer follows the first finger; the gesture turns about their midpoint.
+                .map(|mt| (mt.zoom_delta, mt.translation_delta, Some(mt.center_pos)))
                 .or_else(|| {
                     // Wheel zoom is handled separately, including its Ctrl/Cmd variant.
                     let native_zoom: f32 = i
@@ -190,7 +192,19 @@ impl Chart {
                 })
         });
 
-        if let Some((zoom_delta, translation_delta, hover_pos)) = zoom_info {
+        if let Some((zoom_delta, translation_delta, anchor)) = zoom_info {
+            // Handle two-finger pan (translation during pinch) first: the zoom below then keeps
+            // the bar under the midpoint where the fingers have taken it.
+            if self.chart_options.handle_scroll.enabled
+                && self.chart_options.handle_scroll.horz_touch_drag
+                && translation_delta.x != 0.0
+            {
+                self.pending_scroll_time = None;
+                self.state
+                    .time_scale_mut()
+                    .scroll_pixels(translation_delta.x);
+            }
+
             // Handle pinch zoom
             if self.chart_options.handle_scale.enabled
                 && self.chart_options.handle_scale.pinch
@@ -204,9 +218,9 @@ impl Chart {
                 self.tracking_mode_active = false;
                 self.kinetic_scroll.is_active = false;
 
-                // Use hover position or center of chart as zoom anchor
+                // Use the gesture's anchor or center of chart as zoom anchor
                 let zoom_point_x = self.zoom_anchor(
-                    hover_pos.map_or(chart_width / 2.0, |p| p.x - chart_rect_min_x),
+                    anchor.map_or(chart_width / 2.0, |p| p.x - chart_rect_min_x),
                     chart_width,
                 );
 
@@ -228,23 +242,14 @@ impl Chart {
                 }
             }
 
-            // Handle two-finger pan (translation during pinch)
-            if self.chart_options.handle_scroll.enabled
-                && self.chart_options.handle_scroll.horz_touch_drag
-                && translation_delta.x.abs() > 0.5
-            {
-                self.pending_scroll_time = None;
-                self.state
-                    .time_scale_mut()
-                    .scroll_pixels(translation_delta.x);
-            }
+            // The vertical part of the two-finger pan moves a manual price range.
             if self.chart_options.handle_scroll.enabled
                 && self.chart_options.handle_scroll.vert_touch_drag
                 && self.last_rendered_price_rect.height() > 0.0
                 && self.state.price_scale().is_manual()
                 && translation_delta.y.abs() > 0.5
             {
-                let y = hover_pos.map_or(0.0, |pos| pos.y);
+                let y = anchor.map_or(0.0, |pos| pos.y);
                 let map = self.last_price_map;
                 let shift = map.y_to_scale(y - translation_delta.y) - map.y_to_scale(y);
                 let range = self.state.price_scale().range();
@@ -886,21 +891,27 @@ mod tests {
         }
     }
 
-    /// Native zoom and contact pinch each scale once, retaining the bar under the pointer.
+    /// Native zoom and contact pinch each scale once: a native zoom keeps the bar under the
+    /// pointer, and a pinch keeps the bars under both fingers.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn native_and_contact_pinch_keep_the_zoom_anchor() {
+        // Contacts are how far each finger moves while they spread from 100 to 150 points
+        // apart: the first rests, both move or the second rests.
+        let (first_rests, both_move, second_rests) = ([0.0, 50.0], [-25.0, 25.0], [-50.0, 0.0]);
         for (contacts, native, enabled, tracking, kinetic, maximized, group_enabled) in [
-            (false, true, true, false, false, false, true),
-            (true, false, true, false, false, false, true),
-            (true, true, true, false, false, false, true),
-            (false, true, false, false, false, false, true),
-            (false, true, true, true, false, false, true),
-            (false, true, true, false, true, false, true),
-            (false, true, true, false, false, true, true),
-            (true, false, true, false, false, true, true),
-            (false, true, true, false, false, false, false),
-            (true, false, true, false, false, false, false),
+            (None, true, true, false, false, false, true),
+            (Some(first_rests), false, true, false, false, false, true),
+            (Some(both_move), false, true, false, false, false, true),
+            (Some(second_rests), false, true, false, false, false, true),
+            (Some(both_move), true, true, false, false, false, true),
+            (None, true, false, false, false, false, true),
+            (None, true, true, true, false, false, true),
+            (None, true, true, false, true, false, true),
+            (None, true, true, false, false, true, true),
+            (Some(first_rests), false, true, false, false, true, true),
+            (None, true, true, false, false, false, false),
+            (Some(second_rests), false, true, false, false, false, false),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
@@ -932,14 +943,21 @@ mod tests {
                 pos: Pos2::new(x, pointer.y),
                 force: None,
             };
-            if contacts {
+            // A backend keeps the pointer on the first finger.
+            if contacts.is_some() {
                 frame(
                     &ctx,
                     &mut chart,
                     0.04,
                     vec![
-                        touch(1, egui::TouchPhase::Start, pointer.x - 50.0),
-                        touch(2, egui::TouchPhase::Start, pointer.x + 50.0),
+                        Event::PointerButton {
+                            pos: pointer,
+                            button: PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        },
+                        touch(1, egui::TouchPhase::Start, pointer.x),
+                        touch(2, egui::TouchPhase::Start, pointer.x + 100.0),
                     ],
                 );
             }
@@ -954,10 +972,11 @@ mod tests {
             }
             let (spacing, offset) = chart.get_time_scale_state();
             let mut events = Vec::new();
-            if contacts {
+            if let Some([first, second]) = contacts {
                 events.extend([
-                    touch(1, egui::TouchPhase::Move, pointer.x - 75.0),
-                    touch(2, egui::TouchPhase::Move, pointer.x + 75.0),
+                    Event::PointerMoved(Pos2::new(pointer.x + first, pointer.y)),
+                    touch(1, egui::TouchPhase::Move, pointer.x + first),
+                    touch(2, egui::TouchPhase::Move, pointer.x + 100.0 + second),
                 ]);
             }
             if native {
@@ -970,11 +989,20 @@ mod tests {
             let expected_spacing = if enabled { spacing * 1.5 } else { spacing };
             assert!(
                 (zoomed - expected_spacing).abs() < 1e-5,
-                "contacts={contacts}, native={native}, enabled={enabled}: {zoomed}"
+                "contacts={contacts:?}, native={native}, enabled={enabled}: {zoomed}"
             );
+            // The bar under the fingers' midpoint follows it, and the other bars spread around
+            // it by the pinch ratio; a native zoom turns about the pointer, which stays.
+            let (from, to) = contacts.map_or((pointer.x, pointer.x), |[first, second]| {
+                (pointer.x + 50.0, pointer.x + 50.0 + (first + second) / 2.0)
+            });
             let expected_offset =
-                offset + (rect.right() - pointer.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
-            assert!((moved - expected_offset).abs() < 1e-4);
+                offset + (rect.right() - to - 1.0) / zoomed - (rect.right() - from - 1.0) / spacing;
+            assert!(
+                (moved - expected_offset).abs() < 1e-4,
+                "contacts={contacts:?}, native={native}, enabled={enabled}: {moved}, expected \
+                 {expected_offset}"
+            );
             frame(&ctx, &mut chart, 0.08, vec![]);
             assert_eq!(chart.get_time_scale_state(), (zoomed, moved));
             if tracking {
