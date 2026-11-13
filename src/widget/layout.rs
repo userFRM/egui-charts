@@ -1546,8 +1546,16 @@ impl ChartLayout {
             self.active = index;
         }
         // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
+        #[cfg(feature = "drawings")]
+        let known = self.previous_charts;
         for (index, chart) in charts.iter().enumerate() {
             if self.previous_charts[index] != chart.layout_identity {
+                // A chart new to the layout brings drawings new to it, while one that
+                // `swap_slots` moved keeps its links.
+                #[cfg(feature = "drawings")]
+                if !known.contains(&chart.layout_identity) {
+                    self.drawings.forget_slot(index);
+                }
                 self.previous_charts[index] = chart.layout_identity;
                 self.previous[index] = None;
                 self.previous_ranges[index] = None;
@@ -1884,8 +1892,9 @@ impl ChartLayout {
                         .any(|d| d.folder_sync_mode().is_some())
                 });
             if !tracking {
-                // Turning the switch on is the first time drawings are synchronized.
-                self.drawings.reset();
+                // Turning the switch on is the first time for the drawings it mirrors, while
+                // those that their folder mirrors stay linked on the charts away from them.
+                self.drawings.forget_switched(charts, total);
             } else if self.drawings.sync(
                 charts,
                 total,
