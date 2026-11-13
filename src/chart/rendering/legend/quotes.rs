@@ -66,7 +66,7 @@ pub(super) fn paint_quotes(
         Pos2::new(sell_rect.right(), sell_rect.top()),
         Vec2::new(gap, 34.0),
     );
-    layout.painter.add(layout.fill(spread_rect, theme.chart.bg));
+    layout.painter.add(layout.fill(spread_rect, 1.0));
     let quantity = quantity.map(|quantity| {
         let text = layout.painter.layout_no_wrap(
             compact_quantity(quantity),
