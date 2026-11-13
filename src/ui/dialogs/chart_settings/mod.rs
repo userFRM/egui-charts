@@ -887,6 +887,8 @@ mod tests {
                 settings.grid_lines.vertical_color = Color32::BLUE;
                 settings.crosshair.color = Color32::YELLOW;
                 settings.watermark.color = Color32::RED;
+                settings.margins.top_percent = 12.5;
+                settings.margins.bottom_percent = 7.5;
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(Control::Templates, templates_visible);
                 dialog.open(settings);
@@ -1029,6 +1031,18 @@ mod tests {
                 assert!(
                     mismatches.is_empty(),
                     "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
+                );
+                // A new chart keeps a tenth of the pane free above and below, and 2.5 bars after
+                // the last one.
+                let price = chart.state().price_scale().options().scale_margins;
+                assert_eq!(
+                    (
+                        price.top,
+                        price.bottom,
+                        chart.chart_options().time_scale.right_offset
+                    ),
+                    (0.1, 0.1, 2.5),
+                    "{preset}: margins"
                 );
             }
         }
