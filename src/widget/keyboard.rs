@@ -478,11 +478,12 @@ impl super::Chart {
                 } else {
                     self.chart_options.keyboard.pan_amount
                 };
+                // Left shows earlier bars, as the Scroll left button does.
                 self.state.time_scale_mut().scroll_bars(
                     if matches!(action, A::PanLeft | A::PanLeftFast) {
-                        -amount
-                    } else {
                         amount
+                    } else {
+                        -amount
                     },
                 );
             }
@@ -824,7 +825,9 @@ mod tests {
         let alt_shift = Modifiers::ALT.plus(Modifiers::SHIFT);
         for (key, modifiers, expected) in [
             (Key::ArrowLeft, Modifiers::NONE, Some(A::PanLeft)),
+            (Key::ArrowRight, Modifiers::NONE, Some(A::PanRight)),
             (Key::ArrowLeft, Modifiers::ALT, None),
+            (Key::ArrowLeft, Modifiers::COMMAND, Some(A::PanLeftFast)),
             (Key::ArrowRight, Modifiers::COMMAND, Some(A::PanRightFast)),
             (Key::ArrowUp, Modifiers::COMMAND, Some(A::ZoomIn)),
             (Key::ArrowLeft, alt_shift, Some(A::ScrollToFirstBar)),
@@ -888,8 +891,11 @@ mod tests {
             let offset = chart.state.time_scale().right_offset();
             let spacing = chart.state.time_scale().bar_spacing();
             match expected {
-                Some(A::PanLeft) => assert_eq!(offset, before_offset + 1.0),
-                Some(A::PanRightFast) => assert_eq!(offset, before_offset - page),
+                // Left lowers the index of the first visible bar and Right raises it.
+                Some(A::PanLeft) => assert_eq!(offset, before_offset - 1.0),
+                Some(A::PanRight) => assert_eq!(offset, before_offset + 1.0),
+                Some(A::PanLeftFast) => assert_eq!(offset, before_offset - page),
+                Some(A::PanRightFast) => assert_eq!(offset, before_offset + page),
                 Some(A::ZoomIn) => assert!(spacing > before_spacing),
                 Some(A::ScrollToFirstBar) => {
                     let left = chart.visible_logical_range().unwrap().left;
