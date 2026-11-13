@@ -592,11 +592,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
 
     // Every length equal, then each length alone huge, then each alone longer than the rest
     // (a swapped fast/slow pair, for example).
-    let mut lengths: Vec<[usize; 9]> = vec![[0; 9], [1; 9], [usize::MAX; 9]];
-    for k in 0..9 {
-        let mut huge = [1; 9];
+    let mut lengths: Vec<[usize; 12]> = vec![[0; 12], [1; 12], [usize::MAX; 12]];
+    for k in 0..12 {
+        let mut huge = [1; 12];
         huge[k] = usize::MAX;
-        let mut longer = [20; 9];
+        let mut longer = [20; 12];
         longer[k] = 50;
         lengths.extend([huge, longer]);
     }
