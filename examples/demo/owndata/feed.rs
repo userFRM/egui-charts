@@ -15,7 +15,7 @@ use super::bars::{self, Aggregator, DAY_MS};
 use super::http::{self, Request};
 use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url};
 use super::stream::{Routed, Session, StreamEvent};
-use super::{Failure, Secrets, endpoint, shape, time};
+use super::{Failure, Secrets, conceal, endpoint, shape, time};
 
 /// The feed of one profile. It answers history from the REST template and keeps one stream
 /// session per subscription. One instance serves every chart of the own-data mode.
@@ -197,7 +197,7 @@ impl Datafeed for MappedFeed {
             return reply.send(end_of_history());
         };
         let call = request_for(history, &window, &ask.symbol, interval, &shared.secrets);
-        let url = call.url.clone();
+        let url = conceal(&call.url, &shared.secrets);
         if ask.before.is_none() {
             shared.state().join(&ask.key()).in_flight += 1;
         }
@@ -238,7 +238,7 @@ impl Datafeed for MappedFeed {
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
-        let endpoint = endpoint(&fill_url(&stream.url, &filled)).to_owned();
+        let endpoint = conceal(endpoint(&fill_url(&stream.url, &filled)), &shared.secrets);
         let key = Key {
             symbol,
             timeframe,
@@ -345,7 +345,7 @@ impl Shared {
                 }
             }
         }
-        let kept = kept.map_err(|failure| reported(&failure, url, &ask.symbol))?;
+        let kept = kept.map_err(|failure| reported(&failure, url, &ask.symbol, &self.secrets))?;
         if !kept.bars.is_empty() {
             state.runs.remove(&ask.run());
             // A page shorter than asked never ends history: the empty page after it does.
@@ -523,7 +523,8 @@ impl Shared {
                 };
                 if let Some((sink, endpoint)) = known {
                     sink.set_status(FeedStatus::Disconnected);
-                    sink.report_error(FeedError::Network(format!("{endpoint}: {reason}")));
+                    let text = conceal(&format!("{endpoint}: {reason}"), &self.secrets);
+                    sink.report_error(FeedError::Network(text));
                 }
             }
         }
@@ -555,7 +556,7 @@ impl Shared {
             return;
         };
         let call = request_for(history, &window, &ask.symbol, interval, &self.secrets);
-        let url = call.url.clone();
+        let url = conceal(&call.url, &self.secrets);
         // From here on the subscription folds no trade, until the answer has been pushed.
         match self.state().subscriptions.get_mut(&id) {
             Some(live) if live.opens == opens => live.filling = Some(opens),
@@ -589,7 +590,7 @@ impl Shared {
                     newest
                 }
                 Err(failure) => {
-                    sink.report_error(reported(&failure, &url, &ask.symbol));
+                    sink.report_error(reported(&failure, &url, &ask.symbol, &shared.secrets));
                     None
                 }
             };
@@ -796,9 +797,10 @@ fn request_for(
 }
 
 /// The error the chart reports for `failure` of a request to `url`: the kind `feed_error`
-/// picks, with the endpoint before the reason where the kind carries a text.
-fn reported(failure: &Failure, url: &str, symbol: &str) -> FeedError {
-    let text = format!("{}: {failure}", endpoint(url));
+/// picks, with the endpoint before the reason where the kind carries a text. No key value of
+/// `secrets` is shown.
+fn reported(failure: &Failure, url: &str, symbol: &str, secrets: &Secrets) -> FeedError {
+    let text = conceal(&format!("{}: {failure}", endpoint(url)), secrets);
     match failure.feed_error(symbol) {
         FeedError::Network(_) => FeedError::Network(text),
         FeedError::InvalidData(_) => FeedError::InvalidData(text),
@@ -811,8 +813,8 @@ pub(crate) struct Reading {
     /// The bars with a readable time, oldest first. Bars of equal time keep the order of the
     /// response.
     pub(crate) bars: Vec<Bar>,
-    /// Rows left out because their time is missing or unreadable, or lies too far after `now`
-    /// (1.2.5).
+    /// Rows left out because their time is missing or unreadable, or lies too far after `now`,
+    /// as [`bars::ahead`] judges a pushed bar.
     pub(crate) skipped: usize,
 }
 

@@ -49,7 +49,7 @@ pub(crate) enum Routed {
 }
 
 /// The records of one message and their routes, in message order: the split and the routing a
-/// session applies to every message (1.3.4). The dialog calls it again for the messages of its
+/// session applies to every message. The dialog calls it again for the messages of its
 /// log when the user edits the routes, so the log always shows what the feed would do.
 pub(crate) fn route(stream: &Stream, message: &str) -> Vec<Routed> {
     // A message that is not JSON is one record: its own text.
@@ -757,7 +757,7 @@ pub(crate) mod tests {
         let mut profile = profile(&server.origin);
         profile.keys = vec!["key".to_owned()];
         profile.stream = Some(Stream {
-            url: format!("{}/stream?key={{key}}", peer.url),
+            url: format!("{}/{{key}}/stream?key={{key}}", peer.url),
             connect: vec![
                 r#"{"action":"auth","key":"{key}"}"#.to_owned(),
                 r#"{"action":"subscribe","symbol":"{symbol}","interval":"{interval}"}"#.to_owned(),
@@ -815,14 +815,17 @@ pub(crate) mod tests {
         see(&mut chart, "a new slot", &[B3, B4, B5A, T6]);
 
         // 4. The connection is lost. The chart says so with the endpoint, and without the key
-        // that travels in the address.
+        // that travels in the address: in its path the key is shown by its name.
         peer.release();
         until(&ctx, &mut chart, "the drop", |chart| {
             state(chart).last_error.is_some()
         });
         assert_eq!(state(&chart).status, Some(FeedStatus::Disconnected));
         let error = state(&chart).last_error.unwrap().to_string();
-        let lost = format!("network error: {}/stream: connection lost", peer.url);
+        let lost = format!(
+            "network error: {}/{{key}}/stream: connection lost",
+            peer.url
+        );
         assert!(error.starts_with(&lost), "{error}");
         // The session connects again after a second and the feed loads what was missed, from the
         // slot of the newest bar it knows: the final state of the bar that was forming takes the

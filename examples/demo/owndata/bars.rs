@@ -11,7 +11,7 @@ use super::time::{Stamp, stamp, wall};
 pub(crate) const DAY_MS: i64 = 86_400_000;
 
 /// Whether bars of `timeframe` are whole days, weeks or months: a duration of at least one day
-/// that is a multiple of a day. Such a bar is dated, not timed (1.2.6).
+/// that is a multiple of a day. Such a bar is dated, not timed: it carries a trading date.
 pub(crate) fn calendar(timeframe: Timeframe) -> bool {
     let duration = timeframe.duration_ms();
     duration >= DAY_MS && duration % DAY_MS == 0
@@ -179,7 +179,8 @@ pub(crate) fn conditions(record: &Value, fields: &TradeFields) -> Vec<String> {
     }
 }
 
-/// Builds the bars of one subscription from its trades (1.2.7).
+/// Builds the bars of one subscription from its trades, under the rule of each trade's
+/// conditions, continuing the newest bar of history.
 pub(crate) struct Aggregator {
     clock: BarClock,
     timeframe: Timeframe,
@@ -224,7 +225,7 @@ impl Aggregator {
 
     /// Folds `trade` in and returns the bar to push, in its state after the trade. `None` when
     /// the trade changes nothing: its rule is `Ignore`, its slot is older than the bar being
-    /// built, its slot opens too far after `now` (1.2.5), or it counts volume only and no
+    /// built, its slot opens too far after `now` (see [`ahead`]), or it counts volume only and no
     /// price is known yet.
     pub(crate) fn add(&mut self, trade: &Trade, now: DateTime<Utc>) -> Option<Bar> {
         let slot = self.clock.bar_open(trade.time);

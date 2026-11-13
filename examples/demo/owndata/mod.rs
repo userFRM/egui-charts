@@ -84,6 +84,21 @@ pub(crate) fn endpoint(url: &str) -> &str {
     url.split(['?', '#']).next().unwrap_or(url)
 }
 
+/// `text` with the value of every key of `secrets` written as its `{name}`, as typed and as an
+/// address encodes it. An endpoint keeps its path, and a key can travel there.
+pub(crate) fn conceal(text: &str, secrets: &Secrets) -> String {
+    let mut text = text.to_owned();
+    for (name, value) in secrets.iter().filter(|(_, value)| !value.is_empty()) {
+        let named = format!("{{{name}}}");
+        text = text.replace(value.as_str(), &named);
+        let encoded = profile::fill_url("{v}", &[("v", value)]);
+        if encoded != *value {
+            text = text.replace(&encoded, &named);
+        }
+    }
+    text
+}
+
 /// Runs `action` after `delay` unless `cancelled` is set first. It serves the deadline of a
 /// request, the keep-alive of a stream and the wait before a reconnect. A cancelled wait is
 /// released within a second. `action` runs on a thread of its own natively and as a browser task

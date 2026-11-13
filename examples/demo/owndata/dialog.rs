@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 use egui::{RichText, TextEdit};
-use egui_charts::data::{FeedState, FeedStatus};
+use egui_charts::data::{FeedError, FeedState, FeedStatus};
 use egui_charts::model::{Bar, BarClock, Timeframe, TimezoneId};
 use egui_charts::theme::ThemeExt as _;
 use egui_charts::ui_kit::alert::Alert;
@@ -31,15 +31,16 @@ use super::shape::{self, Proposal};
 use super::store::{self, Saved};
 use super::stream::{self, Routed, Session, StreamEvent};
 use super::time::{self, Stamp};
-use super::{Failure, Secrets, bars, endpoint, http, tree};
+use super::{Failure, Secrets, bars, conceal, endpoint, http, tree};
 
 /// The height the footer takes below the steps.
 const FOOTER: f32 = 64.0;
 /// The height of the line above the footer.
 const LINE: f32 = 24.0;
-/// The most a tree takes before it scrolls.
+/// The height of a tree that scrolls. A nested scroll area would otherwise take only what is
+/// left of the dialog's view below it.
 const TREE: f32 = 200.0;
-/// The most the log takes before it scrolls.
+/// The height of the log once it scrolls.
 const LOG: f32 = 140.0;
 /// The lines the log keeps.
 const LOG_LINES: usize = 200;
@@ -928,9 +929,14 @@ impl DataSourceDialog {
             let bars = usize::try_from(running.rejected_bars).unwrap_or(usize::MAX);
             parts.push(format!("{} dropped as invalid", counted(bars, "bar")));
         }
+        // The chart keeps its most recent error. A connection error no longer describes a stream
+        // that is live again.
+        let live = running.status == Some(FeedStatus::Live);
+        let error = running.last_error.as_ref();
+        let error = error.filter(|error| !(live && matches!(error, FeedError::Network(_))));
         ui.horizontal_wrapped(|ui| {
             ui.label(parts.join(" · "));
-            if let Some(error) = &running.last_error {
+            if let Some(error) = error {
                 ui.error_label(error.to_string());
             }
         });
@@ -946,7 +952,8 @@ impl DataSourceDialog {
     }
 
     /// Stores the draft: it replaces the saved profile it was loaded from, or is appended when
-    /// it is new or imported.
+    /// it is new or imported. Its key values are kept when the box is ticked and forgotten
+    /// otherwise.
     fn store_draft(&mut self) {
         let profile = self.draft.profile.clone();
         let name = profile.name.clone();
@@ -971,6 +978,11 @@ impl DataSourceDialog {
             }
             None => saved.profiles.push(profile),
         }
+        // Key values are kept only by choice.
+        saved.keys.retain(|(kept, _)| *kept != name);
+        if self.draft.keep {
+            saved.keys.push((name.clone(), self.draft.secrets()));
+        }
         self.draft.origin = Some(name);
         self.saved.save(&self.storage);
     }
@@ -983,14 +995,8 @@ impl DataSourceDialog {
             return None;
         }
         self.store_draft();
-        let name = self.draft.profile.name.clone();
         self.saved.own = true;
-        self.saved.current = Some(name.clone());
-        // Key values are kept only by choice.
-        self.saved.keys.retain(|(kept, _)| *kept != name);
-        if self.draft.keep {
-            self.saved.keys.push((name, secrets.clone()));
-        }
+        self.saved.current = Some(self.draft.profile.name.clone());
         self.saved.save(&self.storage);
         self.close();
         let profile = Box::new(self.draft.profile.clone());
@@ -1352,9 +1358,15 @@ impl DataSourceDialog {
             Err(error) => test.error = Some(error),
             Ok(request) => {
                 let answer = Answer::default();
-                test.pending = Some((answer.clone(), endpoint(&request.url).to_owned()));
+                let shown = conceal(endpoint(&request.url), &secrets);
+                test.pending = Some((answer.clone(), shown));
                 let repaint = ctx.clone();
                 http::fetch(request, move |result| {
+                    // A reason can repeat the endpoint, and a key in its path.
+                    let result = result.map_err(|failure| match failure {
+                        Failure::Refused(reason) => Failure::Refused(conceal(&reason, &secrets)),
+                        failure => failure,
+                    });
                     *answer.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
                     repaint.request_repaint();
                 });
@@ -1664,7 +1676,7 @@ impl DataSourceDialog {
             ("symbol".to_owned(), symbol),
             ("interval".to_owned(), interval.to_owned()),
         ];
-        values.extend(secrets);
+        values.extend(secrets.iter().cloned());
         let borrowed: Vec<(&str, &str)> = values
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -1674,7 +1686,16 @@ impl DataSourceDialog {
         let queue = Events::default();
         let events = queue.clone();
         let repaint = ctx.clone();
+        let shown = conceal(endpoint(&url), &secrets);
         let session = Session::open(stream.clone(), values, move |event| {
+            // A reason can repeat the endpoint, and a key in its path.
+            let event = match event {
+                StreamEvent::Closed { reason, retry_in } => StreamEvent::Closed {
+                    reason: conceal(&reason, &secrets),
+                    retry_in,
+                },
+                event => event,
+            };
             let mut events = events.lock().unwrap_or_else(PoisonError::into_inner);
             events.push((Utc::now(), event));
             repaint.request_repaint();
@@ -1682,7 +1703,7 @@ impl DataSourceDialog {
         self.live = LiveTest {
             session: Some(session),
             queue,
-            endpoint: endpoint(&url).to_owned(),
+            endpoint: shown,
             route: self.live.route,
             slot: self.live.slot,
             ..LiveTest::default()
@@ -1831,7 +1852,8 @@ impl DataSourceDialog {
         let mut selected = None;
         let log = egui::ScrollArea::vertical()
             .id_salt("data_source_log")
-            .max_height(LOG);
+            .max_height(LOG)
+            .min_scrolled_height(LOG);
         log.auto_shrink([false, true])
             .stick_to_bottom(true)
             .show(ui, |ui| {
@@ -2488,7 +2510,8 @@ fn clear_button(ui: &mut egui::Ui, enabled: bool) -> bool {
 
 /// A tree's own scroll area, which fills its column.
 fn tree_area(salt: &str) -> egui::ScrollArea {
-    let area = egui::ScrollArea::both().id_salt(salt).max_height(TREE);
+    let area = egui::ScrollArea::both().id_salt(salt);
+    let area = area.max_height(TREE).min_scrolled_height(TREE);
     area.auto_shrink([false, true])
 }
 
@@ -3289,12 +3312,41 @@ mod tests {
         let connected = click(&ctx, &mut dialog, "Connect");
         assert!(matches!(connected, Some(Outcome::Connect { .. })));
         assert!(stored(&fresh).contains(SECRET));
-        let mut dialog = DataSourceDialog::new(fresh, true);
+        let mut dialog = DataSourceDialog::new(fresh.clone(), true);
         let Some(Outcome::Connect { secrets, .. }) = dialog.startup() else {
             panic!("the start did not connect");
         };
         assert_eq!(secrets, [("key".to_owned(), SECRET.to_owned())]);
         assert!(!dialog.is_open());
+        // The box cleared and the profile saved, the key is forgotten.
+        dialog.open();
+        click(&ctx, &mut dialog, "Keep keys in this browser");
+        click(&ctx, &mut dialog, "Save");
+        assert!(!stored(&fresh).contains(SECRET));
+    }
+
+    /// The status line shows the connection error while the stream is down, and no longer once it
+    /// is live again, although the chart keeps the error as its most recent one.
+    #[test]
+    fn the_status_line_drops_a_connection_error_once_the_stream_is_live() {
+        let ctx = egui::Context::default();
+        let dialog = DataSourceDialog::new(Arc::new(DemoStorage::default()), true);
+        let lost = FeedError::Network("ws://127.0.0.1:9/stream: connection lost".to_owned());
+        for (status, shown) in [(FeedStatus::Disconnected, true), (FeedStatus::Live, false)] {
+            let mut running = FeedState::default();
+            running.status = Some(status);
+            running.last_error = Some(lost.clone());
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| dialog.status(ui, &running));
+            let mut texts = Vec::new();
+            for clipped in &output.shapes {
+                painted(&clipped.shape, clipped.clip_rect, &mut texts);
+            }
+            let found = texts
+                .iter()
+                .any(|(text, ..)| text.contains("connection lost"));
+            output.drop_without_applying_deltas();
+            assert_eq!(found, shown, "{status:?}");
+        }
     }
 
     /// A Test that fails says, in the step where the visitor pressed the button, which
@@ -3423,11 +3475,12 @@ mod tests {
         );
         assert!(server.seen().is_empty());
 
-        // The stream: an address where nothing listens is named without its query.
+        // The stream: an address where nothing listens is named without its query, and a key
+        // in its path by its name.
         let address = closed();
         let mut dialog = open(&format!("http://{address}"), |profile| {
             profile.stream = Some(Stream {
-                url: format!("ws://{address}/stream?key={{key}}"),
+                url: format!("ws://{address}/{{key}}/stream?key={{key}}"),
                 ..Stream::default()
             });
         });
@@ -3436,7 +3489,7 @@ mod tests {
         let line = wait(
             &ctx,
             &mut dialog,
-            &format!("ws://{address}/stream: cannot connect ("),
+            &format!("ws://{address}/{{key}}/stream: cannot connect ("),
         );
         assert!(!line.contains(SECRET), "{line}");
         click(&ctx, &mut dialog, "Stop");
