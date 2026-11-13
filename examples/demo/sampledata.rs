@@ -253,6 +253,171 @@ pub fn dividend_factor(symbol: &str) -> f64 {
     1.0 - 0.01 * (1 + DemoSymbol::find(symbol).seed % 3) as f64
 }
 
+/// Twenty-six years of daily OHLCV before the recent minute archive. No executions are made.
+/// The last close meets the first minute's open; prices and volume are stable per symbol/date.
+pub fn daily_history(symbol: &str, before: DateTime<Utc>) -> Vec<Bar> {
+    use chrono::{Duration, Months, NaiveTime};
+    let spec = DemoSymbol::find(symbol);
+    let end = before.date_naive();
+    let start = end.checked_sub_months(Months::new(26 * 12)).unwrap();
+    let mut day = end;
+    let mut close = spec.start_price;
+    let tick = if close < 10.0 { 0.0001 } else { 0.01 };
+    let mut bars = Vec::new();
+    while day > start {
+        day -= Duration::days(1);
+        let time = day.and_time(NaiveTime::MIN).and_utc();
+        let mut seed = (time.timestamp().div_euclid(86_400) as u64)
+            .wrapping_add(spec.seed)
+            .wrapping_mul(0x9e3779b97f4a7c15);
+        seed = (seed ^ (seed >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        let open = (close * (1.0 + ((seed % 101) as f64 - 50.0) / 10_000.0) / tick)
+            .round()
+            .max(1.0)
+            * tick;
+        bars.push(Bar::new(
+            time,
+            open,
+            (open.max(close) * 1.003 / tick).ceil() * tick,
+            (open.min(close) * 0.997 / tick).floor().max(1.0) * tick,
+            close,
+            (4_000_000 + seed % 8_000_001) as f64,
+        ));
+        close = open;
+    }
+    bars.reverse();
+    bars
+}
+
+/// Combine the coarse archive with recent minutes on the requested calendar.
+/// Split synthetic days follow open, low, high, close at 0, 1/4, 3/4 and 1 of their span,
+/// with uniform volume, so a shifted calendar boundary consumes only its share of a UTC day.
+/// Session calendars place coarse daily samples in the demo's regular exchange window.
+pub fn calendar_history(
+    daily: &[Bar],
+    minutes: &[Bar],
+    clock: egui_charts::model::BarClock,
+) -> Vec<Bar> {
+    use chrono::{Datelike, Duration, TimeZone};
+    let session = us_equity_session();
+    let regular = &session.windows[0];
+    let zone = us_equity_zone();
+    let mut result: Vec<Bar> = Vec::new();
+    let mut push = |bar: Bar| {
+        if let Some(last) = result.last_mut().filter(|last| last.time == bar.time) {
+            last.high = last.high.max(bar.high);
+            last.low = last.low.min(bar.low);
+            last.close = bar.close;
+            last.volume += bar.volume;
+        } else {
+            result.push(bar);
+        }
+    };
+    for (index, bar) in daily.iter().enumerate() {
+        let mut end = (bar
+            .time
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            + Duration::days(1))
+        .min(
+            daily
+                .get(index + 1)
+                .map_or(DateTime::<Utc>::MAX_UTC, |next| next.time),
+        )
+        .min(
+            minutes
+                .first()
+                .map_or(DateTime::<Utc>::MAX_UTC, |minute| minute.time),
+        );
+        let mut start = bar.time;
+        if clock.has_session() {
+            let day = bar.time.date_naive();
+            if !regular.days.contains(&day.weekday()) {
+                continue;
+            }
+            let open = zone
+                .from_local_datetime(&day.and_time(regular.open))
+                .single()
+                .expect("the regular open exists")
+                .to_utc();
+            let close = zone
+                .from_local_datetime(&day.and_time(regular.close))
+                .single()
+                .expect("the regular close exists")
+                .to_utc();
+            start = start.max(open);
+            end = end.min(close);
+        }
+        let span = (end - start).num_milliseconds();
+        if span <= 0 {
+            continue;
+        }
+        let points = [
+            (0, bar.open),
+            (span / 4, bar.low),
+            (span * 3 / 4, bar.high),
+            (span, bar.close),
+        ];
+        let price = |at: i64| {
+            let pair = points.windows(2).find(|pair| at <= pair[1].0).unwrap();
+            pair[0].1
+                + (pair[1].1 - pair[0].1) * (at - pair[0].0) as f64 / (pair[1].0 - pair[0].0) as f64
+        };
+        let mut from = start;
+        while from < end {
+            let slot = clock.bar_open(from);
+            let mut to = end;
+            if clock.bar_open(end - Duration::milliseconds(1)) != slot {
+                let (mut lo, mut hi) = (from.timestamp_millis(), end.timestamp_millis());
+                while hi - lo > 1 {
+                    let mid = lo + (hi - lo) / 2;
+                    if clock.bar_open(DateTime::from_timestamp_millis(mid).unwrap()) == slot {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                to = DateTime::from_timestamp_millis(hi).unwrap();
+            }
+            if from == start && to == end {
+                push(Bar {
+                    time: slot,
+                    ..bar.clone()
+                });
+            } else {
+                let a = (from - start).num_milliseconds();
+                let b = (to - start).num_milliseconds();
+                let (open, close) = (price(a), price(b));
+                let mut high = open.max(close);
+                let mut low = open.min(close);
+                for &(at, value) in &points {
+                    if a <= at && at <= b {
+                        high = high.max(value);
+                        low = low.min(value);
+                    }
+                }
+                push(Bar::new(
+                    slot,
+                    open,
+                    high,
+                    low,
+                    close,
+                    bar.volume * (b - a) as f64 / span as f64,
+                ));
+            }
+            from = to;
+        }
+    }
+    for bar in egui_charts::data::resample(minutes, egui_charts::model::Timeframe::Min1, clock)
+        .expect("nested minute history")
+    {
+        push(bar);
+    }
+    result
+}
+
 /// Derive a displayed session and dividend basis from the unchanged source history.
 ///
 /// Symbols with [`DemoSymbol::has_hours`] show only the bars inside the selected session of
@@ -296,13 +461,21 @@ pub fn visible_bars_for_range(
     range: egui_charts::ui::timeframe_toolbar::DateRange,
     bars: &[Bar],
 ) -> usize {
-    use chrono::{Datelike, Duration, Months, TimeZone};
-    use egui_charts::ui::timeframe_toolbar::DateRange;
     let Some(last) = bars.last() else {
         return 0;
     };
-    let end = last.time;
-    let start = match range {
+    let start = range_start(range, last.time);
+    bars.len() - start.map_or(0, |start| bars.partition_point(|bar| bar.time < start))
+}
+
+/// Inclusive start of a range preset, or no bound for all available history.
+pub fn range_start(
+    range: egui_charts::ui::timeframe_toolbar::DateRange,
+    end: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    use chrono::{Datelike, Duration, Months, TimeZone};
+    use egui_charts::ui::timeframe_toolbar::DateRange;
+    match range {
         DateRange::Day1 => Some(end - Duration::days(1)),
         DateRange::Day5 => Some(end - Duration::days(5)),
         DateRange::Month1 => end.checked_sub_months(Months::new(1)),
@@ -312,8 +485,7 @@ pub fn visible_bars_for_range(
         DateRange::Year1 => end.checked_sub_months(Months::new(12)),
         DateRange::Year5 => end.checked_sub_months(Months::new(60)),
         DateRange::All => None,
-    };
-    bars.len() - start.map_or(0, |start| bars.partition_point(|bar| bar.time < start))
+    }
 }
 
 #[cfg(test)]

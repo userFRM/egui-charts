@@ -10,7 +10,7 @@ use egui::{Color32, Painter, Pos2, Shape, Stroke};
 use super::helpers::valued_runs;
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
-use crate::model::{Bar, LinePlotStyle, LineType, PriceSource};
+use crate::model::{Bar, ChartTypeStyles, LinePlotStyle, LineType, PriceSource};
 
 pub(super) fn render_line(
     painter: &Painter,
@@ -81,25 +81,10 @@ pub(super) fn render_line_with_markers(
 
     draw_bar_line(painter, visible_data, &points, style, false);
 
-    // Draw markers
-    for (point, bar) in points
-        .iter()
-        .zip(visible_data)
-        .filter(|(_, bar)| !bar.is_whitespace() && marker_radius.is_finite() && marker_radius > 0.0)
-    {
-        painter.add(Shape::circle_filled(
-            *point,
-            marker_radius,
-            line_color(bar, style),
-        ));
-        painter.add(Shape::circle_stroke(
-            *point,
-            marker_radius,
-            Stroke::new(
-                DESIGN_TOKENS.stroke.hairline,
-                DESIGN_TOKENS.semantic.chart.crosshair_label_text,
-            ),
-        ));
+    for (point, bar) in points.iter().zip(visible_data) {
+        if !bar.is_whitespace() {
+            draw_point_marker(painter, *point, marker_radius, line_color(bar, style));
+        }
     }
 
     if show_volume {
@@ -164,6 +149,22 @@ pub(super) fn line_color(bar: &Bar, style: &LinePlotStyle) -> Color32 {
         .as_ref()
         .and_then(|own| own.color)
         .unwrap_or(style.color)
+}
+
+/// Paint a data point in its line colour, with the same outline for every line-based plot.
+pub(super) fn draw_point_marker(painter: &Painter, point: Pos2, radius: f32, color: Color32) {
+    if !radius.is_finite() || radius <= 0.0 || !point.is_finite() {
+        return;
+    }
+    painter.circle_filled(point, radius, color);
+    painter.circle_stroke(
+        point,
+        radius,
+        Stroke::new(
+            DESIGN_TOKENS.stroke.hairline,
+            DESIGN_TOKENS.semantic.chart.crosshair_label_text,
+        ),
+    );
 }
 
 /// Paint the line through `points`, one per bar of `bars`, with the chart type's own style: broken
@@ -249,23 +250,33 @@ fn curve_through(points: &[Pos2]) -> Vec<Pos2> {
     curve
 }
 
-/// Paints the crosshair marker: a dot of `radius` in the series' line colour, ringed in the
-/// chart background so it stands out from the line.
+/// Paint the hovered point with its marker style, falling back to the line colour and
+/// chart background for the fill and border.
 pub(crate) fn render_crosshair_marker(
     painter: &Painter,
     point: Pos2,
-    radius: f32,
+    styles: &ChartTypeStyles,
     color: Color32,
     background: Color32,
 ) {
+    let radius = styles.crosshair_marker_radius;
     if !radius.is_finite() || radius <= 0.0 || !point.is_finite() {
         return;
     }
+    let width = styles.crosshair_marker_border_width;
+    let stroke = if width.is_finite() && width > 0.0 {
+        Stroke::new(
+            width,
+            styles.crosshair_marker_border_color.unwrap_or(background),
+        )
+    } else {
+        Stroke::NONE
+    };
     painter.circle(
         point,
         radius,
-        color,
-        Stroke::new(DESIGN_TOKENS.stroke.thick, background),
+        styles.crosshair_marker_fill.unwrap_or(color),
+        stroke,
     );
 }
 

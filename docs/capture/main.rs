@@ -1,12 +1,17 @@
 //! Captures the README images from the demo app in `examples/demo`, rendered offscreen by egui_kittest's wgpu
 //! renderer. The demo starts at a fixed timestamp with its sample feed paused. Each scene sets its state through the
-//! controller's own action handlers and the public chart API, so no step depends on where a control is drawn.
+//! controller's own action handlers and the public chart API before recording pointer input.
 //!
-//! Run from this directory: `cargo run --release -- <out-dir> [scene-filter]`
-//! Output: `<scene>-<theme>.png` for the dark and light themes, from a 1600x1000 window at 1.5 pixels per point.
+//! Regenerate the motion media with `docs/capture/regenerate.sh <absolute-temporary-directory>`.
+//! See README.md beside this file for the renderer, clock, encoder versions and exact encoding commands.
+//! Stills: `cargo run --release -- <out-dir> [scene-filter]`; motion: append `--animated`.
+//! Still output: `<scene>-<theme>.png` for the dark and light themes, from a 1600x1000 window at 1.5 pixels per point.
 //! Each capture sets its theme on the app and with `Chart::set_theme` before the first step. `docs/images` holds
 //! them converted unchanged to lossless WebP: `for f in <out-dir>/*.png; do cwebp -quiet -lossless -z 9 "$f" -o
 //! docs/images/$(basename "${f%.png}").webp; done`.
+//! PNG frames live outside the repository. The tour uses 1280x720 points and galleries 1280x800,
+//! at 2 pixels per point and 60 deterministic UI frames per second. Every frame is rendered.
+//! Set LP_NUM_THREADS=3 for repeat runs.
 
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "only the captured scenes are exercised")]
@@ -17,12 +22,15 @@ mod panel_alerts;
 #[expect(dead_code, reason = "only the captured scenes are exercised")]
 mod sampledata;
 
+mod animation;
+mod pointer;
+
 use controller::DemoApp;
 use egui::containers::panel::PanelState;
 use egui::{Context, Rect, Vec2, ViewportId, vec2};
-use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-use egui_charts::model::{Alert, AlertCondition, OrderRequest, OrderSide, OrderType};
-use egui_charts::model::{Bar, ChartType as ModelChartType, Timeframe};
+use egui_charts::drawings::DrawingToolType;
+use egui_charts::model::{ChartType as ModelChartType, Timeframe};
+use egui_charts::model::{OrderRequest, OrderSide, OrderType};
 use egui_charts::studies::{self, Indicator};
 use egui_charts::theme::Theme;
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
@@ -49,14 +57,12 @@ enum Step {
     ClearStudies,
     /// Add a study with its default parameters.
     Study(fn() -> Box<dyn Indicator>),
-    /// Add drawings placed from the bars on the chart.
-    Drawings(fn(&[Bar]) -> Vec<Drawing>),
+    /// Add a study as the indicators dialog does, with its inputs in the legend.
+    AddStudy(&'static str),
     /// Pick an arrangement in the layout menu.
     Grid(ChartLayoutMode),
     /// Make the chart in this slot of the layout the active one, as clicking it does.
     Slot(usize),
-    /// Open or close a side panel from the right-hand bar.
-    Panel(RightBarIcon),
     /// Stop the charts of a layout following each other's time range.
     UnsyncTime,
     /// Zoom the active chart to this many bars, ending at the latest.
@@ -67,9 +73,7 @@ enum Step {
     Limit,
     Ticket,
     Dom,
-    Alert,
     Heatmap,
-    Replay(usize),
 }
 
 struct Scene {
@@ -107,28 +111,6 @@ fn scenes() -> Vec<Scene> {
         steps
     };
     vec![
-        Scene {
-            name: "hero",
-            steps: vec![
-                ClearStudies,
-                Study(|| Box::new(studies::EMA::new(9))),
-                Study(|| {
-                    Box::new(
-                        studies::EMA::new(21).with_color(egui::Color32::from_rgb(255, 174, 67)),
-                    )
-                }),
-                Study(study::<studies::VolumeWeightedAvgPrice>),
-                Study(study::<studies::RSI>),
-                Visible(100),
-                Drawings(position_plan),
-                Paper,
-                Position,
-                Limit,
-                Alert,
-                Panel(RightBarIcon::Watchlist),
-            ],
-            pointer: Some(vec2(0.45, 0.33)),
-        },
         scene(
             "studies",
             vec![
@@ -141,10 +123,6 @@ fn scenes() -> Vec<Scene> {
                 Visible(120),
                 Indicators,
             ],
-        ),
-        scene(
-            "drawings",
-            vec![ClearStudies, Visible(150), Drawings(analysis)],
         ),
         Scene {
             name: "layouts",
@@ -201,19 +179,6 @@ fn scenes() -> Vec<Scene> {
             ],
         ),
         scene(
-            "replay",
-            vec![
-                ClearStudies,
-                Study(study::<studies::EMA>),
-                Replay(30),
-                Visible(100),
-                Paper,
-                Position,
-                Limit,
-            ],
-        ),
-        scene("liquidity", vec![ClearStudies, Visible(45), Heatmap]),
-        scene(
             "footprint",
             vec![
                 ClearStudies,
@@ -226,100 +191,13 @@ fn scenes() -> Vec<Scene> {
             vec![
                 ClearStudies,
                 Interval(Timeframe::Min5),
-                Study(|| {
-                    let mut profile = studies::VolProfileSession::default();
-                    profile.set_colors(vec![
-                        egui::Color32::from_rgb(41, 98, 255),
-                        egui::Color32::from_rgba_unmultiplied(38, 166, 154, 65),
-                        egui::Color32::from_rgba_unmultiplied(239, 83, 80, 65),
-                    ]);
-                    Box::new(profile)
-                }),
+                Study(study::<studies::VolProfileSession>),
                 Study(study::<studies::EMA>),
-                Visible(72),
+                // Wide enough bars that the session high's wick clears the profile's data source note.
+                Visible(60),
             ],
         ),
     ]
-}
-
-// ---------------------------------------------------------------- drawings, placed from the data
-
-/// Index and price of the lowest low and of the highest high among `bars[from..to]`.
-fn extremes(bars: &[Bar], from: usize, to: usize) -> ((usize, f64), (usize, f64)) {
-    let mut low = (from, f64::INFINITY);
-    let mut high = (from, f64::NEG_INFINITY);
-    for (i, b) in bars.iter().enumerate().take(to).skip(from) {
-        if b.low < low.1 {
-            low = (i, b.low);
-        }
-        if b.high > high.1 {
-            high = (i, b.high);
-        }
-    }
-    (low, high)
-}
-
-fn drawing(tool: DrawingToolType, color: [u8; 4], points: &[(usize, f64)]) -> Drawing {
-    let mut d = Drawing::with_color(0, tool, color);
-    d.chart_points = points
-        .iter()
-        .map(|&(i, p)| ChartPoint::new(i as f32, p))
-        .collect();
-    d.completed = true;
-    d
-}
-
-const BLUE: [u8; 4] = [41, 98, 255, 255];
-
-fn position_plan(bars: &[Bar]) -> Vec<Drawing> {
-    let n = bars.len();
-    let entry = bars[n - 67].close;
-    vec![drawing(
-        DrawingToolType::LongPos,
-        BLUE,
-        &[
-            (n - 67, entry),
-            (n - 45, entry + 1.5),
-            (n - 45, entry - 0.75),
-        ],
-    )]
-}
-
-fn analysis(bars: &[Bar]) -> Vec<Drawing> {
-    let n = bars.len();
-    assert!(n >= 120);
-    let (a, _) = extremes(bars, n - 112, n - 93);
-    let (_, b) = extremes(bars, n - 92, n - 70);
-    let (c, _) = extremes(bars, n - 69, n - 52);
-    let (_, d) = extremes(bars, n - 51, n - 30);
-    let (e, _) = extremes(bars, n - 29, n - 8);
-    let mut fork = drawing(DrawingToolType::Pitchfork, BLUE, &[a, b, c]);
-    fork.stroke_width = 1.0;
-    let mut fib = drawing(
-        DrawingToolType::FibonacciExtension,
-        [255, 174, 67, 255],
-        &[c, d, e],
-    );
-    fib.extend_right = true;
-    let mut pattern = drawing(
-        DrawingToolType::XABCDPattern,
-        [151, 115, 230, 255],
-        &[a, b, c, d, e],
-    );
-    pattern.fill_color = Some([151, 115, 230, 24]);
-    let mut callout = drawing(
-        DrawingToolType::Callout,
-        [38, 166, 154, 255],
-        &[e, (n - 18, e.1 + 1.2)],
-    );
-    callout.text = Some("Watch the retest".into());
-    let mut zone = drawing(
-        DrawingToolType::Rect,
-        [38, 166, 154, 255],
-        &[(n - 32, e.1 - 0.15), (n - 3, e.1 + 0.45)],
-    );
-    zone.fill_color = Some([38, 166, 154, 24]);
-    vec![fork, fib, pattern, zone, callout]
 }
 
 // ---------------------------------------------------------------- capture
@@ -336,7 +214,10 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
             app.handle_top_toolbar(ctx, TopToolbarAction::ChartStyleSelected(*t));
             app.chart.config_mut().show_volume = !matches!(
                 t,
-                ModelChartType::Renko | ModelChartType::Kagi | ModelChartType::VolumeFootprint
+                ModelChartType::Renko
+                    | ModelChartType::Kagi
+                    | ModelChartType::VolumeFootprint
+                    | ModelChartType::TimePriceOpportunity
             );
         }
         Step::ClearStudies => {
@@ -346,21 +227,20 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
         Step::Study(make) => {
             app.chart.add_indicator(make());
         }
-        Step::Drawings(place) => {
-            let placed = place(app.chart.bars(SeriesId::MAIN));
-            let dm = app.chart.drawings_mut();
-            for drawing in placed {
-                dm.add_synced_drawing(drawing)
-                    .expect("capture drawings are valid");
-            }
-            dm.deselect();
+        Step::AddStudy(name) => {
+            let count = app.chart.indicators().count();
+            app.handle_top_toolbar(ctx, TopToolbarAction::AddIndicator((*name).into()));
+            assert_eq!(
+                app.chart.indicators().count(),
+                count + 1,
+                "unknown study {name}"
+            );
         }
         Step::Grid(mode) => app.handle_top_toolbar(
             ctx,
             TopToolbarAction::Layout(LayoutAction::SelectGrid(*mode)),
         ),
         Step::Slot(slot) => app.activate_chart_slot(*slot),
-        Step::Panel(icon) => app.toggle_panel(*icon),
         Step::UnsyncTime => {
             app.layout.sync.sync_time_axis = false;
             app.top_toolbar.chart_grid_selector.sync.sync_time_axis = false;
@@ -368,13 +248,6 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
         Step::Visible(count) => app.chart.set_visible_bars(*count),
         Step::Indicators => app.handle_top_toolbar(ctx, TopToolbarAction::OpenIndicators),
         Step::Paper => app.connect_paper(),
-        Step::Replay(back) => app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - back),
-        Step::Alert => {
-            let price = app.chart.bars(SeriesId::MAIN).last().unwrap().close - 1.7;
-            let mut alert = Alert::new(SAMPLE, AlertCondition::CrossingDown(price));
-            alert.name = "Retest of the breakout level".into();
-            app.alerts.save(alert);
-        }
         Step::Position | Step::Limit | Step::Ticket | Step::Dom | Step::Heatmap => {}
     }
 }
@@ -395,11 +268,48 @@ fn chart_rect(ctx: &Context) -> Rect {
     r
 }
 
-fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
+/// Runs frames until the active chart's feed has delivered its history. Each pane of a layout simulates
+/// its own feed in batches per frame, so a fixed number of frames would stop it partway through the day.
+fn wait_for_history(h: &mut Harness<'static, pointer::CaptureApp>) {
+    let ready = |h: &Harness<'_, pointer::CaptureApp>| {
+        h.state()
+            .chart
+            .feed_state(SeriesId::MAIN)
+            .is_some_and(|state| {
+                state.status == Some(egui_charts::data::FeedStatus::Live) && !state.loading_history
+            })
+    };
+    for _ in 0..2_000 {
+        if ready(h) {
+            break;
+        }
+        h.step();
+    }
+    assert!(
+        ready(h),
+        "sample history must finish before scripting a scene"
+    );
+}
+
+fn prepare(
+    scene: &Scene,
+    light: bool,
+    scale: f32,
+    animated: bool,
+) -> Harness<'static, pointer::CaptureApp> {
     let mut h = Harness::builder()
-        .with_size(SIZE)
+        .with_size(if animated {
+            if scene.name == "tour" {
+                vec2(1280.0, 720.0)
+            } else {
+                vec2(1280.0, 800.0)
+            }
+        } else {
+            SIZE
+        })
+        .with_step_dt(if animated { 1.0 / 60.0 } else { 0.25 })
         .with_pixels_per_point(scale)
-        // The chart draws its own crosshair; kittest would paint a pointer arrow over it.
+        // The capture app paints the motion pointer; stills keep the chart's crosshair.
         .with_render_cursor(false)
         // Glyphs no bundled font has (arrows, small triangles in the toolbars) stay boxes, as the demo shows them.
         .allow_missing_glyphs()
@@ -409,14 +319,27 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         .wgpu()
         .build_eframe(|cc| {
             let now = "2026-10-27T19:29:50Z".parse().unwrap();
-            DemoApp::new_at(cc, now, true)
+            let mut app = DemoApp::new_at(cc, now, true);
+            if animated {
+                app.theme = if light { Theme::light() } else { Theme::dark() };
+                app.chart.set_theme(&cc.egui_ctx, &app.theme);
+            }
+            pointer::CaptureApp {
+                demo: *app,
+                show_pointer: animated,
+                pointing_at_row: false,
+            }
         });
     h.run_steps(3);
+    // Replay and drawings must start from the completed history, including retained executions.
+    wait_for_history(&mut h);
     let ctx = h.ctx.clone();
-    h.state_mut().toggle_panel(RightBarIcon::Notifications);
-    h.run_steps(3);
-    h.state_mut().toggle_panel(RightBarIcon::Notifications);
-    let app = h.state_mut();
+    if !animated {
+        h.state_mut().toggle_panel(RightBarIcon::Notifications);
+        h.run_steps(3);
+        h.state_mut().toggle_panel(RightBarIcon::Notifications);
+    }
+    let app = &mut h.state_mut().demo;
     app.theme = if light { Theme::light() } else { Theme::dark() };
     app.chart.set_theme(&ctx, &app.theme);
     // The demo's call to action belongs to the host application, not to the library.
@@ -424,6 +347,14 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     app.paper
         .set_replay_time(Some("2026-10-27T19:29:50Z".parse().unwrap()));
     app.chart.config_mut().show_countdown = false;
+    if animated && scene.name == "tour" {
+        app.chart.config_mut().title_as_description = false;
+        app.chart.config_mut().show_quote_boxes = false;
+    }
+    if animated && scene.name != "tour" {
+        app.chart.config_mut().axis_font_size = Some(28.0);
+        app.chart.config_mut().right_axis_width = 140.0;
+    }
     app.trading.display.notifications = egui_charts::widget::settings::TradingNotifications::Off;
     app.timeframe_toolbar
         .set_control_visible(egui_charts::ui::Control::TimeZone, false);
@@ -434,6 +365,7 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     for step in &scene.steps {
         apply(h.state_mut(), &ctx, step);
         h.run_steps(4);
+        wait_for_history(&mut h);
         match step {
             Step::Position | Step::Limit => {
                 let price = h.state().chart.bars(SeriesId::MAIN).last().unwrap().close;
@@ -445,12 +377,12 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
                     if position {
                         OrderType::Market
                     } else {
-                        OrderType::Limit((price * 100.0).round() / 100.0 - 1.8)
+                        OrderType::Limit((price * 100.0).round() / 100.0 - 2.3)
                     },
                 );
                 if position {
                     order.take_profit = Some((price * 100.0).round() / 100.0 + 4.5);
-                    order.stop_loss = Some((price * 100.0).round() / 100.0 - 2.5);
+                    order.stop_loss = Some((price * 100.0).round() / 100.0 - 3.6);
                 }
                 h.state_mut().trading.open_ticket(order);
                 h.run_steps(5);
@@ -458,13 +390,7 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
                     .click();
                 h.run_steps(5);
                 h.state_mut().trading.toggle_ticket(SAMPLE.into());
-                if position && scene.name == "replay" {
-                    for _ in 0..3 {
-                        h.key_press(egui::Key::ArrowRight);
-                        h.run_steps(3);
-                    }
-                }
-                if position && scene.name != "replay" {
+                if position {
                     let now = "2026-10-27T19:31:50Z".parse().unwrap();
                     h.state_mut().paper.set_replay_time(Some(now));
                     h.state_mut().advance_sample_to(now);
@@ -476,7 +402,7 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
                     SAMPLE,
                     OrderSide::Buy,
                     25.0,
-                    OrderType::Limit((price * 100.0).round() / 100.0 - 0.6),
+                    OrderType::Limit((price * 100.0).round() / 100.0 - 1.6),
                 );
                 order.take_profit = Some((price * 100.0).round() / 100.0 + 1.2);
                 order.stop_loss = Some((price * 100.0).round() / 100.0 - 3.7);
@@ -494,10 +420,11 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
                         .advance_sample_to(start + chrono::Duration::minutes(minute));
                     h.run_steps(2);
                 }
+                // The sample feed prints about 110 trades a minute with a heavy tail of sizes. Keep
+                // the largest 0.7% by a fixed size, so a bubble stays while its trade is in view.
                 h.state_mut().chart.set_volume_bubbles(Some(
                     egui_charts::chart::overlays::VolumeBubblesConfig {
-                        min_size_filter: Some(80.0),
-                        max_diameter: 20.0,
+                        min_size_filter: Some(120.0),
                         ..Default::default()
                     },
                 ));
@@ -506,7 +433,59 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         }
         h.run_steps(5);
     }
-    if !matches!(scene.name, "layouts" | "chart-types") {
+    if scene.name == "tour" {
+        // The heatmap has 25 minutes of book history; align the other feeds with it.
+        let start: chrono::DateTime<chrono::Utc> = "2026-10-27T19:29:50Z".parse().unwrap();
+        let end = "2026-10-27T19:54:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        for slot in 0..3 {
+            h.state_mut().activate_chart_slot(slot);
+            for minute in 1..=25 {
+                h.state_mut()
+                    .advance_sample_to(start + chrono::Duration::minutes(minute));
+                h.run_steps(2);
+            }
+            for _ in 0..2_000 {
+                if h.state()
+                    .chart
+                    .bars(SeriesId::MAIN)
+                    .last()
+                    .is_some_and(|bar| bar.time == end)
+                {
+                    break;
+                }
+                h.step();
+            }
+            assert_eq!(
+                h.state().chart.bars(SeriesId::MAIN).last().unwrap().time,
+                end,
+                "every tour feed must reach the same sample minute"
+            );
+            h.state_mut().chart.scroll_to_position(0.5, false);
+        }
+        // Keep the latest bars of the heatmap pane beside its book strip.
+        h.state_mut().activate_chart_slot(3);
+        h.state_mut().chart.scroll_to_position(6.0, false);
+        h.state_mut().activate_chart_slot(0);
+        h.run_steps(5);
+    }
+    if matches!(scene.name, "layouts" | "chart-types") {
+        let now: chrono::DateTime<chrono::Utc> = "2026-10-27T19:29:50Z".parse().unwrap();
+        for slot in 0..4 {
+            h.state_mut().activate_chart_slot(slot);
+            let chart = &h.state().chart;
+            let last = chart.bars(SeriesId::MAIN).last().unwrap().time;
+            let interval = chart.timeframe().unwrap().duration();
+            assert!(
+                last <= now && now < last + interval,
+                "{} pane {slot} ends at {last}, before the sample clock",
+                scene.name
+            );
+        }
+        h.state_mut().activate_chart_slot(0);
+    }
+    if !matches!(scene.name, "layouts" | "chart-types" | "tour") {
         let count = scene.steps.iter().rev().find_map(|s| {
             if let Step::Visible(n) = s {
                 Some(*n)
@@ -526,17 +505,17 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
             .scale_margins
             .top = 0.28;
     }
-    if scene.name == "footprint" {
+    if matches!(scene.name, "footprint" | "tour") {
         h.state_mut().chart.scroll_to_position(0.5, false);
     }
-    if scene.name == "hero" {
-        h.run_steps(3);
-        h.get_by_role(egui::accesskit::Role::MultilineTextInput)
-            .focus();
-        h.get_by_role(egui::accesskit::Role::MultilineTextInput)
-            .type_text(
-                "Intraday plan\nWatch 770.00 for acceptance.\nKeep risk below the pullback low.",
-            );
+    if matches!(scene.name, "footprint" | "profile") {
+        // Keep the tallest columns and the highest profile rows below the legend.
+        h.state_mut()
+            .chart
+            .price_scale_mut()
+            .options_mut()
+            .scale_margins
+            .top = 0.16;
     }
     // Let feed replies and pane sizes settle before rendering.
     h.run_steps(10);
@@ -556,18 +535,28 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         h.hover_at(area.min + area.size() * f);
         h.run_steps(2);
     }
+    h
+}
+
+fn save_frame(
+    h: &mut Harness<'_, pointer::CaptureApp>,
+    path: &Path,
+    compression: CompressionType,
+    filter: FilterType,
+) {
     let img = h
         .render()
-        .unwrap_or_else(|e| panic!("render {}: {e}", scene.name));
+        .unwrap_or_else(|e| panic!("render {}: {e}", path.display()));
+    let file = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
+    img.write_with_encoder(PngEncoder::new_with_quality(file, compression, filter))
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
+fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
+    let mut h = prepare(scene, light, scale, false);
     let theme = if light { "light" } else { "dark" };
     let path = out.join(format!("{}-{theme}.png", scene.name));
-    let file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
-    img.write_with_encoder(PngEncoder::new_with_quality(
-        file,
-        CompressionType::Best,
-        FilterType::Adaptive,
-    ))
-    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    save_frame(&mut h, &path, CompressionType::Best, FilterType::Adaptive);
     let bytes = std::fs::metadata(&path).unwrap().len();
     if bytes > MAX_BYTES {
         eprintln!(
@@ -580,15 +569,30 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(out) = args.get(1) else {
-        eprintln!("usage: capture <out-dir> [scene-filter]");
+        eprintln!("usage: capture <out-dir> [scene-filter] [--animated]");
         std::process::exit(2);
     };
-    let filter = args.get(2).map(String::as_str).unwrap_or("");
+    let animated = args.iter().skip(2).any(|arg| arg == "--animated");
+    let filter = args
+        .iter()
+        .skip(2)
+        .find(|arg| arg.as_str() != "--animated")
+        .map(String::as_str)
+        .unwrap_or("");
     let out = Path::new(out);
     std::fs::create_dir_all(out).unwrap();
-    for scene in scenes().iter().filter(|s| s.name.contains(filter)) {
+    let scenes = if animated {
+        animation::scenes()
+    } else {
+        scenes()
+    };
+    for scene in scenes.iter().filter(|s| s.name.contains(filter)) {
         for light in [false, true] {
-            shoot(scene, light, 1.5, out);
+            if animated {
+                animation::shoot(scene, light, out);
+            } else {
+                shoot(scene, light, 1.5, out);
+            }
         }
         eprintln!("captured {}", scene.name);
     }

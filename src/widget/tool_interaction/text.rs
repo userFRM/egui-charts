@@ -47,8 +47,129 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
         opened_frame: None,
         placed,
         inline: edits_in_place(drawing.tool_type),
+        fib_level: None,
     });
     manager.select(id);
+}
+
+/// Open the hovered level field using the annotation editor's draft and history.
+pub(super) fn begin_fibonacci_edit(
+    ui: &Ui,
+    manager: &mut DrawingManager,
+    response: &egui::Response,
+    pane: Rect,
+) {
+    if manager.active_tool.is_some()
+        || manager.eraser_mode
+        || manager.text_editor.is_some()
+        || !response.clicked()
+    {
+        return;
+    }
+    let hit = response
+        .interact_pointer_pos()
+        .and_then(|pos| manager.hit_test(pos));
+    let hint = l10n::text(ui.ctx(), "Add text");
+    let mut target = None;
+    for drawing in manager.drawings.iter().rev().filter(|drawing| {
+        matches!(
+            drawing.tool_type,
+            DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension
+        ) && hit.is_none_or(|id| id == drawing.id)
+            && drawing.selectable
+            && !drawing.locked
+            && manager.owns_pane(drawing)
+            && drawing.is_visible_on_timeframe(&manager.curr_timeframe)
+    }) {
+        let config = drawing.fibonacci_config();
+        for (index, level) in config.levels.iter().enumerate() {
+            let empty = level.text.is_empty();
+            if empty && !manager.is_selected(drawing.id) {
+                continue;
+            }
+            let text = if empty {
+                hint.as_str()
+            } else {
+                level.text.as_str()
+            };
+            let Some(bounds) = drawing.fib_text_bounds(ui.painter(), pane, index, text) else {
+                continue;
+            };
+            if response
+                .interact_pointer_pos()
+                .is_some_and(|pos| bounds.contains(pos))
+            {
+                target = Some((drawing.id, index, level.text.clone()));
+                break;
+            }
+        }
+        if target.is_some() {
+            break;
+        }
+    }
+    if let Some((id, index, draft)) = target {
+        manager.text_editor = Some(TextEditState {
+            id,
+            draft,
+            focus: true,
+            opened_frame: None,
+            placed: false,
+            inline: true,
+            fib_level: Some(index),
+        });
+        manager.select(id);
+    }
+}
+
+/// Open the text field of a selected rectangle, circle or ellipse on a click on its text, or on
+/// the hint it shows in place of none. The click that selects the shape leaves the field closed,
+/// as does a double click, which the host answers with the drawing's settings.
+pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: &egui::Response) {
+    if manager.active_tool.is_some()
+        || manager.eraser_mode
+        || manager.text_editor.is_some()
+        || !response.clicked()
+        || response.double_clicked()
+        || response.triple_clicked()
+        || ui.input(|input| input.modifiers.any())
+    {
+        return;
+    }
+    let Some(pos) = response.interact_pointer_pos() else {
+        return;
+    };
+    let Some(drawing) = manager.hit_test(pos).and_then(|id| {
+        manager.drawings.iter().find(|drawing| {
+            drawing.id == id
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse
+                )
+                && !drawing.locked
+                && manager.is_selected(id)
+        })
+    }) else {
+        return;
+    };
+    let text = drawing.text.clone().filter(|t| !t.trim().is_empty());
+    let field = text
+        .clone()
+        .unwrap_or_else(|| l10n::text(ui.ctx(), "Add text"));
+    if manager
+        .painted_text(drawing.id, &field)
+        .is_some_and(|(min, galley)| Rect::from_min_size(min, galley.size()).contains(pos))
+    {
+        let id = drawing.id;
+        manager.text_editor = Some(TextEditState {
+            id,
+            draft: text.unwrap_or_default(),
+            focus: true,
+            opened_frame: None,
+            placed: false,
+            inline: true,
+            fib_level: None,
+        });
+    }
 }
 
 /// `links` says whether the chart has a `Posts` source.
@@ -72,7 +193,8 @@ pub(super) fn show_editor(
         (
             input.consume_key(Modifiers::NONE, Key::Escape),
             input.consume_key(Modifiers::COMMAND, Key::Enter)
-                || input.consume_key(Modifiers::CTRL, Key::Enter),
+                || input.consume_key(Modifiers::CTRL, Key::Enter)
+                || (editor.fib_level.is_some() && input.consume_key(Modifiers::NONE, Key::Enter)),
         )
     });
     let frame = ui.ctx().cumulative_frame_nr();
@@ -83,20 +205,59 @@ pub(super) fn show_editor(
             drawing.tool_type,
             DrawingToolType::AnchoredNote | DrawingToolType::FlagNote
         );
-        let old = drawing.text.clone();
+        let old = if let Some(index) = editor.fib_level {
+            drawing
+                .fibonacci_config()
+                .levels
+                .get(index)
+                .map(|level| level.text.clone())
+                .filter(|text| !text.trim().is_empty())
+        } else {
+            drawing.text.clone()
+        };
         let shown = editor.shown_text(ui.ctx());
-        let caret = drawing.text_box_colors(ui.ctx()).text;
+        let caret = editor
+            .fib_level
+            .and_then(|index| {
+                drawing.fibonacci_config().levels.get(index).map(|level| {
+                    let [r, g, b, a] = level.color;
+                    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+                })
+            })
+            .unwrap_or_else(|| drawing.text_box_colors(ui.ctx()).text);
         let mut outside = false;
-        if let Some((pos, galley)) = manager.painted_text(editor.id, &shown)
+        let painted = if let Some(index) = editor.fib_level {
+            drawing
+                .fib_text_bounds(ui.painter(), pane, index, &shown)
+                .map(|bounds| {
+                    let galley = ui.painter().layout_no_wrap(
+                        shown.clone(),
+                        egui::FontId::proportional(crate::styles::typography::font_size(
+                            drawing.fibonacci_config().label_size,
+                        )),
+                        caret,
+                    );
+                    (bounds.min, galley)
+                })
+        } else {
+            // A shape shows its hint in place of a blank draft, and the field stays on it.
+            manager
+                .painted_text(editor.id, &shown)
+                .or_else(|| manager.painted_text(editor.id, &l10n::text(ui.ctx(), "Add text")))
+        };
+        if let Some((pos, galley)) = painted
             && let Some(section) = galley.job.sections.first()
         {
             let format = egui::TextFormat {
                 color: egui::Color32::TRANSPARENT,
                 ..section.format.clone()
             };
+            // The draft wraps where the drawing wraps it, so the caret stays on the painted text.
+            let wrap = galley.job.wrap.clone();
             let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-                let job =
+                let mut job =
                     egui::text::LayoutJob::simple_format(text.as_str().to_owned(), format.clone());
+                job.wrap = wrap.clone();
                 ui.fonts_mut(|fonts| fonts.layout_job(job))
             };
             egui::Area::new(id)
@@ -147,7 +308,17 @@ pub(super) fn show_editor(
                     _ => {}
                 }
             } else if !cancel && text != old {
-                manager.edit_drawing(editor.id, |d| d.text = text);
+                manager.edit_drawing(editor.id, |d| {
+                    if let Some(index) = editor.fib_level {
+                        let mut config = d.fibonacci_config().into_owned();
+                        if let Some(level) = config.levels.get_mut(index) {
+                            level.text = text.unwrap_or_default();
+                        }
+                        d.fib_config = Some(config);
+                    } else {
+                        d.text = text;
+                    }
+                });
             }
         } else {
             manager.text_editor = Some(editor);
@@ -169,7 +340,13 @@ pub(super) fn show_editor(
     // A table editor shows about six rows of cells above its buttons.
     let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
-    let font_size = crate::styles::typography::font_size(drawing.font_size);
+    // A price note's typed text has a size of its own once set.
+    let font_size = crate::styles::typography::font_size(
+        drawing
+            .note_text_style
+            .filter(|_| drawing.tool_type == DrawingToolType::PriceNote)
+            .map_or(drawing.font_size, |style| style.font_size),
+    );
     let hint = match drawing.tool_type {
         DrawingToolType::Image => "Image address (https://… or file://…)",
         DrawingToolType::Tweet if links => {
@@ -272,6 +449,249 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event, Key, Modifiers, PointerButton, pos2};
+
+    /// A click edits only the chosen level, even when two levels have the same text. Drafts
+    /// cancel without history; confirmation is one undoable edit and retains spare levels.
+    /// Nonselectable drawings and unchanged empty fields never create an edit.
+    #[test]
+    fn fibonacci_text_click_edits_one_level() {
+        use crate::drawings::{ChartPoint, Drawing};
+        for tool in [
+            DrawingToolType::FibonacciRetracement,
+            DrawingToolType::FibonacciExtension,
+        ] {
+            for (initial, selectable, replacement) in [
+                ("", true, "Replacement"),
+                ("Same", true, "Replacement"),
+                ("Same", false, "Replacement"),
+                ("", true, ""),
+            ] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0; 20], &[20.0; 20]);
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points =
+                    vec![ChartPoint::new(2.0, 12.0), ChartPoint::new(12.0, 18.0)];
+                if tool == DrawingToolType::FibonacciExtension {
+                    drawing.chart_points.push(ChartPoint::new(18.0, 12.0));
+                }
+                drawing.completed = true;
+                drawing.selectable = selectable;
+                let mut config =
+                    serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+                config["levels"][3]["text"] = initial.into();
+                config["levels"][4]["text"] = initial.into();
+                drawing.fib_config = Some(serde_json::from_value(config).unwrap());
+                chart.drawings_mut().drawings.push(drawing);
+                chart.drawings_mut().select(7);
+                let mut time = 0.0;
+                let mut step = |chart: &mut crate::Chart, events| {
+                    time += 0.1;
+                    frame(&ctx, chart, time, events);
+                };
+                let key = |key, modifiers| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                };
+                for confirm in [false, true] {
+                    step(&mut chart, vec![]);
+                    let points = &chart.drawings().drawings[0].points;
+                    let anchors = chart.drawings().drawings[0].chart_points.clone();
+                    let x = if tool == DrawingToolType::FibonacciExtension {
+                        (points[1].x + points[2].x) * 0.5
+                    } else {
+                        (points[0].x + points[1].x) * 0.5
+                    };
+                    let pos = pos2(x, chart.drawings().drawings[0].level_ys[3]);
+                    step(&mut chart, vec![Event::PointerMoved(pos)]);
+                    for pressed in [true, false] {
+                        step(
+                            &mut chart,
+                            vec![Event::PointerButton {
+                                pos,
+                                button: PointerButton::Primary,
+                                pressed,
+                                modifiers: Modifiers::NONE,
+                            }],
+                        );
+                    }
+                    step(&mut chart, vec![]);
+                    if !selectable {
+                        assert!(chart.drawings().text_editor.is_none());
+                        assert!(!chart.can_undo());
+                        break;
+                    }
+                    assert_eq!(chart.drawings().text_editor.as_ref().unwrap().id, 7);
+                    if replacement != initial {
+                        step(
+                            &mut chart,
+                            vec![
+                                key(Key::A, Modifiers::COMMAND),
+                                Event::Text(replacement.into()),
+                            ],
+                        );
+                    }
+                    let level_text = |chart: &crate::Chart, index: usize| {
+                        serde_json::to_value(
+                            chart.drawings().drawings[0].fib_config.as_ref().unwrap(),
+                        )
+                        .unwrap()["levels"][index]["text"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned()
+                    };
+                    assert_eq!(level_text(&chart, 3), initial);
+                    assert!(!chart.can_undo());
+                    step(
+                        &mut chart,
+                        vec![key(
+                            if confirm { Key::Enter } else { Key::Escape },
+                            if confirm && initial.is_empty() {
+                                Modifiers::COMMAND
+                            } else {
+                                Modifiers::NONE
+                            },
+                        )],
+                    );
+                    let levels = &chart.drawings().drawings[0]
+                        .fib_config
+                        .as_ref()
+                        .unwrap()
+                        .levels;
+                    assert_eq!(
+                        level_text(&chart, 3),
+                        if confirm { replacement } else { initial }
+                    );
+                    assert_eq!(level_text(&chart, 4), initial);
+                    assert_eq!(levels.len(), 24);
+                    assert_eq!(chart.drawings().drawings[0].chart_points, anchors);
+                    if confirm && replacement != initial {
+                        assert!(chart.undo());
+                        assert_eq!(level_text(&chart, 3), initial);
+                        assert!(!chart.can_undo());
+                        assert!(chart.redo());
+                        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+                        chart.load_drawings(&saved).unwrap();
+                        assert_eq!(level_text(&chart, 3), replacement);
+                    } else {
+                        assert!(!chart.can_undo());
+                    }
+                }
+            }
+        }
+    }
+
+    /// A selected rectangle, circle or ellipse shows a hint where its text would be and opens its
+    /// text field on a click there. A double click that begins by selecting the shape does not,
+    /// and a locked shape has no field. A draft that starts blank keeps its field, cancels
+    /// without history, and confirms as one undoable edit that a saved file restores.
+    #[test]
+    fn shape_text_field_click_edits_the_text() {
+        use crate::drawings::{ChartPoint, Drawing};
+        for tool in [
+            DrawingToolType::Rect,
+            DrawingToolType::Circle,
+            DrawingToolType::Ellipse,
+        ] {
+            for (initial, locked) in [(None, false), (Some("Zone"), false), (None, true)] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0; 20], &[20.0; 20]);
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points =
+                    vec![ChartPoint::new(8.0, 15.0), ChartPoint::new(12.0, 18.0)];
+                drawing.completed = true;
+                drawing.locked = locked;
+                drawing.text = initial.map(String::from);
+                chart.drawings_mut().drawings.push(drawing);
+                let mut time = 0.0;
+                let mut step = |chart: &mut crate::Chart, events| {
+                    time += 0.1;
+                    frame(&ctx, chart, time, events);
+                };
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let key = |key, modifiers| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                };
+                step(&mut chart, vec![]);
+                let points = &chart.drawings().drawings[0].points;
+                let center = if tool == DrawingToolType::Circle {
+                    points[0]
+                } else {
+                    points[0].lerp(points[1], 0.5)
+                };
+                let hint = |chart: &crate::Chart| chart.drawings().painted_text(7, "Add text");
+                assert!(hint(&chart).is_none(), "{tool:?}");
+                step(&mut chart, vec![Event::PointerMoved(center)]);
+                for pressed in [true, false, true, false] {
+                    step(&mut chart, vec![button(center, pressed)]);
+                }
+                step(&mut chart, vec![]);
+                assert!(chart.drawings().is_selected(7), "{tool:?}");
+                assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
+                assert_eq!(
+                    hint(&chart).is_some(),
+                    initial.is_none() && !locked,
+                    "{tool:?} {initial:?} locked {locked}"
+                );
+                for confirm in [false, true] {
+                    // Later than a double click of the last one.
+                    for _ in 0..5 {
+                        step(&mut chart, vec![]);
+                    }
+                    for pressed in [true, false] {
+                        step(&mut chart, vec![button(center, pressed)]);
+                    }
+                    step(&mut chart, vec![]);
+                    if locked {
+                        assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
+                        break;
+                    }
+                    assert_eq!(chart.drawings().text_editor.as_ref().unwrap().id, 7);
+                    step(
+                        &mut chart,
+                        vec![key(Key::A, Modifiers::COMMAND), Event::Text(" ".into())],
+                    );
+                    step(&mut chart, vec![Event::Text("Supply".into())]);
+                    let text = |chart: &crate::Chart| chart.drawings().drawings[0].text.clone();
+                    assert_eq!(text(&chart).as_deref(), initial, "{tool:?}");
+                    assert!(!chart.can_undo());
+                    step(
+                        &mut chart,
+                        vec![if confirm {
+                            key(Key::Enter, Modifiers::COMMAND)
+                        } else {
+                            key(Key::Escape, Modifiers::NONE)
+                        }],
+                    );
+                    assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
+                    if confirm {
+                        assert_eq!(text(&chart).as_deref(), Some(" Supply"), "{tool:?}");
+                        assert!(chart.undo());
+                        assert_eq!(text(&chart).as_deref(), initial, "{tool:?}");
+                        assert!(!chart.can_undo());
+                        assert!(chart.redo());
+                        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+                        chart.load_drawings(&saved).unwrap();
+                        assert_eq!(text(&chart).as_deref(), Some(" Supply"), "{tool:?}");
+                    } else {
+                        assert_eq!(text(&chart).as_deref(), initial, "{tool:?}");
+                        assert!(!chart.can_undo());
+                    }
+                }
+            }
+        }
+    }
 
     /// Narrow editors stay within the pane, and clicks on their chrome keep the draft open.
     #[test]

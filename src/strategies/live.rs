@@ -83,7 +83,8 @@ impl Backtest {
     /// from its open to its close, then from its previous close to each new close, and decides
     /// again with that forming bar included in the context. Its fills and orders are retained
     /// when the bar closes; unseen intrabar extremes are never replayed over observed ticks.
-    /// Identical snapshots do nothing. Fill callbacks still exclude the unfinished bar.
+    /// Identical snapshots do nothing. Live fill callbacks exclude the unfinished bar;
+    /// historical tick callbacks see their developing candle.
     ///
     /// A correction before the previous forming bar, removed history, changed settings or inputs
     /// rebuilds from the start using `Strategy::prepare` to reset decision state. Replayed fills
@@ -168,10 +169,17 @@ impl Backtest {
             self.live = Some(live);
             return Vec::new();
         }
+        let candles = (self.settings.chart_type == ChartType::Heikin)
+            .then(|| crate::model::BarData::from_bars(bars.to_vec()).to_heikin_ashi());
+        let decision_bars = candles.as_ref().map_or(bars, |data| data.bars.as_slice());
         let calculation_bars = if self.settings.recalculate_on_every_update {
-            bars
+            decision_bars
+        } else if self.settings.recalculate_on_history
+            && !self.settings.chart_type.transforms_data()
+        {
+            &[]
         } else {
-            &bars[..closed]
+            &decision_bars[..closed]
         };
         if rebuild {
             strategy.prepare(calculation_bars);
@@ -187,9 +195,11 @@ impl Backtest {
             rejected: live.rejected,
             settings: &self.settings,
             strategy,
-            history: &[],
+            history: Cow::Borrowed(&[]),
+            prices: bars,
             trading: false,
             tick: live.tick,
+            open_tick: 0,
             fills: Some(&mut fills),
             forming: false,
         };
@@ -208,16 +218,28 @@ impl Backtest {
         if live.report.equity.is_empty() {
             run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
         }
+        let bar_closed = live.processed < closed;
         for index in live.processed..closed {
             let bar = &bars[index];
             let observed = live.forming.is_some_and(|(time, _)| time == bar.time);
             if observed {
                 if live.bars.get(index).is_none_or(|old| !same_bar(old, bar)) {
-                    run.forming_bar(bars, index, live.forming.map(|(_, price)| price), false);
+                    run.forming_bar(
+                        decision_bars,
+                        index,
+                        live.forming.map(|(_, price)| price),
+                        false,
+                    );
                 }
                 live.forming = None;
             }
-            run.closed_bar(&bars[..closed], index, &finer, &mut live.report, !observed);
+            run.closed_bar(
+                &decision_bars[..closed],
+                index,
+                &finer,
+                &mut live.report,
+                !observed,
+            );
             if rebuild
                 && replayed(bar.time)
                 && let Some(fills) = &mut run.fills
@@ -233,8 +255,22 @@ impl Backtest {
                 .forming
                 .filter(|(time, _)| *time == bar.time)
                 .map(|(_, price)| price);
-            if run.forming_bar(bars, closed, previous_price, true) {
-                live.forming = Some((bar.time, bar.close));
+            // Closing a bar left the calculations at that bar, one short of this decision's bars.
+            if bar_closed
+                && self.settings.recalculate_on_history
+                && !self.settings.chart_type.transforms_data()
+            {
+                run.strategy.prepare_update(decision_bars);
+            }
+            if run.forming_bar(decision_bars, closed, previous_price, true) {
+                let execution = if self.settings.chart_type == ChartType::Heikin
+                    && !self.settings.original_price_fills
+                {
+                    &decision_bars[closed]
+                } else {
+                    bar
+                };
+                live.forming = Some((bar.time, execution.close));
             }
             if rebuild
                 && replayed(bar.time)
@@ -274,19 +310,30 @@ impl<'a> Run<'a> {
             .settings
             .start_time
             .is_none_or(|start| bar.time >= start);
-        if !valid_bar(bar) {
+        if !valid_bar(bar) || !valid_bar(&self.prices[index]) {
             return false;
         }
-        self.history = &bars[..index];
+        self.history = Cow::Borrowed(&bars[..index]);
         self.forming = true;
+        let execution = if self.settings.chart_type == ChartType::Heikin
+            && self.settings.original_price_fills
+        {
+            &self.prices[index]
+        } else {
+            bar
+        };
         if self.trading {
             if previous.is_none() {
-                self.tick += 1;
+                self.open_bar();
             }
-            self.fill_along(previous.unwrap_or(bar.open), bar.close, bar.time);
+            self.fill_along(
+                previous.unwrap_or(execution.open),
+                execution.close,
+                bar.time,
+            );
         }
         if decide {
-            self.history = &bars[..=index];
+            self.history = Cow::Borrowed(&bars[..=index]);
             self.decide(bar.close, false);
         }
         true
@@ -529,6 +576,44 @@ mod tests {
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
     }
 
+    /// A fill carries no study output, so a plot placeholder in a fill message is missing.
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn strategy_fill_message_reads_no_study_value() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+        alert.message = "{{value}} rsi {{plot_3_0}}".into();
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+        let fill = StrategyFill {
+            sequence: 1,
+            time: DateTime::UNIX_EPOCH,
+            order_id: "Long".into(),
+            side: OrderSide::Buy,
+            price: 187.5,
+            quantity: 2.0,
+            position: 2.0,
+        };
+        engine.strategy_fills(
+            "run-1",
+            "SYM",
+            None,
+            Timeframe::Min1,
+            &[fill],
+            DateTime::UNIX_EPOCH,
+        );
+        let events = delivered.lock().unwrap();
+        let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
+            panic!("one fill");
+        };
+        assert_eq!(message, "187.5 rsi NaN");
+    }
+
     #[test]
     #[cfg(feature = "alert-engine")]
     fn strategy_alerts_deliver_each_fill_once_even_at_the_same_timestamp() {
@@ -571,6 +656,7 @@ mod tests {
             alerts.strategy_fills(
                 "other-run",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -578,6 +664,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "OTHER",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -585,6 +672,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Hour1,
                 &fills,
                 bars[count - 1].time,
@@ -597,6 +685,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -604,6 +693,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -653,12 +743,12 @@ mod tests {
             edited.name = "Renamed".into();
             edited.status = status;
             alerts.save(edited, inbox.reply(0));
-            alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            alerts.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &all, bars[4].time);
             assert_eq!(delivered.lock().unwrap().len(), 4);
         }
         let mut next = all[0].clone();
         next.sequence = 5;
-        alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &[next], bars[4].time);
+        alerts.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &[next], bars[4].time);
         assert_eq!(delivered.lock().unwrap().len(), 5);
         // Fill alerts obey the same lifecycle rules, without needing a price subscription.
         use crate::model::{
@@ -700,12 +790,13 @@ mod tests {
                     .subjects(engine.alerts()[0].id.as_ref().unwrap())
                     .is_empty()
             );
-            engine.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &all, bars[4].time);
             assert_eq!(delivered.lock().unwrap().len(), count);
             // Opening the schedule must not repeat fills observed outside it.
             engine.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &all,
                 DateTime::UNIX_EPOCH + TimeDelta::hours(12),
@@ -727,12 +818,41 @@ mod tests {
                 });
             let mut fill = all[0].clone();
             fill.price = 0.00025;
-            engine.strategy_fills("run-1", "SYM", Timeframe::Min1, &[fill], bars[4].time);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &[fill], bars[4].time);
             let events = delivered.lock().unwrap();
             let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
                 panic!("one fill");
             };
             assert_eq!(message, expected);
         }
+    }
+
+    #[test]
+    fn forming_decision_after_a_close_sees_refreshed_calculations() {
+        /// Records decisions whose bars differ from the bars of the last calculation.
+        #[derive(Default)]
+        struct Prefix {
+            prepared: usize,
+            stale: Vec<(usize, usize)>,
+        }
+        impl Strategy for Prefix {
+            fn prepare(&mut self, bars: &[Bar]) {
+                self.prepared = bars.len();
+            }
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                if context.bars().len() != self.prepared {
+                    self.stale.push((context.bars().len(), self.prepared));
+                }
+            }
+        }
+        let bars: Vec<_> = (0..3).map(|i| bar(i, 100.0 + i as f64)).collect();
+        let mut engine = Backtest::new("Live", "SYM", Timeframe::Min1, 1000.0);
+        engine.settings.recalculate_on_every_update = true;
+        engine.settings.recalculate_on_history = true;
+        let mut strategy = Prefix::default();
+        for count in 1..=bars.len() {
+            engine.update(&mut strategy, &bars[..count], &[]);
+        }
+        assert_eq!(strategy.stale, Vec::<(usize, usize)>::new());
     }
 }

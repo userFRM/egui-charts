@@ -51,11 +51,13 @@ pub(crate) mod plots;
 pub(crate) mod projection;
 mod settings;
 pub(crate) mod table;
-pub use plots::{FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyLabel, StudyZone};
+pub use plots::{
+    FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyGradient, StudyLabel, StudyZone,
+};
 pub use projection::StudyProjection;
 pub use settings::{
-    ConfiguredStudy, LevelStyle, PlotStyle, PlotType, StudyIntervalRange, StudySettings,
-    StudySettingsSnapshot,
+    ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
+    StudyIntervalRange, StudySettings, StudySettingsSnapshot,
 };
 pub use table::{StudyCell, StudyTable};
 mod values;

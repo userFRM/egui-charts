@@ -1,3 +1,5 @@
+mod gradient;
+
 use crate::chart::rendering::{ChartMapping, RenderContext};
 use crate::model::Bar;
 use crate::model::LineStyle;
@@ -197,10 +199,33 @@ fn paint_fills(
 ) {
     use crate::studies::FillBoundary;
     for fill in study.fills() {
+        // Colour selection uses values so inverted price maps retain the same meaning.
+        let colors = if map.y_to_price(coords.rect.top()) < map.y_to_price(coords.rect.bottom()) {
+            (fill.inverted_color.unwrap_or(fill.color), Some(fill.color))
+        } else {
+            (fill.color, fill.inverted_color)
+        };
+        if let (FillBoundary::Level(a), FillBoundary::Level(b)) = (fill.first, fill.second) {
+            if !a.is_finite() || !b.is_finite() {
+                continue;
+            }
+            let (a, b) = (map.price_to_y(a), map.price_to_y(b));
+            if a.is_finite() && b.is_finite() {
+                paint_band(
+                    painter,
+                    Pos2::new(coords.rect.left(), a),
+                    Pos2::new(coords.rect.right(), a),
+                    Pos2::new(coords.rect.left(), b),
+                    Pos2::new(coords.rect.right(), b),
+                    colors.0,
+                    colors.1,
+                );
+            }
+            continue;
+        }
         let value = |boundary, bar| match boundary {
             FillBoundary::Level(value) => value.is_finite().then_some(value),
-            FillBoundary::Plot(line) => (line < study.line_count()
-                && study.plot_style(line).visible)
+            FillBoundary::Plot(line) => (line < study.line_count())
                 .then(|| study.plot_value(line, bar))
                 .flatten(),
         };
@@ -221,13 +246,6 @@ fn paint_fills(
                 Pos2::new(next_x, map.price_to_y(d)),
             ];
             if points.iter().all(|point| point.is_finite()) {
-                // Colour selection uses values so inverted price maps retain the same meaning.
-                let colors =
-                    if map.y_to_price(coords.rect.top()) < map.y_to_price(coords.rect.bottom()) {
-                        (fill.inverted_color.unwrap_or(fill.color), Some(fill.color))
-                    } else {
-                        (fill.color, fill.inverted_color)
-                    };
                 paint_band(
                     painter, points[0], points[1], points[2], points[3], colors.0, colors.1,
                 );
@@ -261,9 +279,15 @@ impl IndicatorRenderer {
                 indicator.as_ref(),
                 &ChartMapping {
                     price: *price_scale,
-                    ..*coords
+                    ..coords.clone()
                 },
             );
+            if let Some(color) = indicator.background() {
+                context
+                    .painter
+                    .with_clip_rect(context.rect)
+                    .rect_filled(context.rect, 0.0, color);
+            }
             Self::render_study(
                 context,
                 indicator.as_ref(),
@@ -275,7 +299,8 @@ impl IndicatorRenderer {
         }
     }
 
-    /// Shared study geometry for overlays and indicator panes.
+    /// Shared study geometry for overlays and indicator panes. Each paints the study's tint first,
+    /// beneath what else it paints there.
     pub(crate) fn render_study(
         context: &RenderContext,
         indicator: &dyn Indicator,
@@ -284,6 +309,10 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
+        let painter = context.painter.with_clip_rect(context.rect);
+        if indicator.is_overlay() {
+            crate::chart::indicators::plots::paint_overlay_levels(&painter, indicator, price_scale);
+        }
         #[cfg(feature = "drawings")]
         if !indicator.drawings().is_empty() {
             crate::chart::indicators::plots::paint_drawings(
@@ -292,14 +321,16 @@ impl IndicatorRenderer {
                 price_scale,
                 coords,
             );
+            crate::chart::indicators::plots::paint_price_lines(&painter, indicator, price_scale);
             return;
         }
         if !indicator.candles().is_empty() {
             crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
+            crate::chart::indicators::plots::paint_price_lines(&painter, indicator, price_scale);
             return;
         }
         let visible = crate::chart::rendering::volume_profile::profile_range(coords);
-        for plot in indicator.volume_profiles(visible) {
+        for plot in indicator.volume_profiles(visible.clone()) {
             crate::painting::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),
                 &plot.profile,
@@ -308,7 +339,17 @@ impl IndicatorRenderer {
                 crate::chart::rendering::volume_profile::profile_span(&plot, coords),
                 crate::painting::volume_profile::ProfileStyle::Study {
                     right_aligned: plot.right_aligned,
+                    width: plot.width,
                 },
+                &|price| price_scale.price_to_y(price),
+            );
+        }
+        // Levels lie over every profile they cross.
+        for level in indicator.profile_levels(visible) {
+            crate::painting::volume_profile::paint_level(
+                &painter,
+                &level,
+                crate::chart::rendering::volume_profile::level_span(&level, coords),
                 &|price| price_scale.price_to_y(price),
             );
         }
@@ -325,11 +366,19 @@ impl IndicatorRenderer {
             price_scale,
             coords,
         );
+        gradient::paint(
+            &painter,
+            indicator,
+            display_start..display_end,
+            price_scale,
+            coords,
+        );
         crate::chart::indicators::plots::paint_zones(&painter, indicator, price_scale, coords);
         crate::chart::indicators::projection::paint(&painter, indicator, coords, price_scale);
 
         // Handle multi-line indicators
         let line_count = indicator.line_count();
+        let bar_spacing = coords.bar_spacing_for_width();
 
         for line_idx in 0..line_count {
             let mut plot = indicator.plot_style(line_idx);
@@ -338,7 +387,7 @@ impl IndicatorRenderer {
                 PlotType::Columns | PlotType::BackgroundColor
             ) || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
             {
-                plot.width = coords.bar_spacing
+                plot.width = bar_spacing
                     * if plot.plot_type != PlotType::BackgroundColor {
                         0.8
                     } else {
@@ -358,7 +407,7 @@ impl IndicatorRenderer {
                 .unwrap_or(0)
                 .min(values.len());
 
-            let style = indicator.line_style(line_idx);
+            let mut style = indicator.line_style(line_idx);
             let mut points = Vec::new();
             let provisional = indicator.provisional_after(line_idx);
             let mut dashed = false;
@@ -392,7 +441,17 @@ impl IndicatorRenderer {
                     }
                 }
                 let next_color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
-                if next_color != color && !points.is_empty() {
+                let next_width = if matches!(
+                    plot.plot_type,
+                    PlotType::Columns | PlotType::BackgroundColor
+                ) || (indicator.is_volume()
+                    && plot.plot_type == PlotType::Histogram)
+                {
+                    plot.width
+                } else {
+                    indicator.plot_width(line_idx, i)
+                };
+                if (next_color != color || next_width != plot.width) && !points.is_empty() {
                     Self::draw_line(
                         context,
                         &points,
@@ -411,13 +470,15 @@ impl IndicatorRenderer {
                     }
                 }
                 color = next_color;
+                plot.width = next_width;
+                style.width = next_width;
                 if plot.plot_type == PlotType::BarColor {
                     if values.value(line_idx, i).is_some()
                         && let Some(bar) = display_bar
                             .checked_sub(bars_start)
                             .and_then(|i| bars.get(i))
                     {
-                        let width = coords.bar_spacing * 0.8;
+                        let width = bar_spacing * 0.8;
                         let open = price_scale.price_to_y(bar.open);
                         let close = price_scale.price_to_y(bar.close);
                         let top = open.min(close);
@@ -441,7 +502,7 @@ impl IndicatorRenderer {
                     }
                     continue;
                 }
-                let price = values.value(line_idx, i);
+                let price = indicator.plot_value(line_idx, display_bar);
 
                 if let Some(price) = price {
                     // Convert price to screen Y coord
@@ -620,6 +681,7 @@ impl IndicatorRenderer {
         if !indicator.labels_on_price() {
             crate::chart::indicators::plots::paint_labels(&painter, indicator, price_scale, coords);
         }
+        crate::chart::indicators::plots::paint_price_lines(&painter, indicator, price_scale);
     }
 
     fn draw_line(
@@ -958,13 +1020,166 @@ mod tests {
     }
 
     #[test]
+    fn ao_price_lines_follow_the_latest_bar_independently_of_tags() {
+        use crate::studies::{AwesomeOscillator, ConfiguredStudy};
+        let bars: Vec<_> = [1.0, 2.0, 4.0, 3.0, 1.0, 4.0]
+            .into_iter()
+            .map(|p| Bar::new(Utc.timestamp_opt(0, 0).unwrap(), p, p, p, p, 1.0))
+            .collect();
+        let mut study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
+        assert_eq!(study.plot_style(0).plot_type, PlotType::Columns);
+        // On the price pane, where the tint lies beneath the shared geometry.
+        study.set_overlay(true);
+        study.set_scale(crate::studies::StudyScale::Main);
+        study.calculate(&bars);
+        // At bar 5: (1 + 4)/2 - (3 + 1 + 4)/3 = -1/6, rising from -2/3.
+        assert!((study.values().value(0, 5).unwrap() + 1.0 / 6.0).abs() < 1e-12);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
+        for alternate_color in [
+            Color32::from_rgb(17, 71, 191),
+            Color32::from_rgb(191, 71, 17),
+            Color32::from_rgb_additive(191, 71, 17),
+        ] {
+            for (tagged, visible, enabled, missing, offset, last, expected) in [
+                (true, true, true, false, 0, 4.0, Some(-1.0 / 6.0)),
+                (false, true, true, false, 1, 4.0, Some(-1.0 / 6.0)),
+                (false, true, true, false, -100, 4.0, Some(-1.0 / 6.0)),
+                (false, true, true, false, 100, 4.0, Some(-1.0 / 6.0)),
+                (true, true, true, false, 0, 0.0, Some(-5.0 / 6.0)),
+                (true, true, false, false, 0, 4.0, None),
+                (true, false, true, false, 0, 4.0, None),
+                (true, true, true, true, 0, 4.0, None),
+            ] {
+                let mut settings = serde_json::to_value(study.settings()).unwrap();
+                settings["price_line_plots"] =
+                    serde_json::json!(if enabled { vec![0] } else { vec![] });
+                settings["untagged_plots"] =
+                    serde_json::json!(if tagged { vec![] } else { vec![0] });
+                settings["plots"][0]["visible"] = visible.into();
+                settings["plots"][0]["color"] = serde_json::json!([17, 71, 191, 255]);
+                settings["plots"][0]["width"] = 2.0.into();
+                settings["plots"][0]["plot_type"] = serde_json::json!("Histogram");
+                let tint = Color32::from_rgba_unmultiplied(20, 40, 60, 16);
+                settings["background"] = serde_json::to_value(tint).unwrap();
+                settings["plot_variants"] = serde_json::json!([[{
+                    "name": "Decreasing bars", "color": alternate_color.to_array(), "width": 5.0
+                }]]);
+                study
+                    .apply_settings(
+                        &[(
+                            "plot_offset".into(),
+                            crate::studies::InputValue::Integer(offset),
+                        )],
+                        serde_json::from_value(settings).unwrap(),
+                    )
+                    .unwrap();
+                let mut data = bars.clone();
+                data[5] = Bar::new(data[5].time, last, last, last, last, 1.0);
+                if missing {
+                    data[5].high = f64::NAN;
+                }
+                study.calculate(&data);
+                for (inverted, tinted) in
+                    [(false, true), (true, true), (false, false), (true, false)]
+                {
+                    let mut settings = serde_json::to_value(study.settings()).unwrap();
+                    settings["background_visible"] = tinted.into();
+                    study
+                        .apply_settings(&[], serde_json::from_value(settings).unwrap())
+                        .unwrap();
+                    let map = PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(-1.0, 1.0),
+                        0.0,
+                        120.0,
+                        inverted,
+                    );
+                    // Latest-value lines span the viewport even while the last bar is offscreen.
+                    let coords = ChartMapping::new(rect, 30.0, 0, 2, 0.0, map);
+                    let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                        IndicatorRenderer::render(
+                            &RenderContext::new(ui.painter(), rect),
+                            std::slice::from_ref(&study.clone_box()),
+                            &data,
+                            &map,
+                            &coords,
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    // The latest-value line is a row of one-pixel dots in a single mesh.
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            Shape::Mesh(mesh) if !mesh.vertices.is_empty() => {
+                                let (min, max) = mesh
+                                    .vertices
+                                    .iter()
+                                    .fold((f32::MAX, f32::MIN), |(min, max), v| {
+                                        (min.min(v.pos.y), max.max(v.pos.y))
+                                    });
+                                (max - min <= 1.0)
+                                    .then_some(((min + max) / 2.0, mesh.vertices[0].color))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        !lines.is_empty(),
+                        expected.is_some(),
+                        "tagged={tagged}, visible={visible}, enabled={enabled}, missing={missing}, offset={offset}"
+                    );
+                    if let Some(value) = expected {
+                        assert!((lines[0].0 - map.price_to_y(value)).abs() <= 0.5);
+                        assert_eq!(
+                            lines[0].1,
+                            if last == 0.0 {
+                                alternate_color
+                            } else {
+                                Color32::from_rgb(17, 71, 191)
+                            }
+                        );
+                    }
+                    assert_eq!(
+                        shapes.iter().any(
+                            |s| matches!(&s.shape, Shape::Rect(r) if r.fill == tint && r.rect == rect)
+                        ),
+                        tinted
+                    );
+                    assert_eq!(
+                        serde_json::to_value(study.settings()).unwrap()["background"],
+                        serde_json::to_value(tint).unwrap()
+                    );
+                    // Falling and rising bars have independently editable thickness.
+                    if visible && offset == 0 {
+                        for (color, width) in [
+                            (Color32::from_rgb(17, 71, 191), 2.0),
+                            (alternate_color, 5.0),
+                        ] {
+                            assert!(shapes.iter().any(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == color && (r.rect.width() - width).abs() < 0.001)));
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(study.plot_style(0).plot_type, PlotType::Histogram);
+    }
+
+    #[test]
     fn displaced_bands_split_crossings_without_bridging_gaps() {
         use crate::studies::{
             ConfiguredStudy, CustomIndicator, FillBoundary, IndicatorValue, StudyFill,
         };
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
         let red = Color32::from_rgba_unmultiplied(255, 0, 0, 51);
-        for inverted in [false, true] {
+        for (inverted, visible, boundary_visible) in [
+            (false, true, true),
+            (true, true, true),
+            (false, false, true),
+            (true, false, true),
+            (false, true, false),
+            (true, true, false),
+        ] {
             let mut study = CustomIndicator::new("Band", |_| {
                 vec![
                     IndicatorValue::Multiple(vec![2.0, 0.0]),
@@ -978,11 +1193,21 @@ mod tests {
             .with_fills(vec![StudyFill {
                 first: FillBoundary::Plot(0),
                 second: FillBoundary::Plot(1),
-                color: blue,
-                inverted_color: Some(red),
+                color: Color32::WHITE,
+                inverted_color: None,
             }]);
             study.calculate(&[]);
-            let study = ConfiguredStudy::new(Box::new(study));
+            let mut study = ConfiguredStudy::new(Box::new(study));
+            let mut settings = serde_json::to_value(study.settings()).unwrap();
+            // The band keeps its own colours even when its boundary plot colours change.
+            settings["plots"][0]["color"] = serde_json::json!([10, 20, 30, 255]);
+            settings["plots"][0]["visible"] = boundary_visible.into();
+            settings["fills"] = serde_json::json!([{
+                "color": blue.to_array(), "inverted_color": red.to_array(), "visible": visible
+            }]);
+            study
+                .apply_settings(&[], serde_json::from_value(settings).unwrap())
+                .unwrap();
             let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(240.0, 120.0));
             let map = PriceMap::new(
                 PriceTransform::default(),
@@ -1016,7 +1241,10 @@ mod tests {
                 })
                 .collect();
             // Values cross halfway from displayed bar 2 to 3, at price 1.
-            assert_eq!(bands.len(), 2);
+            assert_eq!(bands.len(), if visible { 2 } else { 0 });
+            if !visible {
+                continue;
+            }
             let crossing = Pos2::new(209.0, 60.0);
             for band in &bands {
                 assert_eq!(band.vertices.len(), 3);
@@ -1334,5 +1562,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An AO saved as a 4 px histogram before falling bars had a width of their own draws its
+    /// falling bars as it did then, at the plot width.
+    #[test]
+    fn older_ao_histogram_keeps_its_falling_bar_width() {
+        use crate::studies::{AwesomeOscillator, ConfiguredStudy, StudyTemplate};
+        let bars: Vec<_> = [1.0, 2.0, 4.0, 3.0, 1.0, 4.0]
+            .into_iter()
+            .map(|p| Bar::new(Utc.timestamp_opt(0, 0).unwrap(), p, p, p, p, 1.0))
+            .collect();
+        let study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
+        let mut saved = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
+        for key in [
+            "price_line_plots",
+            "plot_variants",
+            "background",
+            "background_visible",
+            "fills",
+        ] {
+            saved["settings"].as_object_mut().unwrap().remove(key);
+        }
+        saved["settings"]["plots"][0]["plot_type"] = serde_json::json!("Histogram");
+        saved["settings"]["plots"][0]["width"] = 4.0.into();
+        let template: StudyTemplate = serde_json::from_value(saved).unwrap();
+        let mut loaded = template.create().unwrap();
+        loaded.calculate(&bars);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(-1.0, 1.0),
+            0.0,
+            120.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 30.0, 0, 5, 0.0, map);
+        let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                loaded.as_ref(),
+                &bars,
+                0,
+                &map,
+                &coords,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        // AO(2, 3) is 2/3, 1/2, -2/3 and -1/6 from bar 2, so bars 3 and 4 fall.
+        let falling = AwesomeOscillator::new(2, 3).colors()[1];
+        let widths: Vec<f32> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Rect(r) if r.fill == falling => Some(r.rect.width()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(widths, [4.0, 4.0], "falling bar widths {widths:?}");
     }
 }

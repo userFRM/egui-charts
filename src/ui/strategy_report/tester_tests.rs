@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    model::{Direction, OrderSide, SignalShape},
+    model::{ChartType, Direction, OrderSide, SignalShape},
     strategies::Commission,
 };
 use egui::{Role, Vec2};
@@ -113,6 +113,168 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             h.get_by_role_and_label(Role::Tab, "Report").click();
             h.run();
             assert!(h.state().0.tab == Tab::Report);
+        }
+    }
+}
+
+#[test]
+fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        tester.tab = Tab::Properties;
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(1440.0, 900.0))
+            .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+            .build_ui_state(
+                |ui, tester: &mut StrategyTester| {
+                    tester.show(ui, "TEST", Timeframe::Min1, &bars());
+                },
+                tester,
+            );
+        h.run();
+        for label in [
+            "Long funding (%)",
+            "Short funding (%)",
+            "Price increment",
+            "Liquidation unit step",
+            "Order execution delay (price ticks)",
+        ] {
+            h.get_by_role_and_label(Role::SpinButton, label);
+        }
+        let start = h
+            .get_by_role_and_label(Role::SpinButton, "Price increment")
+            .rect()
+            .center();
+        h.drag_at(start);
+        h.run();
+        for distance in [10.0, 20.0, 30.0] {
+            h.hover_at(start + Vec2::new(distance, 0.0));
+            h.run();
+        }
+        h.drop_at(start + Vec2::new(30.0, 0.0));
+        h.run();
+        assert_ne!(h.state().settings().price_increment, 0.01);
+        assert!(h.state_mut().undo_settings());
+        assert_eq!(h.state().settings().price_increment, 0.01);
+        h.get_by_role_and_label(Role::ComboBox, "Limit verification")
+            .click();
+        h.run();
+        h.get_by_label("Cross by one increment").click();
+        h.run();
+        assert!(h.state().settings().require_limit_cross);
+        h.get_by_role_and_label(Role::CheckBox, "Decide on historical price ticks")
+            .click();
+        h.run();
+        assert!(h.state().settings().recalculate_on_history);
+        h.get_by_role_and_label(Role::Button, "Undo settings")
+            .click();
+        h.run();
+        assert!(!h.state().settings().recalculate_on_history);
+        assert!(h.state().settings().require_limit_cross);
+        h.get_by_role_and_label(Role::Button, "Redo settings")
+            .click();
+        h.run();
+        assert!(h.state().settings().recalculate_on_history);
+        h.get_by_role_and_label(Role::ComboBox, "Decision candles")
+            .click();
+        h.run();
+        h.get_by_label("Heikin Ashi").click();
+        h.run();
+        assert_eq!(h.state().settings().chart_type, ChartType::Heikin);
+        assert!(!h.state().settings().recalculate_on_history);
+        h.get_by_role_and_label(Role::CheckBox, "Execute at original candle prices")
+            .click();
+        h.run();
+        assert!(h.state().settings().original_price_fills);
+        let mut tiny = h.state().settings().clone();
+        tiny.price_increment = 1e-8;
+        tiny.liquidation_increment = 1e-6;
+        h.state_mut().set_settings(tiny).unwrap();
+        let output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1440.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                h.state_mut().show(ui, "TEST", Timeframe::Min1, &bars());
+            },
+        );
+        for value in ["0.00000001", "0.000001"] {
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == value)), "small increments must remain visible: {value}");
+        }
+        output.drop_without_applying_deltas();
+        let mut settings = h.state().settings().clone();
+        settings.long_funding = Some(0.2);
+        settings.short_funding = Some(0.75);
+        settings.price_increment = 0.25;
+        settings.liquidation_increment = 0.1;
+        settings.fill_on_close = true;
+        settings.order_delay = 3;
+        h.state_mut().set_settings(settings.clone()).unwrap();
+        let saved = serde_json::to_string(&settings).unwrap();
+        let restored = serde_json::from_str::<BacktestSettings>(&saved).unwrap();
+        assert_eq!(restored, settings);
+        assert_eq!(
+            serde_json::from_str::<BacktestSettings>("{}").unwrap(),
+            BacktestSettings::default()
+        );
+        h.state_mut()
+            .set_settings(BacktestSettings::default())
+            .unwrap();
+        h.state_mut().set_settings(restored).unwrap();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Run").click();
+        h.run();
+        let report = h.state().report().unwrap();
+        let property = |key: &str| {
+            report
+                .properties
+                .iter()
+                .find(|(name, _)| name == key)
+                .unwrap()
+                .1
+                .as_str()
+        };
+        for (key, expected) in [
+            ("Long funding fraction", "0.2"),
+            ("Short funding fraction", "0.75"),
+            ("Price increment", "0.25"),
+            ("Liquidation unit step", "0.1"),
+            ("Verify limit crossing", "true"),
+            ("Fill on close", "true"),
+            ("Order execution delay", "3"),
+            ("Decision chart type", "Heikin Ashi"),
+            ("Original-price execution", "true"),
+            ("Historical tick decisions", "false"),
+        ] {
+            assert_eq!(property(key), expected);
+        }
+        let previous = report.clone();
+        assert!(h.state_mut().undo_settings());
+        assert!(h.state().is_stale());
+        assert_eq!(h.state().report(), Some(&previous));
+        for (long, short, tick, step, kind, history) in [
+            (Some(-0.1), None, 0.01, 1.0, ChartType::Candles, false),
+            (None, Some(f64::NAN), 0.01, 1.0, ChartType::Candles, false),
+            (None, None, 0.0, 1.0, ChartType::Candles, false),
+            (None, None, 0.01, 0.0, ChartType::Candles, false),
+            (None, None, 0.01, 1.0, ChartType::Heikin, true),
+            (None, None, 0.01, 1.0, ChartType::Renko, true),
+        ] {
+            let mut invalid = settings.clone();
+            invalid.long_funding = long;
+            invalid.short_funding = short;
+            invalid.price_increment = tick;
+            invalid.liquidation_increment = step;
+            invalid.chart_type = kind;
+            invalid.recalculate_on_history = history;
+            let before = h.state().settings().clone();
+            assert!(h.state_mut().set_settings(invalid).is_err());
+            assert_eq!(h.state().settings(), &before);
         }
     }
 }

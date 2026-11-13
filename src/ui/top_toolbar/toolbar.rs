@@ -290,12 +290,52 @@ impl TopToolbar {
         ui: &mut Ui,
         app_state: &dyn crate::ui::app_state::ChartAppState,
     ) -> TopToolbarAction {
+        self.show_with_menu_impl(ui, app_state, None::<fn(&mut Ui)>)
+    }
+
+    /// Show the toolbar with host entries after the built-in top-left menu entries.
+    ///
+    /// Calling this keeps the menu button visible even when all built-in menu entries are
+    /// hidden. [`Control::Menu`] still hides the entire menu. The closure draws entries with
+    /// icons and labels and handles their responses; call [`Ui::close`] after an action.
+    /// Submenus can use [`egui::containers::menu::SubMenu`] with a list-item response.
+    ///
+    /// ```
+    /// # fn show(ui: &mut egui::Ui, state: &dyn egui_charts::ui::app_state::ChartAppState) {
+    /// use egui_charts::{icons::icons, ui::top_toolbar::TopToolbar};
+    /// use egui_charts::ui_kit::list_item::ListItem;
+    /// let mut toolbar = TopToolbar::new();
+    /// let mut refresh = false;
+    /// let action = toolbar.show_with_menu(ui, state, |ui| {
+    ///     if ListItem::new().show_with_icon(ui, "Refresh data", &icons::REPLAY).clicked() {
+    ///         refresh = true;
+    ///         ui.close();
+    ///     }
+    /// });
+    /// // Handle `action` and `refresh` in the host.
+    /// # }
+    /// ```
+    pub fn show_with_menu(
+        &mut self,
+        ui: &mut Ui,
+        app_state: &dyn crate::ui::app_state::ChartAppState,
+        menu: impl FnOnce(&mut Ui),
+    ) -> TopToolbarAction {
+        self.show_with_menu_impl(ui, app_state, Some(menu))
+    }
+
+    fn show_with_menu_impl(
+        &mut self,
+        ui: &mut Ui,
+        app_state: &dyn crate::ui::app_state::ChartAppState,
+        menu: Option<impl FnOnce(&mut Ui)>,
+    ) -> TopToolbarAction {
         let mut menu_action = TopToolbarAction::None;
         let menu_visible = [S::QuickSearch, S::Theme].map(|slot| self.is_shown(slot));
         let action = self.show_with_slots(
             ui,
             app_state,
-            |ui| Self::show_menu(ui, &mut menu_action, menu_visible),
+            |ui| Self::show_menu(ui, &mut menu_action, menu_visible, menu),
             |_| {},
         );
         if menu_action != TopToolbarAction::None {
@@ -417,28 +457,41 @@ impl TopToolbar {
         .inner
     }
 
-    fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction, visible: [bool; 2]) {
-        if !visible.into_iter().any(|shown| shown) {
+    fn show_menu(
+        ui: &mut Ui,
+        action: &mut TopToolbarAction,
+        visible: [bool; 2],
+        host_menu: Option<impl FnOnce(&mut Ui)>,
+    ) {
+        if !visible.into_iter().any(|shown| shown) && host_menu.is_none() {
             return;
         }
         let response = IconButton::new(&super::buttons::MENU_ICON)
             .icon_scale(24.0 / 28.0)
             .tooltip("Menu")
             .show(ui);
-        egui::Popup::menu(&response).show(|ui| {
-            ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
-            for (control, visible) in [S::QuickSearch, S::Theme].into_iter().zip(visible) {
-                if !visible {
-                    continue;
+        egui::Popup::menu(&response)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
+                for (control, visible) in [S::QuickSearch, S::Theme].into_iter().zip(visible) {
+                    if !visible {
+                        continue;
+                    }
+                    if let Some((icon, label, clicked_action)) = control.entry()
+                        && ListItem::new().show_with_icon(ui, label, icon).clicked()
+                    {
+                        *action = clicked_action;
+                        ui.close();
+                    }
                 }
-                if let Some((icon, label, clicked_action)) = control.entry()
-                    && ListItem::new().show_with_icon(ui, label, icon).clicked()
-                {
-                    *action = clicked_action;
-                    ui.close();
+                if let Some(menu) = host_menu {
+                    if visible.into_iter().any(|shown| shown) {
+                        ui.separator();
+                    }
+                    menu(ui);
                 }
-            }
-        });
+            });
     }
 
     /// Desktop layout: horizontal toolbar contents.
@@ -617,7 +670,7 @@ impl TopToolbar {
                                 ui.label(
                                     egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
                                         .size(11.0)
-                                        .color(theme.ui.text_muted),
+                                        .color(crate::ui_kit::section::menu_heading_color(&theme)),
                                 );
                                 for (label, icon, value, available) in [
                                     (
@@ -703,9 +756,10 @@ impl TopToolbar {
                     },
                 ))
             }
-            S::Indicators | S::Alert | S::Replay => {
-                IconTextButton::new(icon, label, &self.config).show(ui)
-            }
+            S::Replay => IconTextButton::new(icon, label, &self.config)
+                .selected(self.state.replay_active)
+                .show(ui),
+            S::Indicators | S::Alert => IconTextButton::new(icon, label, &self.config).show(ui),
             _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
@@ -860,6 +914,114 @@ impl TopToolbar {
 mod tests {
     use super::*;
     use egui::{Event, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
+
+    /// The Replay button reports and draws the host's replay state, as the other toggles do.
+    #[test]
+    fn replay_button_is_selected_exactly_while_replay_is_active() {
+        for active in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let mut toolbar = TopToolbar::new();
+            toolbar.state.replay_active = active;
+            let filled = ctx.active_theme().ui.text;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                ui.horizontal(|ui| {
+                    let mut action = TopToolbarAction::None;
+                    toolbar.show_control(ui, S::Replay, "SAMPLE", &mut action);
+                });
+            });
+            output.textures_delta.clear();
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            let node = update
+                .nodes
+                .iter()
+                .map(|(_, node)| node)
+                .find(|node| node.label() == Some("Replay"))
+                .unwrap();
+            let toggled = active.then_some(egui::accesskit::Toggled::True);
+            assert_eq!(
+                node.toggled(),
+                toggled.or(Some(egui::accesskit::Toggled::False))
+            );
+            assert_eq!(
+                output.shapes.iter().any(
+                    |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == filled)
+                ),
+                active
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn host_menu_entries_keep_the_menu_visible_and_handle_actions_and_submenus() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for width in [393.0, 1440.0] {
+            let mut toolbar = TopToolbar::new();
+            toolbar.set_control_visible(Control::QuickSearch, false);
+            toolbar.set_control_visible(Control::Theme, false);
+            let mut harness = Harness::builder()
+                .with_size(vec2(width, 900.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, (toolbar, chosen, checked, host): &mut (TopToolbar, bool, bool, bool)| {
+                        if *host {
+                            toolbar.show_with_menu(ui, &State, |ui| {
+                                if ListItem::new()
+                                    .show_with_icon(ui, "Host action", &embedded_icons::REPLAY)
+                                    .clicked()
+                                {
+                                    *chosen = true;
+                                    ui.close();
+                                }
+                                let response = ListItem::new().show_with_icon(
+                                    ui,
+                                    "Host settings",
+                                    &embedded_icons::SETTINGS,
+                                );
+                                egui::containers::menu::SubMenu::new()
+                                    .config(
+                                        egui::containers::menu::MenuConfig::new().close_behavior(
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        ),
+                                    )
+                                    .show(ui, &response, |ui| {
+                                        ui.checkbox(checked, "Host option");
+                                    });
+                            });
+                        } else {
+                            toolbar.show_with_state(ui, &State);
+                        }
+                    },
+                    (toolbar, false, false, false),
+                );
+            assert!(harness.query_by_label("Menu").is_none());
+            harness.state_mut().3 = true;
+            harness.run();
+            harness.get_by_label("Menu").click();
+            harness.run();
+            harness.get_by_label("Host action").click();
+            harness.run();
+            assert!(harness.state().1);
+            assert!(harness.query_by_label("Host action").is_none());
+            harness.get_by_label("Menu").click();
+            harness.run();
+            harness.get_by_label("Host settings").click();
+            harness.run();
+            harness.get_by_label("Host option").click();
+            harness.run();
+            assert!(harness.state().2);
+            assert!(harness.query_by_label("Host option").is_some());
+            harness
+                .state_mut()
+                .0
+                .set_control_visible(Control::Menu, false);
+            harness.run();
+            assert!(harness.query_by_label("Menu").is_none());
+            assert!(harness.query_by_label("Host option").is_none());
+        }
+    }
 
     struct State;
     impl crate::ui::app_state::ChartAppState for State {

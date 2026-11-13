@@ -82,6 +82,8 @@ pub use option_chain::{
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
+#[cfg(feature = "studies")]
+pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -103,7 +105,8 @@ pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
 pub use volume_profile::{
-    ProfileDisplay, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig,
+    ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
+    VolumeProfileConfig,
 };
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
@@ -495,11 +498,13 @@ pub struct HistoryRequest {
 #[non_exhaustive]
 pub struct HistoryPage {
     /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
-    /// close time lands in the next bar. A bar of a day or longer covers a calendar period of
-    /// [`HistoryRequest::clock`], such as a day, a week from Monday or a calendar
-    /// month, in UTC by default: stamp it inside that period, for example at its local midnight. A
-    /// session open on the evening before can fall in the period of the bar before, and one of
-    /// the two bars is then dropped. The chart sorts, deduplicates and validates them.
+    /// close time lands in the next bar. A bar of whole days, weeks or months is dated by the UTC
+    /// calendar date of its timestamp and covers the calendar period of [`HistoryRequest::clock`]
+    /// that holds that date, such as a day, a week from Monday or a calendar month, in UTC by
+    /// default: stamp it on its trading date inside that period, at the later of 00:00 UTC on the
+    /// date and the period's open. A session open on the evening before can fall in the period of
+    /// the bar before, and one of the two bars is then dropped. The chart sorts, deduplicates and
+    /// validates them.
     pub bars: Vec<Bar>,
     /// Nothing exists before the oldest returned bar (or before `request.before` when `bars` is
     /// empty).

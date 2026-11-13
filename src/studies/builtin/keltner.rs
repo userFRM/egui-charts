@@ -10,7 +10,8 @@
 //!   bar's own true range, or Wilder's average of the bar's high minus low over the middle
 //!   line's length.
 //!
-//! A bar with a non-finite high, low, close or source price is skipped and changes nothing.
+//! A bar with a non-finite high, low or close is skipped. A missing source leaves a gap in
+//! the basis while the band distance continues to read the original bars.
 //!
 //! # Interpretation
 //! - Price above upper band: Strong uptrend or overbought
@@ -30,9 +31,12 @@ use super::clamp_param;
 use super::price_oscillator::{Mean, OscillatorAverage};
 use super::smoothing::Smoothing;
 use crate::model::{Bar, PriceSource};
+use crate::studies::inputs::input_spec;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{
+    ATR, Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyError, StudyInput,
+};
 use egui::Color32;
 
 /// How far the bands of [`KeltnerChannels`] lie from the middle line, before the multiplier.
@@ -67,6 +71,7 @@ pub struct KeltnerChannels {
 
 #[derive(Clone, Default)]
 struct State {
+    bar: usize,
     previous: Option<f64>,
     middle: Mean,
     band: Smoothing,
@@ -128,54 +133,17 @@ impl KeltnerChannels {
         self.band = band;
         self
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for KeltnerChannels {
-    fn default() -> Self {
-        Self::new(20, 10, 2.0)
-    }
-}
-
-impl Indicator for KeltnerChannels {
-    crate::studies::inputs::study_inputs!(self;
-        ema_period: length("Length", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX),
-        source: choice("Source", PriceSource::all()),
-        average: choice("Average", [OscillatorAverage::Exponential, OscillatorAverage::Simple]),
-        band: choice("Band style", [KeltnerBand::AverageTrueRange, KeltnerBand::TrueRange, KeltnerBand::Range]),
-        atr_period: length("ATR length", 1, usize::MAX)
-    ; {});
-
-    fn fills(&self) -> Vec<crate::studies::StudyFill> {
-        vec![crate::studies::StudyFill {
-            first: crate::studies::FillBoundary::Plot(1),
-            second: crate::studies::FillBoundary::Plot(2),
-            color: self.fill_color,
-            inverted_color: None,
-        }]
-    }
-
-    fn name(&self) -> &str {
-        "Keltner"
-    }
-
-    fn desc(&self) -> &str {
-        "Keltner Channels - Volatility-based envelope"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.update(data, 0);
-    }
-
-    fn update(&mut self, data: &[Bar], from: usize) {
+    fn update_prices(&mut self, data: &[Bar], from: usize, source: Option<&[f64]>) {
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                let price = self.source.compute(bar.open, bar.high, bar.low, bar.close);
-                if ![bar.high, bar.low, bar.close, price]
-                    .iter()
-                    .all(|v| v.is_finite())
-                {
+                let index = state.bar;
+                state.bar += 1;
+                let price = source.map_or_else(
+                    || self.source.compute(bar.open, bar.high, bar.low, bar.close),
+                    |source| source.get(index).copied().unwrap_or(f64::NAN),
+                );
+                if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
                     return IndicatorValue::None;
                 }
                 let tr = state
@@ -203,6 +171,142 @@ impl Indicator for KeltnerChannels {
                 let width = self.multiplier * band;
                 IndicatorValue::Multiple(vec![middle, middle + width, middle - width])
             });
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for KeltnerChannels {
+    fn default() -> Self {
+        Self::new(20, 10, 2.0)
+    }
+}
+
+impl Indicator for KeltnerChannels {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
+
+    /// Only the basis uses the aligned source; ranges retain the bars' own high, low and close.
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.update_prices(data, from, Some(source));
+    }
+
+    fn inputs(&self) -> Vec<StudyInput> {
+        let defaults = Self::default();
+        vec![
+            input_spec!(
+                "ema_period",
+                self.ema_period,
+                length("Length", 1, usize::MAX)
+            )
+            .with_default(InputValue::Length(defaults.ema_period)),
+            input_spec!(
+                "multiplier",
+                self.multiplier,
+                number("Multiplier", 0.0, f64::MAX)
+            )
+            .with_default(InputValue::Number(defaults.multiplier)),
+            input_spec!("source", self.source, choice("Source", PriceSource::all())).with_default(
+                InputValue::Choice(
+                    PriceSource::all()
+                        .iter()
+                        .position(|source| *source == defaults.source)
+                        .unwrap_or(0),
+                ),
+            ),
+            StudyInput::new(
+                "average",
+                "Exponential basis",
+                InputValue::Toggle(self.average == OscillatorAverage::Exponential),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(
+                defaults.average == OscillatorAverage::Exponential,
+            )),
+            input_spec!(
+                "band",
+                self.band,
+                choice(
+                    "Band style",
+                    [
+                        KeltnerBand::AverageTrueRange,
+                        KeltnerBand::TrueRange,
+                        KeltnerBand::Range
+                    ]
+                )
+            )
+            .with_default(InputValue::Choice(0)),
+            input_spec!(
+                "atr_period",
+                self.atr_period,
+                length("ATR length", 1, usize::MAX)
+            )
+            .with_default(InputValue::Length(defaults.atr_period)),
+        ]
+    }
+
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
+        let value = match (id, value) {
+            ("average", InputValue::Choice(1)) => InputValue::Toggle(false),
+            ("average", InputValue::Choice(0)) => InputValue::Toggle(true),
+            (_, value) => value,
+        };
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| StudyError::UnknownInput(id.into()))?;
+        if !schema.accepts(&value) {
+            return Err(StudyError::invalid_input(id));
+        }
+        match (id, value) {
+            ("ema_period", InputValue::Length(value)) => self.ema_period = value,
+            ("multiplier", InputValue::Number(value)) => self.multiplier = value,
+            ("source", InputValue::Choice(value)) => self.source = PriceSource::all()[value],
+            ("band", InputValue::Choice(value)) => {
+                self.band = [
+                    KeltnerBand::AverageTrueRange,
+                    KeltnerBand::TrueRange,
+                    KeltnerBand::Range,
+                ][value]
+            }
+            ("atr_period", InputValue::Length(value)) => self.atr_period = value,
+            ("average", InputValue::Toggle(value)) => {
+                self.average = if value {
+                    OscillatorAverage::Exponential
+                } else {
+                    OscillatorAverage::Simple
+                }
+            }
+            _ => unreachable!("validated study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(1),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: self.fill_color,
+            inverted_color: None,
+        }]
+    }
+
+    fn name(&self) -> &str {
+        "Keltner"
+    }
+
+    fn desc(&self) -> &str {
+        "Keltner Channels - Volatility-based envelope"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.update_prices(data, from, None);
     }
 
     fn is_incremental(&self) -> bool {

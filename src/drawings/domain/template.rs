@@ -23,9 +23,11 @@ impl DrawingTemplate {
         settings.chart_points.clear();
         settings.level_ys.clear();
         settings.screen_anchor = None;
+        settings.text_zoom_spacing = None;
         settings.pane = None;
         settings.group = None;
         settings.folder.clear();
+        settings.folder_sync.clear();
         settings.selectable = true;
         settings.saveable = true;
         settings.listed = true;
@@ -60,9 +62,11 @@ impl DrawingTemplate {
             level_ys: drawing.level_ys.clone(),
             completed: drawing.completed,
             screen_anchor: drawing.screen_anchor,
+            text_zoom_spacing: drawing.text_zoom_spacing,
             pane: drawing.pane,
             group: drawing.group.clone(),
             folder: drawing.folder.clone(),
+            folder_sync: drawing.folder_sync.clone(),
             selectable: drawing.selectable,
             saveable: drawing.saveable,
             listed: drawing.listed,

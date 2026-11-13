@@ -62,6 +62,18 @@ impl Default for PitchforkConfig {
 }
 
 impl PitchforkConfig {
+    /// The levels a new `tool` starts with: the defaults, with the pitchfan's 0.5 level in cyan.
+    pub(crate) fn for_tool(tool: super::DrawingToolType) -> Self {
+        let mut config = Self::default();
+        if tool == super::DrawingToolType::Pitchfan {
+            let half = config.levels.iter_mut().find(|level| level.value == 0.5);
+            if let Some(level) = half {
+                level.color = super::drawing::CYAN;
+            }
+        }
+        config
+    }
+
     /// The levels of pitchforks saved without a config: 0, 0.5, 1 and 1.5, all shown, with
     /// faint bands. Renderers draw them in the drawing colour.
     pub(crate) fn legacy() -> Self {

@@ -1,0 +1,51 @@
+---
+title: Area
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/series.rs?raw';
+
+An area plot fills between a value line and a pane edge. The
+[series overview](../series.mdx) covers data updates and removal.
+
+## Data
+
+[`ChartType::Area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.Area)
+accepts a scalar via
+[`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
+or OHLC bars. The main series reads
+[`ChartConfig::price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.price_source),
+close by default; added areas read close. Whitespace breaks the line and fill.
+
+[`ChartType::HlcArea`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.HlcArea)
+needs high, low and close in a valid OHLC bar. It fills the high-to-close and
+close-to-low bands rather than filling to the pane edge.
+
+## Style and running result
+
+This scene fills below the sample close line, fading to transparency at the
+bottom. It uses the [shared synthetic OHLC history](../first-chart.mdx).
+
+<Example scene="series-area" title="An area with a transparent lower fill"
+  task="Pan and zoom to see the fill follow the visible values and pane edge."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn area\b[^]*?\n\}/)[0]} />
+
+The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
+[`AreaStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AreaStyle.html)
+sets the edge line, top and bottom fill colours, gradient coordinates and fill
+direction. `relative_gradient` defaults to true, spreading the gradient from the
+visible line extreme to the pane edge; false uses the whole pane.
+`invert_filled_area` fills upward. Apply it through
+[`ChartTypeStyles::area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.area).
+
+For HLC area,
+[`HlcAreaStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.HlcAreaStyle.html)
+sets the colour, width and visibility of the high and low lines, the close line,
+and the colour, opacity and visibility of each band. Added areas use
+[`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
+and `width` with the default downward gradient, unless `area_style` supplies the
+line and gradient settings above. Added HLC areas take their high line and upper
+band from `up_color` and their low line and lower band from `down_color`. Both types can be
+[added series](../chart-types.mdx#added-series-restrictions).
+
+For fills on both sides of a reference, use [baseline](/egui-charts/docs/series/baseline/).

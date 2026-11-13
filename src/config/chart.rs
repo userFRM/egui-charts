@@ -66,6 +66,11 @@ fn group_thousands_with_comma() -> Option<char> {
     Some(',')
 }
 
+/// Older saved configurations keep the one-physical-pixel grouping threshold.
+fn pixel_conflation_threshold() -> Option<f32> {
+    Some(1.0)
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -76,7 +81,7 @@ fn group_thousands_with_comma() -> Option<char> {
 pub struct PriceAxisOptions {
     /// Allow value tags to overlap instead of moving them to free vertical slots.
     pub allow_label_overlap: bool,
-    /// Display study values on price axes when study values are enabled.
+    /// Display study value tags on price axes, independently of the status line values.
     pub show_study_values: bool,
     /// Study value tag colour; `None` follows each plot's colour.
     pub study_value_color: Option<Color32>,
@@ -260,6 +265,17 @@ pub struct ChartConfig {
     pub bearish_wick_color: Option<Color32>,
     /// Price source for line-based charts (Line, Area, StepLine, etc.)
     pub price_source: PriceSource,
+    /// Minimum spacing in physical pixels for unmerged main-series samples; `None` disables
+    /// conflation. The default, `Some(1.0)`, preserves the one-pixel grouping. Below the
+    /// threshold, consecutive bars form groups of the smallest power of two whose spacing
+    /// reaches it, capped at 2^30 bars. For example, 0.25 points at two pixels per point gives
+    /// groups of two at a threshold of 1, and four at a threshold of 2. Equality stays unmerged.
+    /// Non-positive and non-finite thresholds use 1. Price-based chart types stay unmerged;
+    /// gaps and per-bar colours keep their source samples even within a group.
+    /// [`Chart::prepare_conflation`](crate::Chart::prepare_conflation) prepares these groups
+    /// before rendering. Saved configurations without this field keep the default.
+    #[serde(default = "pixel_conflation_threshold")]
+    pub conflation_threshold: Option<f32>,
     /// Background color for the chart (used when background_style is Solid)
     pub background_color: Color32,
     /// Background style (Solid, VerticalGradient, HorizontalGradient)
@@ -277,6 +293,12 @@ pub struct ChartConfig {
     /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
     /// Default: None
     pub axis_font_size: Option<f32>,
+    /// Font family of this chart's price and time axis labels and tags, including study panes.
+    /// Absent named families use proportional fonts until the host installs them in
+    /// [`egui::FontDefinitions`], without changing the saved choice.
+    /// Defaults to proportional, including for saved configurations without this field.
+    #[serde(default)]
+    pub axis_font_family: egui::FontFamily,
     /// Character that groups the thousands of the built-in price labels: the ticks and tags of
     /// price scales, the crosshair label and the legend's prices write `42,541.77` with the
     /// default `','`. `None` writes plain digits (`42541.77`), and so do `'.'` and the ASCII
@@ -485,6 +507,7 @@ impl Default for ChartConfig {
             bearish_wick_color: None,
             // Price source for line charts (default: Close)
             price_source: PriceSource::default(),
+            conflation_threshold: pixel_conflation_threshold(),
             // Dark background
             background_color: chart.bg,
             // Default to solid background
@@ -497,6 +520,7 @@ impl Default for ChartConfig {
             // Text color
             text_color: chart.axis_text,
             axis_font_size: None,
+            axis_font_family: egui::FontFamily::Proportional,
             thousands_sep: Some(','),
             // Candle bodies leave room for the wider volume bars
             candle_width: 0.6,
@@ -619,9 +643,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_axis_family_defaults_and_round_trips_host_names() {
+        let mut saved = serde_json::to_value(ChartConfig::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("axis_font_family");
+        let restored: ChartConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.axis_font_family, egui::FontFamily::Proportional);
+        for family in [
+            egui::FontFamily::Monospace,
+            egui::FontFamily::Name("Host Sans".into()),
+        ] {
+            let config = ChartConfig {
+                axis_font_family: family.clone(),
+                ..Default::default()
+            };
+            let restored: ChartConfig =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.axis_font_family, family);
+        }
+    }
+
+    #[test]
     fn with_theme_recolours_session_breaks_and_watermark() {
         let config = ChartConfig::default().with_theme(&Theme::light());
         assert_eq!(config.session_break_color, Color32::from_rgb(229, 229, 229));
         assert_eq!(config.watermark_color, Color32::from_rgb(211, 212, 215));
+    }
+
+    #[test]
+    fn saved_conflation_threshold_keeps_disabled_custom_and_legacy_modes() {
+        let mut saved = serde_json::to_value(ChartConfig::default()).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("conflation_threshold");
+        let restored: ChartConfig = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(restored.conflation_threshold, Some(1.0));
+        for threshold in [None, Some(0.5), Some(2.0)] {
+            saved["conflation_threshold"] = serde_json::to_value(threshold).unwrap();
+            let restored: ChartConfig = serde_json::from_value(saved.clone()).unwrap();
+            assert_eq!(restored.conflation_threshold, threshold);
+        }
     }
 }

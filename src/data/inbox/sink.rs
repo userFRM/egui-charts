@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Maximum undrained bar slots per live subscription, independent of raw trade retention.
 const MAX_PENDING_BARS: usize = 100_000;
 
+/// Undrained bars past which a replay opens no more flat candles: a recording with a wrong
+/// timestamp must not fill the memory with quiet slots. Its executions still arrive.
+const MAX_QUIET_BARS: usize = 2_000_000;
+
 /// Rebuilds bars from chronological executions using the live sink's aggregation rules.
 /// Count intervals start at the first accepted trade in `trades`; retain that grouping anchor
 /// when joining history to live data. Duplicate ids are ignored. Invalid or late trades and
@@ -132,6 +136,7 @@ impl Inbox {
                 ids: HashSet::new(),
                 capacity: trade_capacity,
             },
+            rebuilt_bars: 0,
             updates: Updates::new(Trades::new(trade_capacity)),
         };
         self.state().subscriptions.insert(id, live);
@@ -213,6 +218,52 @@ impl Sink {
             for input in &live.study_inputs {
                 input.clear();
             }
+        });
+    }
+
+    /// Starts a replay position that is rebuilt before the chart can drain: a rebuild is finite,
+    /// so its bars do not count against the pending limit. Ended by [`Self::finish_rebuild`].
+    pub(crate) fn start_rebuild(&self, time: DateTime<Utc>) {
+        self.reset_replay(time);
+        self.update(|live| live.rebuilt_bars = usize::MAX);
+    }
+
+    /// Keeps the rebuilt bars out of the pending limit until the chart drains them, and puts
+    /// pushes after them back under it: frames may run before that drain.
+    pub(crate) fn finish_rebuild(&self) {
+        self.update(|live| live.rebuilt_bars = live.updates.bars.len());
+    }
+
+    /// Opens the flat candles a live feed's regular heartbeats would have opened in the slots
+    /// after the newest one and before that of `now`. A replay calls this as its clock jumps,
+    /// so its candles do not depend on where its frames land; a live heartbeat opens only its
+    /// own slot, since a stream that was away cannot tell a quiet market from a lost connection.
+    pub(crate) fn open_quiet_slots(&self, now: DateTime<Utc>) {
+        self.inbox
+            .push(|state| match state.subscriptions.get_mut(&self.id) {
+                Some(live) => live.open_quiet_slots(now),
+                None => false,
+            });
+    }
+
+    /// [`Self::advance_time`] for a replay frame that stayed at `now`: the slot of `now` was
+    /// settled when the replay got there, and finding it again allocates on a clock with a
+    /// session.
+    pub(crate) fn hold_time(&self, now: DateTime<Utc>) {
+        self.inbox.push(|state| {
+            let Some(live) = state.subscriptions.get_mut(&self.id) else {
+                return false;
+            };
+            let sampled = live.sample_book(now);
+            if live
+                .clock
+                .timeframe()
+                .is_none_or(|tf| tf.duration_ms() <= 0)
+            {
+                return sampled;
+            }
+            live.updates.time = live.updates.time.max(Some(now));
+            sampled || !live.study_inputs.is_empty()
         });
     }
 
@@ -312,15 +363,7 @@ impl Sink {
             if !live.clock.is_open(now) || live.forming.is_none_or(|last| open <= last) {
                 return sampled || !live.study_inputs.is_empty();
             }
-            live.updates.bars.insert(
-                open,
-                (
-                    Bar::new(open, close, close, close, close, 0.0),
-                    Origin::Ticks(0),
-                ),
-            );
-            live.forming = Some(open);
-            live.empty = true;
+            live.open_empty(open, close);
             live.bound_bars();
             true
         });
@@ -508,8 +551,19 @@ impl TakenIds {
     }
 }
 
+/// The part of `remaining` that fills a bar up to `room`. A fill that reaches the room within
+/// the rounding of its sum (see [`crate::data::footprint::meets_threshold`]) takes all of
+/// itself, so the bar closes on it and the next execution opens the next bar whole.
+fn fill_to(remaining: f64, room: f64, limit: f64) -> f64 {
+    if remaining <= room + limit * 1e-9 {
+        remaining
+    } else {
+        room
+    }
+}
+
 /// Exact execution allocations shared by chart bars and standalone stream inputs.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct TradeBars {
     pub(crate) forming: Option<DateTime<Utc>>,
     current: Option<(Bar, u64)>,
@@ -555,10 +609,18 @@ impl TradeBars {
                 current.clone().ok_or(())?
             };
             let size = match timeframe {
-                Timeframe::Volume(limit) => remaining.min(limit.get() as f64 - old.volume),
+                Timeframe::Volume(limit) => fill_to(
+                    remaining,
+                    limit.get() as f64 - old.volume,
+                    limit.get() as f64,
+                ),
                 Timeframe::Delta(limit) => match tick.side {
-                    Some(OrderSide::Buy) => remaining.min(limit.get() as f64 - delta),
-                    Some(OrderSide::Sell) => remaining.min(limit.get() as f64 + delta),
+                    Some(OrderSide::Buy) => {
+                        fill_to(remaining, limit.get() as f64 - delta, limit.get() as f64)
+                    }
+                    Some(OrderSide::Sell) => {
+                        fill_to(remaining, limit.get() as f64 + delta, limit.get() as f64)
+                    }
                     None => remaining,
                 },
                 _ => remaining,
@@ -574,8 +636,12 @@ impl TradeBars {
             };
             closed = match timeframe {
                 Timeframe::Ticks(limit) => count + 1 >= limit.get(),
-                Timeframe::Volume(limit) => bar.volume >= limit.get() as f64,
-                Timeframe::Delta(limit) => delta.abs() >= limit.get() as f64,
+                Timeframe::Volume(limit) => {
+                    crate::data::footprint::meets_threshold(bar.volume, limit.get() as f64)
+                }
+                Timeframe::Delta(limit) => {
+                    crate::data::footprint::meets_threshold(delta.abs(), limit.get() as f64)
+                }
                 Timeframe::Range(ticks) => {
                     let tick_size = tick_size.filter(|s| s.is_finite() && *s > 0.0).ok_or(())?;
                     let range = ticks.get() as f64 * tick_size;
@@ -615,7 +681,9 @@ impl Live {
             for input in &inputs {
                 if !self.study_inputs.iter().any(|old| input.same_source(old)) {
                     // The chart rebuilt drained history; include the executions still queued.
-                    for trade in self.updates.trades.iter() {
+                    let repeats = &self.updates.repeats;
+                    let queued = self.updates.trades.iter();
+                    for trade in queued.filter(|t| t.id.is_none_or(|id| !repeats.contains(&id))) {
                         input.push_trade(&self.clock, trade);
                     }
                     if let Some(open) = self.forming {
@@ -628,10 +696,56 @@ impl Live {
     }
 
     fn bound_bars(&mut self) {
-        while self.updates.bars.len() > MAX_PENDING_BARS {
+        while self.updates.bars.len() > MAX_PENDING_BARS.saturating_add(self.rebuilt_bars) {
             self.updates.bars.pop_first();
             self.updates.dropped_bars += 1;
         }
+    }
+
+    /// The empty forming candle of the slot opening at `open`, carrying the last `close`.
+    fn open_empty(&mut self, open: DateTime<Utc>, close: f64) {
+        self.updates.bars.insert(
+            open,
+            (
+                Bar::new(open, close, close, close, close, 0.0),
+                Origin::Ticks(0),
+            ),
+        );
+        self.forming = Some(open);
+        self.empty = true;
+    }
+
+    /// See [`Sink::open_quiet_slots`]. Reports whether it opened any. Stops short of the bars
+    /// that may wait undrained, so that no slot is dropped and no loss is reported for one.
+    fn open_quiet_slots(&mut self, now: DateTime<Utc>) -> bool {
+        let (Some(close), Some(mut newest)) = (self.last_close, self.forming) else {
+            return false;
+        };
+        if self
+            .clock
+            .timeframe()
+            .is_none_or(|tf| tf.duration_ms() <= 0 || tf.is_trade_based())
+        {
+            return false;
+        }
+        let target = self.clock.bar_open(now);
+        let limit = MAX_PENDING_BARS
+            .saturating_add(self.rebuilt_bars)
+            .min(MAX_QUIET_BARS);
+        let mut opened = false;
+        while newest < target && self.updates.bars.len() + 1 < limit {
+            let Some(slot) = (self.clock.next_open(newest))
+                .and_then(|next| self.clock.open_at_or_after(next))
+                .map(|open| self.clock.bar_open(open))
+                .filter(|slot| *slot > newest && *slot < target)
+            else {
+                break;
+            };
+            self.open_empty(slot, close);
+            newest = slot;
+            opened = true;
+        }
+        opened
     }
 
     /// Whether the slot opening at `open` is too far ahead of the feed's current time, `system`
@@ -668,9 +782,13 @@ impl Live {
         if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             if !trades::valid(&tick) || live.ahead(tick.ts, system) {
                 live.updates.rejected += 1;
-            } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
+            } else if let Some(id) = tick.id.filter(|id| live.taken.ids.contains(id)) {
                 live.updates.repeated_ticks += 1;
                 if tick.aggressor_order_id.is_some() || tick.resting_order_id.is_some() {
+                    // A queued execution takes the ids itself; a drained one's repeat waits for the store.
+                    if !live.updates.trades.holds(id) {
+                        live.updates.repeats.insert(id);
+                    }
                     live.updates.trades.push(tick);
                 }
             } else if live.last_trade.is_some_and(|last| tick.ts < last) {
@@ -754,7 +872,7 @@ impl Live {
         self.event_closed = state.closed;
         for (i, (bar, size)) in bars.into_iter().enumerate() {
             for input in &self.study_inputs {
-                input.push_trade_part(tick, bar.time, size, i == 0);
+                input.push_trade_part(&self.clock, tick, bar.time, size, i == 0);
             }
             self.updates.bars.insert(bar.time, (bar, Origin::Live));
         }

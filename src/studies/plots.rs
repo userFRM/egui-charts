@@ -5,7 +5,7 @@ use egui::Color32;
 /// One boundary of a study band, in the study's value scale.
 #[derive(Clone, Copy, Debug)]
 pub enum FillBoundary {
-    /// A zero-based output line, including its offset and visibility.
+    /// A zero-based output line, including its offset. Its visibility does not hide the fill.
     Plot(usize),
     /// A constant level across the pane.
     Level(f64),
@@ -22,6 +22,72 @@ pub struct StudyFill {
     pub color: Color32,
     /// Optional colour when the first value is below the second.
     pub inverted_color: Option<Color32>,
+}
+
+/// A vertical colour ramp between a plot and a fixed baseline, beneath the plot.
+/// Values outside the ramp retain the nearest endpoint colour.
+#[derive(Clone, Copy, Debug)]
+pub struct StudyGradient {
+    /// Caption in the style editor.
+    pub name: &'static str,
+    /// Output bounding the fill. Its visibility does not hide the fill.
+    pub plot: usize,
+    /// Other boundary of the filled area.
+    pub baseline: f64,
+    /// Values at the two ends of the colour ramp, in either order.
+    pub range: [f64; 2],
+    /// Colours at the corresponding ends of the ramp.
+    pub colors: [Color32; 2],
+}
+
+/// Prices of visible bands and ramps, even when their boundary plots are hidden.
+#[cfg(feature = "widget")]
+pub(crate) fn fill_prices(
+    study: &dyn super::Indicator,
+    bars: std::ops::Range<usize>,
+) -> impl Iterator<Item = f64> + '_ {
+    let bands = study
+        .fills()
+        .into_iter()
+        .filter(|fill| {
+            fill.color != Color32::TRANSPARENT
+                || fill
+                    .inverted_color
+                    .is_some_and(|color| color != Color32::TRANSPARENT)
+        })
+        .flat_map({
+            let bars = bars.clone();
+            move |fill| {
+                bars.clone()
+                    .filter_map(move |bar| {
+                        let value = |boundary| match boundary {
+                            FillBoundary::Plot(line) => study.plot_value(line, bar),
+                            FillBoundary::Level(value) => Some(value),
+                        };
+                        let a = value(fill.first)?;
+                        let b = value(fill.second)?;
+                        (a.is_finite() && b.is_finite()).then_some([a, b])
+                    })
+                    .flatten()
+            }
+        });
+    bands.chain(
+        study
+            .gradients()
+            .into_iter()
+            .filter(|fill| {
+                fill.colors
+                    .iter()
+                    .any(|color| *color != Color32::TRANSPARENT)
+            })
+            .flat_map(move |fill| {
+                bars.clone()
+                    .filter_map(move |bar| study.plot_value(fill.plot, bar))
+                    .filter(|value| value.is_finite())
+                    .flat_map(move |value| [fill.baseline, value])
+            })
+            .filter(|value| value.is_finite()),
+    )
 }
 
 /// One OHLCV candle spanning an exclusive range of source bar indices.
@@ -101,11 +167,22 @@ pub(crate) fn drawing_prices(
             };
             let first = extent.iter().map(|p| p.bar_idx).reduce(f32::min)?;
             let last = extent.iter().map(|p| p.bar_idx).reduce(f32::max)?;
-            let left = drawing.extend_left
+            let (mut extend_left, mut extend_right) = (drawing.extend_left, drawing.extend_right);
+            if drawing.extends_past_anchors()
+                && let [a, b, ..] = drawing.chart_points.as_slice()
+            {
+                // Reversed anchors exchange the sides reached; vertical lines stay at one bar.
+                if a.bar_idx > b.bar_idx {
+                    std::mem::swap(&mut extend_left, &mut extend_right);
+                } else if a.bar_idx == b.bar_idx {
+                    (extend_left, extend_right) = (false, false);
+                }
+            }
+            let left = extend_left
                 || levels
                     .as_ref()
                     .is_some_and(|(c, _)| c.extend_left || c.show_background);
-            let right = drawing.extend_right
+            let right = extend_right
                 || drawing.tool_type == crate::drawings::DrawingToolType::Pitchfork
                 || levels
                     .as_ref()

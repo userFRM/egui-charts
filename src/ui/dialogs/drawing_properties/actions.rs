@@ -1,6 +1,6 @@
 //! Actions from the drawing properties dialog.
 
-use super::tabs::CoordinatesState;
+use super::tabs::{CoordinatesState, has_text_box};
 use crate::drawings::domain::GANN_SQUARE_UNITS;
 use crate::drawings::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
 use crate::drawings::{Drawing, DrawingTemplate, DrawingToolType, TimeframeVisibility};
@@ -110,6 +110,36 @@ impl DrawingProps {
         }
     }
 
+    /// Exact saved or picked RGB at the current opacity when it encodes the paint colour.
+    pub(super) fn color_rgba(&self) -> [u8; 4] {
+        self.tool_settings
+            .as_ref()
+            .map(|template| &template.settings)
+            .filter(|settings| self.paints(settings.color))
+            .map_or_else(
+                || self.color.to_srgba_unmultiplied(),
+                |settings| {
+                    let [r, g, b, _] = settings.color;
+                    [r, g, b, self.color.a()]
+                },
+            )
+    }
+
+    /// Whether the paint colour shows the given colour's RGB at its own opacity.
+    fn paints(&self, [r, g, b, _]: [u8; 4]) -> bool {
+        Color32::from_rgba_unmultiplied(r, g, b, self.color.a()) == self.color
+    }
+
+    /// Whether one RGB shows as `paint` at that colour's opacity and as the paint colour at its
+    /// own, so that the two differ in opacity only as far as either holds its hue.
+    fn keeps_hue_of(&self, paint: Color32) -> bool {
+        let at = |c: u8, a: u8| Color32::from_rgba_unmultiplied(c, c, c, a).r();
+        (0..3).all(|i| {
+            (0..=255)
+                .any(|c| at(c, paint.a()) == paint[i] && at(c, self.color.a()) == self.color[i])
+        })
+    }
+
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
     /// drawing `id`'s, which these properties were read from, was edited, and only edited values
     /// change the drawings: text only those that show text, tool inputs only drawings of the same
@@ -181,9 +211,19 @@ impl DrawingProps {
             return Err("Drawing anchors changed; reopen its properties");
         }
         let selected = chart.drawings().is_selected(id.0);
-        let fill = self
-            .fill_enabled
-            .then(|| self.fill_color.unwrap_or(self.color.gamma_multiply(0.2)));
+        let fill = self.fill_enabled.then(|| {
+            self.fill_color.unwrap_or_else(|| {
+                let [r, g, b, a] =
+                    Drawing::first_fill(target.tool_type, self.color.to_srgba_unmultiplied());
+                Color32::from_rgba_unmultiplied(r, g, b, a)
+            })
+        });
+        let [r, g, b, a] = self.color_rgba();
+        let [tr, tg, tb, _] = target.color;
+        // Without tool settings only the paint colour is held, and it reads back as another hue
+        // at each opacity: the hue was edited unless one RGB paints both it and the target's.
+        let hue_edited = [r, g, b] != [tr, tg, tb]
+            && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()));
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
@@ -201,8 +241,11 @@ impl DrawingProps {
         {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
-            if self.color != target.color32() {
-                drawing.color = self.color.to_srgba_unmultiplied();
+            if hue_edited {
+                drawing.recolor([r, g, b, drawing.color[3]]);
+            }
+            if a != target.color[3] {
+                drawing.color[3] = a;
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
@@ -222,7 +265,12 @@ impl DrawingProps {
             {
                 drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
             }
-            if fill != target.fill_color32() && drawing.fill_color32() != fill {
+            if fill != target.fill_color32()
+                && drawing.fill_color32() != fill
+                && (drawing.id == id.0
+                    || drawing.tool_type.supports_fill()
+                    || (has_text_box(target.tool_type) && has_text_box(drawing.tool_type)))
+            {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
             if self.font_size != target.font_size {
@@ -238,9 +286,9 @@ impl DrawingProps {
                 let settings = &template.settings;
                 // A tool setting that differs from the target's was edited.
                 macro_rules! edited {
-                    ($($field:ident),+ $(,)?) => {
-                        $(if settings.$field != target.$field {
-                            drawing.$field.clone_from(&settings.$field);
+                    ($($field:ident $(.$member:ident)?),+ $(,)?) => {
+                        $(if settings.$field$(.$member)? != target.$field$(.$member)? {
+                            drawing.$field$(.$member)?.clone_from(&settings.$field$(.$member)?);
                         })+
                     };
                 }
@@ -251,26 +299,89 @@ impl DrawingProps {
                     background,
                     border,
                     border_color,
+                    text_wrap,
+                    text_wrap_width,
+                    text_follows_zoom,
+                    note_text_style,
                     arrow_start_style,
                     arrow_end_style,
                     custom_settings,
-                    fib_config,
                     pitchfork,
                     gann,
                     ghost_feed,
                     bars_pattern,
                     position_size,
                     position_sizing,
+                    position_readout.persistent,
+                    position_readout.condensed,
+                    position_readout.quantity_decimals,
                     position_target_color,
                     position_stop_color,
+                    position_style,
                     volume_profile,
                     regression_trend,
                     vwap,
                     channel_midline,
+                    line_measurements.price_change,
+                    line_measurements.percent_change,
+                    line_measurements.pip_change,
+                    line_measurements.bar_count,
+                    line_measurements.elapsed_time,
+                    line_measurements.length,
+                    line_measurements.inclination,
+                    line_measurements.persistent,
+                    line_measurements.midpoint,
+                    line_measurements.price_labels,
+                    line_measurements.position,
+                    line_measurements.text_horizontal_align,
+                    line_measurements.text_vertical_align,
+                    line_measurements.text_orientation,
+                    line_measurements.across_panes,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
                 );
+                if settings.fib_config != target.fib_config {
+                    if matches!(
+                        drawing.tool_type,
+                        crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciCircles
+                            | crate::drawings::DrawingToolType::FibonacciSpeedResistanceArcs
+                            | crate::drawings::DrawingToolType::FibonacciSpiral
+                            | crate::drawings::DrawingToolType::FibonacciExtension
+                            | crate::drawings::DrawingToolType::FibonacciChannel
+                            | crate::drawings::DrawingToolType::FibonacciWedge
+                            | crate::drawings::DrawingToolType::FibonacciSpeedFan
+                            | crate::drawings::DrawingToolType::FibonacciTimeZones
+                            | crate::drawings::DrawingToolType::TrendBasedFibTime
+                    ) {
+                        let original = target.fibonacci_config();
+                        let edited = settings.fibonacci_config();
+                        let mut config = drawing.fibonacci_config().into_owned();
+                        config.apply_edits(&original, &edited);
+                        drawing.fib_config = Some(config);
+                    } else {
+                        drawing.fib_config.clone_from(&settings.fib_config);
+                    }
+                }
+                if settings.position_readout.account_currency
+                    != target.position_readout.account_currency
+                {
+                    drawing
+                        .position_readout
+                        .account_currency
+                        .clone_from(&settings.position_readout.account_currency);
+                    // A peer's old rate cannot follow it into a different currency.
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                } else if settings.position_readout.conversion_rate
+                    != target.position_readout.conversion_rate
+                    && drawing.position_readout.account_currency
+                        == settings.position_readout.account_currency
+                {
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                }
                 // Only the image's opacity: each picture keeps its own frame size.
                 let opacity = settings.image.map_or(255, |c| c.opacity);
                 if opacity != target.image.map_or(255, |c| c.opacity) {
@@ -310,12 +421,8 @@ impl DrawingProps {
             {
                 return Err("Fibonacci ratios must be finite");
             }
-            if settings
-                .fib_config
-                .as_ref()
-                .is_some_and(|c| !(c.level_width > 0.0 && c.level_width <= MAX_STROKE_WIDTH))
-            {
-                return Err("Fibonacci widths must be above 0 and at most 100");
+            if settings.fib_config.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err("Fibonacci widths must be above 0 and at most 100, font size 1 to 256");
             }
             if settings.pitchfork.as_ref().is_some_and(|c| {
                 c.levels
@@ -360,6 +467,18 @@ impl DrawingProps {
                 return Err(
                     "Ghost feed average range must be positive and noise nonnegative, both finite",
                 );
+            }
+            if !settings.position_readout.is_valid() {
+                return Err("Invalid position readout settings");
+            }
+            if settings
+                .note_text_style
+                .is_some_and(|style| !style.is_valid())
+            {
+                return Err("Price note text size must be 1 to 256");
+            }
+            if !settings.position_style.is_valid() {
+                return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(
@@ -502,7 +621,12 @@ mod tests {
                     crate::ui_kit::ColorPickerState::new(props.color),
                     crate::ui_kit::ColorPickerState::new(props.color),
                 ];
-                super::super::tabs::StyleTab::show(ui, &mut props, &mut pickers);
+                super::super::tabs::StyleTab::show(
+                    ui,
+                    &mut props,
+                    &mut pickers,
+                    &mut Default::default(),
+                );
             });
             let labels: Vec<_> = output
                 .shapes
@@ -519,11 +643,38 @@ mod tests {
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             use DrawingToolType as T;
             let (price, time) = (
-                matches!(tool, T::HorizontalLine | T::HorizontalRay | T::CrossLine),
+                matches!(
+                    tool,
+                    T::HorizontalLine | T::HorizontalRay | T::CrossLine | T::LongPos | T::ShortPos
+                ),
                 matches!(tool, T::VerticalLine | T::CrossLine),
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
             assert_eq!(labels.contains(&"Time"), time, "{tool:?}");
+            assert_eq!(
+                labels.contains(&"Through all panes"),
+                tool == T::VerticalLine,
+                "{tool:?}"
+            );
+            for label in [
+                "Middle point",
+                "Keep statistics visible",
+                "Price labels",
+                "Price change",
+                "Percentage change",
+                "Pip change",
+                "Bar count",
+                "Elapsed time",
+                "Length in periods",
+                "Inclination",
+                "Statistics placement",
+            ] {
+                assert_eq!(
+                    labels.contains(&label),
+                    tool.supports_line_measurements(),
+                    "{tool:?}: {label}"
+                );
+            }
             output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
@@ -556,9 +707,28 @@ mod tests {
             let sizing = settings.position_sizing;
             settings.position_target_color = Some([40, 100, 220, 255]);
             settings.position_stop_color = Some([220, 140, 40, 255]);
+            settings.position_style.font_size = 16.0;
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            let measurements = crate::drawings::LineMeasurements {
+                persistent: true,
+                price_change: true,
+                percent_change: true,
+                pip_change: true,
+                bar_count: true,
+                elapsed_time: true,
+                length: true,
+                inclination: true,
+                midpoint: true,
+                position: crate::drawings::LineMeasurementPosition::Left,
+                price_labels: true,
+                text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Right,
+                text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
+                text_orientation: crate::drawings::LineTextOrientation::Horizontal,
+                across_panes: true,
+            };
+            settings.line_measurements = measurements;
             settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {
                 mirrored: true,
                 ..Default::default()
@@ -574,6 +744,16 @@ mod tests {
             settings.background = false;
             settings.border = false;
             settings.border_color = Some([4, 5, 6, 255]);
+            settings.text_wrap = true;
+            settings.text_wrap_width = 120.0;
+            settings.text_follows_zoom = true;
+            let note_text = crate::drawings::NoteTextStyle {
+                color: [7, 8, 9, 255],
+                font_size: 18.0,
+                bold: true,
+                italic: false,
+            };
+            settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
             let expected = format!("{:?}", settings.fib_config);
@@ -600,8 +780,10 @@ mod tests {
             assert_eq!(saved.position_sizing, sizing);
             assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
+            assert_eq!(saved.position_style.font_size, 16.0);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert_eq!(saved.line_measurements, measurements);
             assert!(saved.bars_pattern.unwrap().mirrored);
             assert!(
                 !saved.price_axis_label && !saved.time_axis_label,
@@ -612,6 +794,9 @@ mod tests {
             assert!(saved.italic && !saved.background && !saved.border);
             assert_eq!(saved.text_color, Some([1, 2, 3, 255]));
             assert_eq!(saved.border_color, Some([4, 5, 6, 255]));
+            assert_eq!((saved.text_wrap, saved.text_wrap_width), (true, 120.0));
+            assert!(saved.text_follows_zoom);
+            assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
@@ -619,8 +804,15 @@ mod tests {
             assert!(!peer.italic && peer.background && peer.border);
             assert!(peer.price_axis_label && peer.time_axis_label);
             assert_eq!((peer.text_color, peer.border_color), (None, None));
+            assert_eq!((peer.text_wrap, peer.text_wrap_width), (false, 200.0));
+            assert!(!peer.text_follows_zoom);
+            assert_eq!(peer.note_text_style, None);
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].line_measurements,
+                crate::drawings::LineMeasurements::for_tool(tool)
+            );
             assert_eq!(
                 format!("{:?}", chart.drawings().drawings[0].fib_config),
                 format!("{:?}", Drawing::new(7, tool).fib_config)
@@ -713,10 +905,14 @@ mod tests {
 
     /// Confirming the dialog of one drawing in a selection changes the others only where it was
     /// edited: each keeps its own text, width, extension, visibility and tool settings, and an
-    /// edited text reaches only the drawings that show text.
+    /// edited text reaches only the drawings that show text. A recoloured price label keeps its
+    /// badge one colour.
     #[test]
     fn selection_edits_change_only_the_edited_values() {
-        use crate::drawings::FontWeight;
+        use crate::drawings::{
+            DrawingToolType::{PriceLabel, Sticker},
+            FontWeight,
+        };
         let mut alpha = Drawing::new(1, DrawingToolType::TextLabel);
         alpha.text = Some("Alpha".into());
         let mut beta = Drawing::new(2, DrawingToolType::TextLabel);
@@ -731,25 +927,41 @@ mod tests {
         line.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
         // A sticker keeps its kind in its text, which it does not show.
         let sticker = Drawing::new(4, DrawingToolType::Sticker);
-        let drawings = vec![alpha, beta, line, sticker];
+        // A price label shows no text, and its border shares the colour of its badge.
+        let label = Drawing::new(5, DrawingToolType::PriceLabel);
+        let drawings = vec![alpha, beta, line, sticker, label];
         let mut chart = Chart::new(crate::model::BarData::new());
         chart.drawings_mut().drawings = drawings.clone();
-        chart.drawings_mut().select_drawings([1, 2, 3, 4]);
+        chart.drawings_mut().select_drawings([1, 2, 3, 4, 5]);
         let opened = DrawingProps::from_drawing(&drawings[0], &chart);
         // Each case: the edit made in the dialog, then what it changes on each drawing.
         type Case = (&'static str, fn(&mut DrawingProps), fn(&mut Drawing));
-        let cases: [Case; 4] = [
+        let cases: [Case; 5] = [
             ("nothing edited", |_| {}, |_| {}),
+            (
+                "opacity only",
+                // The custom editor returns the saved hue at the new opacity.
+                |props| {
+                    let [r, g, b, _] = props.color_rgba();
+                    props.color = Color32::from_rgba_unmultiplied(r, g, b, 84);
+                },
+                |d| d.color[3] = 84,
+            ),
             (
                 "colour",
                 |props| props.color = Color32::BLUE,
-                |d| d.color = [0, 0, 255, 255],
+                |d| {
+                    d.color = [0, 0, 255, 255];
+                    if d.tool_type == PriceLabel {
+                        d.border_color = Some([0, 0, 255, 255]);
+                    }
+                },
             ),
             (
                 "text",
                 |props| props.label = "Gamma".into(),
                 |d| {
-                    if d.tool_type != DrawingToolType::Sticker {
+                    if !matches!(d.tool_type, Sticker | PriceLabel) {
                         d.text = Some("Gamma".into());
                     }
                 },
@@ -758,7 +970,7 @@ mod tests {
                 "text cleared",
                 |props| props.label.clear(),
                 |d| {
-                    if d.tool_type != DrawingToolType::Sticker {
+                    if !matches!(d.tool_type, Sticker | PriceLabel) {
                         d.text = None;
                     }
                 },
@@ -771,6 +983,78 @@ mod tests {
             let mut expected = drawings.clone();
             expected.iter_mut().for_each(change);
             assert_eq!(format!("{edits:?}"), format!("{expected:?}"), "{case}");
+        }
+        // Editing typography or one caption leaves every other saved level of a peer intact.
+        chart.drawings_mut().drawings = (0..2)
+            .map(|id| {
+                let mut drawing = Drawing::new(id, DrawingToolType::FibonacciExtension);
+                let config = drawing.fib_config.as_mut().unwrap();
+                config.levels[1].text = format!("Peer {id}");
+                config.levels[1].value = 0.25 + id as f32;
+                config.level_width = 2.0 + id as f32;
+                drawing
+            })
+            .collect();
+        chart.drawings_mut().select_drawings([0, 1]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let config = props
+            .tool_settings
+            .as_mut()
+            .unwrap()
+            .settings
+            .fib_config
+            .as_mut()
+            .unwrap();
+        config.label_size = 18.0;
+        config.levels[0].text = "Target".into();
+        let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+        for (index, drawing) in edits.iter().enumerate() {
+            let config = drawing.fib_config.as_ref().unwrap();
+            assert_eq!(config.label_size, 18.0);
+            assert_eq!(config.levels[0].text, "Target");
+            assert_eq!(config.levels[1].text, format!("Peer {index}"));
+            assert_eq!(config.levels[1].value, 0.25 + index as f32);
+            assert_eq!(config.level_width, 2.0 + index as f32);
+        }
+        // A rate belongs to an account currency; changing the currency also replaces its rate.
+        for currency_changed in [false, true] {
+            chart.drawings_mut().drawings = [("EUR", 0.8), ("GBP", 0.6), ("EUR", 0.7)]
+                .into_iter()
+                .enumerate()
+                .map(|(id, (currency, rate))| {
+                    let mut drawing = Drawing::new(id, DrawingToolType::LongPos);
+                    drawing.position_readout.account_currency = Some(currency.into());
+                    drawing.position_readout.conversion_rate = Some(rate);
+                    drawing
+                })
+                .collect();
+            chart.drawings_mut().select_drawings([0, 1, 2]);
+            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            let readout = &mut props
+                .tool_settings
+                .as_mut()
+                .unwrap()
+                .settings
+                .position_readout;
+            readout.conversion_rate = Some(0.9);
+            if currency_changed {
+                readout.account_currency = Some("CAD".into());
+            }
+            let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+            for (id, drawing) in edits.iter().enumerate() {
+                let expected = if currency_changed {
+                    ("CAD", 0.9)
+                } else if id == 1 {
+                    ("GBP", 0.6)
+                } else {
+                    ("EUR", 0.9)
+                };
+                assert_eq!(
+                    drawing.position_readout.account_currency.as_deref(),
+                    Some(expected.0)
+                );
+                assert_eq!(drawing.position_readout.conversion_rate, Some(expected.1));
+            }
         }
         // An image's opacity is independent of its frame and of the other selected pictures.
         for opacity in [None, Some(128)] {
@@ -811,6 +1095,153 @@ mod tests {
                 let config = drawing.image.unwrap();
                 assert_eq!(config.size, Some(size));
                 assert_eq!(config.opacity, opacity.unwrap_or(original_opacity));
+            }
+        }
+        // Properties assembled without tool settings hold the colour premultiplied, which reads
+        // 76 back as 75 at alpha 51: an unedited colour leaves every hue as saved.
+        let mut highlighter = Drawing::new(1, DrawingToolType::Highlighter);
+        highlighter.color = [76, 175, 80, 51];
+        let drawings = vec![highlighter, Drawing::new(2, DrawingToolType::TrendLine)];
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = drawings.clone();
+        chart.drawings_mut().select_drawings([1, 2]);
+        let props = DrawingProps {
+            tool_settings: None,
+            font_size: 20.0,
+            ..DrawingProps::from_drawing(&drawings[0], &chart)
+        };
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        assert_eq!(
+            edits.iter().map(|d| d.color).collect::<Vec<_>>(),
+            drawings.iter().map(|d| d.color).collect::<Vec<_>>()
+        );
+        // The editor may still hold the hue of an earlier dialog, here [240, 55, 70], which the
+        // default highlighter read back at 20% and paints the same at alpha 52: its opacity
+        // dragged to 153 is still an opacity edit.
+        chart.drawings_mut().drawings[0].color = [242, 54, 69, 52];
+        let props = DrawingProps {
+            tool_settings: None,
+            color: Color32::from_rgba_unmultiplied(240, 55, 70, 153),
+            ..DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart)
+        };
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        assert_eq!(
+            edits.iter().map(|d| d.color).collect::<Vec<_>>(),
+            [[242, 54, 69, 153], [41, 98, 255, 153]]
+        );
+    }
+
+    /// Two selected trend lines: the first shows its price change, the second its inclination on
+    /// the left with its text below the line. Ticking "Elapsed time" in the dialog of the first, or
+    /// changing the first's text alignment, edits only that value on each line.
+    #[test]
+    fn selection_readout_edit_keeps_the_other_lines_readouts() {
+        use crate::drawings::{
+            LineMeasurementPosition as P, LineMeasurements, LineTextHorizontalAlign as H,
+            LineTextVerticalAlign as V,
+        };
+        let mut first = Drawing::new(1, DrawingToolType::TrendLine);
+        first.line_measurements.price_change = true;
+        let mut second = Drawing::new(2, DrawingToolType::TrendLine);
+        second.line_measurements = LineMeasurements {
+            inclination: true,
+            position: P::Left,
+            text_vertical_align: V::Top,
+            ..Default::default()
+        };
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = vec![first.clone(), second.clone()];
+        chart.drawings_mut().select_drawings([1, 2]);
+        let opened = DrawingProps::from_drawing(&first, &chart);
+        let mut got = Vec::new();
+        let changes: [fn(&mut LineMeasurements); 13] = [
+            |m| m.price_change = false,
+            |m| m.percent_change = true,
+            |m| m.pip_change = true,
+            |m| m.bar_count = true,
+            |m| m.elapsed_time = true,
+            |m| m.length = true,
+            |m| m.inclination = true,
+            |m| m.persistent = true,
+            |m| m.midpoint = true,
+            |m| m.price_labels = true,
+            |m| m.position = P::Center,
+            |m| m.text_horizontal_align = H::Right,
+            |m| m.text_vertical_align = V::Middle,
+        ];
+        for edit in changes {
+            let mut props = opened.clone();
+            edit(
+                &mut props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .line_measurements,
+            );
+            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+            got.push(
+                edits
+                    .iter()
+                    .map(|d| d.line_measurements)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let want: Vec<_> = changes
+            .into_iter()
+            .map(|edit| {
+                [first.line_measurements, second.line_measurements]
+                    .into_iter()
+                    .map(|mut settings| {
+                        edit(&mut settings);
+                        settings
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    /// Selection fill edits skip tools without a fill, while text backgrounds still reach
+    /// other text boxes even when their Style tab has no shape fill.
+    #[test]
+    fn selection_fill_skips_drawings_without_a_fill() {
+        for tool in [
+            DrawingToolType::Rect,
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::AnchoredNote,
+        ] {
+            for (stored, enabled) in [
+                (None, true),
+                (Some([10, 20, 30, 40]), true),
+                (Some([10, 20, 30, 40]), false),
+            ] {
+                let mut target = Drawing::new(1, tool);
+                target.background = true;
+                target.fill_color = (!enabled).then_some([0, 0, 255, 51]);
+                let mut highlighter = Drawing::new(2, DrawingToolType::Highlighter);
+                highlighter.fill_color = stored;
+                let mut peer = Drawing::new(3, tool);
+                peer.background = true;
+                peer.fill_color = Some([0, 255, 0, 51]);
+                let mut chart = Chart::new(crate::model::BarData::new());
+                chart.drawings_mut().drawings = vec![target, highlighter, peer];
+                chart.drawings_mut().select_drawings([1, 2, 3]);
+                let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+                props.fill_enabled = enabled;
+                props.fill_color = Some(Color32::from_rgba_unmultiplied(255, 0, 0, 51));
+                let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+                let fill = enabled.then_some([255, 0, 0, 51]);
+                assert_eq!(edits[0].fill_color, fill);
+                assert_eq!(
+                    edits[1].fill_color, stored,
+                    "tools without a fill keep their stored value on enable, colour and disable edits"
+                );
+                assert_eq!(
+                    edits[2].fill_color, fill,
+                    "{tool:?} keeps selection background edits"
+                );
             }
         }
     }

@@ -1,6 +1,5 @@
-//! The depth ladder of the order ticket's DOM tab: the size resting at each price around the last
-//! trade, the user's working orders at their prices, and orders placed, moved and cancelled from
-//! the ladder.
+//! Shared rows and profiles for a read-only depth panel and the order ticket's ladder.
+//! The ticket adds working orders at their prices and places, moves and cancels orders.
 
 use crate::localization as l10n;
 use std::collections::{BTreeMap, HashMap};
@@ -24,7 +23,7 @@ use crate::theme::ThemeExt;
 const ROW: f32 = 20.0;
 
 /// What the price column's profile draws from the traded volume at each price.
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Profile {
     /// All volume, including unclassified prints.
     #[default]
@@ -36,7 +35,7 @@ enum Profile {
 }
 
 /// Which trades the profile and the traded column sum.
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Accumulation {
     /// Every trade the chart retains.
     #[default]
@@ -52,21 +51,28 @@ enum Accumulation {
 const EXTRAS: [&str; 3] = ["Orders", "Obs. chg", "Traded"];
 
 /// Where the ladder stands between frames.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub(super) struct Ladder {
     /// The tick of the middle row, until the ladder has a price to centre on.
     centre: Option<i64>,
     /// Keeps the ladder where the user scrolled it instead of re-centring on the market.
     locked: bool,
     /// Scrolled distance short of a whole row.
+    #[serde(skip)]
     scroll: f32,
     /// The Details section is open.
+    #[serde(skip)]
     details: bool,
     /// The previous observed sizes, and the last change at each level.
+    #[serde(skip)]
     sizes: [BTreeMap<i64, f64>; 2],
+    #[serde(skip)]
     changes: [BTreeMap<i64, f64>; 2],
+    #[serde(skip)]
     observed: bool,
     /// The order chosen from a price with more than one working order on the same side.
+    #[serde(skip)]
     selected: Option<OrderId>,
     /// Which of the [`EXTRAS`] are shown.
     columns: [bool; 3],
@@ -126,6 +132,132 @@ fn format_size(value: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+/// A read-only depth ladder using the chart's book, executions and instrument metadata.
+/// No broker is required and no order actions are emitted. Prices stay fixed until Center
+/// (Shift+Alt+C) is pressed. Keep one panel per chart; serialize it with the workspace to retain
+/// the view and profile choices.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DepthPanel {
+    symbol: String,
+    tick: f64,
+    ladder: Ladder,
+}
+
+impl DepthPanel {
+    /// Whether the feed explicitly declares price-level depth for the current instrument.
+    /// Hosts should offer their Depth entry only while this returns true.
+    pub fn is_available(chart: &crate::widget::Chart) -> bool {
+        chart.instrument().is_some_and(|instrument| {
+            instrument.symbol == chart.symbol()
+                && chart
+                    .feed_capabilities()
+                    .unwrap_or(&crate::data::FeedCapabilities::default())
+                    .declares(crate::model::FeedService::Depth, instrument)
+        })
+    }
+
+    /// Draw the current chart's depth with the ticket's rows, optional columns and profiles.
+    /// A changed symbol or tick size clears price-dependent state, retaining view choices.
+    /// Drains pending chart feed data before drawing, including when the chart itself is hidden.
+    /// Candle-only replay never displays the live book or live executions.
+    pub fn show(&mut self, ui: &mut Ui, chart: &mut crate::widget::Chart) {
+        use crate::chart::selection::SeriesId;
+        use crate::model::{Capabilities, TradingRules};
+
+        chart.pump(ui.ctx());
+        crate::ui_kit::PanelHeader::new(&l10n::text(ui.ctx(), "Depth")).show(ui, |_| {});
+        if !Self::is_available(chart) {
+            muted(ui, "Depth unavailable for this symbol");
+            return;
+        }
+        let instrument = chart.instrument().expect("depth has an instrument");
+        let decimals = crate::scales::instrument_price_precision(instrument).map_or(2, usize::from);
+        let tick = instrument
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)
+            .unwrap_or(10f64.powi(-(decimals as i32)));
+        if self.symbol != chart.symbol() || self.tick != tick {
+            self.symbol = chart.symbol().to_owned();
+            self.tick = tick;
+            self.ladder = Ladder {
+                columns: self.ladder.columns,
+                profile: self.ladder.profile,
+                accumulation: self.ladder.accumulation,
+                ..Default::default()
+            };
+        }
+        let candle_replay = chart.replay_time().is_some() && chart.replay_driver().is_none();
+        let trades: Vec<_> = if candle_replay {
+            Vec::new()
+        } else {
+            chart.trades(SeriesId::MAIN).collect()
+        };
+        let book = chart.order_book(SeriesId::MAIN);
+        let view = chart.order_book_view();
+        let queue = chart.order_queue(SeriesId::MAIN);
+        let filtered = view.filter != crate::data::OrderFilter::default();
+        let ladder = match (queue, filtered) {
+            (Some(queue), true) => queue
+                .filtered(chart.symbol(), &view.filter)
+                .map(|book| Some(std::borrow::Cow::Owned(book))),
+            (None, true) if !candle_replay => {
+                Err(crate::data::OrderFilterUnavailable::AggregateDepth)
+            }
+            _ => Ok(book.map(std::borrow::Cow::Borrowed)),
+        };
+        let theme = ui.active_theme();
+        let highlights = queue
+            .zip(view.tiers)
+            .map(|(queue, tiers)| {
+                queue
+                    .largest_orders(&view.filter)
+                    .into_iter()
+                    .filter_map(|order| {
+                        let tier = tiers.tier(order.size)?;
+                        Some((
+                            order.side == OrderSide::Buy,
+                            order.price,
+                            view.tier_color(tier, &theme.chart),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let rules = TradingRules::new(chart.symbol());
+        let market = Market {
+            symbol: chart.symbol(),
+            formatter: None,
+            pip_value: None,
+            last: trades.last().map(|trade| trade.price),
+            bid: book.and_then(|book| book.best_bid().map(|level| level.price)),
+            ask: book.and_then(|book| book.best_ask().map(|level| level.price)),
+            tick,
+            decimals,
+            currency: "",
+            balance: None,
+            capabilities: Capabilities::default(),
+            rules: &rules,
+            rules_ready: false,
+            offline: None,
+            ladder_unavailable: ladder.as_ref().err().copied(),
+            ladder: ladder.unwrap_or(None),
+            highlights,
+            orders: &[],
+            positions: &[],
+            trades: &trades,
+            session_open: trades
+                .last()
+                .and_then(|trade| super::view::session_open(chart, trade.ts)),
+            last_fill: None,
+            logo: None,
+        };
+        ui.push_id("depth_panel", |ui| {
+            self.ladder.draw(ui, chart.symbol(), &market, None);
+        });
+    }
+}
+
 impl Ladder {
     /// The retained trades the profile sums, oldest first.
     fn accumulated<'a>(
@@ -155,6 +287,21 @@ impl Ladder {
         quantity: &mut f64,
         time_in_force: &mut TimeInForce,
     ) -> Option<Action> {
+        self.draw(ui, symbol, market, Some((quantity, time_in_force)))
+    }
+
+    /// One renderer for the observational panel and the trading ticket. Without entry fields,
+    /// neither order gestures nor account controls are installed.
+    fn draw(
+        &mut self,
+        ui: &mut Ui,
+        symbol: &str,
+        market: &Market<'_>,
+        entry: Option<(&mut f64, &mut TimeInForce)>,
+    ) -> Option<Action> {
+        let read_only = entry.is_none();
+        let wanted = entry.as_ref().map_or(0.0, |(quantity, _)| **quantity);
+        let tif = entry.as_ref().map_or(TimeInForce::Day, |(_, tif)| **tif);
         let theme = ui.active_theme();
         let tick = market.tick;
         let ticks = |price: f64| (price / tick).round() as i64;
@@ -162,12 +309,11 @@ impl Ladder {
         let buy = side_color(&theme, OrderSide::Buy);
         let sell = side_color(&theme, OrderSide::Sell);
         let orders: Vec<&Order> = (market.orders.iter())
-            .filter(|order| order.request.symbol == symbol)
+            .filter(|order| !read_only && order.request.symbol == symbol)
             .collect();
         let position = (market.positions.iter()).find(|position| position.symbol == symbol);
         let quantity_decimals = decimals(market.rules.quantity_step);
         let numbers = market.numbers();
-        let wanted = *quantity;
         let order = |side, order_type| -> Result<OrderRequest, String> {
             if market.offline.is_some() {
                 return Err("Waiting for the broker to connect".into());
@@ -183,13 +329,16 @@ impl Ladder {
             }
             let quantity = order_quantity(wanted, market.rules)?;
             let mut request = OrderRequest::new(symbol, side, quantity, order_type);
-            request.time_in_force = *time_in_force;
+            request.time_in_force = tif;
             Ok(request)
         };
         let mut action = None;
 
-        let footer =
-            28.0 + 28.0 + 28.0 + FIELD_HEIGHT + 24.0 + if self.details { 64.0 } else { 0.0 };
+        let footer = if read_only {
+            28.0 + 40.0 + 28.0
+        } else {
+            28.0 + 28.0 + 28.0 + FIELD_HEIGHT + 24.0 + if self.details { 64.0 } else { 0.0 }
+        };
         let spacing = ui.spacing().item_spacing.y;
         let mut scroll_style = ui.spacing().scroll;
         scroll_style.floating = false;
@@ -206,6 +355,17 @@ impl Ladder {
             viewport.min + vec2(0.0, header_height + spacing),
             vec2(viewport.width(), rows as f32 * ROW),
         );
+        let last = market.last.filter(|last| last.is_finite());
+        let middle = market
+            .bid
+            .zip(market.ask)
+            .map(|(bid, ask)| bid / 2.0 + ask / 2.0)
+            .or(last);
+        let middle = if read_only {
+            last.or(middle).or(market.bid).or(market.ask)
+        } else {
+            middle
+        };
 
         // Scroll by whole rows; without the lock the market stays in view.
         // Keep the price under a press or drag stable through its release frame.
@@ -216,15 +376,15 @@ impl Ladder {
             let moved = (self.scroll / ROW).trunc();
             self.scroll -= moved * ROW;
             if let Some(centre) = &mut self.centre {
-                *centre = centre.saturating_add(moved as i64).max(0);
+                let floor = middle.map_or(*centre >= 0, |middle| middle >= 0.0);
+                *centre = centre.saturating_add(moved as i64);
+                if floor {
+                    *centre = (*centre).max(0);
+                }
             }
         }
-        let last = market.last.filter(|last| last.is_finite()).map(ticks);
-        let middle = market
-            .bid
-            .zip(market.ask)
-            .map(|(bid, ask)| ticks(bid / 2.0 + ask / 2.0))
-            .or(last);
+        let last = last.map(ticks);
+        let middle = middle.map(ticks);
         let top = |centre: i64| centre.saturating_add(rows / 2);
         let visible = |centre: i64, tick_index: i64| {
             (top(centre).saturating_sub(rows - 1)..=top(centre)).contains(&tick_index)
@@ -232,7 +392,7 @@ impl Ladder {
         match (self.centre, middle) {
             (None, Some(middle)) => self.centre = Some(middle),
             (Some(centre), Some(middle))
-                if !self.locked && !interacting && !visible(centre, middle) =>
+                if !read_only && !self.locked && !interacting && !visible(centre, middle) =>
             {
                 self.centre = Some(middle);
             }
@@ -364,7 +524,11 @@ impl Ladder {
             "STP LMT".to_owned()
         };
         let margin = measure(&widest_tag, 10.0) + 8.0;
-        let margin = margin.max(measure(&orders.len().to_string(), 12.0) + 28.0);
+        let margin = if read_only {
+            0.0
+        } else {
+            margin.max(measure(&orders.len().to_string(), 12.0) + 28.0)
+        };
         let size_width = |side: usize, header: &str| {
             size_labels
                 .iter()
@@ -398,7 +562,12 @@ impl Ladder {
         let minimum = widths.iter().sum::<f32>() + strip;
         let width = ui.available_width().max(minimum);
         let spare = width - minimum;
-        for (width, share) in widths.iter_mut().zip([0.15, 0.21, 0.28, 0.21, 0.15]) {
+        let shares = if read_only {
+            [0.0, 0.3, 0.4, 0.3, 0.0]
+        } else {
+            [0.15, 0.21, 0.28, 0.21, 0.15]
+        };
+        for (width, share) in widths.iter_mut().zip(shares) {
             *width += spare * share;
         }
         ui.scope(|ui| {
@@ -713,6 +882,9 @@ impl Ladder {
                             .clamp(0.0, (rows - 1) as f32) as usize
                     };
                     let cell_order = |pos: egui::Pos2| {
+                        if read_only {
+                            return None;
+                        }
                         let (side, column) = if bid_column.contains(pos) {
                             (OrderSide::Buy, bid_column)
                         } else if ask_column.contains(pos) {
@@ -925,6 +1097,9 @@ impl Ladder {
                             theme.text.body,
                             theme.ui.text,
                         );
+                        if read_only {
+                            continue;
+                        }
                         let ids: Vec<_> = (orders.iter())
                             .filter(|order| order.request.side == side)
                             .map(|order| order.id.clone())
@@ -974,6 +1149,9 @@ impl Ladder {
                             action = Some(Action::Cancel(ids));
                         }
                     }
+                    if read_only {
+                        return;
+                    }
                     let lock = Rect::from_center_size(price_column.center(), vec2(24.0, 24.0));
                     let lock_response = ui
                         .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
@@ -1010,7 +1188,49 @@ impl Ladder {
 
                 });
         });
+        if read_only {
+            let last = market
+                .last
+                .map_or_else(|| "-".to_owned(), |last| numbers.price(last));
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "Last: {price}",
+                &[("price", last)],
+            ));
+            let spread = market.bid.zip(market.ask).map_or_else(
+                || "-".to_owned(),
+                |(bid, ask)| {
+                    l10n::format_text(
+                        ui.ctx(),
+                        if ((ask - bid) / tick).round() == 1.0 {
+                            "{price} ({ticks} tick)"
+                        } else {
+                            "{price} ({ticks} ticks)"
+                        },
+                        &[
+                            ("price", numbers.price(ask - bid)),
+                            ("ticks", ((ask - bid) / tick).round().to_string()),
+                        ],
+                    )
+                },
+            );
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "Spread: {spread}",
+                &[("spread", spread)],
+            ));
+            let shortcut = !ui.ctx().text_edit_focused()
+                && ui.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::SHIFT | egui::Modifiers::ALT, egui::Key::C)
+                });
+            if ui.button(l10n::text(ui.ctx(), "Center")).clicked() || shortcut {
+                self.centre = middle;
+                self.scroll = 0.0;
+            }
+            return None;
+        }
         self.centre?;
+        let (quantity, time_in_force) = entry?;
 
         // The position and its profit or loss.
         ui.columns(2, |halves| {
@@ -1219,6 +1439,415 @@ fn boxed(ui: &mut Ui, label: &str, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wheel input moves whole price rows below zero and retains the nonnegative market floor.
+    #[test]
+    fn negative_prices_scroll_by_whole_rows() {
+        use crate::model::{Capabilities, TradingRules};
+
+        for read_only in [true, false] {
+            for (last, bid, ask, initial, down, back) in [
+                (
+                    Some(-10.0),
+                    Some(-10.25),
+                    Some(-10.0),
+                    if read_only { -40 } else { -41 },
+                    if read_only { -42 } else { -43 },
+                    if read_only { -40 } else { -41 },
+                ),
+                (Some(-0.1), None, None, 0, -2, 0),
+                (None, None, None, -40, -42, -40),
+                (Some(0.25), Some(0.0), Some(0.25), 1, 0, 2),
+                (Some(0.0), Some(0.0), Some(0.0), 0, 0, 2),
+                (None, None, None, 1, 0, 2),
+            ] {
+                let ctx = egui::Context::default();
+                let rules = TradingRules::new("SPREAD");
+                let market = Market {
+                    symbol: "SPREAD",
+                    formatter: None,
+                    pip_value: None,
+                    last,
+                    bid,
+                    ask,
+                    tick: 0.25,
+                    decimals: 2,
+                    currency: "USD",
+                    balance: None,
+                    capabilities: Capabilities::default(),
+                    rules: &rules,
+                    rules_ready: true,
+                    offline: None,
+                    ladder: None,
+                    ladder_unavailable: None,
+                    highlights: Vec::new(),
+                    orders: &[],
+                    positions: &[],
+                    trades: &[],
+                    session_open: None,
+                    last_fill: None,
+                    logo: None,
+                };
+                let mut ladder = Ladder {
+                    centre: last.is_none().then_some(initial),
+                    locked: !read_only,
+                    ..Default::default()
+                };
+                let frame = |ladder: &mut Ladder, events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(300.0, 700.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut quantity = 1.0;
+                            let mut tif = TimeInForce::Day;
+                            let entry = (!read_only).then_some((&mut quantity, &mut tif));
+                            assert_eq!(ladder.draw(ui, "SPREAD", &market, entry), None);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                frame(&mut ladder, vec![]);
+                assert_eq!(ladder.centre, Some(initial));
+                // 40 points / 20 points per row = two ticks, or 0.50 at this price step.
+                for (delta, expected) in [(-40.0, down), (40.0, back)] {
+                    frame(
+                        &mut ladder,
+                        vec![
+                            egui::Event::PointerMoved(pos2(150.0, 200.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: vec2(0.0, delta),
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                    for _ in 0..60 {
+                        frame(&mut ladder, vec![]);
+                    }
+                    assert_eq!(
+                        ladder.centre,
+                        Some(expected),
+                        "read_only={read_only} last={last:?} initial={initial}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The book is observational even when the same market would accept a ticket order.
+    #[test]
+    fn read_only_rows_keep_their_prices_and_cannot_trade() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, TradingRules};
+
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: Some(1),
+        };
+        let book = OrderBook {
+            ts: now,
+            symbol: "ES".into(),
+            bids: vec![level(100.0, 5.0), level(99.75, 3.0)],
+            asks: vec![level(100.25, 4.0)],
+        };
+        let rules = TradingRules::new("ES");
+        let trades = [Tick::new(now, 100.0, 2.0, Some(OrderSide::Buy))];
+        let trades = trades.iter().collect::<Vec<_>>();
+        let mut market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: Some(100.0),
+            ask: Some(100.25),
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: None,
+            capabilities: Capabilities {
+                market: true,
+                limit: true,
+                stop: true,
+                ..Default::default()
+            },
+            rules: &rules,
+            rules_ready: true,
+            offline: None,
+            ladder: Some(std::borrow::Cow::Borrowed(&book)),
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &trades,
+            session_open: None,
+            last_fill: None,
+            logo: None,
+        };
+        let ctx = egui::Context::default();
+        let frame = |ladder: &mut Ladder, market: &Market<'_>, events: Vec<egui::Event>| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert_eq!(ladder.draw(ui, "ES", market, None), None);
+                },
+            );
+            let labels = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    let egui::Shape::Text(text) = &shape.shape else {
+                        return None;
+                    };
+                    Some((text.galley.text().to_owned(), text.visual_bounding_rect()))
+                })
+                .collect::<Vec<_>>();
+            output.drop_without_applying_deltas();
+            labels
+        };
+        let mut ladder = DepthPanel::default().ladder;
+        let mut labels = frame(&mut ladder, &market, vec![]);
+        for label in [
+            "100.25",
+            "100.00",
+            "99.75",
+            "5",
+            "3",
+            "4",
+            "Last: 100.00",
+            "Spread: 0.25 (1 tick)",
+        ] {
+            assert!(
+                labels.iter().any(|(text, _)| text == label),
+                "missing {label}: {labels:?}"
+            );
+        }
+        assert_eq!(ladder.centre, Some(400));
+        for (price, size, bid) in [
+            ("100.00", "5", true),
+            ("99.75", "3", true),
+            ("100.25", "4", false),
+        ] {
+            let row = labels.iter().find(|(text, _)| text == price).unwrap().1;
+            assert!(
+                labels.iter().any(|(text, rect)| text == size
+                    && (rect.center().y - row.center().y).abs() < 0.5
+                    && if bid {
+                        rect.right() < row.left()
+                    } else {
+                        rect.left() > row.right()
+                    }),
+                "{size} at {price} on bid={bid}: {labels:?}"
+            );
+        }
+        for label in [
+            "Flat",
+            "Buy Mkt",
+            "Sell Mkt",
+            "CXL All",
+            "Flatten",
+            "Reverse",
+            "DETAILS  ",
+        ] {
+            assert!(
+                !labels.iter().any(|(text, _)| text == label),
+                "account control {label}"
+            );
+        }
+        // Click each of the three columns, with normal, modifier and secondary clicks.
+        let price = labels
+            .iter()
+            .find(|(text, _)| text == "100.00")
+            .unwrap()
+            .1
+            .center();
+        for x in [30.0, price.x, 270.0] {
+            let pos = pos2(x, price.y);
+            for (button, modifiers) in [
+                (egui::PointerButton::Primary, egui::Modifiers::NONE),
+                (egui::PointerButton::Primary, egui::Modifiers::CTRL),
+                (egui::PointerButton::Secondary, egui::Modifiers::NONE),
+            ] {
+                frame(
+                    &mut ladder,
+                    &market,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: true,
+                            modifiers,
+                        },
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: false,
+                            modifiers,
+                        },
+                    ],
+                );
+            }
+        }
+        frame(
+            &mut ladder,
+            &market,
+            vec![
+                egui::Event::PointerMoved(price),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, -40.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        for _ in 0..60 {
+            frame(&mut ladder, &market, vec![]);
+        }
+        // Two rows below 100.00 at a 0.25 tick are 99.50, independent of later book prices.
+        assert_eq!(ladder.centre, Some(398));
+        market.bid = Some(200.0);
+        market.ask = Some(200.25);
+        market.last = Some(200.0);
+        let mut moved_book = book.clone();
+        for level in moved_book.bids.iter_mut().chain(&mut moved_book.asks) {
+            level.price += 100.0;
+        }
+        market.ladder = Some(std::borrow::Cow::Owned(moved_book));
+        labels = frame(&mut ladder, &market, vec![]);
+        assert_eq!(ladder.centre, Some(398));
+        let pos = labels
+            .iter()
+            .find(|(text, _)| text == "Center")
+            .unwrap()
+            .1
+            .center();
+        frame(
+            &mut ladder,
+            &market,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(ladder.centre, Some(800));
+        market.last = Some(300.0);
+        frame(
+            &mut ladder,
+            &market,
+            vec![egui::Event::Key {
+                key: egui::Key::C,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+            }],
+        );
+        assert_eq!(ladder.centre, Some(1200));
+        ladder.columns = [true; 3];
+        ladder.profile = Profile::Delta;
+        ladder.accumulation = Accumulation::Manual;
+        ladder.reset_after = Some(now);
+        let panel = DepthPanel {
+            symbol: "ES".into(),
+            tick: 0.25,
+            ladder,
+        };
+        let saved = serde_json::to_string(&panel).unwrap();
+        let mut restored: DepthPanel = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.ladder.centre, Some(1200));
+        assert_eq!(restored.ladder.columns, [true; 3]);
+        assert!(restored.ladder.profile == Profile::Delta);
+        assert!(restored.ladder.accumulation == Accumulation::Manual);
+        assert_eq!(restored.ladder.reset_after, Some(now));
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_symbol("OTHER")
+            .build();
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("OTHER")
+                .with_tick_size(0.25)
+                .with_services([crate::model::FeedService::Depth]),
+        ));
+        ctx.run_ui(Default::default(), |ui| restored.show(ui, &mut chart))
+            .drop_without_applying_deltas();
+        assert_eq!(restored.ladder.centre, None);
+        assert_eq!(restored.ladder.reset_after, None);
+        assert_eq!(restored.ladder.columns, [true; 3]);
+        assert!(restored.ladder.profile == Profile::Delta);
+
+        // A depth-only host need not paint the chart to receive its pending book and executions.
+        struct Feed(OrderBook);
+        impl crate::data::Datafeed for Feed {
+            fn resolve(&self, symbol: &str, reply: crate::data::Reply<crate::model::Instrument>) {
+                reply.send(Ok(crate::model::Instrument::new(symbol)
+                    .with_tick_size(0.25)
+                    .with_services([crate::model::FeedService::Depth])));
+            }
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+                reply.send(Ok(crate::data::HistoryPage::new(vec![], true)));
+            }
+            fn subscribe(&self, subscription: crate::data::Subscription) {
+                subscription.sink.push_depth_snapshot(1, self.0.clone());
+                subscription
+                    .sink
+                    .push_tick(Tick::new(self.0.ts, 100.0, 2.0, Some(OrderSide::Buy)));
+            }
+        }
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_symbol("ES")
+            .with_feed(std::sync::Arc::new(Feed(book.clone())))
+            .build();
+        let mut labels = Vec::new();
+        for _ in 0..4 {
+            let output = ctx.run_ui(Default::default(), |ui| restored.show(ui, &mut chart));
+            labels = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    let egui::Shape::Text(text) = &shape.shape else {
+                        return None;
+                    };
+                    Some(text.galley.text().to_owned())
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        assert!(
+            labels.iter().any(|text| text == "Last: 100.00"),
+            "{labels:?}"
+        );
+        assert!(labels.iter().any(|text| text == "5"), "{labels:?}");
+        assert!(labels.iter().any(|text| text == "4"), "{labels:?}");
+    }
 
     /// Full prices, totals and paired quantities fit their grid cells, including in a narrow ticket.
     #[test]

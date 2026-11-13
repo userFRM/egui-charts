@@ -211,16 +211,42 @@ impl DrawingInteraction {
                         let on_level = drawing
                             .fib_level_x_range(&config, Rect::EVERYTHING)
                             .contains(point.x)
-                            && drawing.level_ys.iter().any(|y| {
-                                (point.y - y).abs() <= hit_distance.max(config.level_width / 2.0)
-                            });
-                        let on_trend = drawing
-                            .points
-                            .windows(2)
-                            .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
+                            && config
+                                .visible_levels()
+                                .zip(&drawing.level_ys)
+                                .any(|(level, y)| {
+                                    (point.y - y).abs()
+                                        <= hit_distance
+                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
+                                });
+                        let on_trend = config.trend_visible
+                            && drawing
+                                .points
+                                .windows(2)
+                                .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
                         if on_level || on_trend {
                             return Some(drawing.id);
                         }
+                    }
+                }
+                DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime => {
+                    let config = drawing.fibonacci_config();
+                    let on_level = config.visible_levels().any(|level| {
+                        drawing
+                            .fibonacci_time_level_x(level.value)
+                            .is_some_and(|x| {
+                                (point.x - x).abs()
+                                    <= hit_distance
+                                        .max(level.width.unwrap_or(config.level_width) / 2.0)
+                            })
+                    });
+                    let on_trend = config.trend_visible
+                        && drawing.points.windows(2).any(|p| {
+                            point_to_line_distance(point, p[0], p[1])
+                                <= hit_distance.max(drawing.stroke_width / 2.0)
+                        });
+                    if on_level || on_trend {
+                        return Some(drawing.id);
                     }
                 }
                 DrawingToolType::FibonacciChannel => {
@@ -230,10 +256,15 @@ impl DrawingInteraction {
                         .expand(2.0 * hit_distance);
                     if drawing
                         .fib_channel_level_lines(reach)
-                        .is_some_and(|(_, lines)| {
+                        .is_some_and(|(config, lines)| {
                             lines
                                 .iter()
-                                .any(|&[a, b]| point_to_line_distance(point, a, b) <= hit_distance)
+                                .zip(config.visible_levels())
+                                .any(|(&[a, b], level)| {
+                                    point_to_line_distance(point, a, b)
+                                        <= hit_distance
+                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
+                                })
                         })
                     {
                         return Some(drawing.id);
@@ -612,7 +643,7 @@ mod tests {
                         timeframe: None,
                         finer: &[],
                     };
-                    fib.render_fibonacci(ui.painter(), rect, &view);
+                    fib.render_fibonacci(ui.painter(), rect, &view, false);
                 });
                 output.textures_delta.clear();
                 let line = output.shapes.iter().any(|s| matches!(&s.shape,
@@ -620,7 +651,7 @@ mod tests {
                 let label = output.shapes.iter().any(|s| {
                     matches!(&s.shape,
                     egui::Shape::Text(t) if t.galley.text() == format!("level ({want:.2})")
-                        && t.pos.y + t.galley.size().y < y)
+                        && (t.pos.y + t.galley.size().y / 2.0 - y).abs() < 1.0)
                 });
                 let band = output.shapes.iter().any(|s| matches!(&s.shape,
                     egui::Shape::Rect(r) if (r.rect.top()-y).abs() < 1e-3 || (r.rect.bottom()-y).abs() < 1e-3));
@@ -687,6 +718,28 @@ mod tests {
                 Some(7),
             ),
             (
+                DrawingToolType::FibonacciRetracement,
+                Some(FibonacciConfig {
+                    trend_visible: false,
+                    ..Default::default()
+                }),
+                (90.0, 310.0),
+                None,
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel {
+                        width: Some(40.0),
+                        ..crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])
+                    }],
+                    trend_visible: false,
+                    ..Default::default()
+                }),
+                (150.0, 265.0),
+                Some(7),
+            ),
+            (
                 DrawingToolType::FibonacciChannel,
                 None,
                 (150.0, 300.0),
@@ -703,6 +756,30 @@ mod tests {
                 extended(),
                 (400.0, 50.0),
                 Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])],
+                    level_width: 40.0,
+                    ..Default::default()
+                }),
+                // The level crosses (150, 300); this point is 14.1 px from its centre.
+                (150.0, 320.0),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel {
+                        width: Some(2.0),
+                        ..crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])
+                    }],
+                    level_width: 40.0,
+                    ..Default::default()
+                }),
+                (150.0, 320.0),
+                None,
             ),
         ];
         let mut wrong = Vec::new();

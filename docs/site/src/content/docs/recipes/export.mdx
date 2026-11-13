@@ -1,0 +1,60 @@
+---
+title: Export an image
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/recipes.rs?raw';
+
+An image export returns content to the host. The library renders the chart;
+your application chooses a destination and writes a file, copies an image or
+starts a browser download. It does not open an account or upload the image.
+
+## Prepare SVG bytes
+
+Create a [first chart](../first-chart.mdx) and `Export::default()` once. Call
+`export.show(ui, &mut chart)` each frame; it shows the chart itself. Pressing
+**Prepare SVG** captures the current view after the chart has been shown and
+stores the complete UTF-8 image in `export.bytes`. The scene reports the byte
+count or an error; it leaves delivery to the host.
+
+<Example scene="export" title="Prepare an image of the current chart view"
+  task="Pan or zoom, then press Prepare SVG. The status shows how many encoded bytes the host receives."
+  code={source.slice(source.indexOf('/// Return encoded')).trim()} />
+
+[`export_svg`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.export_svg)
+works with `widget` alone. The scene converts the returned string into bytes
+without another encoding step. Set
+[`ImageExportOptions::size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ImageExportOptions.html#structfield.size)
+in physical output pixels. The first chart frame must have completed, or export
+returns
+[`ExportError::NoFrame`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ExportError.html#variant.NoFrame).
+Unsupported content is reported as an error rather than silently omitted.
+
+## Deliver the result in the host
+
+Take `export.bytes` after the scene runs, using `export.bytes.take()` so it is
+delivered once. For a native application, write those bytes with
+`std::fs::write` after the user chooses a path and report any I/O error. Use a
+`.svg` filename. In a browser, create a `Blob` with MIME type `image/svg+xml`,
+create an object URL, trigger a download link from the host UI, then revoke the
+URL after it is no longer needed. Browser clipboard and download permissions
+belong to that integration. The preview prepares bytes without saving a file.
+
+## PNG and other layouts
+
+Enable the existing optional `png-export` feature to use
+[`export_png`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.export_png)
+instead. It returns `Vec<u8>` already encoded as PNG, with CPU rendering and no
+GPU readback. Save those bytes directly as `.png`, or use MIME type `image/png`
+for a browser download. Do not encode them again.
+
+[`include_crosshair`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ImageExportOptions.html#structfield.include_crosshair)
+is independent of title, timestamp and watermark options. Export uses an
+isolated chart snapshot, preserving the live view and feed. Host legends,
+tooltips and panels are outside the chart capture. Use
+[`export_layout_svg`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.export_layout_svg)
+or
+[`export_layout_png`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.export_layout_png)
+to draw a supplied layout into the export. Supply host texture pixels through
+[`ImageExportOptions::textures`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ImageExportOptions.html#structfield.textures)
+when required; custom paint callbacks can be unsupported.

@@ -18,18 +18,39 @@ pub(super) struct Recent {
     exchange_logo: Option<String>,
     country: Option<String>,
     root: Option<String>,
+    sector: Option<String>,
+    source: Option<String>,
 }
 
 impl Recent {
     fn symbol(&self) -> Instrument {
         let mut symbol = Instrument::new(&self.name).with_description(&self.description);
-        symbol.exchange = Some(self.exchange.clone());
+        symbol.exchange = (!self.exchange.is_empty()).then(|| self.exchange.clone());
         symbol.symbol_type = self.kind;
         symbol.logo = self.logo.clone();
         symbol.exchange_logo = self.exchange_logo.clone();
         symbol.country = self.country.clone();
         symbol.root = self.root.clone();
+        symbol.sector = self.sector.clone();
+        symbol.source = self.source.clone();
         symbol
+    }
+
+    /// A record that names no provider belongs to the listing of any provider.
+    fn same_listing(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.exchange == other.exchange
+            && (self.source == other.source || self.source.is_none() || other.source.is_none())
+    }
+
+    /// Takes the provider of the newest earlier entry of this listing when this record has none,
+    /// so that only that entry merges with it. `earlier` runs from newest to oldest.
+    fn keep_source<'a>(&mut self, mut earlier: impl Iterator<Item = &'a Self>) {
+        if self.source.is_none() {
+            self.source = earlier
+                .find(|old| self.same_listing(old))
+                .and_then(|old| old.source.clone());
+        }
     }
 }
 
@@ -43,6 +64,9 @@ pub(super) struct Search {
     offset: usize,
     error: Option<String>,
     pub(super) exchange: Option<String>,
+    pub(super) country: Option<String>,
+    pub(super) sector: Option<String>,
+    pub(super) data_source: Option<String>,
     pub(super) recents: TemplateStore<Vec<Recent>>,
     opened: Vec<Recent>,
     components: Components,
@@ -69,6 +93,9 @@ impl Default for Search {
             offset: 0,
             error: None,
             exchange: None,
+            country: None,
+            sector: None,
+            data_source: None,
             recents: TemplateStore::new(StoreKind::RecentSymbols),
             opened: Vec::new(),
             components: Components::default(),
@@ -98,22 +125,24 @@ impl Search {
     }
 
     pub(super) fn record(&mut self, symbol: &Instrument) {
-        let exchange = symbol.exchange.clone().unwrap_or_default();
-        self.opened
-            .retain(|row| row.name != symbol.symbol || row.exchange != exchange);
-        self.opened.push(Recent {
+        let mut recent = Recent {
             name: symbol.symbol.clone(),
             description: symbol
                 .description
                 .clone()
                 .unwrap_or_else(|| symbol.symbol.clone()),
-            exchange,
+            exchange: symbol.exchange.clone().unwrap_or_default(),
             kind: symbol.symbol_type,
             logo: symbol.logo.clone(),
             exchange_logo: symbol.exchange_logo.clone(),
             country: symbol.country.clone(),
             root: symbol.root.clone(),
-        });
+            sector: symbol.sector.clone(),
+            source: symbol.source.clone(),
+        };
+        recent.keep_source(self.opened.iter().rev());
+        self.opened.retain(|row| !recent.same_listing(row));
+        self.opened.push(recent);
     }
 
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
@@ -125,8 +154,9 @@ impl Search {
                 .get("recent")
                 .cloned()
                 .unwrap_or_default();
-            for row in self.opened.drain(..) {
-                recent.retain(|old| old.name != row.name || old.exchange != row.exchange);
+            for mut row in self.opened.drain(..) {
+                row.keep_source(recent.iter());
+                recent.retain(|old| !row.same_listing(old));
                 recent.insert(0, row);
             }
             recent.truncate(20);
@@ -150,7 +180,9 @@ impl Search {
                     self.offset += rows.len();
                     for instrument in rows.into_iter().take(limit) {
                         if self.rows.iter().any(|row| {
-                            row.symbol == instrument.symbol && row.exchange == instrument.exchange
+                            row.symbol == instrument.symbol
+                                && row.exchange == instrument.exchange
+                                && row.source == instrument.source
                         }) {
                             continue;
                         }
@@ -202,15 +234,8 @@ impl Search {
         if self.source.is_none() {
             return;
         }
-        let query = SymbolQuery {
-            text: text.into(),
-            symbol_type: kind,
-            exchange: self.exchange.clone(),
-            offset: 0,
-            limit,
-        };
-        let recent =
-            text.is_empty() && kind.is_none() && self.exchange.is_none() && self.has_recents();
+        let query = self.request(text, kind, limit);
+        let recent = query.unfiltered() && self.has_recents();
         if self.query.as_ref() != Some(&query) {
             self.reset();
             self.query = Some(query.clone());
@@ -226,6 +251,24 @@ impl Search {
             self.inbox = Arc::default();
         }
         self.poll(ctx);
+    }
+
+    pub(super) fn request(
+        &self,
+        text: &str,
+        kind: Option<SymbolType>,
+        limit: usize,
+    ) -> SymbolQuery {
+        SymbolQuery {
+            text: text.into(),
+            symbol_type: kind,
+            exchange: self.exchange.clone(),
+            country: self.country.clone(),
+            sector: self.sector.clone(),
+            source: self.data_source.clone(),
+            offset: 0,
+            limit,
+        }
     }
 
     pub(super) fn next_page(&mut self) {
@@ -262,14 +305,10 @@ impl Search {
                 None => Arc::new(fallback.to_vec()),
             };
             for (at, symbol) in symbols.iter().enumerate() {
-                let query = SymbolQuery {
-                    text: symbol.clone(),
-                    symbol_type: None,
-                    exchange: None,
-                    offset: 0,
-                    limit: 20,
-                };
-                source.search(query, self.components.inbox.reply(at as u64));
+                source.search(
+                    SymbolQuery::new(symbol),
+                    self.components.inbox.reply(at as u64),
+                );
             }
         }
         let repaint = ctx.clone();
@@ -284,9 +323,11 @@ impl Search {
                 .expect("symbol search");
             self.components.found[at] =
                 Some(rows.map_err(|error| error.to_string()).and_then(|rows| {
-                    rows.into_iter()
-                        .map(|row| row.symbol)
-                        .find(|name| name.to_lowercase() == symbols[at].to_lowercase())
+                    let query = SymbolQuery::new(&symbols[at]);
+                    rows.iter()
+                        .find(|row| row.symbol.eq_ignore_ascii_case(&symbols[at]))
+                        .or_else(|| rows.iter().find(|row| query.rank(row) == Some(0)))
+                        .map(|row| row.symbol.clone())
                         .ok_or_else(|| {
                             ExpressionError::UnknownSymbol(symbols[at].clone()).to_string()
                         })
@@ -347,7 +388,10 @@ mod tests {
         search.exchange = Some("Venue".into());
         search.query(&ctx, "old", None, 1);
         let (_, stale) = source.0.lock().unwrap().pop().unwrap();
-        search.query(&ctx, "new", Some(SymbolType::Fund), 1);
+        search.country = Some("US".into());
+        search.sector = Some("Technology".into());
+        search.data_source = Some("Provider".into());
+        search.query(&ctx, "CME:new", Some(SymbolType::Fund), 1);
         let (query, first) = source.0.lock().unwrap().pop().unwrap();
         assert_eq!(
             (
@@ -356,14 +400,23 @@ mod tests {
                 query.exchange.as_deref(),
                 query.offset
             ),
-            ("new", Some(SymbolType::Fund), Some("Venue"), 0)
+            ("CME:new", Some(SymbolType::Fund), Some("Venue"), 0)
+        );
+        assert_eq!(query.qualified(), Some(("CME", "new")));
+        assert_eq!(
+            (
+                query.country.as_deref(),
+                query.sector.as_deref(),
+                query.source.as_deref()
+            ),
+            (Some("US"), Some("Technology"), Some("Provider"))
         );
         stale.send(Ok(vec![Instrument::new("stale")]));
         search.poll(&ctx);
         assert!(search.rows.is_empty());
         first.send(Ok(vec![Instrument::new("first")]));
         search.poll(&ctx);
-        search.query(&ctx, "new", Some(SymbolType::Fund), 1);
+        search.query(&ctx, "CME:new", Some(SymbolType::Fund), 1);
         assert!(
             source.0.lock().unwrap().is_empty(),
             "same query does not refetch"
@@ -371,6 +424,9 @@ mod tests {
         search.next_page();
         let (query, second) = source.0.lock().unwrap().pop().unwrap();
         assert_eq!(query.offset, 1);
+        assert_eq!(query.country.as_deref(), Some("US"));
+        assert_eq!(query.sector.as_deref(), Some("Technology"));
+        assert_eq!(query.source.as_deref(), Some("Provider"));
         second.send(Ok(vec![Instrument::new("second")]));
         search.poll(&ctx);
         assert_eq!(
@@ -389,6 +445,29 @@ mod tests {
             source.0.lock().unwrap().is_empty(),
             "empty page ends pagination"
         );
+        for filter in 0..3 {
+            let text = format!("CME:pending{filter}");
+            search.query(&ctx, &text, Some(SymbolType::Fund), 1);
+            let (_, stale) = source.0.lock().unwrap().pop().unwrap();
+            match filter {
+                0 => search.country = Some("GB".into()),
+                1 => search.sector = None,
+                _ => search.data_source = None,
+            }
+            search.query(&ctx, &text, Some(SymbolType::Fund), 1);
+            let (query, answer) = source
+                .0
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("filter change refetches from zero");
+            assert_eq!(query.offset, 0);
+            stale.send(Err(FeedError::Network("late failure".into())));
+            answer.send(Ok(vec![]));
+            search.poll(&ctx);
+            assert!(search.results().is_empty());
+            assert!(search.error.is_none());
+        }
     }
     #[test]
     fn spread_lookup_reports_service_errors_without_claiming_the_symbol_is_unknown() {
@@ -420,14 +499,21 @@ mod tests {
     fn listings_keep_their_exchange_in_results_and_recents() {
         let ctx = egui::Context::default();
         let listings = vec![
-            Instrument::new("ABC").with_exchange("X").with_root("ABC"),
+            Instrument::new("ABC")
+                .with_exchange("X")
+                .with_root("ABC")
+                .with_source("Primary"),
             Instrument::new("ABC").with_exchange("Y").with_root("ABC"),
+            Instrument::new("ABC")
+                .with_exchange("X")
+                .with_root("ABC")
+                .with_source("Mirror"),
         ];
         let mut search = Search::default();
         search.set_service(Some(Arc::new(listings.clone())));
         search.query(&ctx, "ABC", None, 20);
         assert_eq!(search.results(), listings);
-        for listing in [&listings[0], &listings[1], &listings[0]] {
+        for listing in [&listings[2], &listings[1], &listings[0]] {
             search.record(listing);
         }
         search.poll(&ctx);
@@ -435,8 +521,9 @@ mod tests {
         for (actual, expected) in search.results().iter().zip(&listings) {
             assert_eq!(actual.exchange, expected.exchange);
             assert_eq!(actual.root, expected.root);
+            assert_eq!(actual.source, expected.source);
         }
-        assert_eq!(search.results().len(), 2);
+        assert_eq!(search.results().len(), 3);
     }
 
     #[derive(Default)]
@@ -472,7 +559,13 @@ mod tests {
         search.recents.set_storage(vault.clone());
         for symbol in ["A", "B", "A"] {
             let symbol = Instrument::new(symbol).with_description("Host name");
-            search.record(&symbol.with_logo("bytes://logo").with_country("US"));
+            search.record(
+                &symbol
+                    .with_logo("bytes://logo")
+                    .with_country("US")
+                    .with_sector("Technology")
+                    .with_source("Provider"),
+            );
         }
         for _ in 0..4 {
             search.poll(&ctx);
@@ -503,10 +596,21 @@ mod tests {
             ),
             (Some("Host name"), Some("bytes://logo"), Some("US"))
         );
+        assert_eq!(row.sector.as_deref(), Some("Technology"));
+        assert_eq!(row.source.as_deref(), Some("Provider"));
         let source = Arc::new(Source::default());
         restored.set_service(Some(source.clone()));
-        for (kind, exchange) in [(Some(SymbolType::Stock), None), (None, Some("Venue"))] {
+        for (kind, exchange, country, sector, provider) in [
+            (Some(SymbolType::Stock), None, None, None, None),
+            (None, Some("Venue"), None, None, None),
+            (None, None, Some("US"), None, None),
+            (None, None, None, Some("Technology"), None),
+            (None, None, None, None, Some("Provider")),
+        ] {
             restored.exchange = exchange.map(str::to_owned);
+            restored.country = country.map(str::to_owned);
+            restored.sector = sector.map(str::to_owned);
+            restored.data_source = provider.map(str::to_owned);
             restored.query(&ctx, "", kind, 20);
             let (query, _) = source
                 .0
@@ -515,9 +619,55 @@ mod tests {
                 .pop()
                 .expect("filters query the host catalog even when recents exist");
             assert_eq!(
-                (query.symbol_type, query.exchange.as_deref()),
-                (kind, exchange)
+                (
+                    query.symbol_type,
+                    query.exchange.as_deref(),
+                    query.country.as_deref(),
+                    query.sector.as_deref(),
+                    query.source.as_deref()
+                ),
+                (kind, exchange, country, sector, provider)
             );
+        }
+    }
+
+    /// The dialog records the chosen row and the host records the chart's instrument, which a
+    /// feed reports without the provider; distinct providers still keep their own entries.
+    #[test]
+    fn recording_a_listing_with_and_without_its_provider_keeps_one_recent() {
+        let ctx = egui::Context::default();
+        let listing = |source: &Option<&str>| {
+            let symbol = Instrument::new("MSFT").with_exchange("NASDAQ");
+            match source {
+                Some(source) => symbol.with_source(*source),
+                None => symbol,
+            }
+        };
+        for (records, expected) in [
+            (vec![Some("Synthetic"), None], vec![Some("Synthetic")]),
+            (vec![None, Some("Synthetic")], vec![Some("Synthetic")]),
+            (vec![Some("A"), Some("B")], vec![Some("B"), Some("A")]),
+            // A record without a provider belongs to the listing opened last, not to every one.
+            (vec![Some("A"), Some("B"), None], vec![Some("B"), Some("A")]),
+        ] {
+            // One poll for all records merges them in `record`; one per record, in `poll`.
+            for poll_each in [false, true] {
+                let mut search = Search::default();
+                for source in &records {
+                    search.record(&listing(source));
+                    if poll_each {
+                        search.poll(&ctx);
+                    }
+                }
+                search.poll(&ctx);
+                let sources: Vec<_> = search
+                    .recent_results()
+                    .into_iter()
+                    .map(|row| row.source)
+                    .collect();
+                let expected: Vec<_> = expected.iter().map(|s| s.map(str::to_owned)).collect();
+                assert_eq!(sources, expected, "{records:?}, poll each {poll_each}");
+            }
         }
     }
 }

@@ -38,6 +38,36 @@ impl SettingsDialog {
                         },
                     );
                 });
+                self.draw_setting_row_with_controls(ui, "Pane axes", theme, |ui, dialog| {
+                    use crate::model::AxisSide;
+                    let side = &mut dialog.settings.scales_and_lines.axis_layout.side;
+                    styled_dropdown(
+                        ui,
+                        "pane_axis_side",
+                        150.0,
+                        theme.ui.text,
+                        match side {
+                            None => "By assignment",
+                            Some(AxisSide::Left) => "Left edge",
+                            Some(AxisSide::Right) => "Right edge",
+                        },
+                        |ui| {
+                            for (label, value) in [
+                                ("By assignment", None),
+                                ("Left edge", Some(AxisSide::Left)),
+                                ("Right edge", Some(AxisSide::Right)),
+                            ] {
+                                ui.selectable_value(side, value, l10n::text(ui.ctx(), label));
+                            }
+                        },
+                    );
+                });
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.scales_and_lines.axis_layout.hide_unused,
+                    "Hide unused axes",
+                    theme.ui.text,
+                );
                 ui.add_space(theme.spacing.xxxl);
                 for (value, label) in [
                     (

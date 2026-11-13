@@ -2,7 +2,13 @@
 title: Theming and localization
 ---
 
-Themes are Rust values. `Theme` supplies dark, light and high-contrast presets,
+import Example from '../../components/Example.astro';
+import presentation from '../../../../../examples/docs/scenes/theme.rs?raw';
+
+Themes are Rust values. [`Theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html) supplies
+[dark](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html#method.dark),
+[light](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html#method.light) and
+[high-contrast](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html#method.high_contrast) presets,
 and public fields for customization. The token layer defines spacing, sizing and
 semantic colours used by the chart and application components.
 
@@ -17,23 +23,132 @@ theme::apply_to_egui(&context, &theme);
 let mut chart = ChartBuilder::new().with_theme(theme).build();
 ```
 
-Apply the theme at startup to propagate tokens into egui. `Chart::set_theme`
-updates an existing chart and the context. Use `set_theme_override` for a local
+Apply the theme at startup to propagate tokens into egui. [`Chart::set_theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_theme)
+updates an existing chart and the context. Use [`set_theme_override`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_theme_override) for a local
 chart theme when multiple charts need different appearances. Enable `serde` to
-serialize `Theme` in host settings.
+serialize [`Theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html) in host settings.
+
+## Try presentation changes
+
+Toggle **High contrast**, **Monospace font**, **German UI lookup** and **Price
+units**. The lookup translates the host's **Reset view** button; unknown keys
+keep their English text. Price labels gain a `u` suffix. The chart and readout
+share the same UTC bars throughout. **UTC +05:45** changes only their displayed
+clock, as explained in [Time zones and sessions](time-zones.mdx).
+Create `Presentation::default()` once and call `show(ui, &mut chart)` before
+`chart.show(ui)` each frame, using the [first chart](first-chart.mdx) as history.
+
+<Example scene="theme" title="Fonts, translation and chart presentation"
+  task="Change contrast, font, language, price labels and the displayed clock."
+  code={presentation} />
 
 ## Fonts and images
 
-`apply_to_egui` installs the bundled Roboto face ahead of the application's
-proportional fonts. To replace it, call `Context::set_fonts` afterwards. The host
-supplies additional glyph coverage. The chart installs SVG image loading;
-applications displaying other image formats install their own loaders.
+[`apply_to_egui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/fn.apply_to_egui.html) installs the bundled Roboto face ahead of the application's
+proportional fonts. To replace it, call [`Context::set_fonts`](https://docs.rs/egui/0.37.0/egui/struct.Context.html#method.set_fonts) afterwards. The host
+supplies additional glyph coverage. With `ui`, the chart installs general SVG
+image loading; `icons` alone installs only the embedded icon loader. Hosts using
+other image formats or general SVG images without `ui` install their own loaders.
+
+Install your font after each global theme change. For example, pass bytes from
+an embedded, licensed font asset to this function after `apply_to_egui`:
+
+```rust
+fn install_host_font(ctx: &egui::Context, bytes: &'static [u8]) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "host".into(),
+        egui::FontData::from_static(bytes).into(),
+    );
+    fonts.families.entry(egui::FontFamily::Proportional)
+        .or_default().insert(0, "host".into());
+    ctx.set_fonts(fonts);
+}
+```
+
+Keep fallback fonts for glyphs your primary face lacks. The running scene uses
+egui's bundled monospace family so it needs no font download. Font replacement
+affects the whole egui context. For chart text sizes, edit
+[`Theme::text`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html#structfield.text)
+before applying it. See [Accessibility](accessibility.mdx#text-size-and-contrast)
+for zoom and contrast checks.
 
 ## Translate the interface
 
-Install a host text lookup with `localization::set_translator` before drawing.
+Install a host text lookup with [`localization::set_translator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/localization/fn.set_translator.html) before drawing.
 Missing entries keep English text. Replacing or clearing the lookup takes effect
 on the next frame; translations and fonts belong to the host. UI labels and
 accessibility names use that lookup, while dates and numbers use the chart's
-formatters and locale. `Chart::set_locale` controls localized calendar labels;
+formatters and locale. [`Chart::set_locale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_locale) controls localized calendar labels;
 `locales` enables the locale tables.
+
+```rust
+use egui_charts::localization;
+
+let ctx = egui::Context::default();
+localization::set_translator(&ctx, |english| match english {
+    "Cancel" => Some("Abbrechen".into()),
+    "Copy price {price_str}" => Some("{price_str} kopieren".into()),
+    _ => None,
+});
+assert_eq!(localization::text(&ctx, "Cancel"), "Abbrechen");
+```
+
+Keys include punctuation and case. Preserve placeholder names such as
+`{price_str}`; translations can reorder or repeat them. Use
+[`format_text`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/localization/fn.format_text.html)
+in host controls to translate a template and insert already-formatted values.
+Call [`clear_translator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/localization/fn.clear_translator.html)
+to restore English. The lookup is scoped to the context and must be `Send + Sync`
+and `'static`. Some application UI labels still use direct English text; this
+hook does not guarantee a fully translated application.
+
+Calendar language and UI translation are separate. `set_locale(Some("de-DE".into()))`
+names months and weekdays in German when `locales` is enabled (on by default).
+A widget-only build, including this scene, keeps English calendar names unless
+the host enables that feature. Locale selection does not change numeric
+separators. Use formatters for host-specific number conventions.
+
+## Format dates and values
+
+```rust
+use std::sync::Arc;
+use egui_charts::{ChartBuilder, scales::CustomPriceFormatter};
+
+let mut chart = ChartBuilder::new().build();
+chart.set_locale(Some("de-DE".into()));
+chart.set_date_format(Some("%d.%m.%Y".into()));
+chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|price| {
+    format!("{price:.2} EUR").replace('.', ",")
+}))));
+```
+
+[`set_date_format`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_date_format)
+accepts a `strftime` pattern for crosshair, tooltip and forecast dates; intraday
+labels append the clock. Invalid patterns fall back to the built-in dates.
+[`set_time_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_time_formatter)
+accepts an `Arc<dyn TimeFormatter>` for custom time labels. Its
+[`format_tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.TimeFormatter.html#method.format_tick)
+receives the active locale and can return `None` for the built-in tick text.
+A supplied formatter otherwise replaces the built-in locale and date format.
+Inputs already contain the selected zone's wall-clock fields: do not shift
+them a second time. [`format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time)
+lets a host readout use the chart's time presentation.
+
+Choose the formatter for the values being displayed:
+
+| Setter | Values and labels |
+| --- | --- |
+| [`set_price_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_price_formatter) | Raw prices on normal and logarithmic axes, price tags and drawing prices; replaces instrument decimals. |
+| [`set_series_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_formatter) | Raw prices of one series; overrides the chart formatter. A shared axis uses its first visible series. |
+| [`set_percentage_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_percentage_formatter) | Already transformed percentage or indexed-to-100 values. |
+| [`set_volume_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_formatter) | Volume readouts and volume-formatted studies, in volume units. |
+
+Pass `None` to remove a host formatter. A series falls back to the chart price
+formatter, then its saved
+[`SeriesStyle::display_format`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.SeriesStyle.html#structfield.display_format)
+declaration, then built-in formatting. Other studies retain their own value formats.
+Formatters change text, never stored prices, volumes or calculations. See the
+[price scale guide](price-scale.mdx#choose-the-transform) for relative units and
+the [accessibility guide](accessibility.mdx#screen-reader-output) for the separate
+text summary's formatting limits.

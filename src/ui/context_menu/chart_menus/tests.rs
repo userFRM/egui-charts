@@ -1,6 +1,6 @@
 use super::*;
 use crate::theme::Theme;
-use egui::{Color32, Pos2, Rect, Vec2};
+use egui::{Color32, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 #[test]
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
@@ -1132,4 +1132,398 @@ fn study_menu_entries_act_on_the_study() {
     pick(&mut chart, &mut menus, rsi, &["Remove"]);
     assert!(study(&chart, rsi).is_none());
     assert!(chart.can_undo(), "menu edits are undoable");
+}
+
+#[test]
+fn pointer_button_opens_price_actions_in_each_pane_and_keeps_the_original_price() {
+    for pane in ["price", "study", "series", "empty"] {
+        for pick in ["line", "alert", "order"] {
+            // Only a value in the pane of the main series is a price of the chart symbol.
+            if pane != "price" && pick != "line" {
+                continue;
+            }
+            for command in [
+                Modifiers::CTRL.plus(Modifiers::COMMAND),
+                Modifiers::MAC_CMD.plus(Modifiers::COMMAND),
+            ] {
+                let ctx = Context::default();
+                let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+                chart.set_symbol("TEST");
+                chart.config_mut().show_plus_button = false;
+                let target = match pane {
+                    "study" => {
+                        let id = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+                        Some(chart.series_pane(id).unwrap())
+                    }
+                    "series" => {
+                        let id = chart.add_series(crate::widget::SeriesOptions::default());
+                        chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                        let target = chart.add_pane();
+                        chart.move_series_to_pane(id, target);
+                        Some(target)
+                    }
+                    "empty" => {
+                        let target = chart.add_pane();
+                        chart.set_preserve_empty_pane(target, true);
+                        Some(target)
+                    }
+                    _ => None,
+                };
+                let mut menus = ChartMenus::default();
+                let screen_height = std::cell::Cell::new(600.0);
+                let mut frame = |chart: &mut Chart, events| {
+                    let mut action = None;
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(800.0, screen_height.get()),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            action = menus.show(ui.ctx(), chart);
+                        },
+                    );
+                    (output, action)
+                };
+                for _ in 0..3 {
+                    frame(&mut chart, vec![]).0.drop_without_applying_deltas();
+                }
+                // The two panes share the available height in a 3:1 ratio.
+                let pos = if target.is_some() {
+                    egui::pos2(350.0, 530.0)
+                } else {
+                    egui::pos2(350.0, 250.0)
+                };
+                let map = target
+                    .and_then(|pane| chart.pane_series(pane).first().copied())
+                    .and_then(|id| chart.series_price_map(id))
+                    .unwrap_or_else(|| chart.get_chart_mapping().price);
+                let range = map.range();
+                let top = map.price_to_y(range.max);
+                let bottom = map.price_to_y(range.min);
+                let price =
+                    range.max - f64::from((pos.y - top) / (bottom - top)) * (range.max - range.min);
+                frame(&mut chart, vec![Event::PointerMoved(pos)])
+                    .0
+                    .drop_without_applying_deltas();
+                let hovered = chart.get_hover_bar_idx();
+                let modifiers = command.plus(Modifiers::ALT);
+                for _ in 0..3 {
+                    frame(
+                        &mut chart,
+                        vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
+                    )
+                    .0
+                    .drop_without_applying_deltas();
+                    if pane == "price" && pick == "line" {
+                        assert!(hovered.is_some());
+                        assert_eq!(
+                            chart.get_hover_bar_idx(),
+                            hovered,
+                            "revealing the button keeps the readout"
+                        );
+                    }
+                }
+                for pressed in [true, false] {
+                    frame(
+                        &mut chart,
+                        vec![Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: PointerButton::Primary,
+                            modifiers,
+                        }],
+                    )
+                    .0
+                    .drop_without_applying_deltas();
+                }
+                if pane == "study" && pick == "line" {
+                    screen_height.set(900.0);
+                }
+                let output = frame(
+                    &mut chart,
+                    vec![
+                        Event::ModifiersChanged(Modifiers::NONE),
+                        Event::PointerMoved(egui::pos2(20.0, 20.0)),
+                    ],
+                )
+                .0;
+                let prefix = match pick {
+                    "line" => "Draw horizontal line",
+                    "alert" => "Add alert on",
+                    _ => "Sell ",
+                };
+                let mut point = None;
+                fn find(shape: &egui::Shape, prefix: &str, point: &mut Option<Pos2>) {
+                    match shape {
+                        egui::Shape::Text(text) if text.galley.text().starts_with(prefix) => {
+                            *point = Some(text.pos + egui::vec2(60.0, 6.0))
+                        }
+                        egui::Shape::Vec(shapes) => {
+                            shapes.iter().for_each(|shape| find(shape, prefix, point))
+                        }
+                        _ => {}
+                    }
+                }
+                for shape in &output.shapes {
+                    find(&shape.shape, prefix, &mut point);
+                }
+                output.drop_without_applying_deltas();
+                let point = point.unwrap_or_else(|| panic!("missing {pick} in {pane}"));
+                frame(
+                    &mut chart,
+                    vec![
+                        Event::PointerMoved(point),
+                        Event::PointerButton {
+                            pos: point,
+                            pressed: true,
+                            button: PointerButton::Primary,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                )
+                .0
+                .drop_without_applying_deltas();
+                let (output, action) = frame(
+                    &mut chart,
+                    vec![Event::PointerButton {
+                        pos: point,
+                        pressed: false,
+                        button: PointerButton::Primary,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+                output.drop_without_applying_deltas();
+                assert!(action.is_some(), "{pane} {pick}");
+                let action_price = match action.unwrap() {
+                    ChartContextAction::Chart(
+                        ContextMenuAction::DrawHorizontalLine(price)
+                        | ContextMenuAction::AddAlert { price, .. },
+                    ) => price,
+                    ChartContextAction::Chart(ContextMenuAction::Order(request)) => {
+                        match request.order_type {
+                            crate::model::OrderType::Limit(price)
+                            | crate::model::OrderType::Stop(price) => price,
+                            _ => panic!("unexpected order"),
+                        }
+                    }
+                    other => panic!("unexpected {other:?}"),
+                };
+                assert!(action_price.is_finite());
+                if pane != "empty" {
+                    assert!(
+                        (action_price - price).abs() < 1e-4,
+                        "{pane}: {action_price} != {price}"
+                    );
+                }
+                if pick == "line" {
+                    let drawing = chart.drawings().drawings.last().unwrap();
+                    assert_eq!(drawing.chart_points[0].price, action_price);
+                    if let Some(member) =
+                        target.and_then(|pane| chart.pane_series(pane).first().copied())
+                    {
+                        assert_eq!(drawing.pane, Some(member.0));
+                    } else {
+                        assert_eq!(drawing.pane.is_some(), target.is_some());
+                    }
+                    assert!(chart.undo());
+                    assert!(chart.drawings().drawings.is_empty());
+                }
+            }
+        }
+    }
+    for owner in ["editor", "host", "drawing", "disabled"] {
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        let mut menus = ChartMenus::default();
+        let mut text = String::from("draft");
+        if owner == "drawing" {
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(crate::drawings::DrawingToolType::TrendLine));
+        }
+        let pos = egui::pos2(350.0, 250.0);
+        let modifiers = Modifiers::ALT
+            .plus(Modifiers::CTRL)
+            .plus(Modifiers::COMMAND);
+        for pressed in [None, None, Some(true), Some(false)] {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events: vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)]
+                        .into_iter()
+                        .chain(pressed.map(|pressed| Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: PointerButton::Primary,
+                            modifiers,
+                        }))
+                        .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    if owner == "editor" {
+                        ui.text_edit_singleline(&mut text).request_focus();
+                    } else if owner == "host" {
+                        chart.suppress_shortcuts(ui.ctx());
+                    } else if owner == "disabled" {
+                        ui.disable();
+                    }
+                    chart.show(ui);
+                    menus.show(ui.ctx(), &mut chart);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(menus.context.is_none(), "{owner} retains the gesture");
+        assert_eq!(text, "draft");
+    }
+}
+
+#[test]
+fn study_and_series_panes_offer_no_main_symbol_alerts_or_orders() {
+    // y 250 lies in the upper pane and y 530 in the lower one.
+    for (pane, secondary, y, trading) in [
+        ("price", false, 250.0, true),
+        ("study", false, 530.0, false),
+        ("study", true, 530.0, false),
+        ("series", false, 530.0, false),
+        ("empty", false, 530.0, false),
+        ("moved main series", false, 530.0, true),
+    ] {
+        let ctx = Context::default();
+        // TEST trades between 100 and 110; OTHER, in its own pane, between 400 and 410.
+        let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        chart.set_symbol("TEST");
+        match pane {
+            "study" => {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
+            "series" => {
+                let id = chart.add_series(crate::widget::SeriesOptions {
+                    name: "OTHER".into(),
+                    ..Default::default()
+                });
+                let bars: Vec<_> = chart
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .map(|bar| {
+                        crate::model::Bar::new(
+                            bar.time,
+                            bar.open + 300.0,
+                            bar.high + 300.0,
+                            bar.low + 300.0,
+                            bar.close + 300.0,
+                            bar.volume,
+                        )
+                    })
+                    .collect();
+                chart.set_data(id, bars);
+                let target = chart.add_pane();
+                chart.move_series_to_pane(id, target);
+            }
+            "empty" => {
+                let target = chart.add_pane();
+                chart.set_preserve_empty_pane(target, true);
+            }
+            "moved main series" => {
+                let target = chart.add_pane();
+                chart.move_series_to_pane(SeriesId::MAIN, target);
+            }
+            _ => {}
+        }
+        let mut menus = ChartMenus::default();
+        menus.chart.watchlists = vec!["Tech".into()];
+        let mut frame = |chart: &mut Chart, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    menus.show(ui.ctx(), chart);
+                },
+            )
+        };
+        for _ in 0..3 {
+            frame(&mut chart, vec![]).drop_without_applying_deltas();
+        }
+        let pos = egui::pos2(350.0, y);
+        let modifiers = if secondary {
+            Modifiers::NONE
+        } else {
+            // Alt and the command modifier reveal the price button at the pointer.
+            Modifiers::CTRL
+                .plus(Modifiers::COMMAND)
+                .plus(Modifiers::ALT)
+        };
+        for _ in 0..3 {
+            frame(
+                &mut chart,
+                vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
+            )
+            .drop_without_applying_deltas();
+        }
+        for pressed in [true, false] {
+            frame(
+                &mut chart,
+                vec![Event::PointerButton {
+                    pos,
+                    pressed,
+                    button: if secondary {
+                        PointerButton::Secondary
+                    } else {
+                        PointerButton::Primary
+                    },
+                    modifiers,
+                }],
+            )
+            .drop_without_applying_deltas();
+        }
+        let output = frame(
+            &mut chart,
+            vec![
+                Event::ModifiersChanged(Modifiers::NONE),
+                Event::PointerMoved(egui::pos2(20.0, 20.0)),
+            ],
+        );
+        fn collect(shape: &egui::Shape, labels: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push(text.galley.text().to_owned()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, labels)),
+                _ => {}
+            }
+        }
+        let mut labels = Vec::new();
+        for shape in &output.shapes {
+            collect(&shape.shape, &mut labels);
+        }
+        output.drop_without_applying_deltas();
+        let count = |prefix: &str| {
+            labels
+                .iter()
+                .filter(|label| label.starts_with(prefix))
+                .count()
+        };
+        let case = format!("{pane}, right-click {secondary}: {labels:?}");
+        assert_eq!(count("Draw horizontal line"), 1, "{case}");
+        // The right-click menu lists the watchlist row, right in any pane.
+        assert_eq!(
+            count("Add TEST to watchlist"),
+            usize::from(secondary),
+            "{case}"
+        );
+        assert_eq!(count("Add alert on"), usize::from(trading), "{case}");
+        assert_eq!(
+            count("Buy ") + count("Sell "),
+            2 * usize::from(trading),
+            "{case}"
+        );
+    }
 }

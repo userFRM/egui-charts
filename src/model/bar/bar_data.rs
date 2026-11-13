@@ -152,43 +152,40 @@ impl BarData {
     /// - HA Open = (Previous HA Open + Previous HA Close) / 2
     /// - HA High = Max(High, HA Open, HA Close)
     /// - HA Low = Min(Low, HA Open, HA Close)
+    ///
+    /// A whitespace bar stays whitespace, and the bar after it continues from the last bar with
+    /// a value.
     pub fn to_heikin_ashi(&self) -> Self {
-        if self.bars.is_empty() {
-            return Self::new();
-        }
-
         let mut ha_bars = Vec::with_capacity(self.bars.len());
+        Self::extend_heikin_ashi(&mut ha_bars, &self.bars);
+        Self::from_bars(ha_bars)
+    }
 
-        // First bar: use modified OHLC values
-        let first = &self.bars[0];
-        let mut prev_ha_open = (first.open + first.close) / 2.0;
-        let mut prev_ha_close = (first.open + first.high + first.low + first.close) / 4.0;
-
-        ha_bars.push(Bar::new(
-            first.time,
-            prev_ha_open,
-            first.high,
-            first.low,
-            prev_ha_close,
-            first.volume,
-        ));
-
-        // Process remaining bars
-        for bar in self.bars.iter().skip(1) {
+    /// Appends the Heikin-Ashi candles of `bars` to `ha_bars`, the candles of the bars before them.
+    pub(crate) fn extend_heikin_ashi(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
+        for bar in bars {
+            if bar.is_whitespace() {
+                ha_bars.push(Bar::whitespace(bar.time));
+                continue;
+            }
             let ha_close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
-            let ha_open = (prev_ha_open + prev_ha_close) / 2.0;
-            let ha_high = bar.high.max(ha_open).max(ha_close);
-            let ha_low = bar.low.min(ha_open).min(ha_close);
-
+            let (ha_open, ha_high, ha_low) =
+                match ha_bars.iter().rev().find(|ha| !ha.is_whitespace()) {
+                    Some(prev) => {
+                        let open = (prev.open + prev.close) / 2.0;
+                        (
+                            open,
+                            bar.high.max(open).max(ha_close),
+                            bar.low.min(open).min(ha_close),
+                        )
+                    }
+                    // The first candle has no previous one to continue from.
+                    None => ((bar.open + bar.close) / 2.0, bar.high, bar.low),
+                };
             ha_bars.push(Bar::new(
                 bar.time, ha_open, ha_high, ha_low, ha_close, bar.volume,
             ));
-
-            prev_ha_open = ha_open;
-            prev_ha_close = ha_close;
         }
-
-        Self::from_bars(ha_bars)
     }
 
     /// Returns a clone of the bar data (for regular candlesticks)

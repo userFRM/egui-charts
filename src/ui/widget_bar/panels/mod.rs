@@ -25,6 +25,7 @@ pub mod symbol_details;
 pub mod time_and_sales;
 pub mod watchlist;
 
+pub use crate::ui::trading::DepthPanel;
 pub use alerts_panel::*;
 pub use calendar::*;
 pub use chats::*;

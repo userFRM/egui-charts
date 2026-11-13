@@ -11,8 +11,10 @@ impl ObjectTreePanel {
     ///
     /// Bind the main data source with `with_series_id(SeriesId::MAIN)` to control its visibility.
     /// Returns `false` for host-owned property dialogs, colour gestures, templates, main-series
-    /// removal and renaming non-drawing rows. Drawing names are saved and undone with the drawing.
-    /// Bulk actions apply to every selected drawing and study, and visibility includes the main series.
+    /// removal, renaming non-drawing rows and the layout-wide drawings by symbol. Drawing names are
+    /// saved and undone with the drawing.
+    /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
+    /// series; bar-series ordering stays within its pane.
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -33,21 +35,28 @@ impl ObjectTreePanel {
                 }
                 let mut path = parent.clone();
                 path.push(name.to_owned());
-                if !self.state_mut().folders.insert(path.clone()) {
-                    return false;
-                }
-                self.state_mut().expanded_groups.insert("Drawings".into());
-                for depth in 1..=path.len() {
-                    self.state_mut().collapsed_folders.remove(&path[..depth]);
-                }
                 let ids: Vec<_> = selected
                     .iter()
                     .filter(|s| s.is_drawing())
                     .map(|s| s.id)
                     .collect();
-                chart
-                    .drawings_mut()
-                    .edit_drawings(&ids, |d| d.folder = path.clone());
+                let folders = super::folders::selected_folders(self.state(), sources, &path);
+                if ids.is_empty()
+                    || self.state().folders.contains(&path)
+                    || !chart.drawings_mut().move_to_folder(&ids, &folders, &path)
+                {
+                    return false;
+                }
+                self.state_mut().folders.insert(path.clone());
+                self.state_mut().expanded_groups.insert("Drawings".into());
+                // Everything under the new folder shows expanded, as under a dragged folder, and
+                // the folders moved into it whole leave no collapsed state at their old paths.
+                self.state_mut().collapsed_folders.retain(|p| {
+                    !p.starts_with(&path) && !folders.iter().any(|folder| p.starts_with(folder))
+                });
+                for depth in 1..=path.len() {
+                    self.state_mut().collapsed_folders.remove(&path[..depth]);
+                }
             }
             ObjectTreeAction::MoveToFolder(ids, path) => {
                 if !path.is_empty() && !self.state().folders.contains(path) {
@@ -64,9 +73,49 @@ impl ObjectTreePanel {
                     })
                     .map(|d| d.id)
                     .collect();
-                chart
-                    .drawings_mut()
-                    .edit_drawings(&ids, |d| d.folder = path.clone());
+                chart.drawings_mut().move_to_folder(&ids, &[], path);
+            }
+            ObjectTreeAction::MoveFolder(folder, parent) => {
+                if !self.state().folders.contains(folder)
+                    || (!parent.is_empty() && !self.state().folders.contains(parent))
+                {
+                    return false;
+                }
+                let moved =
+                    chart
+                        .drawings_mut()
+                        .move_to_folder(&[], std::slice::from_ref(folder), parent);
+                if moved {
+                    let target = [parent.as_slice(), &folder[folder.len() - 1..]].concat();
+                    self.state_mut()
+                        .collapsed_folders
+                        .retain(|p| !p.starts_with(folder) && !p.starts_with(&target));
+                }
+                return moved;
+            }
+            ObjectTreeAction::DeleteFolder(path) => {
+                if !self.state().folders.contains(path) {
+                    return false;
+                }
+                let ids: Vec<_> = sources
+                    .iter()
+                    .filter(|s| s.is_drawing() && s.folder.starts_with(path))
+                    .map(|s| s.id)
+                    .collect();
+                chart.drawings_mut().delete_drawings(&ids);
+                self.state_mut().selected_ids.retain(|id| !ids.contains(id));
+                // A folder kept by its locked drawings stays collapsed.
+                self.state_mut().collapsed_folders.retain(|p| {
+                    !p.starts_with(path)
+                        || chart
+                            .drawings()
+                            .drawings
+                            .iter()
+                            .any(|d| d.folder.starts_with(p))
+                });
+            }
+            ObjectTreeAction::SetFolderSync(path, sync) => {
+                return chart.drawings_mut().set_folder_sync(path, *sync);
             }
             ObjectTreeAction::SetFolderVisible(path, value)
             | ObjectTreeAction::SetFolderLocked(path, value) => {
@@ -116,7 +165,9 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::AddToSelection(_)
             | ObjectTreeAction::RangeSelect(_)
-            | ObjectTreeAction::SelectAll => {
+            | ObjectTreeAction::SelectAll
+            | ObjectTreeAction::SelectFolder(_)
+            | ObjectTreeAction::AddFolderToSelection(_) => {
                 chart.clear_selection();
                 chart
                     .drawings_mut()
@@ -163,13 +214,17 @@ impl ObjectTreePanel {
                 let Some(source) = sources.iter().find(|s| s.id == *id) else {
                     return false;
                 };
-                if !source.is_drawing() && !source.is_indicator() {
+                if !source.is_drawing() && !source.is_indicator() && !source.is_added_series() {
                     return false;
                 }
                 delete(chart, source);
             }
             ObjectTreeAction::DeleteSelected => {
-                for source in selected {
+                let (drawings, others): (Vec<_>, Vec<_>) =
+                    selected.into_iter().partition(|s| s.is_drawing());
+                let ids: Vec<_> = drawings.iter().map(|s| s.id).collect();
+                chart.drawings_mut().delete_drawings(&ids);
+                for source in others {
                     delete(chart, source);
                 }
                 self.state_mut().clear_selection();
@@ -200,6 +255,22 @@ impl ObjectTreePanel {
             | ObjectTreeAction::SendToBack(id)
             | ObjectTreeAction::MoveUp(id)
             | ObjectTreeAction::MoveDown(id) => {
+                if let Some(series) = sources
+                    .iter()
+                    .find(|s| s.id == *id && s.source_type == SourceType::DataSource)
+                    .and_then(|s| s.series_id)
+                {
+                    let Some(order) = chart.series_order(series) else {
+                        return false;
+                    };
+                    let order = match action {
+                        ObjectTreeAction::BringToFront(_) => usize::MAX,
+                        ObjectTreeAction::SendToBack(_) => 0,
+                        ObjectTreeAction::MoveUp(_) => order.saturating_add(1),
+                        _ => order.saturating_sub(1),
+                    };
+                    return chart.set_series_order(series, order);
+                }
                 let mut order: Vec<_> = chart
                     .drawings()
                     .drawings
@@ -231,6 +302,19 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ZoomTo(id) => {
+                if let Some(series) = sources
+                    .iter()
+                    .find(|s| s.id == *id && s.is_added_series())
+                    .and_then(|s| s.series_id)
+                {
+                    if let Some(time) = chart.bars(series).last().map(|bar| bar.time) {
+                        chart.scroll_to_time(time);
+                        if let Some(scale) = chart.series_price_scale_mut(series) {
+                            scale.reset();
+                        }
+                    }
+                    return true;
+                }
                 if !sources.iter().any(|s| s.id == *id && s.is_drawing())
                     || !chart.drawings().drawings.iter().any(|d| d.id == *id)
                 {
@@ -242,7 +326,11 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::RemoveAllDrawings => chart.drawings_mut().clear_all(),
             ObjectTreeAction::RemoveAllIndicators => {
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                let ids: Vec<SeriesId> = chart
+                    .indicators()
+                    .filter(|(_, study)| study.user_edit_enabled())
+                    .map(|(id, _)| id)
+                    .collect();
                 for id in ids {
                     chart.remove_series(id);
                 }
@@ -257,6 +345,10 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     if source.source_type == SourceType::DataSource && source.series_id == Some(SeriesId::MAIN) {
         chart.set_main_series_visible(visible);
         true
+    } else if source.is_added_series() {
+        source
+            .series_id
+            .is_some_and(|id| chart.set_series_visible(id, visible))
     } else if source.is_indicator() {
         source
             .series_id
@@ -272,8 +364,10 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
 }
 
 fn delete(chart: &mut Chart, source: &SourceItem) {
-    if source.is_indicator() {
-        if let Some(id) = source.series_id {
+    if source.is_indicator() || source.is_added_series() {
+        if let Some(id) = source.series_id
+            && (source.is_added_series() || chart.indicator_user_edit_enabled(id))
+        {
             chart.remove_series(id);
         }
     } else if source.is_drawing() {
@@ -395,6 +489,32 @@ mod tests {
     }
 
     #[test]
+    fn deleting_added_series_preserves_read_only_studies() {
+        for bulk in [false, true] {
+            let mut chart = chart(&[100.0], &[200.0]);
+            let study = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            chart.set_indicator_user_edit_enabled(study, false);
+            let added = chart.add_series(crate::widget::SeriesOptions::default());
+            let sources = [
+                SourceItem::indicator(1, "SMA", egui::Color32::GRAY).with_series_id(study),
+                SourceItem::data_source(2, "Comparison").with_series_id(added),
+            ];
+            let mut tree = ObjectTreePanel::new();
+            if bulk {
+                tree.state_mut().select(1);
+                tree.state_mut().toggle_selection(2);
+                tree.apply_to_chart(&mut chart, &ObjectTreeAction::DeleteSelected, &sources);
+            } else {
+                for id in [1, 2] {
+                    tree.apply_to_chart(&mut chart, &ObjectTreeAction::Delete(id), &sources);
+                }
+            }
+            assert!(chart.indicators().any(|(id, _)| id == study));
+            assert!(chart.series().all(|(id, _)| id != added));
+        }
+    }
+
+    #[test]
     fn layers_names_copies_and_visibility_apply_as_undoable_steps() {
         let mut chart = chart(&[100.0], &[200.0]);
         let mut tree = ObjectTreePanel::new();
@@ -495,5 +615,69 @@ mod tests {
             .find(|id| !before.contains(id))
             .unwrap();
         assert_eq!(chart.indicator_inputs(copy), Some("2 close"));
+    }
+
+    /// A new subfolder made inside a fully selected folder takes that folder's subfolders whole.
+    /// Folder A holds one drawing directly, one in A/B and one in A/C; clicking A selects all
+    /// three. Expected by the contract that a new folder keeps the structure of every folder whose
+    /// drawings are all selected, except the folders the new one is created in, in one undo step.
+    #[test]
+    fn new_subfolder_keeps_the_structure_of_a_selected_folder() {
+        let folders = |chart: &Chart| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.folder.join("/"))
+                .collect::<Vec<_>>()
+        };
+        let mut observed = Vec::new();
+        for parent in [&["A"][..], &["A", "B"]] {
+            let mut chart = crate::widget::ChartBuilder::new().build();
+            for folder in [&["A"][..], &["A", "B"], &["A", "C"]] {
+                let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                drawing.folder = folder.iter().map(|name| (*name).to_owned()).collect();
+                drawing.chart_points =
+                    vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+                drawing.completed = true;
+                chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+            }
+            let mut rows: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| {
+                    let mut row = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                    row.folder = d.folder.clone();
+                    row
+                })
+                .collect();
+            let mut tree = ObjectTreePanel::new();
+            // The tree derives its folders from the rows as it shows them.
+            egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| {
+                    tree.show(ui, None, &mut rows);
+                })
+                .drop_without_applying_deltas();
+            let ids: Vec<_> = rows.iter().map(|row| row.id).collect();
+            tree.state_mut().select_all(&ids);
+            let parent: Vec<String> = parent.iter().map(|name| (*name).to_owned()).collect();
+            assert!(tree.apply_to_chart(
+                &mut chart,
+                &ObjectTreeAction::CreateFolder(parent, "Sub".into()),
+                &rows,
+            ));
+            observed.push(folders(&chart));
+            assert!(chart.drawings_mut().undo());
+            assert_eq!(folders(&chart), ["A", "A/B", "A/C"]);
+        }
+        assert_eq!(
+            observed,
+            [
+                vec!["A/Sub", "A/Sub/B", "A/Sub/C"],
+                vec!["A/B/Sub", "A/B/Sub", "A/B/Sub/C"],
+            ],
+            "folders after creating Sub under A, then under A/B: {observed:?}"
+        );
     }
 }

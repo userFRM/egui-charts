@@ -209,6 +209,27 @@ impl Indicator for StochasticRSI {
         }
     }
 
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::LIGHT_BLUE.gamma_multiply_u8(26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (80.0, palette::MUTED, "Overbought"),
+                (20.0, palette::MUTED, "Oversold"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+            ],
+            fill_between_levels: true,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // StochRSI is a separate oscillator pane
     }

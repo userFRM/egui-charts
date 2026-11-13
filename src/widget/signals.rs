@@ -125,7 +125,7 @@ impl Chart {
             )
             .map(|index| index as f64)
             .or_else(|| self.time_to_index(time))
-            .map(|index| coords.idx_to_x(0) + index as f32 * coords.bar_spacing)
+            .map(|index| coords.index_to_x(index))
         };
         let mut occupied = Vec::new();
         let half_width = (coords.bar_spacing * self.config.candle_width)
@@ -209,7 +209,7 @@ impl Chart {
                     else {
                         continue;
                     };
-                    let px = coords.idx_to_x(0) + index as f32 * coords.bar_spacing;
+                    let px = coords.index_to_x(index);
                     let color = match direction {
                         Direction::Up => theme.chart.candle_up,
                         Direction::Down => theme.chart.candle_down,

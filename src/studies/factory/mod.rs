@@ -38,11 +38,18 @@ type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 /// the value the rendering layer and legends display, and a new indicator is
 /// reachable through the factory the moment it is added to this list.
 macro_rules! register_builtins {
+    (@help $factory:expr, $kind:literal, $($ty:ty),+ $(,)?) => {
+        $($factory.help_urls.insert(
+            std::any::type_name::<$ty>(),
+            concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/", $kind, ".", stringify!($ty), ".html"),
+        );)+
+    };
     ($factory:expr, $($category:literal => [$($ty:ty),+ $(,)?]),+ $(,)?) => {
         $($(
             // Read the canonical name from a throwaway default instance so the
             // key is always exactly what the indicator reports at runtime.
             let key = <$ty as Default>::default().name().to_string();
+            register_builtins!(@help $factory, "struct", $ty);
             $factory.constructors.insert(
                 key,
                 (Some($category), Box::new(|| Box::new(<$ty as Default>::default()))),
@@ -67,6 +74,8 @@ macro_rules! register_builtins {
 pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
+    help_urls: HashMap<&'static str, &'static str>,
+    defaults: HashMap<String, StudyTemplate>,
 }
 
 impl IndicatorFactory {
@@ -88,6 +97,8 @@ impl IndicatorFactory {
     pub fn new() -> Self {
         let mut factory = Self {
             constructors: HashMap::new(),
+            help_urls: HashMap::new(),
+            defaults: HashMap::new(),
         };
 
         factory.register_builtin();
@@ -102,6 +113,9 @@ impl IndicatorFactory {
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
+        register_builtins!(@help self, "struct", CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns, OptionsVolumeProfile);
+        #[cfg(feature = "drawings")]
+        register_builtins!(@help self, "struct", AutoDrawing);
         let unlisted: [fn() -> Box<dyn Indicator>; 7] = [
             || Box::new(CVD::default()),
             || Box::new(CloseToCloseVol::default()),
@@ -368,6 +382,7 @@ impl IndicatorFactory {
                 ),
             );
         }
+        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
         for cumulative in [false, true] {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()
@@ -437,13 +452,64 @@ impl IndicatorFactory {
         if name.trim().is_empty() {
             return false;
         }
+        self.defaults.remove(&name);
         self.constructors
             .insert(name, (Some(category), Box::new(constructor)));
         true
     }
 
-    /// Create an indicator by its registered name, or `None` if not found.
+    /// Set the inputs and presentation used by subsequent [`create`](Self::create) calls.
+    /// Each template replaces the defaults for its registered name; other names retain theirs.
+    /// An empty list changes nothing, and the last template for a repeated name wins.
+    /// Defaults saved under earlier input ids are upgraded like saved templates.
+    /// Invalid names, inputs or settings reject the entire batch without changing any defaults.
+    /// Existing studies, saved templates, layouts, clipboard copies and alert studies keep their
+    /// own settings.
+    /// Replacing or removing a constructor discards its defaults.
+    ///
+    /// Capture a study with [`StudyTemplate::from_study`], edit its typed inputs or settings,
+    /// then pass it here. A chooser supplied this factory through `IndicatorDialog::with_factory`
+    /// uses the same defaults. Explicit edits to a created study take precedence.
+    ///
+    /// ```
+    /// use egui_charts::studies::{IndicatorFactory, InputValue, StudyTemplate};
+    /// let mut factory = IndicatorFactory::new();
+    /// let mut defaults = StudyTemplate::from_study(factory.create("SMA").unwrap().as_ref());
+    /// defaults.inputs = vec![("period".into(), InputValue::Length(5))];
+    /// defaults.settings.plots[0].width = 3.0;
+    /// factory.set_defaults(&[defaults])?;
+    /// assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 3.0);
+    /// # Ok::<(), egui_charts::studies::StudyError>(())
+    /// ```
+    pub fn set_defaults(&mut self, defaults: &[StudyTemplate]) -> Result<(), StudyError> {
+        for template in defaults {
+            template.create_with(self)?;
+        }
+        for template in defaults {
+            self.defaults
+                .insert(template.name.clone(), template.clone());
+        }
+        Ok(())
+    }
+
+    /// Discard the host defaults for `name`. Returns whether defaults were removed.
+    /// Subsequent creations use the registered constructor's values again.
+    pub fn clear_defaults(&mut self, name: &str) -> bool {
+        self.defaults.remove(name).is_some()
+    }
+
+    /// Create an indicator by its registered name with the host's defaults, or `None` if not
+    /// found or if the constructor no longer accepts those defaults. Without host defaults,
+    /// returns the constructor's study unchanged.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
+        if let Some(template) = self.defaults.get(name) {
+            return template.create_with(self).ok();
+        }
+        self.create_registered(name)
+    }
+
+    /// Reconstruct saved state without applying defaults intended for new studies.
+    pub(crate) fn create_registered(&self, name: &str) -> Option<Box<dyn Indicator>> {
         self.constructors.get(name).map(|(_, f)| f())
     }
 
@@ -476,11 +542,13 @@ impl IndicatorFactory {
     ///
     /// Returns `true` if it was present and removed, `false` otherwise.
     pub fn unregister(&mut self, name: &str) -> bool {
+        self.defaults.remove(name);
         self.constructors.remove(name).is_some()
     }
 
     /// Remove all registered indicators, including built-ins.
     pub fn clear(&mut self) {
+        self.defaults.clear();
         self.constructors.clear();
     }
 
@@ -497,6 +565,16 @@ impl Default for IndicatorFactory {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Resolve the built-in articles once so direct constructors retain the same help as the chooser.
+pub(crate) fn builtin_help_url(study_type: &str) -> Option<&'static str> {
+    static CATALOGUE: std::sync::OnceLock<HashMap<&'static str, &'static str>> =
+        std::sync::OnceLock::new();
+    CATALOGUE
+        .get_or_init(|| IndicatorFactory::new().help_urls)
+        .get(study_type)
+        .copied()
 }
 
 #[cfg(test)]

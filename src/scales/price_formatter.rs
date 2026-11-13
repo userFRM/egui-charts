@@ -10,7 +10,7 @@
 //! smallest positive `f64`. This also applies when public fields are set directly.
 //! Use [`PriceFormatterBuilder`] for a fluent construction API.
 
-use crate::model::{Instrument, percent_change};
+use crate::model::{Instrument, SeriesDisplayFormat, SeriesFormat, percent_change};
 use std::sync::Arc;
 
 // Enough decimal places to keep even the smallest positive f64 from rounding to zero.
@@ -40,9 +40,14 @@ pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 
 /// Decimals needed to write `step`, such as 2 for 0.25.
 #[cfg(feature = "widget")]
 pub(crate) fn decimals(step: f64) -> usize {
-    let text = format!("{step}");
-    text.split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len())
+    let rounded = format!("{:.14e}", step.abs())
+        .parse::<f64>()
+        .unwrap_or(step.abs());
+    let text = format!("{rounded}");
+    let Some((_, fractional)) = text.split_once('.') else {
+        return 0;
+    };
+    fractional.len()
 }
 
 /// Writes `separator` between the groups of three digits of the integer part of `text`, its
@@ -103,14 +108,60 @@ pub trait PriceFormatter: Send + Sync {
     /// Formatted string to display on the price axis
     fn format(&self, price: f64) -> String;
 
+    /// Format an absolute price change. The default preserves the formatter's text;
+    /// chart-owned display formats add the built-in sign for non-negative changes.
+    fn format_change(&self, change: f64) -> String {
+        self.format(change)
+    }
+
     /// Format a price axis tick. Defaults to [`format`](Self::format); override it
     /// to write ticks differently from crosshair and price tag labels.
     fn format_tick(&self, price: f64) -> String {
         self.format(price)
     }
 
+    /// Format the complete tick list for one axis, in ascending value order.
+    /// Values are raw prices in normal and logarithmic modes, percentages or index
+    /// values otherwise. Return one label per value, in the same order, to choose
+    /// units or precision from the whole list. The default calls
+    /// [`format_tick`](Self::format_tick) for each value, and a different label count
+    /// falls back to that per-value method for the whole list.
+    ///
+    /// Layout and painting can each request labels; ticks covered by tags or clipped
+    /// at the pane boundary are still included, as are the edge values when edge ticks
+    /// are enabled. Layout and painting use the same list. Crosshair and price tags use
+    /// [`format`](Self::format) instead.
+    fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
+        prices
+            .iter()
+            .map(|&price| self.format_tick(price))
+            .collect()
+    }
+
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
+}
+
+impl PriceFormatter for SeriesDisplayFormat {
+    fn format(&self, value: f64) -> String {
+        let step = self.min_move;
+        let rounded = (value / step).round() * step;
+        let value = if step.is_finite() && step > 0.0 && rounded.is_finite() {
+            rounded
+        } else {
+            value
+        };
+        let precision = usize::from(self.precision);
+        match self.kind {
+            SeriesFormat::Price => DefaultPriceFormatter::with_precision(precision).format(value),
+            SeriesFormat::Volume => VolumeFormatter { precision }.format(value),
+            SeriesFormat::Percentage => format!("{}%", format_decimal(value, precision)),
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn PriceFormatter> {
+        Box::new(*self)
+    }
 }
 
 /// Default price formatter with configurable precision
@@ -495,6 +546,15 @@ pub(crate) fn price_decimals(price: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn decimals_ignore_binary_noise_and_keep_subnormal_precision() {
+        assert_eq!(decimals(0.025 * 3.0), 3);
+        assert_eq!(decimals(5e-324), 324);
+        assert_eq!(decimals(f64::NAN), 0);
+        assert_eq!(decimals(f64::INFINITY), 0);
+    }
 
     #[test]
     fn test_default_formatter() {

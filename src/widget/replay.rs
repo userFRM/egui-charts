@@ -1,5 +1,6 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
+use super::events::same_bar;
 use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
@@ -11,7 +12,7 @@ use std::sync::Arc;
 
 pub(super) struct ReplayWindow {
     pub(super) time: DateTime<Utc>,
-    bars: HashMap<SeriesId, Vec<Bar>>,
+    pub(super) bars: HashMap<SeriesId, Vec<Bar>>,
     source: Option<(Vec<Bar>, BarClock)>,
     /// The pause last set with `set_feed_paused` before the replay, which its exit sets again.
     feed_paused: bool,
@@ -75,6 +76,13 @@ impl Chart {
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
     /// nanosecond later. An interval change resubscribes at the same shared position.
+    ///
+    /// Other series that the host supplies are windowed as in [`Self::set_replay_time`]: they
+    /// show only the bars completed by [`Self::replay_time`] and follow seeks, playback,
+    /// interval changes and bar limits. `set_data`, `update` and `pop_bars` change their retained
+    /// history, which `None` restores. For the main series they change only the retained
+    /// history, since the driver builds the bars it shows; series the feed supplies show what
+    /// the driver sends.
     pub fn set_market_replay(&mut self, driver: Option<Arc<ReplayDriver>>) {
         if let Some(replay) = self.market_replay.take() {
             self.feed_link = replay.feed;
@@ -92,7 +100,8 @@ impl Chart {
             });
         let view = self.order_book_view();
         let heatmap_config = self.liquidity_heatmap_config();
-        self.set_replay_time(Some(driver.time()));
+        let entry = driver.time();
+        self.set_replay_time(Some(entry));
         let window = self.replay.take().expect("replay window");
         let feed = self.feed_link.take();
         self.attach_feed(driver.clone(), 1);
@@ -115,20 +124,59 @@ impl Chart {
             feed,
             window,
         });
+        // The driver delivers no execution past its cursor, so lift the cutoff the entry set.
+        self.replay_order_flow(entry);
+        // The driver's cutoff is one nanosecond after the time the entry windowed at.
+        self.apply_replay_window();
+    }
+
+    /// Windows the host series again once the market replay driver moved.
+    pub(super) fn follow_market_replay(&mut self) {
+        if self
+            .market_replay
+            .as_ref()
+            .is_some_and(|replay| Some(replay.window.time) != self.replay_time())
+        {
+            self.apply_replay_window();
+        }
+    }
+
+    /// The retained history of a candle or market replay.
+    pub(super) fn replay_window(&self) -> Option<&ReplayWindow> {
+        (self.replay.as_ref()).or(self.market_replay.as_ref().map(|replay| &replay.window))
+    }
+
+    pub(super) fn replay_window_mut(&mut self) -> Option<&mut ReplayWindow> {
+        (self.replay.as_mut()).or(self.market_replay.as_mut().map(|replay| &mut replay.window))
+    }
+
+    /// Whether the replay window decides the bars `series` shows: every series in candle
+    /// replay, and in market replay the series other than the main one that no feed supplies.
+    pub(super) fn replay_windows(&self, series: SeriesId) -> bool {
+        self.replay.is_some()
+            || self.market_replay.is_some() && series != SeriesId::MAIN && !self.is_fed(series)
+    }
+
+    /// Whether host bars for `series` go to the retained replay history: those of the windowed
+    /// series and, in market replay, those of the main series.
+    pub(super) fn replay_retains(&self, series: SeriesId) -> bool {
+        self.replay_windows(series) || self.market_replay.is_some() && series == SeriesId::MAIN
     }
 
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
     /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
     /// that studies request for other symbols and intervals. A bar's close is its
-    /// `BarClock::next_open`; without a timeframe, timestamps are observation instants and bars
-    /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
-    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
+    /// `BarClock::next_open`; without a timeframe or on numeric and custom horizontal axes,
+    /// keys strictly before `time` are available. Supply finer bars with `set_replay_source`
+    /// to build the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
     ///
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
     /// `set_data` and `update` retain
     /// host corrections behind the window. `None` exits, restores all retained bars and quotes,
-    /// and restores the feed's previous pause state. Hosts own source data and session storage.
+    /// and restores the feed's previous pause state; a feed that resumes keeps the restored bars
+    /// and depth history as [`Self::set_feed_paused`] describes. Hosts own source data and session
+    /// storage.
     /// With a market driver attached this dispatches a seek; call outside egui context locks,
     /// as with [`ReplayDriver::seek`].
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {
@@ -140,6 +188,7 @@ impl Chart {
                 if replay.driver.time() != inclusive {
                     replay.driver.seek(inclusive);
                 }
+                self.apply_replay_window();
             } else {
                 self.set_market_replay(None);
             }
@@ -237,85 +286,113 @@ impl Chart {
         true
     }
 
-    /// Applies the replay cutoff, or its end, to the order-flow inputs of the studies, which the
-    /// paused feed no longer updates, and recalculates those studies from the bar containing
-    /// `since`, the earlier of the old and the new cutoff.
+    /// Applies the candle replay's cutoff, or its end, to the order-flow inputs of the studies,
+    /// which the paused feed no longer updates, and recalculates those studies from the bar
+    /// containing `since`, the earlier of the old and the new cutoff. A market replay's feed
+    /// needs no cutoff, since its driver delivers no execution past its cursor.
     fn replay_order_flow(&mut self, since: DateTime<Utc>) {
-        let time = self.replay_time();
+        let time = self.replay.as_ref().map(|replay| replay.time);
         let link = self.feed_link.as_ref();
         let clock = link.map_or_else(|| self.bar_clock(), |link| link.clock.clone());
         let trades = link.map(|link| &link.trades);
         let open = clock.bar_open(since);
         let from = (self.state.data().bars).partition_point(|bar| clock.bar_open(bar.time) < open);
+        // The window keeps the bars after the cutoff aside; the executions are grouped along all.
+        let history = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
+            .map_or(&[][..], Vec::as_slice);
         for (at, study) in self.studies.indicators().iter().enumerate() {
             let inputs = study.order_flow_inputs();
             if inputs.is_empty() {
                 continue;
             }
             for input in inputs {
-                input.set_replay(&clock, time, trades);
+                input.set_replay(&clock, time, trades, history);
             }
             self.pending_from[at] = Some(self.pending_from[at].map_or(from, |old| old.min(from)));
         }
     }
 
     pub(super) fn apply_replay_window(&mut self) {
-        let Some(mut replay) = self.replay.take() else {
+        let Some(time) = self.replay_time() else {
             return;
         };
         let clock = self
-            .timeframe
+            .calendar_timeframe()
             .map_or_else(BarClock::exact, |_| self.bar_clock());
-        for (&id, &limit) in &self.bar_limits {
+        let market = self.market_replay.is_some();
+        let main_live = self.main_bars_live();
+        let Some(replay) =
+            (self.replay.as_mut()).or(self.market_replay.as_mut().map(|replay| &mut replay.window))
+        else {
+            return;
+        };
+        replay.time = time;
+        // A removed main series keeps its limit unread, as in `Chart::bar_limit`.
+        let limits = (self.bar_limits.iter()).filter(|(id, _)| **id != SeriesId::MAIN || main_live);
+        for (&id, &limit) in limits {
             let count = replay
                 .bars
                 .get(&id)
                 .map_or(0, |bars| super::series::evicted_bars(bars.len(), limit));
             if count > 0 {
                 replay.remove_oldest_bars(id, count, &clock);
-                if id == SeriesId::MAIN {
+                if id == SeriesId::MAIN && !market {
                     self.feed.history_complete = false;
                 }
             }
         }
-        if let Some(bars) = replay.bars.get(&SeriesId::MAIN) {
-            let mut visible = completed(bars, &clock, replay.time).to_vec();
-            if let Some((source, source_clock)) = &replay.source
-                && let Some(first) = source.first()
-                && let Some(last) = source.last()
-                && let Some(partial) = fold_source(
-                    completed(source, source_clock, replay.time),
-                    source_clock,
-                    &clock,
-                )
-            {
-                let start = clock.bar_open(first.time);
-                let end = clock.bar_open(last.time);
-                visible.retain(|bar| {
-                    let slot = clock.bar_open(bar.time);
-                    slot < start || slot > end
-                });
-                merge(
-                    &mut visible,
-                    &mut BTreeMap::new(),
-                    &clock,
-                    partial.into_iter().map(|bar| (bar, Origin::Live)).collect(),
-                );
-            }
-            self.replace_main_data(visible);
-        }
-        for item in &mut self.price_series {
+        // In market replay a fed series shows what the driver sends.
+        for item in (self.price_series.iter_mut()).filter(|item| !(market && item.fed)) {
             if let Some(bars) = replay.bars.get(&item.id) {
-                item.bars = completed(bars, &clock, replay.time).to_vec();
-                item.revision = crate::model::next_revision();
+                let visible = completed(bars, &clock, time);
+                // Market playback runs this every frame; an unchanged window keeps the revision.
+                if item.bars.len() != visible.len()
+                    || !item.bars.iter().zip(visible).all(|(a, b)| same_bar(a, b))
+                {
+                    item.bars = visible.to_vec();
+                    item.revision = crate::model::next_revision();
+                    if let Some(marks) = &mut item.change_marks {
+                        // Windowing keeps timestamps; host bars can share an interval.
+                        marks.retain_bars(&item.bars, &BarClock::exact());
+                    }
+                }
             }
         }
-        self.replay = Some(replay);
+        if market {
+            return;
+        }
+        let Some(bars) = replay.bars.get(&SeriesId::MAIN) else {
+            return;
+        };
+        let mut visible = completed(bars, &clock, time).to_vec();
+        if let Some((source, source_clock)) = &replay.source
+            && let Some(first) = source.first()
+            && let Some(last) = source.last()
+            && let Some(partial) =
+                fold_source(completed(source, source_clock, time), source_clock, &clock)
+        {
+            let start = clock.bar_open(first.time);
+            let end = clock.bar_open(last.time);
+            visible.retain(|bar| {
+                let slot = clock.bar_open(bar.time);
+                slot < start || slot > end
+            });
+            merge(
+                &mut visible,
+                &mut BTreeMap::new(),
+                &clock,
+                partial.into_iter().map(|bar| (bar, Origin::Live)).collect(),
+            );
+        }
+        let replay = self.replay.take();
+        self.replace_main_data(visible);
+        self.replay = replay;
     }
 
     pub(super) fn replay_set_data(&mut self, id: SeriesId, bars: Vec<Bar>) {
         let clock = self.clock();
-        let Some(replay) = &mut self.replay else {
+        let Some(replay) = self.replay_window_mut() else {
             return;
         };
         let (bars, rejected) = super::series::clean(bars, &clock);
@@ -327,7 +404,7 @@ impl Chart {
     /// Merges `bar` into the retained bars of `id`; returns whether they changed.
     pub(super) fn replay_update(&mut self, id: SeriesId, bar: Bar) -> bool {
         let clock = self.clock();
-        let Some(replay) = &mut self.replay else {
+        let Some(replay) = self.replay_window_mut() else {
             return false;
         };
         let merged = merge(
@@ -343,7 +420,7 @@ impl Chart {
 
     /// Removes the last `count` retained bars of `id` and returns them.
     pub(super) fn replay_pop(&mut self, id: SeriesId, count: usize) -> Vec<Bar> {
-        let Some(replay) = &mut self.replay else {
+        let Some(replay) = self.replay_window_mut() else {
             return Vec::new();
         };
         let bars = replay.bars.entry(id).or_default();
@@ -356,8 +433,7 @@ impl Chart {
     /// in the chart, so the history leaves with the series and is dropped with it.
     pub(super) fn replay_release(&mut self, series: &mut PriceSeries) {
         if let Some(bars) = self
-            .replay
-            .as_mut()
+            .replay_window_mut()
             .and_then(|replay| replay.bars.remove(&series.id))
         {
             series.bars = bars;
@@ -367,11 +443,15 @@ impl Chart {
     /// Retains the bars of `series` as it enters the chart, leaving it those the cutoff completed.
     pub(super) fn replay_admit(&mut self, series: &mut PriceSeries) {
         let clock = self
-            .timeframe
+            .calendar_timeframe()
             .map_or_else(BarClock::exact, |_| self.bar_clock());
-        if let Some(replay) = &mut self.replay {
+        let time = self.replay_time();
+        if let (Some(time), Some(replay)) = (time, self.replay_window_mut()) {
             let bars = std::mem::take(&mut series.bars);
-            series.bars = completed(&bars, &clock, replay.time).to_vec();
+            series.bars = completed(&bars, &clock, time).to_vec();
+            if let Some(marks) = &mut series.change_marks {
+                marks.retain_bars(&series.bars, &BarClock::exact());
+            }
             replay.bars.insert(series.id, bars);
         }
     }
@@ -578,26 +658,65 @@ mod tests {
 
     /// An added series brought back by undo shows what it would have shown had it never left:
     /// the bars completed at the cutoff during replay, and all of them after the exit. A cutoff
-    /// at minute 2 completes the bars of minutes 0 and 1.
+    /// at minute 2 completes the bars of minutes 0 and 1; on a custom axis, cutoff key 3
+    /// admits keys 0, 1 and 2 regardless of the displayed calendar interval.
     #[test]
-    fn undoing_a_series_removal_across_replay_keeps_its_history_and_the_cutoff() {
-        let minutes: Vec<_> = (0..5).map(|i| bar(i, [10.0; 5])).collect();
-        for removed_in_replay in [true, false] {
+    fn custom_key_replay_cutoff_ignores_the_timeframe() {
+        let scale = Arc::new(crate::scales::CustomHorizontalScale::new(0..6_u8, |key| {
+            key.to_string()
+        }));
+        for (timeframe, custom, removed_in_replay) in [
+            (Some(Timeframe::Min1), false),
+            (None, true),
+            (Some(Timeframe::Day1), true),
+            (Some(Timeframe::Month1), true),
+        ]
+        .into_iter()
+        .flat_map(|(timeframe, custom)| [true, false].map(|removed| (timeframe, custom, removed)))
+        {
+            let minutes: Vec<_> = (0..5)
+                .map(|i| {
+                    if custom {
+                        scale.value(&i, 10.0).unwrap()
+                    } else {
+                        bar(i.into(), [10.0; 5])
+                    }
+                })
+                .collect();
+            let cutoff = if custom {
+                scale.time(&3).unwrap()
+            } else {
+                time(2)
+            };
+            let count = if custom { 3 } else { 2 };
             let mut chart = Chart::new(BarData::from_bars(minutes.clone()));
-            chart.set_timeframe(Timeframe::Min1);
+            if custom {
+                chart.set_horizontal_scale(Some(scale.clone()));
+            }
+            if let Some(timeframe) = timeframe {
+                chart.set_timeframe(timeframe);
+            }
             let id = chart.add_series(Default::default());
             chart.set_data(id, minutes.clone());
             if removed_in_replay {
-                chart.set_replay_time(Some(time(2)));
+                chart.set_replay_time(Some(cutoff));
+                assert_eq!(chart.bars(SeriesId::MAIN), &minutes[..count]);
+                assert_eq!(chart.bars(id), &minutes[..count]);
             }
             assert!(chart.user_action(|chart| chart.remove_series(id)));
             if removed_in_replay {
                 chart.set_replay_time(None);
                 assert!(chart.undo());
             } else {
-                chart.set_replay_time(Some(time(2)));
+                chart.set_replay_time(Some(cutoff));
+                assert_eq!(chart.bars(SeriesId::MAIN), &minutes[..count]);
                 assert!(chart.undo());
-                assert_eq!(chart.bars(id), &minutes[..2], "undone during replay");
+                assert_eq!(chart.bars(id), &minutes[..count], "undone during replay");
+                chart.set_replay_time(Some(minutes[4].time));
+                assert_eq!(chart.bars(SeriesId::MAIN), &minutes[..4]);
+                assert_eq!(chart.bars(id), &minutes[..4]);
+                chart.set_replay_time(Some(cutoff));
+                assert_eq!(chart.bars(id), &minutes[..count]);
                 chart.set_replay_time(None);
             }
             assert_eq!(
@@ -605,6 +724,63 @@ mod tests {
                 minutes,
                 "removed_in_replay={removed_in_replay}"
             );
+        }
+    }
+
+    /// A chart's extended hours choice selects the driver's executions at the same position.
+    #[test]
+    fn switching_extended_hours_rebuilds_market_replay_at_the_position() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Session, SessionWindow, Tick};
+        use chrono::{NaiveTime, Weekday};
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let days = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ];
+        let mut instrument = Instrument::new("A").with_tick_size(1.0);
+        instrument.session = Some(
+            Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+                .with_extended_windows([SessionWindow::new(days, hm(4, 0), hm(9, 30))]),
+        );
+        // Friday 1970-01-02 in UTC, the instrument's default zone: 08:00 and 09:31.
+        let at = |h: i64, m: i64| {
+            chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(1440 + 60 * h + m)
+        };
+        let events = [(at(8, 0), 50.0), (at(9, 31), 100.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(id, (time, price))| {
+                let fill = Tick::new(time, price, 1.0, None).with_id(id as u64);
+                ReplayEvent::new("A", time, id as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let driver = Arc::new(ReplayDriver::new(events, vec![instrument]).unwrap());
+        driver.set_speed(0.0).unwrap();
+        driver.seek(at(9, 31));
+        let mut chart = Chart::new(BarData::new());
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_market_replay(Some(driver.clone()));
+        let ctx = egui::Context::default();
+        for (extended, expected) in [
+            (false, vec![at(9, 31)]),
+            (true, vec![at(8, 0), at(9, 31)]),
+            (false, vec![at(9, 31)]),
+        ] {
+            chart.set_extended_hours(extended);
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            let executed: Vec<_> = (chart.bars(SeriesId::MAIN).iter())
+                .filter(|bar| bar.volume > 0.0)
+                .map(|bar| bar.time)
+                .collect();
+            assert_eq!(executed, expected, "extended hours {extended}");
+            assert_eq!(driver.time(), at(9, 31));
         }
     }
 
@@ -938,5 +1114,123 @@ mod tests {
             expected[expected.len() - 2..],
             "enabling history at a paused cursor must load its latest recording page"
         );
+    }
+
+    /// Host series follow the shared cursor as they do in candle replay, and host bars that
+    /// arrive during market replay wait in the retained history, which the exit restores. The
+    /// exclusive cutoffs one nanosecond after 00:05, 00:02 and 00:08 complete 5, 2 and 8 bars.
+    #[test]
+    fn market_replay_windows_host_series_at_the_cursor() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        let events = (0..10)
+            .map(|minute| {
+                ReplayEvent::new(
+                    "A",
+                    time(minute),
+                    minute as u64,
+                    MarketEvent::Trade(Tick::new(time(minute), 10.0, 1.0, None)),
+                )
+            })
+            .collect();
+        let driver = Arc::new(
+            ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap(),
+        );
+        let minutes: Vec<_> = (0..10).map(|m| bar(m, [1.0; 5])).collect();
+        let mut chart = Chart::new(BarData::from_bars(minutes.clone()));
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        let comparison = chart.add_series(Default::default());
+        chart.set_data(comparison, minutes.clone());
+        let removed = chart.add_series(Default::default());
+        chart.set_data(removed, minutes.clone());
+        let ctx = egui::Context::default();
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time(5));
+        chart.set_market_replay(Some(driver.clone()));
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        assert_eq!(chart.bars(comparison), &minutes[..5], "entry");
+        let added = chart.add_series(Default::default());
+        chart.set_data(added, minutes.clone());
+        assert_eq!(
+            chart.bars(added),
+            &minutes[..5],
+            "added during market replay"
+        );
+        assert!(chart.user_action(|chart| chart.remove_series(removed)));
+        let live = bar(10, [2.0; 5]);
+        chart.update(SeriesId::MAIN, live.clone());
+        assert_eq!(
+            chart.bars(SeriesId::MAIN).last().map(|bar| bar.time),
+            Some(time(5)),
+            "a host bar past the cursor stays hidden"
+        );
+        driver.seek(time(2));
+        chart.pump(&ctx);
+        assert_eq!(chart.bars(comparison), &minutes[..2], "seek back");
+        driver.set_speed(1.0).unwrap();
+        driver.advance(std::time::Duration::from_secs(360)).unwrap();
+        chart.pump(&ctx);
+        assert_eq!(chart.bars(comparison), &minutes[..8], "playback");
+        chart.set_market_replay(None);
+        assert_eq!(chart.bars(SeriesId::MAIN).last(), Some(&live), "exit");
+        assert_eq!(chart.bars(comparison), minutes);
+        assert_eq!(chart.bars(added), minutes);
+        assert!(chart.undo());
+        assert_eq!(chart.bars(removed), minutes, "undone after exit");
+    }
+
+    /// Playback that completes no host bar leaves the host series as it was, also when it holds
+    /// a whitespace bar, whose NaN values never compare equal: its primitives see no change.
+    #[test]
+    fn market_playback_keeps_an_unchanged_host_window() {
+        use crate::chart::primitives::Primitive;
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Changes(Arc<AtomicUsize>);
+        impl Primitive for Changes {
+            fn data_changed(&mut self, _: &[Bar]) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let trade = MarketEvent::Trade(Tick::new(time(0), 10.0, 1.0, None));
+        let driver = Arc::new(
+            ReplayDriver::new(
+                vec![ReplayEvent::new("A", time(0), 0, trade)],
+                vec![Instrument::new("A").with_tick_size(1.0)],
+            )
+            .unwrap(),
+        );
+        let mut chart = Chart::new(BarData::new());
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        let comparison = chart.add_series(Default::default());
+        let mut minutes: Vec<_> = (0..10).map(|m| bar(m, [1.0; 5])).collect();
+        minutes[1] = Bar::whitespace(time(1));
+        chart.set_data(comparison, minutes);
+        let changes = Arc::new(AtomicUsize::new(0));
+        chart.attach_primitive(comparison, Changes(changes.clone()));
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time(5));
+        chart.set_market_replay(Some(driver.clone()));
+        let ctx = egui::Context::default();
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let seen = changes.load(Ordering::Relaxed);
+        driver.set_speed(1.0).unwrap();
+        for second in 1..3 {
+            // 00:05:10 and 00:05:20 complete no bar.
+            driver.advance(std::time::Duration::from_secs(10)).unwrap();
+            crate::widget::test_frames::frame(&ctx, &mut chart, f64::from(second), vec![]);
+        }
+        assert_eq!(chart.bars(comparison).len(), 5, "with the whitespace bar");
+        assert_eq!(changes.load(Ordering::Relaxed), seen, "no bar completed");
+        // 00:06 completes the 00:05 bar.
+        driver.advance(std::time::Duration::from_secs(40)).unwrap();
+        crate::widget::test_frames::frame(&ctx, &mut chart, 3.0, vec![]);
+        assert_eq!(chart.bars(comparison).len(), 6);
+        assert_eq!(changes.load(Ordering::Relaxed), seen + 1);
     }
 }

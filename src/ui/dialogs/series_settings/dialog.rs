@@ -1,6 +1,7 @@
 //! Series settings dialog with sidebar navigation.
 
 use crate::chart::series::{SeriesId, SeriesSettings};
+use crate::config::ChartConfig;
 use crate::localization as l10n;
 use egui::{Context, Ui, Vec2};
 
@@ -164,6 +165,12 @@ impl SeriesSettingsDialog {
                         bearish_color: theme.chart.candle_down,
                         ..Default::default()
                     };
+                    // The theme does not change on Ok, so the chart will not follow it afterwards.
+                    crate::widget::palette::follow_candle_colors(
+                        &mut self.settings.chart_type_params.styles,
+                        &[ChartConfig::default()],
+                        &ChartConfig::default().with_theme(&theme),
+                    );
                 }
             });
         if ok && let Some(id) = self.series_id {
@@ -187,83 +194,238 @@ mod tests {
     #[test]
     fn accepting_preserves_candle_colours_and_reset_uses_the_active_theme() {
         for (_, theme) in crate::theme::presets() {
-            for reset in [false, true] {
-                let ctx = Context::default();
-                crate::theme::apply_to_egui(&ctx, &theme);
-                let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
-                chart.config_mut().bullish_color = egui::Color32::YELLOW;
-                chart.config_mut().bearish_wick_color = Some(egui::Color32::BLUE);
-                let original = chart.series_settings();
-                let mut dialog = SeriesSettingsDialog::new();
-                dialog.open(SeriesId::MAIN, original.clone());
-                let mut frame = |events, label: &str| {
-                    let mut action = SeriesSettingsAction::None;
-                    let output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                Vec2::new(1440.0, 900.0),
-                            )),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| action = dialog.show(ui.ctx()),
-                    );
-                    let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    });
-                    output.drop_without_applying_deltas();
-                    (action, pos)
-                };
-                let mut click = |label: &str| {
-                    frame(vec![], label);
-                    let pos = frame(vec![], label).1.expect("footer control is visible");
-                    frame(vec![egui::Event::PointerMoved(pos)], label);
-                    let button = |pressed| egui::Event::PointerButton {
-                        pos,
-                        pressed,
-                        button: egui::PointerButton::Primary,
-                        modifiers: Default::default(),
+            for chart_type in [ChartType::Candles, ChartType::HlcArea] {
+                for reset in [false, true] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
+                    chart.set_chart_type(chart_type);
+                    chart.config_mut().bullish_color = egui::Color32::YELLOW;
+                    chart.config_mut().bearish_wick_color = Some(egui::Color32::BLUE);
+                    let original = chart.series_settings();
+                    let mut dialog = SeriesSettingsDialog::new();
+                    dialog.open(SeriesId::MAIN, original.clone());
+                    let mut frame = |events, label: &str| {
+                        let mut action = SeriesSettingsAction::None;
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    Vec2::new(1440.0, 900.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| action = dialog.show(ui.ctx()),
+                        );
+                        let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        (action, pos)
                     };
-                    frame(vec![button(true)], label);
-                    frame(vec![button(false)], label).0
-                };
-                if reset {
-                    click("Reset to defaults");
-                }
-                let SeriesSettingsAction::Apply(_, settings) = click("Ok") else {
-                    panic!("expected Apply")
-                };
-                chart.apply_series_settings(&settings);
-                let applied = chart.series_settings();
-                assert_eq!(
-                    applied.bullish_color,
+                    let mut click = |label: &str| {
+                        frame(vec![], label);
+                        let pos = frame(vec![], label).1.expect("footer control is visible");
+                        frame(vec![egui::Event::PointerMoved(pos)], label);
+                        let button = |pressed| egui::Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: Default::default(),
+                        };
+                        frame(vec![button(true)], label);
+                        frame(vec![button(false)], label).0
+                    };
                     if reset {
-                        theme.chart.candle_up
-                    } else {
-                        original.bullish_color
+                        click("Reset to defaults");
                     }
-                );
-                assert_eq!(
-                    applied.bearish_color,
-                    if reset {
-                        theme.chart.candle_down
-                    } else {
-                        original.bearish_color
+                    let SeriesSettingsAction::Apply(_, settings) = click("Ok") else {
+                        panic!("expected Apply")
+                    };
+                    chart.apply_series_settings(&settings);
+                    let applied = chart.series_settings();
+                    assert_eq!(
+                        applied.bullish_color,
+                        if reset {
+                            theme.chart.candle_up
+                        } else {
+                            original.bullish_color
+                        }
+                    );
+                    assert_eq!(
+                        applied.bearish_color,
+                        if reset {
+                            theme.chart.candle_down
+                        } else {
+                            original.bearish_color
+                        }
+                    );
+                    for (actual, expected) in [
+                        (applied.bullish_border_color, original.bullish_border_color),
+                        (applied.bearish_border_color, original.bearish_border_color),
+                        (applied.bullish_wick_color, original.bullish_wick_color),
+                        (applied.bearish_wick_color, original.bearish_wick_color),
+                    ] {
+                        assert_eq!(actual, if reset { None } else { expected });
                     }
-                );
-                for (actual, expected) in [
-                    (applied.bullish_border_color, original.bullish_border_color),
-                    (applied.bearish_border_color, original.bearish_border_color),
-                    (applied.bullish_wick_color, original.bullish_wick_color),
-                    (applied.bearish_wick_color, original.bearish_wick_color),
-                ] {
-                    assert_eq!(actual, if reset { None } else { expected });
+                    let styles = &applied.chart_type_params.styles;
+                    let [high_line, low_line, high_to_close_fill, close_to_low_fill] = if reset {
+                        let (up, down) = (theme.chart.candle_up, theme.chart.candle_down);
+                        let [r, g, b, _] = up.to_srgba_unmultiplied();
+                        let [dr, dg, db, _] = down.to_srgba_unmultiplied();
+                        [
+                            up,
+                            down,
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, 51),
+                            egui::Color32::from_rgba_unmultiplied(dr, dg, db, 51),
+                        ]
+                    } else {
+                        let style = &original.chart_type_params.styles.hlc_area;
+                        [
+                            style.high_line.color,
+                            style.low_line.color,
+                            style.high_to_close_fill,
+                            style.close_to_low_fill,
+                        ]
+                    };
+                    assert_eq!(styles.hlc_area.high_line.color, high_line);
+                    assert_eq!(styles.hlc_area.low_line.color, low_line);
+                    assert_eq!(styles.hlc_area.high_to_close_fill, high_to_close_fill);
+                    assert_eq!(styles.hlc_area.close_to_low_fill, close_to_low_fill);
+                    let volume = &original.chart_type_params.styles.volume_candles;
+                    let (ups, downs) = if reset {
+                        ([theme.chart.candle_up; 3], [theme.chart.candle_down; 3])
+                    } else {
+                        (
+                            [volume.body_up, volume.border_up, volume.wick_up],
+                            [volume.body_down, volume.border_down, volume.wick_down],
+                        )
+                    };
+                    let volume = &styles.volume_candles;
+                    assert_eq!([volume.body_up, volume.border_up, volume.wick_up], ups);
+                    assert_eq!(
+                        [volume.body_down, volume.border_down, volume.wick_down],
+                        downs
+                    );
                 }
             }
+        }
+    }
+
+    /// The candle bodies as (fill, border) and the wick colours of `chart` in painting order. Fills
+    /// and strokes outside `known` belong to other shapes in the plot.
+    fn painted_candles(
+        chart: &mut crate::Chart,
+        known: &[egui::Color32],
+    ) -> (Vec<(egui::Color32, egui::Color32)>, Vec<egui::Color32>) {
+        use crate::widget::test_frames::{frame, shapes};
+        let ctx = Context::default();
+        frame(&ctx, chart, 0.0, vec![]);
+        let painted = shapes(&ctx, chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let (mut bodies, mut wicks) = (Vec::new(), Vec::new());
+        for shape in painted {
+            match shape {
+                egui::Shape::Rect(r)
+                    if plot.contains(r.rect.center())
+                        && (known.contains(&r.fill) || known.contains(&r.stroke.color)) =>
+                {
+                    bodies.push((r.fill, r.stroke.color));
+                }
+                egui::Shape::LineSegment { points, stroke }
+                    if points[0].x == points[1].x && known.contains(&stroke.color) =>
+                {
+                    wicks.push(stroke.color);
+                }
+                _ => {}
+            }
+        }
+        (bodies, wicks)
+    }
+
+    /// The accepted colours of a Heikin-Ashi series reach its candles and come back from
+    /// `series_settings`; the chart keeps its candle colours for the other chart types. The bar
+    /// (10, 18, 8, 14) has the transformed open (10 + 14) / 2 = 12 and close 50 / 4 = 12.5, so it
+    /// rises and takes the rising colours.
+    #[test]
+    fn series_settings_colours_reach_heikin_candles() {
+        use crate::model::{Bar, BarData};
+        let mut chart = crate::Chart::new(BarData::from_bars(vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            10.0,
+            18.0,
+            8.0,
+            14.0,
+            0.0,
+        )]));
+        chart.config_mut().show_volume = false;
+        chart.set_chart_type(ChartType::Heikin);
+        let candle = chart.config().bullish_color;
+        let body = egui::Color32::from_rgb(1, 100, 2);
+        let border = egui::Color32::from_rgb(3, 4, 102);
+        let wick = egui::Color32::from_rgb(105, 106, 6);
+        let mut settings = chart.series_settings();
+        settings.bullish_color = body;
+        settings.bullish_border_color = Some(border);
+        settings.bullish_wick_color = Some(wick);
+        chart.apply_series_settings(&settings);
+        assert_eq!(
+            painted_candles(&mut chart, &[body, border, wick]),
+            (vec![(body, border)], vec![wick, wick])
+        );
+        let read = chart.series_settings();
+        assert_eq!(read.bullish_color, body);
+        assert_eq!(read.bullish_border_color, Some(border));
+        assert_eq!(read.bullish_wick_color, Some(wick));
+        chart.set_chart_type(ChartType::Candles);
+        assert_eq!(chart.series_settings().bullish_color, candle);
+    }
+
+    /// The accepted colours of a hollow or volume candles series reach its candles, a border or
+    /// wick colour of `None` meaning the body colour. The first bar closes above its open and is
+    /// outlined as a hollow candle and filled as a volume candle; the second closes below its open
+    /// and is filled. An opaque border in the colour of its fill paints as the fill alone.
+    #[test]
+    fn series_settings_colours_reach_hollow_and_volume_candles() {
+        use crate::model::{Bar, BarData};
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let up = egui::Color32::from_rgb(1, 100, 2);
+        let down = egui::Color32::from_rgb(101, 2, 3);
+        let none = egui::Color32::TRANSPARENT;
+        for (kind, bodies_expected) in [
+            (ChartType::HollowCandles, [(none, up), (down, none)]),
+            (ChartType::VolumeCandles, [(up, none), (down, none)]),
+        ] {
+            let mut chart = crate::Chart::new(BarData::from_bars(vec![
+                Bar::new(time, 10.0, 18.0, 8.0, 14.0, 100.0),
+                Bar::new(
+                    time + chrono::Duration::days(1),
+                    13.0,
+                    17.0,
+                    8.5,
+                    11.0,
+                    100.0,
+                ),
+            ]));
+            chart.config_mut().show_volume = false;
+            chart.set_chart_type(kind);
+            let candle = chart.config().bullish_color;
+            let mut settings = chart.series_settings();
+            assert_eq!(settings.bullish_border_color, None);
+            assert_eq!(settings.bearish_wick_color, None);
+            settings.bullish_color = up;
+            settings.bearish_color = down;
+            chart.apply_series_settings(&settings);
+            let (bodies, wicks) = painted_candles(&mut chart, &[up, down]);
+            assert_eq!(bodies, bodies_expected, "{kind:?}");
+            assert_eq!(wicks, [up, up, down, down], "{kind:?}");
+            assert_eq!(chart.series_settings().bullish_color, up, "{kind:?}");
+            chart.set_chart_type(ChartType::Candles);
+            assert_eq!(chart.series_settings().bullish_color, candle, "{kind:?}");
         }
     }
 

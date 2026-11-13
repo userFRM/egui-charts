@@ -16,10 +16,45 @@ pub struct StudyProfile {
     pub profile: Arc<VolumeProfile>,
     /// Row layout, value area and display settings.
     pub config: VolumeProfileConfig,
-    /// Colour of total volume and value-area lines.
+    /// Colour of the point of control and value-area lines, `Color32::PLACEHOLDER` as bytes
+    /// following the theme's foreground.
     pub color: [u8; 4],
     /// Draw at the right of the viewport instead of beside the first source bar.
     pub right_aligned: bool,
+    /// Share of the span, from 0 to 1, that the row with the most volume takes.
+    pub width: f32,
+}
+
+/// A level of a finished study profile carried right past the profile's bars: from the bar
+/// after its last to the first later bar that trades in the level's row, or on the line for the
+/// value area high, or to the last bar. Prices fall in rows as the profile binned its volume.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileLevel {
+    /// Chart bars the line spans. It starts at the left edge of the first, which follows the
+    /// profile, and ends at the centre of the last: the bar that trades in the level's row, or
+    /// on the line for the value area high, or the last bar when none has.
+    pub bars: Range<usize>,
+    /// Price of the line: the middle of the point of control row, or the top or bottom edge of
+    /// the value area.
+    pub price: f64,
+    /// Which level of the profile this is.
+    pub kind: ProfileLevelKind,
+    /// Colour of the profile's point of control, `Color32::PLACEHOLDER` as bytes following the
+    /// theme's foreground. The value area high and low are drawn at the opacity of the profile's
+    /// value area lines.
+    pub color: [u8; 4],
+}
+
+/// A level of a volume profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProfileLevelKind {
+    /// The middle of the row with the most volume.
+    PointOfControl,
+    /// The top edge of the value area.
+    ValueAreaHigh,
+    /// The bottom edge of the value area.
+    ValueAreaLow,
 }
 
 /// Volume shown in each price row of a profile built from bars.
@@ -58,6 +93,8 @@ pub struct VolumeProfileConfig {
     pub value_area_colors: Option<[[u8; 4]; 2]>,
     /// Draw the high and low boundaries of the value area.
     pub show_value_area_lines: bool,
+    /// Keep a fixed range drawing growing to the last bar, past its second anchor.
+    pub extend_right: bool,
 }
 
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
@@ -77,6 +114,8 @@ struct VolumeProfileFields {
     value_area_colors: Option<[[u8; 4]; 2]>,
     #[serde(default)]
     show_value_area_lines: bool,
+    #[serde(default)]
+    extend_right: bool,
 }
 
 impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
@@ -90,6 +129,7 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.down_color = fields.down_color;
         config.value_area_colors = fields.value_area_colors;
         config.show_value_area_lines = fields.show_value_area_lines;
+        config.extend_right = fields.extend_right;
         config
             .with_row_size(fields.row_size)
             .ok_or("volume profile row height must be finite and positive")
@@ -137,14 +177,14 @@ impl VolumeProfileConfig {
         self.value_area
     }
 
-    /// Settings a new volume profile drawing starts with: up and down volume side by side in
-    /// cyan and pink, drawn at half opacity outside the value area. Studies keep
-    /// [`Self::default`].
+    /// Settings a new volume profile drawing starts with: up and down volume side by side, which
+    /// on a white chart show as cyan `#7CD2E1` and pink `#DE779B` inside the value area, with the
+    /// bars still visible through them, and paler outside it. Studies keep [`Self::default`].
     pub fn drawing_default() -> Self {
         Self {
             display: ProfileDisplay::UpDown,
-            up_color: [124, 210, 225, 180],
-            down_color: [222, 119, 155, 180],
+            up_color: [83, 196, 216, 191],
+            down_color: [214, 74, 122, 191],
             ..Self::default()
         }
     }
@@ -162,6 +202,7 @@ impl Default for VolumeProfileConfig {
             down_color: profile_down_color(),
             value_area_colors: None,
             show_value_area_lines: false,
+            extend_right: false,
         }
     }
 }
@@ -192,6 +233,23 @@ struct Executions {
     complete: bool,
 }
 
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StrikeExposure {
+    pub strike: f64,
+    pub calls: Option<f64>,
+    pub puts: Option<f64>,
+    pub net: Option<f64>,
+}
+
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExposureProfile {
+    pub snapshot: super::OptionExposure,
+    pub rows: Vec<StrikeExposure>,
+    pub note: String,
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -210,6 +268,9 @@ pub struct VolumeProfile {
     executions: Option<Executions>,
     /// Built from option strikes by [`Self::from_options`].
     options: bool,
+    // Signed figures and their readout for an options exposure overlay; row volumes bound it.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) exposure: Option<Arc<ExposureProfile>>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -275,6 +336,8 @@ impl VolumeProfile {
             down: vec![0.0; count as usize],
             executions: None,
             options: true,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            exposure: None,
         };
         let mut total = 0.0;
         for v in data {
@@ -340,6 +403,8 @@ impl VolumeProfile {
                 complete,
             }),
             options: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            exposure: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -428,6 +493,8 @@ impl VolumeProfile {
             down: vec![0.0; rows],
             executions: None,
             options: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            exposure: None,
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
@@ -512,7 +579,7 @@ impl VolumeProfile {
             &mut self.down
         };
         let top_row = self.volume.len() - 1;
-        let row_of = |price: f64| (grid_floor((price - low) / row_height) as usize).min(top_row);
+        let row_of = |price: f64| (grid_row(low, row_height, price).0 as usize).min(top_row);
         if bar.high > bar.low {
             let (first, last) = (row_of(bar.low), row_of(bar.high));
             for (row, row_volume) in self
@@ -560,12 +627,25 @@ impl VolumeProfile {
 
 // Decimal tick heights can put an exact boundary one rounding step below its integer row.
 fn grid_floor(value: f64) -> f64 {
+    grid_edge(value, value.abs()).unwrap_or_else(|| value.floor())
+}
+
+/// The integer nearest `value` when `value` lies within the rounding of figures of size up to
+/// `scale` it was computed from.
+fn grid_edge(value: f64, scale: f64) -> Option<f64> {
     let nearest = value.round();
-    if (value - nearest).abs() <= 4.0 * f64::EPSILON * value.abs() {
-        nearest
-    } else {
-        value.floor()
-    }
+    ((value - nearest).abs() <= 4.0 * f64::EPSILON * scale).then_some(nearest)
+}
+
+/// The row of a grid from `low` in rows of `height` that `price` lies in, counted from its first
+/// row and not clamped to the grid, and whether the price lies on the row's bottom edge. A price
+/// within rounding of an edge lies on it, in the row above, as where `fixed_grid` starts a grid.
+/// Profiles bin volume with this, so a level of a profile ends at the prices in its row.
+pub(crate) fn grid_row(low: f64, height: f64, price: f64) -> (f64, bool) {
+    let row = (price - low) / height;
+    // The difference rounds as its prices do, not as its own size.
+    grid_edge(row, (price.abs() + low.abs()) / height)
+        .map_or((row.floor(), false), |edge| (edge, true))
 }
 
 /// A zero-aligned grid, including the row of a zero-range bar on an edge.
@@ -835,6 +915,10 @@ mod tests {
         let decimal = VolumeProfile::of(&[boundary], 24, Some(0.1)).unwrap();
         assert_close(decimal.low(), 0.3);
         assert_eq!(decimal.volume(), [7.0]);
+        // A price on an inner edge of cent rows lies in the row the grid starts there.
+        let cents = [32.16, 32.18].map(|price| Bar::new(time, price, price, price, price, 1.0));
+        let cents = VolumeProfile::of(&cents, 24, Some(0.01)).unwrap();
+        assert_eq!(cents.volume(), [1.0, 0.0, 1.0]);
     }
 
     /// Four-unit rows centered at 100, 104 and 108 collect [98,102), [102,106)
@@ -898,7 +982,10 @@ mod tests {
                         config,
                         [0, 0, 255, 255],
                         100.0..300.0,
-                        crate::painting::volume_profile::ProfileStyle::Study { right_aligned },
+                        crate::painting::volume_profile::ProfileStyle::Study {
+                            right_aligned,
+                            width: 0.9,
+                        },
                         &|price| price as f32 * direction,
                     );
                 });

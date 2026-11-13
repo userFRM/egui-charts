@@ -2,10 +2,12 @@
 //!
 //! Ties together all subcomponents into the complete Object Tree panel.
 
+use crate::config::DrawingSort;
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::ui_kit::{IconButton, PanelHeader, filter::filter_input};
-use egui::{Frame, RichText, Ui, vec2};
+use crate::ui_kit::{IconButton, PanelHeader, buttons::ButtonSize, filter::filter_input};
+use crate::widget::SymbolDrawings;
+use egui::{Frame, RichText, ScrollArea, Ui, vec2};
 
 use super::super::controls::dropdown;
 use super::actions::ObjectTreeAction;
@@ -100,11 +102,11 @@ impl ObjectTreePanel {
         sources: &mut [SourceItem],
     ) -> ObjectTreeAction {
         let mut action = ObjectTreeAction::None;
-        for item in sources.iter().filter(|s| s.is_drawing()) {
-            for depth in 1..=item.folder.len() {
-                self.state.folders.insert(item.folder[..depth].to_vec());
-            }
-        }
+        self.state.folders = sources
+            .iter()
+            .filter(|s| s.is_drawing())
+            .flat_map(|s| (1..=s.folder.len()).map(|depth| s.folder[..depth].to_vec()))
+            .collect();
 
         if self.config.group_by_type {
             sources.sort_by_key(|s| {
@@ -121,7 +123,7 @@ impl ObjectTreePanel {
         }
 
         // Handle keyboard shortcuts
-        if self.config.enable_keyboard_shortcuts {
+        if self.config.enable_keyboard_shortcuts && !self.state.showing_symbol_drawings {
             let kb_action = handle_keyboard_shortcuts(ui, &mut self.state, sources);
             if !kb_action.is_none() {
                 action = kb_action;
@@ -131,9 +133,17 @@ impl ObjectTreePanel {
         // Main panel frame
         Frame::new().fill(ui.visuals().panel_fill).show(ui, |ui| {
             // Header
-            self.show_header(ui, &mut action);
+            let can_group = sources
+                .iter()
+                .any(|s| s.is_drawing() && self.state.is_selected(s.id));
+            self.show_header(ui, &mut action, can_group);
 
             ui.separator();
+
+            if self.state.showing_symbol_drawings {
+                self.show_symbol_drawings(ui, &mut action);
+                return;
+            }
 
             // Data Window section (collapsible)
             if self.config.show_data_window
@@ -205,13 +215,14 @@ impl ObjectTreePanel {
     }
 
     /// Render header with title and controls
-    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction) {
+    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction, can_group: bool) {
         PanelHeader::new("Objects")
             .strong()
             .no_separator()
             .show(ui, |ui| {
                 if IconButton::new(&icons::PLUS)
                     .tooltip("New folder with selected drawings")
+                    .enabled(can_group)
                     .show(ui)
                     .clicked()
                 {
@@ -263,6 +274,17 @@ impl ObjectTreePanel {
                     .tooltip("Object actions")
                     .show(ui);
                 egui::Popup::menu(&more).show(|ui| {
+                    if self.state.symbol_drawings.is_some() {
+                        if ui
+                            .button(l10n::text(ui.ctx(), "Drawings by symbol"))
+                            .clicked()
+                        {
+                            self.state.showing_symbol_drawings = true;
+                            *action = ObjectTreeAction::ReadSymbolDrawings;
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
                     if ui.button(l10n::text(ui.ctx(), "Show all")).clicked() {
                         *action = ObjectTreeAction::ShowAll;
                         ui.close();
@@ -289,6 +311,167 @@ impl ObjectTreePanel {
                     }
                 });
             });
+    }
+
+    /// Lists the layout's drawings by symbol in place of the objects.
+    fn show_symbol_drawings(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction) {
+        ui.horizontal(|ui| {
+            if IconButton::new(&icons::CHEVRON_LEFT)
+                .size(ButtonSize::SM)
+                .tooltip(l10n::text(ui.ctx(), "Back to objects"))
+                .show(ui)
+                .clicked()
+            {
+                self.state.showing_symbol_drawings = false;
+            }
+            ui.strong_label(l10n::text(ui.ctx(), "Drawings by symbol"));
+        });
+        ui.space_sm();
+        let inventory = self.state.symbol_drawings.clone().unwrap_or_default();
+        if inventory.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "No saved drawings"))
+                        .weak()
+                        .italics(),
+                );
+            });
+            return;
+        }
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for mut symbol in inventory {
+                    if let Some(sort) = self.state.drawing_sort.get(&symbol.symbol) {
+                        symbol.sort_by_shown_names(*sort, |name| l10n::text(ui.ctx(), name));
+                    }
+                    ui.push_id(&symbol.symbol, |ui| {
+                        self.show_symbol_row(ui, &symbol, action);
+                    });
+                }
+            });
+    }
+
+    /// One symbol's row and, when expanded, its drawings. The row offers sorting and deleting
+    /// while the pointer is over it, and while expanded for input without a pointer.
+    fn show_symbol_row(
+        &mut self,
+        ui: &mut Ui,
+        symbol: &SymbolDrawings,
+        action: &mut ObjectTreeAction,
+    ) {
+        let name = symbol.symbol.as_str();
+        let expanded = self.state.expanded_symbols.contains(name);
+        let row = egui::Rect::from_min_size(
+            ui.cursor().min,
+            vec2(ui.available_width(), self.config.row_height),
+        );
+        let offered =
+            expanded || ui.rect_contains_pointer(row) || egui::Popup::is_any_open(ui.ctx());
+        ui.horizontal(|ui| {
+            ui.set_min_height(self.config.row_height);
+            let caret = if expanded {
+                &icons::CHEVRON_DOWN
+            } else {
+                &icons::CHEVRON_RIGHT
+            };
+            if IconButton::new(caret)
+                .size(ButtonSize::SM)
+                .tooltip(l10n::format_text(
+                    ui.ctx(),
+                    "Toggle {symbol} drawings",
+                    &[("symbol", name.to_owned())],
+                ))
+                .show(ui)
+                .clicked()
+            {
+                if expanded {
+                    self.state.expanded_symbols.remove(name);
+                } else {
+                    self.state.expanded_symbols.insert(name.to_owned());
+                }
+            }
+            // However long the name, its count and the row's controls keep their room.
+            let name_width = (ui.available_width() - 96.0).max(0.0);
+            ui.scope(|ui| {
+                ui.set_max_width(name_width);
+                ui.add(
+                    egui::Label::new(RichText::new(name).strong())
+                        .selectable(false)
+                        .truncate(),
+                );
+            });
+            if self.config.show_item_counts {
+                ui.label(
+                    RichText::new(format!("({})", symbol.drawings.len()))
+                        .size(11.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+            if offered {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if IconButton::new(&icons::TRASH)
+                        .size(ButtonSize::SM)
+                        .tooltip(l10n::format_text(
+                            ui.ctx(),
+                            "Delete {symbol} drawings",
+                            &[("symbol", name.to_owned())],
+                        ))
+                        .show(ui)
+                        .clicked()
+                    {
+                        *action = ObjectTreeAction::DeleteSymbolDrawings(name.to_owned());
+                    }
+                    let sort = IconButton::new(&icons::SORT)
+                        .size(ButtonSize::SM)
+                        .tooltip(l10n::format_text(
+                            ui.ctx(),
+                            "Sort {symbol} drawings",
+                            &[("symbol", name.to_owned())],
+                        ))
+                        .show(ui);
+                    egui::Popup::menu(&sort).show(|ui| {
+                        for (order, title) in [
+                            (DrawingSort::Name, "Sort by name"),
+                            (DrawingSort::LastModified, "Sort by last modified"),
+                        ] {
+                            let chosen = self.state.drawing_sort.get(name) == Some(&order);
+                            if ui
+                                .selectable_label(chosen, l10n::text(ui.ctx(), title))
+                                .clicked()
+                            {
+                                if chosen {
+                                    self.state.drawing_sort.remove(name);
+                                } else {
+                                    self.state.drawing_sort.insert(name.to_owned(), order);
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+            }
+        });
+        if expanded {
+            ui.indent("drawings", |ui| {
+                for drawing in &symbol.drawings {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            crate::ui::drawing_toolbar::icons::get_icon(drawing.tool_type)
+                                .as_image_tinted(
+                                    vec2(16.0, 16.0),
+                                    ui.visuals().widgets.noninteractive.fg_stroke.color,
+                                ),
+                        );
+                        ui.add(
+                            egui::Label::new(l10n::text(ui.ctx(), drawing.name()))
+                                .selectable(false)
+                                .truncate(),
+                        );
+                    });
+                }
+            });
+        }
     }
 
     /// Render filter controls
@@ -400,6 +583,20 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::SelectAll => {
                 self.state.select_all(&source_ids);
+            }
+            ObjectTreeAction::SelectFolder(path) | ObjectTreeAction::AddFolderToSelection(path) => {
+                let members: Vec<_> = sources
+                    .iter()
+                    .filter(|s| s.is_drawing() && s.folder.starts_with(path))
+                    .map(|s| s.id)
+                    .collect();
+                if matches!(action, ObjectTreeAction::SelectFolder(_)) {
+                    self.state.select_all(&members);
+                } else if members.iter().all(|id| self.state.is_selected(*id)) {
+                    self.state.selected_ids.retain(|id| !members.contains(id));
+                } else {
+                    self.state.selected_ids.extend(members);
+                }
             }
             _ => {}
         }
@@ -596,6 +793,7 @@ mod tests {
                     .all(|d| d["folder"] == serde_json::json!([]))
             );
             assert!(h.state_mut().1.drawings_mut().undo());
+            h.run();
             assert_eq!(saved(&h)[0]["folder"], nested[0]["folder"]);
             assert_eq!(saved(&h)[1]["folder"], nested[1]["folder"]);
             assert_eq!(
@@ -620,6 +818,285 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Through the tree: a folder row selects its descendants, drags into another folder and
+    /// back out, nests with a new folder, and leaves with its contents in one undo step.
+    #[test]
+    fn folder_rows_select_nest_delete_and_clean_up() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        type App = (ObjectTreePanel, crate::Chart);
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        for (name, folder) in [
+            ("Line", vec!["Levels"]),
+            ("Deep", vec!["Zones", "Inner"]),
+            ("Free", vec![]),
+        ] {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.label = Some(name.into());
+            drawing.folder = folder.into_iter().map(str::to_owned).collect();
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+        }
+        let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+        let panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+            show_data_window: false,
+            ..Default::default()
+        });
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(320.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, chart): &mut App| {
+                    let mut sources: Vec<_> = chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .map(|d| {
+                            let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                            item.label = d.label.clone();
+                            item.folder = d.folder.clone();
+                            item.folder_sync = d.folder_sync_mode();
+                            item
+                        })
+                        .collect();
+                    let action = panel.show(ui, None, &mut sources);
+                    assert!(panel.apply_to_chart(chart, &action, &sources));
+                },
+                (panel, chart),
+            );
+        h.run();
+        let folder_of = |h: &Harness<'_, App>, index: usize| {
+            h.state().1.drawings().drawings[index].folder.join("/")
+        };
+        let drag = |h: &mut Harness<'_, App>, from: &str, to: &str| {
+            let from = h.get_by_label(from).rect().center();
+            h.drag_at(from);
+            h.run();
+            h.hover_at(from + vec2(0.0, 12.0));
+            h.run();
+            let to = h.get_by_label(to).rect().center();
+            h.hover_at(to);
+            h.run();
+            h.drop_at(to);
+            h.run();
+        };
+
+        // No selection means nothing to group: a folder never starts empty.
+        assert!(
+            h.get_by_label("New folder with selected drawings")
+                .accesskit_node()
+                .is_disabled()
+        );
+
+        // Selecting a folder takes every descendant, here through its nested folder.
+        h.get_by_label("Zones").click();
+        h.run();
+        assert_eq!(
+            h.state().1.drawings().selected_ids().collect::<Vec<_>>(),
+            [ids[1]]
+        );
+        h.get_by_label("Levels").click_modifiers(egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        });
+        h.run();
+        assert_eq!(
+            h.state().1.drawings().selected_ids().collect::<Vec<_>>(),
+            [ids[0], ids[1]]
+        );
+
+        // Grouping the selected folders keeps their structure. The folders it takes leave no
+        // collapsed state behind and show expanded at their new place, as a dragged folder does.
+        for path in [&["Zones"][..], &["All", "Levels"]] {
+            let path = path.iter().map(|name| (*name).to_owned()).collect();
+            h.state_mut().0.state_mut().collapsed_folders.insert(path);
+        }
+        h.get_by_label("New folder with selected drawings").click();
+        h.run();
+        h.event(egui::Event::Text("All".into()));
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(folder_of(&h, 0), "All/Levels");
+        assert_eq!(folder_of(&h, 1), "All/Zones/Inner");
+        assert_eq!(folder_of(&h, 2), "");
+        assert!(h.state().0.state().collapsed_folders.is_empty());
+
+        // A folder drags out to the root and into another; never into its own descendant.
+        // Moving it clears its collapsed state.
+        let path = vec!["All".to_owned(), "Zones".to_owned()];
+        h.state_mut().0.state_mut().collapsed_folders.insert(path);
+        drag(&mut h, "Zones", "Levels");
+        assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        assert!(h.state().0.state().collapsed_folders.is_empty());
+        drag(&mut h, "Levels", "Inner");
+        assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        drag(&mut h, "Inner", "Move to root");
+        assert_eq!(folder_of(&h, 1), "Inner");
+        assert!(h.query_by_label("Zones").is_none(), "emptied folder stays");
+        assert!(h.state_mut().1.drawings_mut().undo());
+        h.run();
+        assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        h.get_by_label("Zones");
+
+        // Deleting from the row or by key removes the descendants in one undo step each.
+        let delete: [fn(&mut Harness<'_, App>); 2] = [
+            |h| {
+                h.get_by_label("All").click_secondary();
+                h.run();
+                // Deleting a folder clears the collapsed state of what it held.
+                let path = vec!["All".to_owned(), "Levels".to_owned()];
+                h.state_mut().0.state_mut().collapsed_folders.insert(path);
+                h.get_by_label("Delete folder").click();
+                h.run();
+                assert!(h.state().0.state().collapsed_folders.is_empty());
+            },
+            |h| {
+                h.get_by_label("All").click();
+                h.run();
+                h.key_press(egui::Key::Delete);
+                h.run();
+            },
+        ];
+        for delete in delete {
+            delete(&mut h);
+            assert_eq!(h.state().1.drawings().drawings.len(), 1);
+            assert!(h.query_by_label("All").is_none());
+            assert!(h.state_mut().1.drawings_mut().undo());
+            h.run();
+            assert_eq!(h.state().1.drawings().drawings.len(), 3);
+            assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+            h.get_by_label("All");
+        }
+    }
+
+    /// The list of drawings by symbol: reached from the actions menu when the host supplies it,
+    /// sorted from a row's controls, which appear under the pointer or when expanded, and deleting
+    /// one symbol only asks for that symbol.
+    #[test]
+    fn symbol_drawings_list_sorts_and_asks_to_delete_one_symbol() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::{Chart, ChartLayout};
+        use egui_kittest::{Harness, kittest::Queryable};
+        type App = (ObjectTreePanel, Vec<ObjectTreeAction>, Chart);
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        chart.set_symbol("AAA");
+        for name in ["beta", "Alpha"] {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.label = Some(name.into());
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+        }
+        let panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+            show_data_window: false,
+            ..Default::default()
+        });
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(320.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, actions, chart): &mut App| {
+                    let inventory = ChartLayout::default().drawing_inventory(&[&mut *chart]);
+                    panel.state_mut().symbol_drawings = Some(inventory);
+                    let action = panel.show(ui, None, &mut []);
+                    if !action.is_none() {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new(), chart),
+            );
+        h.run();
+        let offered = |h: &Harness<'_, App>| h.query_by_label("Delete AAA drawings").is_some();
+        let rows = |h: &Harness<'_, App>| {
+            let top = |name: &str| h.get_by_label(name).rect().top();
+            top("beta") < top("Alpha")
+        };
+        h.get_by_label("Object actions").click();
+        h.run();
+        h.get_by_label("Drawings by symbol").click();
+        h.run();
+        assert_eq!(h.state().1, [ObjectTreeAction::ReadSymbolDrawings]);
+        assert!(!offered(&h), "controls wait for the pointer");
+        h.hover_at(h.get_by_label("AAA").rect().center());
+        h.run();
+        assert!(offered(&h), "controls under the pointer");
+        h.hover_at(egui::pos2(160.0, 590.0));
+        h.run();
+        assert!(!offered(&h));
+
+        h.get_by_label("Toggle AAA drawings").click();
+        h.run();
+        assert!(offered(&h), "controls while expanded");
+        assert!(rows(&h), "the order of the chart until sorted");
+        h.get_by_label("Sort AAA drawings").click();
+        h.run();
+        h.get_by_label("Sort by name").click();
+        h.run();
+        assert_eq!(
+            h.state().0.state().drawing_sort,
+            [("AAA".to_owned(), crate::config::DrawingSort::Name)].into()
+        );
+        assert!(!rows(&h), "alphabetical, ignoring case");
+
+        // Names go by the text the rows show, in the host's language.
+        for tool in [DrawingToolType::TrendLine, DrawingToolType::Ray] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            h.state_mut()
+                .2
+                .drawings_mut()
+                .add_synced_drawing(drawing)
+                .unwrap();
+        }
+        l10n::set_translator(&h.ctx, |english| match english {
+            "Trend Line" => Some("Ligne de tendance".into()),
+            "Ray" => Some("Rayon".into()),
+            _ => None,
+        });
+        h.run();
+        let top = |name: &str| h.get_by_label(name).rect().top();
+        assert!(
+            top("Ligne de tendance") < top("Rayon"),
+            "shown A to Z: Ligne de tendance at {}, Rayon at {}",
+            top("Ligne de tendance"),
+            top("Rayon")
+        );
+
+        h.get_by_label("Delete AAA drawings").click();
+        h.run();
+        assert_eq!(
+            h.state().1.last(),
+            Some(&ObjectTreeAction::DeleteSymbolDrawings("AAA".into()))
+        );
+
+        // A long symbol name stops before the row's count and controls.
+        let long = "L".repeat(80);
+        let chart = &mut h.state_mut().2;
+        chart.set_symbol(long.as_str());
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+        drawing.completed = true;
+        chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+        h.run();
+        h.hover_at(
+            h.get_by_label(&format!("Toggle {long} drawings"))
+                .rect()
+                .center(),
+        );
+        h.run();
+        let sort = h.get_by_label(&format!("Sort {long} drawings")).rect();
+        assert!(h.get_by_label("(1)").rect().right() <= sort.left());
+
+        h.get_by_label("Back to objects").click();
+        h.run();
+        assert!(h.query_by_label("AAA").is_none());
     }
 
     #[test]
@@ -720,5 +1197,55 @@ mod tests {
                 output.drop_without_applying_deltas();
             }
         }
+    }
+
+    /// A collapsed folder is still collapsed after the tree showed rows without it, and after
+    /// Collapse all or Expand all there, as when one panel follows the active chart of a layout
+    /// and the user selects another chart and then comes back.
+    #[test]
+    fn collapsed_folder_survives_rows_of_another_chart() {
+        use crate::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let show = |panel: &mut ObjectTreePanel, rows: &mut [SourceItem]| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.show(ui, None, rows);
+            })
+            .drop_without_applying_deltas();
+        };
+        let mut panel = ObjectTreePanel::new();
+        let mut level = SourceItem::drawing(1, DrawingToolType::HorizontalLine, egui::Color32::RED);
+        level.folder = vec!["Levels".into()];
+        let mut other = SourceItem::drawing(2, DrawingToolType::TrendLine, egui::Color32::RED);
+        other.folder = vec!["Zones".into()];
+        show(&mut panel, &mut [level.clone()][..]);
+        // What the folder row's toggle does.
+        panel
+            .state_mut()
+            .collapsed_folders
+            .insert(vec!["Levels".into()]);
+        show(&mut panel, &mut [other.clone()][..]);
+        show(&mut panel, &mut [level.clone()][..]);
+        let levels = vec!["Levels".to_owned()];
+        let zones = vec!["Zones".to_owned()];
+        let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
+        assert_eq!(
+            collapsed,
+            [&levels],
+            "collapsed folders after showing another chart's rows: {collapsed:?}"
+        );
+
+        show(&mut panel, &mut [other.clone()][..]);
+        // What Collapse all in the header does.
+        panel.state_mut().collapse_all_groups();
+        show(&mut panel, &mut [level.clone()][..]);
+        let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
+        assert_eq!(collapsed, [&levels, &zones], "after Collapse all elsewhere");
+
+        show(&mut panel, &mut [other][..]);
+        // What Expand all in the header does.
+        panel.state_mut().expand_all_groups();
+        show(&mut panel, &mut [level][..]);
+        let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
+        assert_eq!(collapsed, [&levels], "after Expand all elsewhere");
     }
 }

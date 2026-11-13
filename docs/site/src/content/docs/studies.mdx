@@ -2,38 +2,70 @@
 title: Studies
 ---
 
-Enable `studies` for the built-in catalogue and `IndicatorFactory`. The `Indicator`
-trait, `IndicatorValue`, `CustomIndicator` and `IndicatorRegistry` are also available
+import Example from '../../components/Example.astro';
+import source from '../../../../../examples/docs/scenes/studies.rs?raw';
+
+Studies compute values from the bars your application supplies. Create them
+once, then keep the chart across frames so it can update their values when
+history arrives or the current bar changes.
+
+Enable `studies` for the built-in catalogue and [`IndicatorFactory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/factory/struct.IndicatorFactory.html). The [`Indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html)
+trait, [`IndicatorValue`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html), [`CustomIndicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html) and [`IndicatorRegistry`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.IndicatorRegistry.html) are also available
 in the headless engine.
 
 ## Attach a built-in study
 
-```rust
-use egui_charts::{Chart, model::BarData};
-use egui_charts::studies::EMA;
+This scene adds an [`EMA`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.EMA.html)
+with a period of 20 and an [`RSI`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RSI.html)
+with a period of 14 to the [first chart's](first-chart.mdx) fixed one-minute bars.
+The EMA follows price in the main pane. RSI has its own pane and scale below
+price; both panes share time navigation and the crosshair. Drag their separator
+to resize them. Volume is hidden to make the study placement easier to see.
 
-let mut chart = Chart::new(BarData::new());
-let study = chart.add_indicator(Box::new(EMA::new(20)));
-```
+<Example scene="studies" title="EMA over price, RSI in a second pane"
+  task="Pan, zoom and move the crosshair across both panes; drag the separator to resize."
+  code={'use egui_charts::Chart;\n\n' + source.match(/pub fn builtins\b[^]*?\n\}/)[0]} />
 
-The returned id identifies the study's series. The chart manages recalculation
-when source bars change and places overlays or separate panes according to the
-indicator. Built-in implementations and their definitions are listed in the
-[API reference](api-reference.mdx).
+[`Chart::add_indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_indicator)
+calculates the study immediately and returns a
+[`SeriesId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html).
+Retain that id for
+[`set_indicator_visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_indicator_visible),
+[`indicator_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.indicator_mut)
+or [`remove_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_series).
+Do not add a study on every frame. Call
+[`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
+on the retained chart instead.
+
+The chart recalculates after source bars change and places the study according
+to [`Indicator::is_overlay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.is_overlay).
+The EMA seeds from the first close and smooths with `2 / (period + 1)`;
+it has no missing warm-up values. RSI needs 14 price changes before its first
+value and uses Wilder's smoothing. Neither needs a second feed. See
+[pane placement and resizing](panes.mdx) and the [built-in catalogue](api-reference.mdx).
 
 ## Write a custom study
 
-`CustomIndicator` accepts a `Send + Sync` calculation closure. Return one value
-per source bar and use `IndicatorValue::None` during warm-up or when input is
-unavailable. The [builder guide](../../../../builder-guide.md#custom-studies) includes a
-complete one-bar-change example. Implement `Indicator` directly for incremental
-calculation; `studies::helpers` and `Stepper` support reusable scalar operations.
+[`CustomIndicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html) accepts a `Send + Sync` calculation closure. Return one value
+per source bar and use [`IndicatorValue::None`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html#variant.None) during warm-up or when input is
+unavailable. Try [a custom study with warm-up and gaps](/egui-charts/docs/studies/custom/)
+to see that alignment in a running chart. The [builder guide](../../../../builder-guide.md#custom-studies)
+also includes a one-bar-change example. Implement [`Indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html) directly for incremental
+calculation; [`studies::helpers`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/helpers/index.html) and [`Stepper`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Stepper.html) support reusable scalar operations.
+
+## Load history and update a forming bar
+
+The [live data scene](/egui-charts/docs/studies/live-data/) answers real history
+requests from an in-memory sample and feeds synthetic ticks from elapsed time.
+Try loading older bars, then return to the latest bar and watch its candle and
+EMA update. Your application supplies the historical and streaming data in
+production; the library manages their chart state and study recalculation.
 
 ## Supply additional data
 
 Some studies need another interval, another symbol, instrument metrics or actual
 executions. A connected feed loads declared study data; direct hosts answer
-`Chart::study_data_requests` with `set_study_data`. Read
+[`Chart::study_data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.study_data_requests) with [`set_study_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_study_data). Read
 [calendar and viewport studies](../../../../study-data.md) for intrabar requirements and missing
 values, and [order flow](../../../../order-flow.md) for event-driven inputs.
 

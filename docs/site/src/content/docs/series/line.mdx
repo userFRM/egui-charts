@@ -1,0 +1,57 @@
+---
+title: Line
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/series.rs?raw';
+
+Line plots connect one value per timestamp. Start with the
+[series overview](../series.mdx) for identity and lifecycle.
+
+## Data
+
+Use [`Bar::from_value(time, value)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
+for a scalar. OHLC bars also work: the main series uses
+[`ChartConfig::price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.price_source),
+which defaults to close; added line series always use close. A
+[`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace)
+point leaves a gap. Do not encode a missing value as zero.
+
+Choose [`ChartType::Line`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.Line),
+`LineWithMarkers` or `StepLine`. Steps run horizontally from the previous point
+to the new point's time, then vertically to its value.
+
+## Style and running result
+
+The scene extracts closes from the [shared sample history](../first-chart.mdx)
+into scalar bars and draws a marker at each one.
+
+<Example scene="series-line" title="A line with point markers"
+  task="Zoom in to distinguish each scalar value and its connecting segment."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn line\b[^]*?\n\}/)[0]} />
+
+The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
+[`ChartTypeStyles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html)
+keeps `line`, `step_line` and `line_with_markers` independent. Each
+[`LinePlotStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.LinePlotStyle.html)
+sets colour, width, dash style and straight or curved connections. Step line
+ignores curvature. `marker_radius` controls the point circles;
+`crosshair_marker_radius`, `crosshair_marker_fill`, `crosshair_marker_border_color`
+and `crosshair_marker_border_width` style the hover marker, which is hidden until the radius is
+positive and by default takes the point's line colour with a chart-background ring;
+`last_price_animation` controls the last-price pulse.
+
+For an added series, use
+[`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
+and `width`, or set `line_style` to a
+[`LinePlotStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.LinePlotStyle.html)
+for dashes and curves. Without it, added lines use solid straight segments, or
+steps for `StepLine`. `last_price_animation` pulses at the series' own last
+price on its pane and scale. The four `crosshair_marker_*` fields of
+`SeriesOptions` style its hover marker on that same scale and pane. Per-point
+[`BarColors::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarColors.html#structfield.color)
+colours the outgoing segment or marker. All three line types can be
+[added series](../chart-types.mdx#added-series-restrictions).
+
+Continue to [area](/egui-charts/docs/series/area/) to fill beneath the line, or
+[baseline](/egui-charts/docs/series/baseline/) to compare it with a reference.

@@ -7,10 +7,12 @@
 
 Financial charts for Rust applications built with egui 0.37.
 
+This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow **main (0.3 in development)**, using **egui/eframe 0.37**. Browse the [main API (rustdoc and symbol search)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html). The published **0.2.0** crate uses **egui/eframe 0.33.3** and has separate [release API documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+
 <p>
   <a href="https://userfrm.github.io/egui-charts/demo/"><img src="https://img.shields.io/badge/Live_demo-0969da?style=flat-square" alt="Live demo"></a>
   <a href="https://userfrm.github.io/egui-charts/docs/"><img src="https://img.shields.io/badge/Guide-0969da?style=flat-square" alt="Guide"></a>
-  <a href="https://docs.rs/egui-charts"><img src="https://img.shields.io/docsrs/egui-charts?style=flat-square&amp;logo=rust" alt="docs.rs"></a>
+  <a href="https://docs.rs/egui-charts/0.2.0/egui_charts/"><img src="https://img.shields.io/docsrs/egui-charts/0.2.0?style=flat-square&amp;logo=rust&amp;label=API%200.2.0" alt="Released 0.2.0 API, egui 0.33.3"></a>
   <a href="https://crates.io/crates/egui-charts"><img src="https://img.shields.io/crates/v/egui-charts?style=flat-square&amp;logo=rust" alt="crates.io"></a>
   <a href="https://github.com/userFRM/egui-charts/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/userFRM/egui-charts/ci.yml?branch=main&amp;style=flat-square&amp;logo=github&amp;label=CI" alt="CI"></a>
   <a href="https://github.com/emilk/egui"><img src="https://img.shields.io/badge/egui-0.37-555?style=flat-square" alt="egui 0.37"></a>
@@ -21,12 +23,12 @@ Financial charts for Rust applications built with egui 0.37.
 
 </div>
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.webp">
-  <img src="docs/images/hero-dark.webp" alt="Intraday workspace with candles, volume, EMA overlays, VWAP, RSI, a long-position plan, working orders, an alert, watchlist and paper account">
-</picture>
+<a href="https://userfrm.github.io/egui-charts/docs/#product-tour"><picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/tour-light.webp">
+  <img src="docs/images/tour-dark.webp" alt="Four charts with footprints, volume profiles and filled study bands; the pointer switches layouts and searches for a study">
+</picture></a>
 
-*An intraday session: analysis, risk and orders on the same chart. Every image uses generated sample data and simulated trading.*
+*Chart layouts, studies and chart types in motion. [Watch the full demo tour](https://userfrm.github.io/egui-charts/docs/#product-tour). Every image uses generated sample data and simulated trading.*
 
 ## Inside the demo
 
@@ -77,12 +79,12 @@ Financial charts for Rust applications built with egui 0.37.
       Four linked charts with candles, Heikin-Ashi, OHLC bars and area.
     </td>
     <td width="50%" valign="top">
-      <strong>Mark the setup</strong><br>
+      <strong>Draw a trend line</strong><br>
       <a href="docs/images/drawings-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/drawings-light.webp">
-        <img src="docs/images/drawings-dark.webp" alt="Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.">
+        <img src="docs/images/drawings-dark.webp" alt="A trend line snaps to candle highs and lows, then its handle moves to another bar.">
       </picture></a><br>
-      Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.
+      A trend line snaps to candle highs and lows, then its handle moves to another bar.
     </td>
   </tr>
   <tr>
@@ -98,9 +100,9 @@ Financial charts for Rust applications built with egui 0.37.
       <strong>Rehearse the session</strong><br>
       <a href="docs/images/replay-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/replay-light.webp">
-        <img src="docs/images/replay-dark.webp" alt="Replay transport and a paper position with working orders.">
+        <img src="docs/images/replay-dark.webp" alt="Clicking a bar starts replay, and the replay bar steps the chart through historical bars.">
       </picture></a><br>
-      Replay transport and a paper position with working orders.
+      Clicking a bar starts replay, and the replay bar steps the chart through historical bars.
     </td>
   </tr>
   <tr>
@@ -135,21 +137,19 @@ The [`terminal`](terminal) package assembles them on your `Datafeed` and perform
 
 ## Status
 
-[![chart](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![options](https://userfrm.github.io/egui-charts/docs/progress/badge-options.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
+[![chart verified](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings verified](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies verified](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow verified](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![options verified](https://userfrm.github.io/egui-charts/docs/progress/badge-options.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal verified](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api verified](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
-[![Feature counts by area: done, partial and missing](https://userfrm.github.io/egui-charts/docs/progress/areas.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
-
-Counts come from [docs/progress/features.csv](docs/progress/features.csv), and the [status page](https://userfrm.github.io/egui-charts/docs/progress/) lists each group's partial and missing features.
+Each feature in [docs/progress/features.csv](docs/progress/features.csv) is verified (checked by an independent reviewer), unverified (implemented and awaiting that check), incomplete (implemented in part) or missing. Badges show the verified share only; the [status page](https://userfrm.github.io/egui-charts/docs/progress/) lists each group's unverified, incomplete and missing features.
 
 [![progress map](https://userfrm.github.io/egui-charts/docs/progress/progress.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
 ## Start with a chart
 
-Requires Rust 1.95 or newer. Use egui and eframe 0.37 throughout your application so their types match.
+For main (0.3 in development), use the Git dependency and Rust 1.95 or newer. Use egui and eframe 0.37 throughout your application so their types match.
 
 ```toml
 [dependencies]
-egui-charts = "0.3"
+egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main" }
 eframe = "0.37"
 ```
 
@@ -219,13 +219,13 @@ The [`terminal`](terminal) package assembles the toolbars, menus and charts on y
 
 `ChartLayout` arranges charts in grids or tabs and can synchronize symbols, intervals, crosshairs, time ranges and drawings.
 
-Choose a chart style with `Chart::set_chart_type`: candles, OHLC bars, line, area, baseline, Heikin-Ashi, Renko, Kagi, line break, point and figure, or range bars. See [`ChartType`](https://docs.rs/egui-charts/latest/egui_charts/model/enum.ChartType.html) for the full set.
+Choose a chart style with `Chart::set_chart_type`: candles, OHLC bars, line, area, baseline, Heikin-Ashi, Renko, Kagi, line break, point and figure, or range bars. See [`ChartType` in the main API](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html) for the full set.
 
 The UI components also include replay controls, an order ticket, a depth ladder and an account panel. Connect trading UI to your `Broker` implementation; the demo uses `PaperAccount` for simulated execution.
 
 ## Fit your application
 
-The default build includes the chart, studies, drawings and UI components, plus locale and named time zone support. Select a smaller build with `default-features = false`:
+The default build includes the chart, studies, drawings and UI components, plus locale and named time zone support, CSV and PNG export. Select a smaller build with `default-features = false`:
 
 | Features | Included |
 |---|---|
@@ -236,13 +236,15 @@ The default build includes the chart, studies, drawings and UI components, plus 
 | `alert-engine` | `AlertEngine`, an alerts service that evaluates alerts on the bars the host feeds it, without egui |
 | `detectors` | `OrderFlowDetectors`, a signals service that finds order-flow events in the trades and depth the host feeds it, without egui |
 | `strategies` | `Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`, without egui |
+| `csv` | CSV import and export for bars, strategy reports and chart data |
+| `png-export` | `Chart::export_png` and image textures in SVG export; enables `widget` |
 | `http` | `HttpDatafeed`, HTTP column history, symbol search and live bar refresh, without egui |
 | None | Data types, scales and host service contracts without egui |
 
 For example:
 
 ```toml
-egui-charts = { version = "0.3", default-features = false, features = ["widget", "studies"] }
+egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget", "studies"] }
 ```
 
 `Theme::dark()`, `Theme::light()` and `Theme::high_contrast()` provide starting palettes. A `Theme` exposes its UI colours, chart colours, typography, spacing and corner radii as public fields. Apply it at startup and after a theme change:

@@ -140,11 +140,13 @@ fn shift_months(
 }
 
 fn add_seconds(time: DateTime<Utc>, seconds: f64) -> Option<DateTime<Utc>> {
-    let nanos = seconds * 1e9;
-    if !nanos.is_finite() || nanos.abs() >= i64::MAX as f64 {
+    if !seconds.is_finite() || seconds.abs() >= i64::MAX as f64 {
         return None;
     }
-    time.checked_add_signed(Duration::nanoseconds(nanos.round() as i64))
+    let duration = Duration::try_seconds(seconds.trunc() as i64)?.checked_add(
+        &Duration::nanoseconds((seconds.fract() * 1e9).round() as i64),
+    )?;
+    time.checked_add_signed(duration)
 }
 
 pub(crate) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
@@ -247,4 +249,31 @@ pub(crate) fn index_at_with_timeframe(
     let (left, right) = segment(bars, at.saturating_sub(1));
     let step = seconds(bars[right].time - bars[left].time) / (right - left) as f64;
     Some(left as f64 + seconds(time - bars[left].time) / step)
+}
+
+/// Positions share the same interpolation and edge cadence as keys mapped through row indices.
+pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model::NumericPositions {
+    let Some(first) = bars.first() else {
+        return crate::model::NumericPositions::new(Vec::new(), unit, DateTime::UNIX_EPOCH);
+    };
+    let last = bars.len() - 1;
+    let span = seconds(bars[last].time - first.time);
+    // A lone key has no gap to retain, so its key unit lasts only until keys differ.
+    let retained = unit.or_else(|| (last > 0 && span > 0.0).then_some(span / last as f64));
+    let unit = retained.unwrap_or(1.0);
+    let mut points = Vec::with_capacity(bars.len() + 4);
+    // Keep the last sample at the row anchor even when a fixed unit leaves missing ranks.
+    let offset = last as f64 - span / unit;
+    let (near, step) = edge_step(bars, 0, None);
+    points.extend([offset - (near + step) / unit, offset - near / unit]);
+    points.extend(
+        bars.iter()
+            .map(|bar| offset + seconds(bar.time - first.time) / unit),
+    );
+    let (near, step) = edge_step(bars, last, None);
+    points.extend([
+        last as f64 + near / unit,
+        last as f64 + (near + step) / unit,
+    ]);
+    crate::model::NumericPositions::new(points, retained, first.time)
 }

@@ -210,7 +210,11 @@ struct Replay {
     book: Option<BarBook>,
 }
 
-/// Whether `clock`'s bars span time: footprint and book sources keep no others.
+/// Parts of chart bars (execution, bar open and allocated size) and the grouping after them.
+#[cfg(feature = "widget")]
+type ChartRun<'a> = (Vec<(&'a Tick, DateTime<Utc>, f64)>, super::inbox::TradeBars);
+
+/// Whether `clock`'s bars span time, as book sources require.
 fn time_based(clock: &BarClock) -> bool {
     clock
         .timeframe()
@@ -333,6 +337,8 @@ impl Distinct {
 struct State {
     source: Source,
     trade_bars: super::inbox::TradeBars,
+    /// A footprint that lost the stream's anchor adds only the sink's allocations.
+    awaits_sink: bool,
     bars: BTreeMap<DateTime<Utc>, ([f64; 3], u64)>,
     last: Option<DateTime<Utc>>,
     inside: Option<(f64, f64)>,
@@ -344,6 +350,9 @@ struct State {
     last_price: [Option<f64>; 2],
     revision: u64,
     reset_revision: u64,
+    /// The revision of the latest bar that dropped the oldest bars, which restarts the readers
+    /// like `reset_revision` while the values of the bars kept still hold.
+    dropped_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
     filter: Option<OrderFilter>,
     /// A footprint source's executions, from its first execution with a tick size.
@@ -367,9 +376,9 @@ struct State {
 /// no values for the dropped bars, and a cumulative one, such as
 /// [`FilteredCvd`](OrderFlowKind::FilteredCvd), starts again from the oldest retained bar. The
 /// chart recalculates the studies on a source in full after each drop, once per 1,001 new bars,
-/// and otherwise updates them from the first changed bar. At most 100,000 events per rolling
-/// window are retained; an overflowing window gives no value until the missing events have
-/// expired, rather than understating the rate.
+/// drawing their earlier values until then, and otherwise updates them from the first changed
+/// bar. At most 100,000 events per rolling window are retained; an overflowing window gives no
+/// value until the missing events have expired, rather than understating the rate.
 ///
 /// Besides the fixed aggregations of [`OrderFlowKind`], a source can hold each bar's executions
 /// by price ([`footprint`](Self::footprint)) or its last synchronized book
@@ -390,10 +399,9 @@ impl OrderFlowInput {
     /// An empty source of each bar's executions by price, one level per instrument tick, as
     /// [`Footprint`] aggregates them, for a study to read with
     /// [`footprints_from`](Self::footprints_from). It keeps nothing until it has a tick size
-    /// ([`set_tick_size`](Self::set_tick_size); the chart gives it its instrument's), and only
-    /// bars of an interval measured in time: under a clock without a timeframe, or with a tick,
-    /// volume, range or delta interval, it ignores executions. An execution older than the one
-    /// before it is left out, as from the chart's footprint.
+    /// ([`set_tick_size`](Self::set_tick_size); the chart gives it its instrument's). Tick,
+    /// volume, range and delta intervals share the chart's execution allocations. An execution
+    /// older than the one before it is left out, as from the chart's footprint.
     pub fn footprint() -> Self {
         Self::of(Source::Footprint)
     }
@@ -419,6 +427,32 @@ impl OrderFlowInput {
     pub fn with_order_filter(self, filter: OrderFilter) -> Self {
         self.state().filter = (filter != OrderFilter::default()).then_some(filter);
         self
+    }
+
+    /// Feed services read by this source. Book size with an order filter needs individual
+    /// orders; executions need trade-side classification only for side-dependent outputs.
+    pub fn services(&self) -> &'static [crate::model::FeedService] {
+        use crate::model::FeedService::*;
+        let state = self.state();
+        match state.source {
+            Source::Fixed(OrderFlowKind::Spread | OrderFlowKind::LevelsTradedThrough { .. }) => {
+                &[BestBidAsk]
+            }
+            Source::Fixed(OrderFlowKind::BookSize { .. }) if state.filter.is_some() => {
+                &[OrderDepth]
+            }
+            Source::Fixed(OrderFlowKind::BookSize { .. }) | Source::Book(_) => &[Depth],
+            Source::Footprint
+            | Source::Fixed(
+                OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. },
+            ) => &[LiveTrades],
+            Source::Fixed(
+                OrderFlowKind::LevelsExecuted { .. }
+                | OrderFlowKind::SizeDelta { .. }
+                | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::FilteredCvd { .. },
+            ) => &[LiveTrades, TradeSides],
+        }
     }
 
     /// The filter of book size, if it has one.
@@ -484,7 +518,7 @@ impl OrderFlowInput {
 
     #[cfg(feature = "studies")]
     pub(crate) fn reset_revision(&self) -> u64 {
-        self.state().reset_revision
+        self.state().restart_revision()
     }
 
     #[cfg(feature = "widget")]
@@ -495,7 +529,7 @@ impl OrderFlowInput {
     #[cfg(feature = "widget")]
     pub(crate) fn changed_since(&self, revision: u64) -> Option<DateTime<Utc>> {
         let state = self.state();
-        if state.reset_revision > revision {
+        if state.restart_revision() > revision {
             return None;
         }
         state
@@ -503,6 +537,35 @@ impl OrderFlowInput {
             .iter()
             .find(|(_, changed)| **changed > revision)
             .map(|(time, _)| *time)
+    }
+
+    /// Whether the source only dropped its oldest bars since `revision`: the values of the bars
+    /// it kept still hold until the studies on it are recalculated.
+    #[cfg(feature = "widget")]
+    pub(crate) fn only_dropped_since(&self, revision: u64) -> bool {
+        let state = self.state();
+        state.dropped_revision > revision && state.reset_revision <= revision
+    }
+
+    /// Updates the chart's execution cells from the sink's exact trade-bar allocations.
+    #[cfg(feature = "widget")]
+    pub(crate) fn copy_footprint(&self, target: &mut Footprint, since: u64) -> u64 {
+        let state = self.state();
+        if state.revision != since {
+            let from = if state.restart_revision() > since {
+                None
+            } else {
+                state
+                    .changes
+                    .iter()
+                    .find(|(_, changed)| **changed > since)
+                    .map(|(time, _)| *time)
+            };
+            if let Some(flow) = &state.footprint {
+                target.copy_trade_bars(flow, from);
+            }
+        }
+        state.revision
     }
 
     pub(crate) fn values_from(&self, time: DateTime<Utc>) -> BTreeMap<DateTime<Utc>, [f64; 3]> {
@@ -536,6 +599,17 @@ impl OrderFlowInput {
             None => BTreeMap::new(),
         };
         state.snapshot(bars, complete_from)
+    }
+
+    /// The calendar a footprint source opens its bars by: the clock of the first execution it
+    /// received since it was cleared or given another tick size. `None` while it holds no
+    /// footprint, and for other sources.
+    #[cfg(feature = "studies")]
+    pub(crate) fn footprint_clock(&self) -> Option<BarClock> {
+        self.state()
+            .footprint
+            .as_ref()
+            .map(|flow| flow.clock().clone())
     }
 
     /// Copies the books of a book source for the bars that open at or after `open`, with what
@@ -615,7 +689,10 @@ impl OrderFlowInput {
         }
         let mut state = self.state();
         if matches!(state.source, Source::Footprint) {
-            return state.push_footprint(clock, trade);
+            if state.awaits_sink {
+                return;
+            }
+            return state.push_footprint(clock, trade, None);
         }
         if let Some(timeframe) = clock.timeframe().filter(|tf| tf.is_trade_based()) {
             let tick_size = state.tick_size;
@@ -633,18 +710,30 @@ impl OrderFlowInput {
     /// The sink has already validated and allocated this execution to its chart bars.
     pub(crate) fn push_trade_part(
         &self,
+        clock: &BarClock,
         trade: &Tick,
         open: DateTime<Utc>,
         size: f64,
         first: bool,
     ) {
         let mut state = self.state();
+        if matches!(state.source, Source::Footprint) {
+            state.push_footprint(clock, trade, Some((open, size)));
+        } else {
+            state.add_trade(trade, open, size, first);
+        }
         state.trade_bars.forming = Some(open);
-        state.add_trade(trade, open, size, first);
     }
 
     pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
         self.state().trade_bars.forming = Some(open);
+    }
+
+    /// Forgets the forming bar, so that [`replace_trades`](Self::replace_trades) rebuilds a source
+    /// the sink allocated to before. Sources it does not rebuild keep their values.
+    #[cfg(feature = "widget")]
+    pub(crate) fn forget_trade_bar(&self) {
+        self.state().trade_bars.forming = None;
     }
 
     /// Expires rolling rates and movement during an idle part of a bar with stream data.
@@ -702,9 +791,20 @@ impl OrderFlowInput {
     /// bar that lost an execution to the store's limit is left out, and a rolling window gives no
     /// value while it reaches back to the loss, as when the window overflows. On a trade-based
     /// interval it rebuilds only a source the sink has not allocated an execution to yet, from the
-    /// executions that arrived live.
+    /// executions that arrived live, grouped along `history`, the chart's bars, from the oldest
+    /// bar whose executions are all held. A page's copy of a live execution the store dropped as
+    /// a repeat counts in its place, except at the first instant where it dropped one, where the
+    /// dropped ones count themselves. A footprint source that lost some live executions waits for
+    /// the sink's allocations, leaving out the executions still queued: they open no bar of their
+    /// own. Without a loss, a source whose executions do not match the chart's bars groups them
+    /// from the oldest live one.
     #[cfg(feature = "widget")]
-    pub(crate) fn replace_trades(&self, clock: &BarClock, trades: &super::trades::Trades) {
+    pub(crate) fn replace_trades(
+        &self,
+        clock: &BarClock,
+        trades: &super::trades::Trades,
+        history: &[crate::model::Bar],
+    ) {
         let footprint = match self.state().source {
             Source::Fixed(
                 OrderFlowKind::TradeRate { .. }
@@ -719,16 +819,39 @@ impl OrderFlowInput {
         };
         let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         // Only the sink knows how the chart split its executions into trade-based bars.
-        if trade_based && !footprint && self.state().trade_bars.forming.is_some() {
+        if trade_based && self.state().trade_bars.forming.is_some() {
             return;
         }
         let as_of = self.state().last;
         self.clear();
         let lost = trades.lost_until();
+        let tick_size = self.state().tick_size;
+        let chart_run = || Self::chart_run(clock, tick_size, trades, history, None);
         if footprint {
-            // In arrival order, as the chart's footprint is built.
-            for trade in trades.iter() {
-                self.push_trade(clock, trade);
+            // Without the original live anchor, wait for allocations from the sink.
+            if trade_based && lost.is_some() {
+                self.state().awaits_sink = trades.live().next().is_some();
+                return;
+            }
+            if let Some((parts, bars)) = chart_run() {
+                let mut state = self.state();
+                for (trade, open, size) in parts {
+                    state.push_footprint(clock, trade, Some((open, size)));
+                }
+                // The executions still queued in the sink continue the chart's grouping.
+                if let Some(flow) = &mut state.footprint {
+                    flow.trade_bars = bars.clone();
+                }
+                state.trade_bars = bars;
+            } else {
+                // In arrival order, as the chart's footprint is built.
+                for trade in trades.iter().skip(if trade_based {
+                    trades.iter().count() - trades.live().count()
+                } else {
+                    0
+                }) {
+                    self.push_trade(clock, trade);
+                }
             }
             let mut state = self.state();
             if let (Some(lost), Some(flow)) = (lost, &mut state.footprint) {
@@ -743,17 +866,26 @@ impl OrderFlowInput {
                     distinct.lost_until = lost;
                 }
             }
-            // Paged executions belong to history bars, which the chart did not fold from them.
-            // shortcut: after the store evicts a live execution, a new source starts its trade
-            // bars at the oldest held one; keep the sink's allocations if hosts need it exact.
-            let mut sorted: Vec<_> = if trade_based {
-                trades.live().collect()
-            } else {
-                trades.iter().collect()
-            };
-            sorted.sort_by_key(|trade| trade.ts);
-            for trade in sorted {
-                self.push_trade(clock, trade);
+            if let Some((parts, bars)) = chart_run() {
+                let mut state = self.state();
+                let mut previous: Option<&Tick> = None;
+                for (trade, open, size) in parts {
+                    let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
+                    state.add_trade(trade, open, size, first);
+                    previous = Some(trade);
+                }
+                state.trade_bars = bars;
+            } else if !trade_based || lost.is_none() {
+                // Paged executions belong to history bars, which the chart did not fold from them.
+                let mut sorted: Vec<_> = if trade_based {
+                    trades.live().collect()
+                } else {
+                    trades.iter().collect()
+                };
+                sorted.sort_by_key(|trade| trade.ts);
+                for trade in sorted {
+                    self.push_trade(clock, trade);
+                }
             }
             if let Some(lost) = lost {
                 let cut = clock.bar_open(lost);
@@ -767,16 +899,65 @@ impl OrderFlowInput {
         }
     }
 
+    /// Groups the executions the sink allocated along `history`, the chart's bars, on a
+    /// trade-based interval: the live ones, after a loss only those after it. Without a loss a
+    /// page's copy stands in for a live execution the store dropped as a repeat, so paged ones
+    /// from the open of the chart bar holding the oldest live one join them, or from `anchor`,
+    /// the open of an older bar known to hold the sink's allocations. A bar the sink opened a
+    /// nanosecond after the one before starts with an execution no later than that one's open,
+    /// so a run of such bars counts from the open of its first. Older paged ones belong to
+    /// history bars, which the chart did not fold from them. At the first instant, as the page
+    /// stamps it, where the store left a live execution to a page, the page may hold executions
+    /// the stream never sent, so the live ones the store kept apart count in place of the page's
+    /// executions of that instant. Returns the parts and the grouping after them, or `None`
+    /// unless they rebuild every bar through the newest.
+    #[cfg(feature = "widget")]
+    fn chart_run<'a>(
+        clock: &BarClock,
+        tick_size: Option<f64>,
+        trades: &'a super::trades::Trades,
+        history: &[crate::model::Bar],
+        anchor: Option<DateTime<Utc>>,
+    ) -> Option<ChartRun<'a>> {
+        let timeframe = clock.timeframe().filter(|tf| tf.is_trade_based())?;
+        let lost = trades.lost_until();
+        let paged = trades.iter().count() - trades.live().count();
+        let oldest = trades.live().map(|trade| trade.ts).chain(anchor).min();
+        let from = oldest.filter(|_| lost.is_none()).and_then(|oldest| {
+            let bars = &history[..history.partition_point(|bar| bar.time <= oldest)];
+            let chained = (bars.windows(2).rev())
+                .take_while(|pair| pair[1].time - pair[0].time == TimeDelta::nanoseconds(1))
+                .count();
+            Some(bars[..bars.len() - chained].last()?.time)
+        });
+        let live = trades
+            .live()
+            .filter(|trade| lost.is_none_or(|lost| trade.ts > lost));
+        let (unheld_at, unheld) = trades.unheld_live().unzip();
+        let mut held: Vec<_> = (trades.iter().take(paged))
+            .filter(|trade| Some(trade.ts) != unheld_at)
+            .chain(unheld.into_iter().flatten())
+            .filter(|trade| from.is_some_and(|from| trade.ts >= from))
+            .chain(live)
+            .collect();
+        held.sort_by_key(|trade| trade.ts);
+        super::footprint::live_run(timeframe, tick_size, &held, history)
+    }
+
     /// Applies a chart replay cutoff, exclusive, or removes it with `None`. Readers then stop at
     /// the cutoff's bar. That bar holds the held executions before the cutoff for a source that
     /// sums them, unless the store dropped one of that bar's, and a book source shows the bar's
-    /// book when the bar's last update came before the cutoff.
+    /// book when the bar's last update came before the cutoff. On a trade-based interval the
+    /// cutoff's bar is the one of `history`, all the chart's bars and not only those before the
+    /// cutoff, that holds it, and a page's copy counts for a live execution the store dropped as
+    /// a repeat.
     #[cfg(feature = "widget")]
     pub(crate) fn set_replay(
         &self,
         clock: &BarClock,
         cutoff: Option<DateTime<Utc>>,
         trades: Option<&super::trades::Trades>,
+        history: &[crate::model::Bar],
     ) {
         let mut state = self.state();
         let replay = cutoff.map(|cutoff| {
@@ -784,30 +965,63 @@ impl OrderFlowInput {
             // shortcut: scan the held executions per input per seek; index them by time if
             // replay playback profiles show it.
             let partial = if let Some(timeframe) = trade_timeframe
-                && let Source::Fixed(kind) = state.source
+                && matches!(state.source, Source::Fixed(_) | Source::Footprint)
                 && let Some(trades) = trades.filter(|trades| trades.lost_until().is_none())
             {
-                let mut part = State::new(Source::Fixed(kind));
+                let tick_size = state.tick_size;
+                let mut part = State::new(state.source);
+                part.tick_size = tick_size;
+                // The sink allocated the oldest bar this source holds and every bar after it, so
+                // a page's copies count from there, or from the chart's oldest bar once the chart
+                // no longer holds that one, or from the oldest live execution's bar when the page
+                // lacks one of them.
+                let anchor = (state.footprint.as_ref())
+                    .and_then(|flow| flow.bars().keys().next())
+                    .or(state.bars.keys().next())
+                    .zip(history.first())
+                    .map(|(anchor, first)| first.time.max(*anchor));
+                let run = Self::chart_run(clock, tick_size, trades, history, anchor)
+                    .or_else(|| Self::chart_run(clock, tick_size, trades, history, None));
+                let parts = run.map_or_else(
+                    || {
+                        // Executions that do not match the chart's bars are grouped from the
+                        // oldest live one: history pages did not form the chart's live trade bars.
+                        let mut bars = super::inbox::TradeBars::default();
+                        let mut sorted: Vec<_> = trades.live().collect();
+                        sorted.sort_by_key(|trade| trade.ts);
+                        let mut parts = Vec::new();
+                        for trade in sorted {
+                            let Ok(allocated) = bars.push(timeframe, trade, tick_size) else {
+                                continue;
+                            };
+                            for (bar, size) in allocated {
+                                parts.push((trade, bar.time, size));
+                            }
+                            if trade.ts >= cutoff {
+                                break;
+                            }
+                        }
+                        parts
+                    },
+                    |(parts, _)| parts,
+                );
                 let mut open = None;
-                // History pages did not form the chart's live trade bars.
-                let mut sorted: Vec<_> = trades.live().collect();
-                sorted.sort_by_key(|trade| trade.ts);
-                for trade in sorted {
-                    let Ok(parts) = part.trade_bars.push(timeframe, trade, state.tick_size) else {
-                        continue;
-                    };
-                    for (i, (bar, size)) in parts.into_iter().enumerate() {
-                        if bar.time <= cutoff {
-                            open = Some(bar.time);
-                        }
-                        if trade.ts < cutoff {
-                            part.add_trade(trade, bar.time, size, i == 0);
-                        }
+                let mut previous: Option<&Tick> = None;
+                for (trade, bar, size) in parts {
+                    if bar <= cutoff {
+                        open = Some(bar);
                     }
                     // The first excluded execution can open a bar exactly at the cutoff.
                     if trade.ts >= cutoff {
                         break;
                     }
+                    if matches!(part.source, Source::Footprint) {
+                        part.push_footprint(clock, trade, Some((bar, size)));
+                    } else {
+                        let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
+                        part.add_trade(trade, bar, size, first);
+                    }
+                    previous = Some(trade);
                 }
                 Some((open.unwrap_or(cutoff), part))
             } else {
@@ -818,10 +1032,22 @@ impl OrderFlowInput {
                 *open
             } else if trade_based {
                 state
-                    .bars
-                    .range(..=cutoff)
-                    .next_back()
-                    .map_or(cutoff, |(open, _)| *open)
+                    .footprint
+                    .as_ref()
+                    .and_then(|flow| {
+                        flow.bars()
+                            .range(..=cutoff)
+                            .next_back()
+                            .map(|(open, _)| *open)
+                    })
+                    .or_else(|| {
+                        state
+                            .bars
+                            .range(..=cutoff)
+                            .next_back()
+                            .map(|(open, _)| *open)
+                    })
+                    .unwrap_or(cutoff)
             } else {
                 clock.bar_open(cutoff)
             };
@@ -858,7 +1084,13 @@ impl OrderFlowInput {
                     }
                 }
                 Source::Footprint => {
-                    if let Some(tick_size) = state.tick_size.filter(|_| time_based(clock))
+                    if let Some((_, part)) = &partial {
+                        replay.footprint = part
+                            .footprint
+                            .as_ref()
+                            .and_then(|flow| flow.bars().get(&open))
+                            .cloned();
+                    } else if let Some(tick_size) = state.tick_size.filter(|_| time_based(clock))
                         && let Ok(mut part) = Footprint::new(clock.clone(), tick_size, 1)
                     {
                         // In arrival order, so an execution older than the one before is left out.
@@ -961,6 +1193,12 @@ fn signed_size(trade: &Tick, min: f64, max: f64, size: f64) -> f64 {
 }
 
 impl State {
+    /// The revision from which readers start over: the latest reset or drop.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    fn restart_revision(&self) -> u64 {
+        self.reset_revision.max(self.dropped_revision)
+    }
+
     fn open(&self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
         if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             self.trade_bars.forming
@@ -1066,6 +1304,7 @@ impl State {
         Self {
             source,
             trade_bars: super::inbox::TradeBars::default(),
+            awaits_sink: false,
             bars: BTreeMap::new(),
             last: None,
             inside: None,
@@ -1075,6 +1314,7 @@ impl State {
             last_price: [None; 2],
             revision: 0,
             reset_revision: 0,
+            dropped_revision: 0,
             changes: BTreeMap::new(),
             filter: None,
             footprint: None,
@@ -1129,8 +1369,13 @@ impl State {
     /// Adds an execution to a footprint source. Past `MAX_BARS` bars or `MAX_ROWS` rows the
     /// footprint's budget takes the oldest bar; the rest of the chunk then goes at once, down to
     /// `KEPT_BARS` and `KEPT_ROWS`, so the studies start over once per chunk.
-    fn push_footprint(&mut self, clock: &BarClock, trade: &Tick) {
-        let Some(tick_size) = self.tick_size.filter(|_| time_based(clock)) else {
+    fn push_footprint(
+        &mut self,
+        clock: &BarClock,
+        trade: &Tick,
+        part: Option<(DateTime<Utc>, f64)>,
+    ) {
+        let Some(tick_size) = self.tick_size else {
             return;
         };
         if self.footprint.is_none() {
@@ -1138,13 +1383,29 @@ impl State {
                 return;
             };
             flow.set_budget(MAX_BARS, MAX_ROWS);
+            if part.is_some()
+                && let Some(open) = self.trade_bars.forming
+            {
+                flow.received_from(open);
+            }
             self.footprint = Some(flow);
         }
         let Some(flow) = &mut self.footprint else {
             return;
         };
         let first = flow.bars().keys().next().copied();
-        if !matches!(flow.push(trade), Ok(true)) {
+        let changed = match part {
+            Some((open, _)) => Some(open),
+            None if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) => {
+                flow.bars().last_key_value().map(|(open, _)| *open)
+            }
+            None => Some(clock.bar_open(trade.ts)),
+        };
+        let result = match part {
+            Some((open, size)) => flow.push_part(trade, open, size),
+            None => flow.push(trade),
+        };
+        if !matches!(result, Ok(true)) {
             return;
         }
         let dropped = first.is_some() && flow.bars().keys().next().copied() != first;
@@ -1154,13 +1415,20 @@ impl State {
         }
         let first = flow.bars().keys().next().copied();
         let latest = self.last.map_or(trade.ts, |last| last.max(trade.ts));
-        self.finish(latest, clock.bar_open(trade.ts));
+        let open = flow
+            .bars()
+            .last_key_value()
+            .map_or(trade.ts, |(open, _)| *open);
+        if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            self.trade_bars.forming = Some(open);
+        }
+        self.finish(latest, changed.or(first).unwrap_or(open));
         if dropped {
             // `changes` names only held bars, so it shares their bound; readers start over.
             if let Some(first) = first {
                 self.changes.retain(|bar, _| *bar >= first);
             }
-            self.reset_revision = self.revision;
+            self.dropped_revision = self.revision;
         }
     }
 
@@ -1215,7 +1483,7 @@ impl State {
                     self.book_rows -= book.bids.len() + book.asks.len();
                 }
             }
-            self.reset_revision = self.revision;
+            self.dropped_revision = self.revision;
         }
     }
 
@@ -1231,7 +1499,7 @@ impl State {
             if let Some((&first, _)) = self.bars.first_key_value() {
                 self.changes.retain(|bar, _| *bar >= first);
             }
-            self.reset_revision = self.revision;
+            self.dropped_revision = self.revision;
         }
     }
 }
@@ -1240,6 +1508,85 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::{OrderBook, OrderBookLevel, Timeframe};
+
+    #[test]
+    fn services_name_the_data_each_source_reads() {
+        use crate::model::FeedService::*;
+        use OrderFlowKind::*;
+        let book = BookSize {
+            levels: 5,
+            distance: 0.0,
+        };
+        let cases: [(_, &[crate::model::FeedService]); 13] = [
+            (OrderFlowInput::new(Spread), &[BestBidAsk]),
+            (
+                OrderFlowInput::new(LevelsTradedThrough { seconds: 0 }),
+                &[BestBidAsk],
+            ),
+            (OrderFlowInput::new(book), &[Depth]),
+            (
+                OrderFlowInput::new(book).with_order_filter(OrderFilter {
+                    min_size: 10.0,
+                    ..Default::default()
+                }),
+                &[OrderDepth],
+            ),
+            (
+                OrderFlowInput::new(book).with_order_filter(OrderFilter::default()),
+                &[Depth],
+            ),
+            (
+                OrderFlowInput::new(TradeRate {
+                    volume: false,
+                    seconds: 60,
+                    instant: 3,
+                }),
+                &[LiveTrades],
+            ),
+            (
+                OrderFlowInput::new(AggressorRate {
+                    seconds: 60,
+                    instant: 3,
+                }),
+                &[LiveTrades],
+            ),
+            (
+                OrderFlowInput::new(LevelsExecuted {
+                    seconds: 0,
+                    reversal: false,
+                }),
+                &[LiveTrades, TradeSides],
+            ),
+            (
+                OrderFlowInput::new(SizeDelta {
+                    ranges: [[0.0, 10.0]; 3],
+                }),
+                &[LiveTrades, TradeSides],
+            ),
+            (
+                OrderFlowInput::new(FlowSum { bars: 10 }),
+                &[LiveTrades, TradeSides],
+            ),
+            (
+                OrderFlowInput::new(FilteredCvd {
+                    min: 0.0,
+                    max: 10.0,
+                }),
+                &[LiveTrades, TradeSides],
+            ),
+            (OrderFlowInput::footprint(), &[LiveTrades]),
+            (
+                OrderFlowInput::book(5).with_order_filter(OrderFilter {
+                    min_size: 10.0,
+                    ..Default::default()
+                }),
+                &[Depth],
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(input.services(), expected);
+        }
+    }
 
     #[test]
     fn late_trades_do_not_clear_an_overflow_gap_early() {
@@ -1318,6 +1665,38 @@ mod tests {
         }
     }
 
+    /// A repeat queued only to complete a drained execution's order ids is no new execution:
+    /// a source connected while it waits counts the buy once, as one connected from the start
+    /// does, and the drain still gives the held execution its aggressor order id.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn a_source_connected_before_the_drain_skips_a_queued_repeat() {
+        let clock = BarClock::new("2t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let inbox = Arc::new(super::super::inbox::Inbox::default());
+        let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+        let first = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        inbox.study_inputs(sink.id, vec![first.clone()]);
+        let buy = Tick::new(start, 100.0, 1.0, Some(OrderSide::Buy)).with_id(7);
+        sink.push_tick(buy.clone());
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let bars: Vec<_> = updates.bars.values().map(|(bar, _)| bar.clone()).collect();
+        let mut held = super::super::trades::Trades::new(100);
+        held.append(updates.trades, &mut |_, _| ());
+        sink.push_tick(buy.with_aggressor_order_id(9));
+        // The chart adds a study in the frame before its next drain.
+        let added = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        added.forget_trade_bar();
+        added.replace_trades(&clock, &held, &bars);
+        inbox.study_inputs(sink.id, vec![first.clone(), added.clone()]);
+        let once = BTreeMap::from([(start, [1.0, 1.0, 0.0])]);
+        assert_eq!([first.values(), added.values()], [once.clone(), once]);
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        held.append(updates.trades, &mut |_, _| ());
+        let held: Vec<_> = held.iter().map(|t| (t.id, t.aggressor_order_id)).collect();
+        assert_eq!(held, [(Some(7), Some(9))]);
+    }
+
     /// Quotes and books between fills belong to the current three-tick bar, even when
     /// the feed sends the entire burst before the chart drains it. Paging older executions
     /// must keep that allocation during replay too.
@@ -1334,10 +1713,23 @@ mod tests {
             distance: 0.0,
         });
         let flow = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
-        inbox.study_inputs(sink.id, vec![spread.clone(), book.clone()]);
+        let footprint = OrderFlowInput::footprint();
+        footprint.set_tick_size(Some(1.0));
+        inbox.study_inputs(
+            sink.id,
+            vec![spread.clone(), book.clone(), footprint.clone()],
+        );
         for second in 0..6 {
             if second == 2 {
-                inbox.study_inputs(sink.id, vec![spread.clone(), book.clone(), flow.clone()]);
+                inbox.study_inputs(
+                    sink.id,
+                    vec![
+                        spread.clone(),
+                        book.clone(),
+                        flow.clone(),
+                        footprint.clone(),
+                    ],
+                );
             }
             let at = start + TimeDelta::seconds(second);
             sink.push_tick(Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)).with_id(second as u64));
@@ -1393,16 +1785,17 @@ mod tests {
         let boundary = Tick::new(start, 100.0, 1.0, Some(OrderSide::Buy)).with_id(99);
         held.prepend(vec![old, boundary], &mut |_, _| ());
         let rebuilt = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
-        for input in [&flow, &rebuilt] {
-            input.replace_trades(&clock, &held);
+        for input in [&flow, &rebuilt, &footprint] {
+            input.replace_trades(&clock, &held, &[]);
         }
         let live: BTreeMap<_, _> = got[2].iter().copied().collect();
         assert_eq!([flow.values(), rebuilt.values()], [live.clone(), live]);
         let cutoff = start + TimeDelta::seconds(2);
-        for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(cutoff), Some(&held));
+        for input in [&spread, &book, &flow, &footprint] {
+            input.set_replay(&clock, Some(cutoff), Some(&held), &[]);
         }
         assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
+        assert_eq!(footprint.footprints_from(start).bars[&start].volume(), 2.0);
         assert!(
             spread.values().is_empty(),
             "past quotes cannot be reconstructed"
@@ -1411,12 +1804,21 @@ mod tests {
             book.values().is_empty(),
             "past depth cannot be reconstructed"
         );
-        for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(opens[1]), Some(&held));
+        for input in [&spread, &book, &flow, &footprint] {
+            input.set_replay(&clock, Some(opens[1]), Some(&held), &[]);
         }
         assert_eq!(spread.values().keys().copied().collect::<Vec<_>>(), [start]);
         assert_eq!(book.values().keys().copied().collect::<Vec<_>>(), [start]);
         assert_eq!(flow.values(), BTreeMap::from([(start, [3.0, 3.0, 0.0])]));
+        assert_eq!(
+            footprint
+                .footprints_from(start)
+                .bars
+                .values()
+                .map(|bar| (bar.time, bar.volume()))
+                .collect::<Vec<_>>(),
+            [(start, 3.0)]
+        );
         let mut trades = held;
         for second in [6, 7] {
             let trade = Tick::new(
@@ -1428,8 +1830,13 @@ mod tests {
             sink.push_tick(trade.clone());
             trades.push(trade);
         }
-        for input in [&spread, &book, &flow] {
-            input.set_replay(&clock, Some(start + TimeDelta::seconds(7)), Some(&trades));
+        for input in [&spread, &book, &flow, &footprint] {
+            input.set_replay(
+                &clock,
+                Some(start + TimeDelta::seconds(7)),
+                Some(&trades),
+                &[],
+            );
         }
         assert_eq!(spread.values().keys().copied().collect::<Vec<_>>(), opens);
         assert_eq!(book.values().keys().copied().collect::<Vec<_>>(), opens);
@@ -1437,6 +1844,155 @@ mod tests {
             flow.values()[&(start + TimeDelta::seconds(6))],
             [1.0, 1.0, 0.0]
         );
+        let open = start + TimeDelta::seconds(6);
+        assert_eq!(footprint.footprints_from(open).bars[&open].volume(), 1.0);
+        let mut limited = super::super::trades::Trades::new(2);
+        for trade in trades.iter() {
+            limited.push(trade.clone());
+        }
+        footprint.set_replay(
+            &clock,
+            Some(start + TimeDelta::seconds(7)),
+            Some(&limited),
+            &[],
+        );
+        assert!(
+            footprint.footprints_from(open).bars.is_empty(),
+            "a partial bar without its raw anchor must not expose the next fill"
+        );
+        // The first excluded sell would finish the old volume bar and open another. Only
+        // the buy before it belongs in replay, not the old bar's completed volume of five.
+        let clock = BarClock::new("5v".parse().unwrap());
+        let inbox = Arc::new(super::super::inbox::Inbox::default());
+        let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+        let footprint = OrderFlowInput::footprint();
+        footprint.set_tick_size(Some(1.0));
+        let flow = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        inbox.study_inputs(sink.id, vec![footprint.clone(), flow.clone()]);
+        let cutoff = start + TimeDelta::seconds(1);
+        let mut held = super::super::trades::Trades::new(100);
+        for trade in [
+            Tick::new(start, 100.0, 2.0, Some(OrderSide::Buy)),
+            Tick::new(cutoff, 101.0, 6.0, Some(OrderSide::Sell)),
+        ] {
+            sink.push_tick(trade.clone());
+            held.push(trade);
+        }
+        for input in [&footprint, &flow] {
+            input.set_replay(&clock, Some(cutoff), Some(&held), &[]);
+        }
+        assert_eq!(
+            footprint
+                .footprints_from(start)
+                .bars
+                .values()
+                .map(|bar| (bar.time, bar.volume(), bar.delta()))
+                .collect::<Vec<_>>(),
+            [(start, 2.0, 2.0)]
+        );
+        assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
+    }
+
+    /// Hand counts on 3t at price 100, every execution of 1 with an id. A trade page answered in
+    /// the drain that streams them holds copies it stamps apart from the stream: the sell of
+    /// 10:00:00, stamped 400 microseconds later, after a buy at 09:59:59 that the page lacks; or
+    /// a buy at 10:00:00 and a sell 400 microseconds later, both stamped 10:00:00. With buys at
+    /// 10:00:01 and 10:00:02, the chart's bars hold the first three executions, of volume 3 and
+    /// delta 1, and the last, of 1 and 1. A source rebuilt from the held executions counts each
+    /// copied execution once and shows those bars, as the source connected from the start does.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn a_page_copy_stamped_apart_from_its_live_execution_counts_once() {
+        use OrderSide::{Buy, Sell};
+        let clock = BarClock::new("3t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let fill = |(micros, side, id)| {
+            let at = start + TimeDelta::microseconds(micros);
+            Tick::new(at, 100.0, 1.0, Some(side)).with_id(id)
+        };
+        let second = 1_000_000;
+        let rows = [
+            (
+                [(-second, Buy, 1), (0, Sell, 2)],
+                vec![(400, Sell, 2)],
+                -second,
+            ),
+            (
+                [(0, Buy, 1), (400, Sell, 2)],
+                vec![(0, Buy, 1), (0, Sell, 2)],
+                0,
+            ),
+        ];
+        for (first, page, open) in rows {
+            let inbox = Arc::new(super::super::inbox::Inbox::default());
+            let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+            let stayed = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+            inbox.study_inputs(sink.id, vec![stayed.clone()]);
+            let buys = [(second, Buy, 3), (2 * second, Buy, 4)];
+            for trade in first.into_iter().chain(buys) {
+                sink.push_tick(fill(trade));
+            }
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let bars: Vec<_> = updates.bars.values().map(|(bar, _)| bar.clone()).collect();
+            // The chart applies the page before the executions it drains with it.
+            let mut held = super::super::trades::Trades::new(100);
+            held.prepend(page.into_iter().map(fill).collect(), &mut |_, _| ());
+            held.append(updates.trades, &mut |_, _| ());
+            let added = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+            added.replace_trades(&clock, &held, &bars);
+            let expected = BTreeMap::from([
+                (start + TimeDelta::microseconds(open), [3.0, 1.0, 0.0]),
+                (start + TimeDelta::seconds(2), [1.0, 1.0, 0.0]),
+            ]);
+            let values = [stayed.values(), added.values()];
+            assert_eq!(values, [expected.clone(), expected], "first bar at {open}");
+        }
+    }
+
+    /// Hand counts: three-tick bars of buys of one open at 09:59:57 and 10:00:00, three each.
+    /// The chart drained 09:59:57 to 10:00:00 and kept them all, or only the newest two. A
+    /// footprint source connected while the buy of 10:00:01 is still queued, then given the buy
+    /// of 10:00:02, offers both whole bars, or after the loss none of the forming bar's parts.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn footprint_connected_after_a_store_loss_offers_only_whole_bars() {
+        let clock = BarClock::new("3t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let buy = |second: i64| {
+            Tick::new(
+                start + TimeDelta::seconds(second),
+                100.0,
+                1.0,
+                Some(OrderSide::Buy),
+            )
+        };
+        for (capacity, want) in [(100, vec![(-3, 3.0), (0, 3.0)]), (2, vec![])] {
+            let inbox = Arc::new(super::super::inbox::Inbox::default());
+            let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+            for second in -3..=0 {
+                sink.push_tick(buy(second));
+            }
+            let (_, drained) = inbox.drain().updates.pop().unwrap();
+            let mut held = super::super::trades::Trades::new(capacity);
+            drained
+                .trades
+                .iter()
+                .for_each(|trade| held.push(trade.clone()));
+            let bars: Vec<_> = drained.bars.into_values().map(|(bar, _)| bar).collect();
+            let footprint = OrderFlowInput::footprint();
+            footprint.set_tick_size(Some(1.0));
+            // As the chart connects a new source: rebuilt from its store along its bars, then
+            // given the queue.
+            footprint.replace_trades(&clock, &held, &bars);
+            sink.push_tick(buy(1));
+            inbox.study_inputs(sink.id, vec![footprint.clone()]);
+            sink.push_tick(buy(2));
+            let got: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
+                .values()
+                .map(|bar| ((bar.time - start).num_seconds(), bar.volume()))
+                .collect();
+            assert_eq!(got, want, "store of {capacity}");
+        }
     }
 
     /// Hand counts: ids 7 and 8 fill in the first minute (7 twice, an unidentified fill
@@ -1674,9 +2230,9 @@ mod tests {
     }
 
     /// Hand levels: 100.2 is 200.4 ticks of 0.5, level 200, and 400.8 ticks of 0.25, level 401.
-    /// A footprint keeps nothing without a tick size or on bars that do not span time.
+    /// A footprint keeps nothing without a tick size, including on trade-based bars.
     #[test]
-    fn footprint_sources_follow_their_tick_size_and_time_bars() {
+    fn footprint_sources_follow_their_tick_size_and_bar_clock() {
         let clock = BarClock::new(Timeframe::Min1);
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let input = OrderFlowInput::footprint();
@@ -1708,7 +2264,11 @@ mod tests {
         assert_eq!(held(), (None, vec![]), "NaN is no tick size");
         input.set_tick_size(Some(1.0));
         push(&BarClock::new("1t".parse().unwrap()), 3, 100.0);
-        assert_eq!(held(), (Some(1.0), vec![]), "tick bars do not span time");
+        assert_eq!(
+            held(),
+            (Some(1.0), vec![100]),
+            "tick bars use the execution grid"
+        );
     }
 
     /// Hand values: a store of two drops the buy of 00:10 when the sell of 01:05 arrives, so bar
@@ -1733,7 +2293,7 @@ mod tests {
             seconds: 60,
             instant: 3,
         });
-        rate.replace_trades(&clock, &store);
+        rate.replace_trades(&clock, &store, &[]);
         let values = rate.values();
         assert_eq!(values.keys().copied().collect::<Vec<_>>(), [at(60)]);
         let [total, rolling, instant] = values[&at(60)];
@@ -1744,7 +2304,7 @@ mod tests {
         );
         let footprint = OrderFlowInput::footprint();
         footprint.set_tick_size(Some(1.0));
-        footprint.replace_trades(&clock, &store);
+        footprint.replace_trades(&clock, &store, &[]);
         let flow = footprint.footprints_from(DateTime::<Utc>::MIN_UTC);
         assert_eq!(flow.complete_from, Some(at(60)));
         assert_eq!(flow.bars.keys().copied().collect::<Vec<_>>(), [at(60)]);

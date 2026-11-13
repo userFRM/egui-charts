@@ -75,6 +75,9 @@ const TRADE_IDS: usize = 100_000;
 /// let mut instrument = Instrument::new("ES");
 /// instrument.tick_size = Some(0.25);
 /// detectors.track(&instrument).unwrap();
+/// let mut settings = detectors.settings();
+/// settings.big_trades.enabled = true;
+/// detectors.set_settings(settings);
 /// // `Chart::set_signal_source(Some(detectors.clone()))` draws the detections.
 ///
 /// /// Pushes one event of the feed into the chart and into the detectors.
@@ -153,8 +156,9 @@ impl DetectionKind {
     }
 }
 
-/// The settings of every detector, applied by [`OrderFlowDetectors::set_settings`].
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The settings of every detector, disabled by default, applied by
+/// [`OrderFlowDetectors::set_settings`].
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct DetectorSettings {
     /// Large aggressive executions and their zones.
@@ -175,8 +179,44 @@ pub struct DetectorSettings {
     pub stop_run_count_alert: Option<CountAlert>,
 }
 
-/// The settings of one detector.
-#[derive(Clone, Debug, PartialEq)]
+impl DetectorSettings {
+    /// Checks thresholds and minima before applying settings from storage or a user interface.
+    pub fn validate(&self) -> Result<(), FeedError> {
+        for threshold in [
+            self.big_trades.rule.threshold,
+            self.absorption.rule.threshold,
+            self.liquidity.rule.threshold,
+            self.liquidity.rule.fresh_threshold,
+        ] {
+            if let Threshold::Fixed(size) = threshold
+                && (!size.is_finite() || size <= 0.0)
+            {
+                return Err(FeedError::InvalidData(
+                    "fixed threshold must be positive and finite".into(),
+                ));
+            }
+        }
+        if self.icebergs.rule.refills == 0 {
+            return Err(FeedError::InvalidData(
+                "iceberg refills must be positive".into(),
+            ));
+        }
+        for alert in [self.iceberg_count_alert, self.stop_run_count_alert]
+            .into_iter()
+            .flatten()
+        {
+            if alert.minimum == 0 {
+                return Err(FeedError::InvalidData(
+                    "count alert minimum must be positive".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The settings of one detector, disabled by default with alerts and sounds off.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Detector<R> {
     /// Whether the detector detects. A disabled detector still calibrates its automatic
@@ -193,7 +233,7 @@ pub struct Detector<R> {
 impl<R: Default> Default for Detector<R> {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             alert: false,
             sound: false,
             rule: R::default(),
@@ -202,7 +242,7 @@ impl<R: Default> Default for Detector<R> {
 }
 
 /// The size or count from which a detector detects.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Threshold {
     /// This positive and finite value, validated by [`OrderFlowDetectors::set_settings`].
@@ -253,7 +293,7 @@ impl Default for OrderFlowDetectors {
 }
 
 impl OrderFlowDetectors {
-    /// A service tracking no symbol, with the default settings.
+    /// A service tracking no symbol, with detectors, alerts and sounds disabled.
     pub fn new() -> Self {
         Self {
             state: Mutex::new(State::default()),
@@ -313,29 +353,7 @@ impl OrderFlowDetectors {
     /// stay; a disabled liquidity tracker drops its unfinished zones. Panics if a fixed
     /// threshold is not positive and finite, or a refill or count-alert minimum is zero.
     pub fn set_settings(&self, settings: DetectorSettings) {
-        for threshold in [
-            settings.big_trades.rule.threshold,
-            settings.absorption.rule.threshold,
-            settings.liquidity.rule.threshold,
-            settings.liquidity.rule.fresh_threshold,
-        ] {
-            if let Threshold::Fixed(size) = threshold {
-                assert!(
-                    size.is_finite() && size > 0.0,
-                    "fixed threshold must be positive and finite"
-                );
-            }
-        }
-        assert!(
-            settings.icebergs.rule.refills > 0,
-            "iceberg refills must be positive"
-        );
-        for alert in [settings.iceberg_count_alert, settings.stop_run_count_alert]
-            .into_iter()
-            .flatten()
-        {
-            assert!(alert.minimum > 0, "count alert minimum must be positive");
-        }
+        settings.validate().expect("invalid detector settings");
         self.lock().settings = settings;
     }
 
@@ -742,6 +760,32 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn detectors_start_disabled_and_can_be_enabled_without_reconnecting() {
+        let host = Host::new(Some(10.0));
+        let settings = DetectorSettings::default();
+        assert!(!settings.big_trades.enabled);
+        assert!(!settings.stop_runs.enabled);
+        assert!(!settings.stop_sweeps.enabled);
+        assert!(!settings.icebergs.enabled);
+        assert!(!settings.absorption.enabled);
+        assert!(!settings.liquidity.enabled);
+        host.detectors.set_settings(settings);
+        let trade =
+            |second, size| MarketEvent::Trade(fill(second, 100.0, size, OrderSide::Buy, None));
+        assert!(host.push(trade(0, 100.0)).is_empty());
+        assert!(host.detectors.take_alerts().is_empty());
+        let mut settings = host.detectors.settings();
+        settings.big_trades.enabled = true;
+        settings.big_trades.alert = true;
+        settings.big_trades.rule.threshold = Threshold::Fixed(10.0);
+        host.detectors.set_settings(settings);
+        assert!(!host.push(trade(1, 10.0)).is_empty());
+        let alerts = host.detectors.take_alerts();
+        assert_eq!(alerts.len(), 1);
+        assert!(!alerts[0].sound);
+    }
+
+    #[test]
     fn detection_counts_follow_feed_windows_without_alerting_loaded_history() {
         use crate::services::{Notification, Notifications};
 
@@ -959,11 +1003,7 @@ mod tests {
             instrument.tick_size = Some(0.25);
             detectors.track(&instrument).unwrap();
             let mut settings = DetectorSettings::default();
-            settings.icebergs.enabled = false;
-            settings.absorption.enabled = false;
-            settings.liquidity.enabled = false;
-            settings.stop_runs.enabled = false;
-            settings.stop_sweeps.enabled = false;
+            settings.big_trades.enabled = true;
             if let Some(size) = threshold {
                 settings.big_trades.rule.threshold = Threshold::Fixed(size);
             }

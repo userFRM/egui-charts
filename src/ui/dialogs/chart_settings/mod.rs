@@ -59,6 +59,7 @@ pub struct SettingsDialog {
     margin_right_str: String,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    apply_to_all: bool,
     /// The local sounds the host can play, by name, offered on the Trading and Alerts tabs. The host
     /// plays the chosen one; see
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
@@ -171,10 +172,18 @@ impl SettingsDialog {
             timezones: timezones.iter().map(|zone| (*zone).to_owned()).collect(),
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
+            apply_to_all: false,
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
         }
+    }
+
+    /// Offers a button that applies the dialog's settings to all charts of the layout and closes
+    /// the dialog, for a host showing several charts. It returns as
+    /// [`SettingsAction::ApplyToAll`]. Off by default.
+    pub fn offer_apply_to_all(&mut self, offered: bool) {
+        self.apply_to_all = offered;
     }
 
     /// Shows or hides `control`: Templates (the template button and menu; Reset to defaults
@@ -309,6 +318,11 @@ impl SettingsDialog {
                 &mut self.color_picker_states.background_gradient_bottom,
                 basic.background_gradient_bottom,
                 theme.chart.bg_axis,
+            ),
+            (
+                &mut self.color_picker_states.crosshair,
+                self.settings.crosshair.color,
+                theme.chart.crosshair_line,
             ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
@@ -447,7 +461,7 @@ impl SettingsDialog {
                         error,
                     );
                 } else if self.hidden.contains(&Control::Templates) {
-                    self.draw_reset_button(ui);
+                    self.draw_reset_button(ui, theme);
                 } else {
                     let button = self.draw_template_button(ui, theme);
                     if button.clicked() {
@@ -456,6 +470,31 @@ impl SettingsDialog {
                     if self.template_menu_open {
                         action = self.draw_template_menu(ui, theme, &button, action.clone());
                     }
+                }
+                if error.is_none()
+                    && self.apply_to_all
+                    && ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(l10n::text(ui.ctx(), "Apply to all"))
+                                    .size(theme.text.title)
+                                    .color(theme.ui.text),
+                            )
+                            .fill(theme.ui.panel_bg)
+                            .stroke(egui::Stroke::new(
+                                DESIGN_TOKENS.stroke.hairline,
+                                theme.ui.border_control,
+                            ))
+                            .corner_radius(theme.radius.md as u8)
+                            .min_size(Vec2::new(
+                                0.0,
+                                DESIGN_TOKENS.sizing.settings_dialog.button_height,
+                            )),
+                        )
+                        .clicked()
+                {
+                    action = SettingsAction::ApplyToAll(Box::new(self.settings.clone()));
+                    self.is_open = false;
                 }
             });
         if ok {
@@ -560,7 +599,7 @@ impl SettingsDialog {
         ui.separator();
         action = self.draw_template_list(ui, theme, action);
         ui.separator();
-        self.draw_reset_button(ui);
+        self.draw_reset_button(ui, theme);
         action
     }
 
@@ -697,6 +736,32 @@ impl SettingsDialog {
                 self.settings.chart_type = kind;
                 self.settings.chart_type_params = params;
                 self.settings.price_source = source;
+                // A template saved before volume candles had a style shows what they drew, which
+                // Ok then applies with any edits made before it.
+                if kind == crate::model::ChartType::VolumeCandles
+                    && let Some(params) = &mut self.settings.chart_type_params
+                    && (template.chart_type_params.is_none()
+                        || params.styles.volume_candles.is_saved_without_style())
+                {
+                    let colors = &mut self.settings.candle_colors;
+                    let style = crate::model::VolumeCandlesStyle::drawn_before_style(
+                        colors.body_up,
+                        colors.body_down,
+                    );
+                    *colors = crate::widget::settings::CandleColorConfig {
+                        color_by_previous_close: colors.color_by_previous_close,
+                        show_body: style.body_visible,
+                        show_border: style.border_visible,
+                        show_wick: style.wick_visible,
+                        body_up: style.body_up,
+                        body_down: style.body_down,
+                        border_up: style.border_up,
+                        border_down: style.border_down,
+                        wick_up: style.wick_up,
+                        wick_down: style.wick_down,
+                    };
+                    params.styles.volume_candles = style;
+                }
                 self.template_name = name.clone();
                 self.update_color_pickers_from_settings();
                 action = SettingsAction::LoadTemplate(name.clone());
@@ -727,7 +792,7 @@ impl SettingsDialog {
         action
     }
 
-    fn draw_reset_button(&mut self, ui: &mut Ui) {
+    fn draw_reset_button(&mut self, ui: &mut Ui, theme: &Theme) {
         if ui
             .button(
                 RichText::new(l10n::text(ui.ctx(), "Reset to defaults"))
@@ -741,6 +806,30 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
+            let palette = crate::config::ChartConfig::default().with_theme(theme);
+            // The default styles of the chart types hold the dark preset's candle colours.
+            let params = self.settings.chart_type_params.get_or_insert_default();
+            crate::widget::palette::follow_candle_colors(
+                &mut params.styles,
+                &[crate::config::ChartConfig::default()],
+                &palette,
+            );
+            self.settings.candle_colors =
+                crate::widget::settings::CandleColorConfig::from_theme(theme);
+            self.settings.scales_appearance.text_color = theme.chart.axis_text;
+            self.settings.grid_lines.horizontal_color = theme.chart.grid_line;
+            self.settings.grid_lines.vertical_color = theme.chart.grid_line;
+            // What a new chart holds: the colour follows the theme until one is chosen.
+            self.settings.crosshair.color = Color32::PLACEHOLDER;
+            self.settings.watermark.color = palette.watermark_color;
+            if matches!(
+                self.settings.chart_type,
+                crate::model::ChartType::Heikin
+                    | crate::model::ChartType::HollowCandles
+                    | crate::model::ChartType::VolumeCandles
+            ) {
+                self.settings.candle_colors.show_border = true;
+            }
             self.template_name.clear();
             self.update_color_pickers_from_settings();
             self.template_menu_open = false;
@@ -762,6 +851,188 @@ impl SettingsDialog {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn reset_colours_match_a_new_chart_under_each_theme() {
+        // The dialog is shown with `theme` while the application theme is `app`.
+        for (preset, theme, app) in [
+            ("light", Theme::light(), Theme::light()),
+            ("dark", Theme::dark(), Theme::dark()),
+            (
+                "high contrast",
+                Theme::high_contrast(),
+                Theme::high_contrast(),
+            ),
+            ("light dialog in a dark app", Theme::light(), Theme::dark()),
+            ("dark dialog in a light app", Theme::dark(), Theme::light()),
+            (
+                "high contrast dialog in a light app",
+                Theme::high_contrast(),
+                Theme::light(),
+            ),
+        ] {
+            for (templates_visible, size) in [
+                (true, Vec2::new(1440.0, 900.0)),
+                (false, Vec2::new(1440.0, 900.0)),
+                (true, Vec2::new(320.0, 450.0)),
+                (false, Vec2::new(320.0, 450.0)),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &app);
+                let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
+                let expected = ChartSettingsState::from_chart(&chart);
+                let mut settings = expected.clone();
+                settings.scales_appearance.text_color = Color32::RED;
+                settings.grid_lines.horizontal_color = Color32::GREEN;
+                settings.grid_lines.vertical_color = Color32::BLUE;
+                settings.crosshair.color = Color32::YELLOW;
+                settings.watermark.color = Color32::RED;
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(Control::Templates, templates_visible);
+                dialog.open(settings);
+                let mut frame = |events, label: &str| {
+                    let mut action = SettingsAction::None;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| action = dialog.show(ui.ctx(), &theme),
+                    );
+                    let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    (action, pos)
+                };
+                let mut action = SettingsAction::None;
+                let buttons: &[&str] = if templates_visible {
+                    &["Template", "Reset to defaults", "Ok"]
+                } else {
+                    &["Reset to defaults", "Ok"]
+                };
+                for label in buttons {
+                    frame(vec![], label);
+                    let pos = frame(vec![], label).1.expect(label);
+                    assert!(
+                        Rect::from_min_size(Pos2::ZERO, size).contains(pos),
+                        "{label} at {size:?}"
+                    );
+                    frame(vec![egui::Event::PointerMoved(pos)], label);
+                    for pressed in [true, false] {
+                        action = frame(
+                            vec![egui::Event::PointerButton {
+                                pos,
+                                pressed,
+                                button: egui::PointerButton::Primary,
+                                modifiers: Default::default(),
+                            }],
+                            label,
+                        )
+                        .0;
+                    }
+                }
+                let SettingsAction::Apply(settings) = action else {
+                    panic!("Ok must apply the reset settings");
+                };
+                assert!(!dialog.is_open);
+                // Saved settings and templates keep a theme-following crosshair as it is.
+                let saved: ChartSettingsState =
+                    serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+                assert_eq!(saved.crosshair.color, Color32::PLACEHOLDER);
+                settings.apply_to_chart(&mut chart).unwrap();
+                let actual = ChartSettingsState::from_chart(&chart);
+                let mismatches: Vec<_> = [
+                    (
+                        "axis text",
+                        actual.scales_appearance.text_color,
+                        expected.scales_appearance.text_color,
+                    ),
+                    (
+                        "horizontal grid",
+                        actual.grid_lines.horizontal_color,
+                        expected.grid_lines.horizontal_color,
+                    ),
+                    (
+                        "vertical grid",
+                        actual.grid_lines.vertical_color,
+                        expected.grid_lines.vertical_color,
+                    ),
+                    (
+                        "horizontal crosshair",
+                        chart.chart_options().crosshair.horz_line_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "vertical crosshair",
+                        chart.chart_options().crosshair.vert_line_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "crosshair swatch",
+                        dialog.color_picker_states.crosshair.sel_color,
+                        theme.chart.crosshair_line,
+                    ),
+                    (
+                        "candle up",
+                        actual.candle_colors.body_up,
+                        expected.candle_colors.body_up,
+                    ),
+                    (
+                        "candle down",
+                        actual.candle_colors.body_down,
+                        expected.candle_colors.body_down,
+                    ),
+                    (
+                        "candle border up",
+                        actual.candle_colors.border_up,
+                        expected.candle_colors.border_up,
+                    ),
+                    (
+                        "candle border down",
+                        actual.candle_colors.border_down,
+                        expected.candle_colors.border_down,
+                    ),
+                    (
+                        "candle wick up",
+                        actual.candle_colors.wick_up,
+                        expected.candle_colors.wick_up,
+                    ),
+                    (
+                        "candle wick down",
+                        actual.candle_colors.wick_down,
+                        expected.candle_colors.wick_down,
+                    ),
+                    (
+                        "HLC area high line",
+                        chart.chart_type_params().styles.hlc_area.high_line.color,
+                        theme.chart.candle_up,
+                    ),
+                    (
+                        "HLC area low line",
+                        chart.chart_type_params().styles.hlc_area.low_line.color,
+                        theme.chart.candle_down,
+                    ),
+                    (
+                        "watermark",
+                        actual.watermark.color,
+                        expected.watermark.color,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(_, actual, expected)| actual != expected)
+                .collect();
+                assert!(
+                    mismatches.is_empty(),
+                    "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn enabled_sound_controls_offer_a_preview_without_applying_settings() {
@@ -827,7 +1098,12 @@ mod tests {
         };
         for (kind, label) in [
             (ChartType::Heikin, "Body"),
-            (ChartType::Bars, "Body"),
+            (ChartType::HollowCandles, "Body"),
+            (
+                ChartType::VolumeCandles,
+                "Color bars based on previous close",
+            ),
+            (ChartType::Bars, "Up and down colors"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
             (ChartType::Renko, "Size method"),
@@ -1417,6 +1693,114 @@ mod tests {
                     "{tops:?}"
                 );
             }
+        }
+    }
+
+    /// A template saved before volume candles had a style, with or without chart type
+    /// parameters, holds the candle settings of the candles chart type, of which volume candles
+    /// drew only the body colours. Loaded for a volume candles chart it shows them as drawn, the
+    /// body colours on the body and both wicks without a border, and an edit made before Ok
+    /// applies.
+    #[test]
+    fn old_templates_load_volume_candles_as_drawn_and_keep_edits() {
+        use crate::model::{Bar, BarData, ChartType};
+        use crate::widget::settings::CandleColorConfig;
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let (border, wick) = (Color32::from_rgb(3, 4, 102), Color32::from_rgb(105, 106, 6));
+        for (parent, entry) in [
+            ("/chart_type_params/styles", "volume_candles"),
+            ("", "chart_type_params"),
+        ] {
+            let mut chart = crate::Chart::new(BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                100.0,
+            )]));
+            chart.set_chart_type(ChartType::VolumeCandles);
+            let mut saved = serde_json::to_value(ChartSettingsState::from_chart(&chart)).unwrap();
+            let object = saved.pointer_mut(parent).unwrap().as_object_mut().unwrap();
+            object.remove(entry).unwrap();
+            saved["candle_colors"] = serde_json::to_value(CandleColorConfig {
+                color_by_previous_close: true,
+                show_body: true,
+                show_border: true,
+                show_wick: false,
+                body_up: up,
+                body_down: down,
+                border_up: border,
+                border_down: border,
+                wick_up: wick,
+                wick_down: wick,
+            })
+            .unwrap();
+            let mut dialog = SettingsDialog::new();
+            dialog
+                .templates
+                .save("Old", serde_json::from_value(saved).unwrap())
+                .unwrap();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            let ctx = Context::default();
+            let mut item = None;
+            for step in 0..4 {
+                let events = match (step, item) {
+                    (2, Some(pos)) | (3, Some(pos)) => vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed: step == 2,
+                            button: egui::PointerButton::Primary,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    _ => vec![],
+                };
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        dialog.draw_template_item(
+                            ui,
+                            &Theme::light(),
+                            "Old".into(),
+                            SettingsAction::None,
+                        );
+                    },
+                );
+                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                }));
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(dialog.template_name, "Old", "{entry}");
+            assert_eq!(
+                dialog.settings().candle_colors,
+                CandleColorConfig {
+                    color_by_previous_close: true,
+                    show_body: true,
+                    show_border: false,
+                    show_wick: true,
+                    body_up: up,
+                    body_down: down,
+                    border_up: up,
+                    border_down: down,
+                    wick_up: up,
+                    wick_down: down,
+                },
+                "{entry}"
+            );
+            dialog.settings.candle_colors.show_border = true;
+            dialog.settings().apply_to_chart(&mut chart).unwrap();
+            let style = &chart.chart_type_params().styles.volume_candles;
+            assert!(style.border_visible, "{entry}");
+            assert_eq!([style.border_up, style.wick_down], [up, down], "{entry}");
         }
     }
 }

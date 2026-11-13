@@ -988,7 +988,7 @@ fn views_past_the_bars_keep_the_chart_readable() {
             self.formatter.as_ref().format_crosshair(time, bar_seconds)
         }
     }
-    for (left, right) in [(2427.0, 3854.0), (28131.0, 29558.0)] {
+    for (left, right) in [(2427.0, 3852.0), (28131.0, 29556.0)] {
         let mut control = None;
         for count in [1000, 1001] {
             let start = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
@@ -1047,67 +1047,134 @@ fn views_past_the_bars_keep_the_chart_readable() {
     }
 }
 
+/// Startup label measurements keep the configured zoom of an unlocked chart, and a later one
+/// keeps the visible range: the slots the plot spans and both edges, also in a locked chart,
+/// which must not scale a second time from the old width, and at the fixed left edge's stop,
+/// which must not clamp against the old width.
 #[test]
 fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
     use crate::model::Instrument;
-    let ctx = egui::Context::default();
-    let mut chart = chart(&[100.0], &[110.0]);
-    chart.config.show_volume = false;
-    chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
-    let initial_view = chart.get_time_scale_state();
-    let input = || egui::RawInput {
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-        ..Default::default()
-    };
-    ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(Rect::ZERO),
+    for (lock, fix_left) in [(false, false), (true, false), (false, true), (true, true)] {
+        let row = format!("lock {lock}, fix_left_edge {fix_left}");
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        let mut options = chart.chart_options().clone();
+        options.time_scale.bar_spacing = 20.0;
+        options.time_scale.lock_visible_time_range_on_resize = lock;
+        options.time_scale.fix_left_edge = fix_left;
+        chart.set_chart_options(options);
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
+        let initial_view = chart.get_time_scale_state();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
             ..Default::default()
-        },
-        |ui| {
+        };
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::ZERO),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        let mut passes = 0;
+        ctx.run_ui(input(), |ui| {
             chart.show(ui);
-        },
-    )
-    .drop_without_applying_deltas();
-    let mut passes = 0;
-    ctx.run_ui(input(), |ui| {
-        chart.show(ui);
-        passes += 1;
-        if ui.ctx().current_pass_index() == 0 {
-            // Metadata arriving during startup can widen labels on the discarded pass.
-            chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(6)));
-            ui.ctx().request_discard("instrument metadata arrived");
+            passes += 1;
+            if ui.ctx().current_pass_index() == 0 {
+                // Metadata arriving during startup can widen labels on the discarded pass.
+                chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(6)));
+                ui.ctx().request_discard("instrument metadata arrived");
+            }
+        })
+        .drop_without_applying_deltas();
+        assert!(passes > 1, "{row}");
+        // A locked chart treats the startup measurement as a resize and keeps its slots.
+        if !lock {
+            assert_eq!(chart.get_time_scale_state(), initial_view, "{row}");
         }
-    })
-    .drop_without_applying_deltas();
-    assert!(passes > 1);
-    assert_eq!(chart.get_time_scale_state(), initial_view);
 
-    ctx.run_ui(input(), |ui| {
-        chart.show(ui);
-    })
-    .drop_without_applying_deltas();
-    let width = chart.get_rendered_price_rect().width();
-    let spacing = chart.state.time_scale().bar_spacing();
-    chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
-    ctx.run_ui(input(), |ui| {
-        chart.show(ui);
-    })
-    .drop_without_applying_deltas();
-    let new_width = chart.get_rendered_price_rect().width();
-    assert!(new_width < width, "later labels must widen the axis");
-    assert!((new_width / chart.state.time_scale().bar_spacing() - width / spacing).abs() < 1e-4);
+        let settle = |chart: &mut crate::widget::Chart| {
+            ctx.run_ui(input(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        settle(&mut chart);
+        if fix_left {
+            chart.scroll_to_position(-1000.0, false);
+            settle(&mut chart);
+        }
+        let width = chart.get_rendered_price_rect().width();
+        let spacing = chart.state.time_scale().bar_spacing();
+        let range = chart.state.time_scale().visible_logical_range();
+        if fix_left {
+            assert_eq!(
+                range.left, 0.0,
+                "{row}: the view starts at the left edge's stop"
+            );
+        }
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let new_width = chart.get_rendered_price_rect().width();
+        assert!(new_width < width, "{row}: later labels must widen the axis");
+        // The plot spans `width - 1` pixels of slots, so both edges stay on the same times.
+        let slots = |width: f32, spacing: f32| f64::from(width - 1.0) / f64::from(spacing);
+        let new_spacing = chart.state.time_scale().bar_spacing();
+        assert!(
+            (slots(new_width, new_spacing) - slots(width, spacing)).abs() < 1e-4,
+            "{row}: spacing {spacing} to {new_spacing}"
+        );
+        let new_range = chart.state.time_scale().visible_logical_range();
+        assert!(
+            (new_range.left - range.left).abs() < 1e-3
+                && (new_range.right - range.right).abs() < 1e-3,
+            "{row}: {range:?} to {new_range:?}"
+        );
+    }
+}
+
+/// Extra columns share at most half of a narrow widget on either edge. Four 70-point columns
+/// need 280 points, so 240 and 320 keep half for the plot and 800 fits all of them.
+#[test]
+fn extra_axis_columns_leave_narrow_plots_half_the_width() {
+    use crate::model::{AxisSide, SeriesScale};
+    use crate::widget::SeriesOptions;
+    for side in [AxisSide::Left, AxisSide::Right] {
+        for (width, plot) in [(240.0, 120.0), (320.0, 160.0), (800.0, 520.0)] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_volume = false;
+            chart.config.right_axis_width = 70.0;
+            chart.config.left_axis_width = 70.0;
+            for key in 0..3 {
+                chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Separate(key),
+                    ..Default::default()
+                });
+            }
+            assert!(chart.place_pane_scales(crate::widget::PaneId::MAIN, side));
+            let layout = chart
+                .calculate_layout_rects(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 450.0)));
+            assert_eq!(layout.price_rect.width(), plot, "{side:?} at {width}");
+        }
+    }
 }
 
 #[test]
 fn plot_uses_the_interior_and_configured_axis_widths() {
-    for (width, height, padding, left, right, studies, gutter) in [
+    for (width, height, padding, left, right, studies, left_gutter) in [
         (800.0, 600.0, 0.0, 0.0, 70.0, 0, 0.0),
         (640.0, 450.0, 2.0, 50.0, 80.0, 0, 0.0),
         (45.0, 20.0, 0.0, 0.0, 70.0, 0, 0.0),
         (800.0, 600.0, 8.0, 0.0, 0.0, 0, 0.0),
         (240.0, 450.0, 0.0, 0.0, 70.0, 3, 85.0),
-        (320.0, 450.0, 0.0, 50.0, 70.0, 3, 100.0),
+        (320.0, 450.0, 0.0, 50.0, 70.0, 3, 125.0),
         (800.0, 600.0, 0.0, 0.0, 70.0, 1, 70.0),
     ] {
         let mut chart = chart(&[100.0], &[110.0]);
@@ -1128,15 +1195,58 @@ fn plot_uses_the_interior_and_configured_axis_widths() {
         assert_eq!(layout.price_rect.top(), widget.top() + padding);
         assert_eq!(
             layout.price_rect.left(),
-            widget.left() + (padding + left + gutter).min(width)
+            widget.left() + (padding + left_gutter).min(width)
         );
         assert_eq!(
             layout.price_rect.width(),
-            (width - 2.0 * padding - left - right - gutter).max(0.0)
+            (width - 2.0 * padding - right - left_gutter).max(0.0)
         );
         assert_eq!(
             layout.price_rect.height(),
             (height - 2.0 * padding - 35.0).max(0.0)
+        );
+    }
+}
+
+/// A Heikin-Ashi chart whose main series has no bars lays out the slots of its added series. Its
+/// price line has no transformed bar to read, whichever bar it follows, and the frame still
+/// paints the added series' line.
+#[test]
+fn heikin_last_visible_price_line_without_main_bars() {
+    use crate::model::{Bar, BarData, ChartType, PriceLineSource};
+    use crate::widget::{Chart, SeriesId, SeriesOptions};
+    let start = chrono::DateTime::UNIX_EPOCH;
+    let color = egui::Color32::from_rgb(1, 2, 3);
+    for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::new());
+        chart.config_mut().show_volume = false;
+        chart.set_chart_type(ChartType::Heikin);
+        chart
+            .series_style_mut(SeriesId::MAIN)
+            .unwrap()
+            .price_line_source = source;
+        let id = chart.add_series(SeriesOptions {
+            color,
+            ..Default::default()
+        });
+        chart.set_data(
+            id,
+            (0..3)
+                .map(|i| {
+                    let time = start + chrono::Duration::minutes(15 * i);
+                    Bar::new(time, 10.0, 11.0, 9.0, 10.5, 1.0)
+                })
+                .collect(),
+        );
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.05, vec![]);
+        chart.fit_content();
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        assert!(
+            painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+                if path.stroke.color == egui::epaint::ColorMode::Solid(color))),
+            "{source:?}: the added series' line is painted"
         );
     }
 }

@@ -383,8 +383,32 @@ impl Terminal {
                 // The colour becomes the active tool's saved default; other tools keep theirs.
                 let manager = chart.drawings_mut();
                 if let Some(tool) = manager.active_tool() {
-                    let mut drawing = manager.new_drawing(0, tool);
-                    drawing.color = rgba;
+                    let saved = manager.new_drawing(0, tool);
+                    let mut drawing = saved.clone();
+                    drawing.set_line_color(rgba);
+                    // The saved default carries earlier picks, so a fill or level the tool does not
+                    // tint from its line (read from the tool's own style) may share the line's RGB
+                    // and be retinted; each pick leaves those as they were.
+                    let own = egui_charts::drawings::Drawing::new(0, tool);
+                    if own
+                        .fill_color
+                        .is_some_and(|fill| fill[..3] != own.color[..3])
+                    {
+                        drawing.fill_color = saved.fill_color;
+                    }
+                    if let (Some(own_levels), Some(before), Some(after)) =
+                        (&own.pitchfork, &saved.pitchfork, &mut drawing.pitchfork)
+                    {
+                        for (level, kept) in after.levels.iter_mut().zip(&before.levels) {
+                            if own_levels
+                                .levels
+                                .iter()
+                                .any(|l| l.value == level.value && l.color[..3] != own.color[..3])
+                            {
+                                level.color = kept.color;
+                            }
+                        }
+                    }
                     manager
                         .tool_defaults
                         .insert(tool, DrawingTemplate::from_drawing(&drawing));
@@ -602,7 +626,7 @@ impl Terminal {
             .with_timestamp(chart.format_time(bar.time))
             .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
         info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info
+        info.with_chart_formatters(chart)
     }
 
     /// Follows the active chart's crosshair, which the data window drawn before the chart reads.
@@ -759,6 +783,83 @@ mod tests {
 
     fn run(terminal: &mut Terminal, action: DrawingToolbarAction) {
         assert!(terminal.run(Action::DrawingToolbar(action)).is_none());
+    }
+
+    /// A new tool's fill follows toolbar colours at its own opacity, except independent fills.
+    #[test]
+    fn toolbar_colour_tints_the_default_fill() {
+        let mut terminal = ready();
+        let host = [70, 80, 90, 255];
+        let picked = [10, 200, 30, 220];
+        for (tool, fill) in [
+            (DrawingToolType::Rect, [10, 200, 30, 51]),
+            (DrawingToolType::Arc, [10, 200, 30, 51]),
+            (DrawingToolType::Polyline, [10, 200, 30, 51]),
+            (DrawingToolType::PriceRange, [10, 200, 30, 38]),
+            (DrawingToolType::Sector, [41, 98, 255, 51]),
+        ] {
+            for saved in [false, true] {
+                let manager = terminal.chart_mut().drawings_mut();
+                manager.tool_defaults.clear();
+                manager.options.default_color = Some(host);
+                manager.set_active_tool(Some(tool));
+                if saved {
+                    let mut defaults = manager.new_drawing(0, tool);
+                    defaults.stroke_width = 5.0;
+                    defaults.line_style = egui_charts::model::LineStyle::Dashed;
+                    manager
+                        .tool_defaults
+                        .insert(tool, DrawingTemplate::from_drawing(&defaults));
+                }
+                run(&mut terminal, DrawingToolbarAction::ColorChanged(picked));
+                let drawing = terminal.chart().drawings().new_drawing(1, tool);
+                assert_eq!(drawing.color, picked, "{tool:?}");
+                assert_eq!(drawing.fill_color, Some(fill), "{tool:?}");
+                assert_eq!(
+                    drawing.stroke_width,
+                    if saved {
+                        5.0
+                    } else {
+                        Drawing::new(0, tool).stroke_width
+                    }
+                );
+                assert_eq!(
+                    drawing.line_style,
+                    if saved {
+                        egui_charts::model::LineStyle::Dashed
+                    } else {
+                        egui_charts::model::LineStyle::Solid
+                    }
+                );
+                assert_eq!(terminal.chart().drawings().tool_defaults.len(), 1);
+            }
+        }
+    }
+
+    /// A toolbar pick recolours what a first pick recolours, however many came before it.
+    #[test]
+    fn repeated_toolbar_colours_keep_independent_fills_and_levels() {
+        let mut terminal = ready();
+        let indigo = [41, 98, 255, 255];
+        let red = [242, 54, 69, 255];
+        for tool in [DrawingToolType::Sector, DrawingToolType::Pitchfork] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(indigo));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            if tool == DrawingToolType::Sector {
+                assert_eq!(drawing.fill_color, Some([41, 98, 255, 51]));
+                continue;
+            }
+            let own = egui_charts::drawings::PitchforkConfig::default();
+            // The median is Red in the own style, so every level matches it after Indigo then Red.
+            for (level, own) in drawing.pitchfork.unwrap().levels.iter().zip(&own.levels) {
+                assert_eq!(level.color, own.color, "level {}", own.value);
+            }
+        }
     }
 
     /// Selecting a drawing exposes current style values, and each quick edit is undoable.

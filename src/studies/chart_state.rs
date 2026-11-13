@@ -47,6 +47,10 @@ pub struct ChartState {
     elements: Option<Arc<[Bar]>>,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
+    /// Shared whitespace slots when the main series has no horizontal domain.
+    fallback: Vec<Bar>,
+    /// Prefix revisions, lengths and last times represented by the fallback slots.
+    fallback_series: Vec<(u64, usize, Option<chrono::DateTime<chrono::Utc>>)>,
     /// The main series' price scale.
     price_scale: PriceScale,
     /// Stack of previous zoom snapshots for the "zoom out" button.
@@ -61,6 +65,8 @@ impl Clone for ChartState {
         Self {
             data: self.data.clone(),
             elements: self.elements.clone(),
+            fallback: self.fallback.clone(),
+            fallback_series: self.fallback_series.clone(),
             time_scale: self.time_scale.clone(),
             price_scale: self.price_scale.clone(),
             zoom_history: self.zoom_history.clone(),
@@ -78,6 +84,8 @@ impl ChartState {
         Self {
             data,
             elements: None,
+            fallback: Vec::new(),
+            fallback_series: Vec::new(),
             time_scale,
             price_scale: PriceScale::new(PriceScaleOptions::default()),
             zoom_history: Vec::new(),
@@ -144,14 +152,80 @@ impl ChartState {
         {
             self.revision = next_revision();
         }
-        self.time_scale.set_bar_cnt(self.shown().len());
+        self.sync_time_scale();
         first_changed
     }
 
     /// The series drawn on the time scale, one OHLC bar per element on price-based charts.
-    /// Indices returned by the chart hover and selection APIs refer to this series.
+    /// Indices returned by the chart hover and selection APIs refer to this series. When the
+    /// main series is empty, the widget can supply whitespace slots from added series.
     pub fn shown(&self) -> &[Bar] {
-        self.elements.as_deref().unwrap_or(&self.data.bars)
+        Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback)
+    }
+
+    /// The main series' shown bars, or the shared whitespace slots when it has none.
+    fn domain<'a>(data: &'a [Bar], elements: Option<&'a [Bar]>, fallback: &'a [Bar]) -> &'a [Bar] {
+        match elements.unwrap_or(data) {
+            [] => fallback,
+            shown => shown,
+        }
+    }
+
+    /// Points the time scale at the shown bars.
+    fn sync_time_scale(&mut self) {
+        let shown = Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback);
+        #[cfg(feature = "widget")]
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
+    }
+
+    /// Shares added-series timestamps without taking their values into the main series.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_fallback_series<'a>(
+        &mut self,
+        series: impl IntoIterator<Item = (&'a [Bar], u64)>,
+    ) {
+        let series: Vec<_> = if self.shows_fallback() {
+            series.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let keys: Vec<_> = series
+            .iter()
+            .map(|(bars, revision)| (*revision, bars.len(), bars.last().map(|bar| bar.time)))
+            .collect();
+        if self.fallback_series == keys {
+            return;
+        }
+        let times: std::collections::BTreeSet<_> = series
+            .iter()
+            .flat_map(|(bars, _)| bars.iter().map(|bar| bar.time))
+            .collect();
+        let bars: Vec<_> = times.into_iter().map(Bar::whitespace).collect();
+        let old_len = self.fallback.len();
+        let first_changed = self
+            .fallback
+            .iter()
+            .zip(&bars)
+            .position(|(old, new)| old.time != new.time)
+            .unwrap_or(old_len.min(bars.len()));
+        self.fallback = bars;
+        if first_changed < old_len.saturating_sub(1) || self.fallback.len() < old_len {
+            self.revision = next_revision();
+        }
+        self.fallback_series = keys;
+        self.sync_time_scale();
+    }
+
+    /// Whether the time scale lays out added-series slots: the main domain alone is empty, as
+    /// [`shown`](Self::shown) can already contain the fallback.
+    #[cfg(feature = "widget")]
+    pub(crate) fn shows_fallback(&self) -> bool {
+        self.elements
+            .as_deref()
+            .unwrap_or(&self.data.bars)
+            .is_empty()
     }
 
     #[cfg(feature = "widget")]
@@ -187,7 +261,7 @@ impl ChartState {
             )
         });
         self.elements = elements;
-        self.time_scale.set_bar_cnt(self.shown().len());
+        self.sync_time_scale();
         match kept {
             Some((_, true)) if follow && near_live => self.time_scale.scroll_to_realtime(),
             Some(_) if follow && near_live => {}
@@ -208,7 +282,7 @@ impl ChartState {
     /// the range is empty: it starts at 0 before the first bar and at the number of bars
     /// after the last.
     pub fn visible_range(&self) -> (usize, usize) {
-        let (start, end) = self.time_scale.visible_logical_range().to_strict_range();
+        let (start, end) = self.time_scale.visible_data_range().to_strict_range();
         let end = end.min(self.shown().len());
         (start.min(end), end)
     }
@@ -246,7 +320,7 @@ impl ChartState {
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
     /// `series_values` are already in scale units. `main_bars` supplies transformed visible
     /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
-    /// Returns the transform and the fitted data bounds in scale units, before margins.
+    /// Returns the transform, fitted bounds in scale units and the main provider's pixel margins.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
@@ -256,7 +330,7 @@ impl ChartState {
         main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
-    ) -> (PriceTransform, (f64, f64)) {
+    ) -> (PriceTransform, crate::model::AutoscaleInfo) {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = main_bars.unwrap_or(&self.shown()[start..end]);
@@ -270,7 +344,7 @@ impl ChartState {
             .map_or(f64::NAN, |bar| bar.close);
         let transform = PriceTransform::new(mode, base);
         // Unclamped, so that displaced values and projections past the last bar are fitted.
-        let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
+        let (study_start, study_end) = self.time_scale.visible_data_range().to_strict_range();
         let study_values = indicators
             .into_iter()
             .filter(|study| {
@@ -372,14 +446,15 @@ impl ChartState {
                         })
                 });
                 match autoscale {
-                    Some(provider) => provider.range(visible, range),
-                    None => range,
+                    Some(provider) => provider.info(visible, range),
+                    None => range.map(Into::into),
                 }
             })
             .flatten();
+        let margins = main.map_or_else(Default::default, |info| info.margins);
         let (min, max) = main
             .into_iter()
-            .flat_map(|(min, max)| [min, max])
+            .flat_map(|info| [info.price_range.0, info.price_range.1])
             .chain(study_values)
             .chain(prices)
             .map(|value| transform.to_scale(value))
@@ -390,7 +465,13 @@ impl ChartState {
             });
         self.price_scale.rebase(transform);
         self.price_scale.autoscale(min, max);
-        (transform, (min, max))
+        (
+            transform,
+            crate::model::AutoscaleInfo {
+                price_range: (min, max),
+                margins,
+            },
+        )
     }
 
     /// Save current zoom state to history

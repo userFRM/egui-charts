@@ -3,20 +3,29 @@
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyCandle, StudyInput};
 use egui::Color32;
+use std::num::{NonZeroU32, NonZeroU64};
+use std::ops::Range;
 
-/// Candles spanning the loaded bars of a higher interval, daily by default.
+/// Candles spanning the loaded bars of a higher interval, which follows the chart's by default.
+///
+/// The automatic interval is two hours on charts below one minute whose interval divides two
+/// hours, one day on the other charts below one day, one week below one week, one month below one
+/// month, three months below three months and twelve months from there on. Turning it off
+/// aggregates into the chosen interval, which must be longer than the chart's.
 ///
 /// The chart supplies its input interval and instrument metadata. Direct callers set them through
 /// [`Indicator::set_timeframe`] and [`Indicator::set_instrument`] before calculating, and
 /// [`Indicator::set_bar_clock`] when their calendar differs from UTC. Input bars
 /// must be chronological. The last period is rebuilt on every update, including corrections to
-/// its opening bar. Incompatible intervals have no output. No external data is requested.
+/// its opening bar. Bars longer than a day join the period they open in. Incompatible intervals
+/// have no output. No external data is requested.
 ///
 /// [`Indicator::candles`] exposes period OHLCV and source ranges. The two output columns contain
 /// each period's close on its source bars, in the up or down column; unchanged closes count as up.
 #[derive(Clone)]
 pub struct HigherIntervalCandles {
     interval: Timeframe,
+    automatic: bool,
     clock: BarClock,
     instrument: Instrument,
     extended_hours: bool,
@@ -27,10 +36,12 @@ pub struct HigherIntervalCandles {
 }
 
 impl HigherIntervalCandles {
-    /// Aggregate into `interval`. Count intervals cannot be derived from OHLCV bars.
+    /// Aggregate into `interval` whatever the chart's. Count intervals cannot be derived from
+    /// OHLCV bars.
     pub fn new(interval: Timeframe) -> Self {
         Self {
             interval,
+            automatic: false,
             clock: BarClock::new(Timeframe::Min1),
             instrument: Instrument::new(""),
             extended_hours: true,
@@ -62,9 +73,19 @@ impl HigherIntervalCandles {
         if start == 0 && !data.is_empty() {
             self.values.set_value(1, 0, f64::NAN);
         }
-        if self.clock.timeframe().is_none_or(|source| {
-            source.duration_ms() == 0 || self.interval.duration_ms() <= source.duration_ms()
-        }) {
+        let Some(source) = self.clock.timeframe() else {
+            return;
+        };
+        let interval = if self.automatic {
+            automatic_interval(source)
+        } else {
+            self.interval
+        };
+        // A chart of twelve months or more is its own automatic interval.
+        if source.duration_ms() == 0
+            || interval.duration_ms() <= source.duration_ms()
+                && !(self.automatic && interval == source)
+        {
             return;
         }
         // A bad direct-call input has no value and does not contaminate the rest of its period.
@@ -76,13 +97,19 @@ impl HigherIntervalCandles {
             .map(|(i, _)| i)
             .collect();
         let bars: Vec<_> = indices.iter().map(|&i| data[i].clone()).collect();
-        let Some(periods) = crate::data::resample_periods(
-            &bars,
-            self.clock.clone(),
-            self.clock.for_timeframe(self.interval),
-            &self.instrument,
-            self.extended_hours,
-        ) else {
+        let target = self.clock.for_timeframe(interval);
+        let periods = if source.duration_ms() > Timeframe::Day1.duration_ms() {
+            calendar_periods(&bars, &target)
+        } else {
+            crate::data::resample_periods(
+                &bars,
+                self.clock.clone(),
+                target,
+                &self.instrument,
+                self.extended_hours,
+            )
+        };
+        let Some(periods) = periods else {
             if start > 0 {
                 self.calculate_from(data, 0);
             }
@@ -102,9 +129,58 @@ impl HigherIntervalCandles {
     }
 }
 
+/// The interval that follows the chart's `source` interval when none is chosen. A chart of
+/// twelve months or more has no longer one and draws a candle per bar.
+fn automatic_interval(source: Timeframe) -> Timeframe {
+    let months = |count| Timeframe::Months(NonZeroU32::new(count).unwrap());
+    match source.duration_ms() {
+        // Below a minute, an interval that does not divide two hours has a bar across a two-hour
+        // boundary, but its bars still nest in the day. Ticks have no duration and no output.
+        ms if ms < Timeframe::Min1.duration_ms() && 7_200_000_i64.checked_rem(ms) == Some(0) => {
+            Timeframe::Custom(NonZeroU64::new(7200).unwrap())
+        }
+        ms if ms < Timeframe::Day1.duration_ms() => Timeframe::Day1,
+        ms if ms < Timeframe::Week1.duration_ms() => Timeframe::Week1,
+        ms if ms < Timeframe::Month1.duration_ms() => Timeframe::Month1,
+        ms if ms < months(3).duration_ms() => months(3),
+        ms if ms < months(12).duration_ms() => months(12),
+        _ => source,
+    }
+}
+
+/// Periods of `bars` longer than a day, which do not nest in longer intervals: each bar joins
+/// the `target` period it opens in. `None` when the bars of a period do not combine.
+fn calendar_periods(bars: &[Bar], target: &BarClock) -> Option<Vec<(Range<usize>, Bar)>> {
+    let mut periods: Vec<(Range<usize>, Bar)> = Vec::new();
+    for (i, bar) in bars.iter().enumerate() {
+        let open = target.bar_open(bar.time);
+        match periods.last_mut() {
+            Some((range, period)) if period.time == open => {
+                *period = crate::data::merge::fold(period, bar)?;
+                range.end = i + 1;
+            }
+            // The colours and payload of a source bar are not those of its period.
+            _ => periods.push((
+                i..i + 1,
+                Bar {
+                    time: open,
+                    colors: None,
+                    payload: None,
+                    ..bar.clone()
+                },
+            )),
+        }
+    }
+    Some(periods)
+}
+
 impl Default for HigherIntervalCandles {
+    /// Follows the chart's interval, with one day as the interval chosen otherwise.
     fn default() -> Self {
-        Self::new(Timeframe::Day1)
+        Self {
+            automatic: true,
+            ..Self::new(Timeframe::Day1)
+        }
     }
 }
 
@@ -118,6 +194,13 @@ impl Indicator for HigherIntervalCandles {
     fn inputs(&self) -> Vec<StudyInput> {
         let intervals = self.intervals();
         vec![
+            StudyInput::new(
+                "auto_interval",
+                "Automatic interval",
+                InputValue::Toggle(self.automatic),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(true)),
             StudyInput::new(
                 "interval",
                 "Interval",
@@ -147,6 +230,7 @@ impl Indicator for HigherIntervalCandles {
                     .get(index)
                     .ok_or_else(|| crate::studies::StudyError::invalid_input(id))?
             }
+            ("auto_interval", InputValue::Toggle(enabled)) => self.automatic = enabled,
             ("extended_hours", InputValue::Toggle(enabled)) => self.extended_hours = enabled,
             _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
@@ -223,7 +307,199 @@ impl Indicator for HigherIntervalCandles {
 mod tests {
     use super::*;
     use crate::model::{Session, SessionWindow, TimezoneId};
-    use chrono::{NaiveTime, Weekday};
+    use chrono::{DateTime, NaiveTime, Utc, Weekday};
+
+    /// The default study aggregates into the interval that follows the chart's, across a missing
+    /// bar, and a corrected historical bar rebuilds its period.
+    #[test]
+    fn automatic_intervals_follow_the_chart_interval() {
+        let months = |count| Timeframe::Months(NonZeroU32::new(count).unwrap());
+        // Chart interval, bar opens with one missing, and period opens.
+        let rows: [(Timeframe, [&str; 4], &[&str]); 10] = [
+            (
+                Timeframe::Sec30,
+                [
+                    "2024-03-08T01:59:00Z",
+                    "2024-03-08T01:59:30Z",
+                    "2024-03-08T02:00:00Z",
+                    "2024-03-08T02:01:00Z",
+                ],
+                &["2024-03-08T00:00:00Z", "2024-03-08T02:00:00Z"],
+            ),
+            // Seven seconds do not divide two hours: the bar from 01:59:56 runs past 02:00, so each
+            // day is a period.
+            (
+                Timeframe::Custom(NonZeroU64::new(7).unwrap()),
+                [
+                    "2024-03-08T01:59:56Z",
+                    "2024-03-08T02:00:03Z",
+                    "2024-03-09T01:59:56Z",
+                    "2024-03-09T02:00:10Z",
+                ],
+                &["2024-03-08T00:00:00Z", "2024-03-09T00:00:00Z"],
+            ),
+            (
+                Timeframe::Min15,
+                [
+                    "2024-03-08T23:30:00Z",
+                    "2024-03-08T23:45:00Z",
+                    "2024-03-09T00:00:00Z",
+                    "2024-03-09T00:30:00Z",
+                ],
+                &["2024-03-08T00:00:00Z", "2024-03-09T00:00:00Z"],
+            ),
+            // Friday and Sunday, then Monday and Tuesday.
+            (
+                Timeframe::Day1,
+                [
+                    "2024-03-08T00:00:00Z",
+                    "2024-03-10T00:00:00Z",
+                    "2024-03-11T00:00:00Z",
+                    "2024-03-12T00:00:00Z",
+                ],
+                &["2024-03-04T00:00:00Z", "2024-03-11T00:00:00Z"],
+            ),
+            // The two days from Sunday 10 March end in the next week and stay with the week they
+            // open in.
+            (
+                Timeframe::Custom(NonZeroU64::new(172_800).unwrap()),
+                [
+                    "2024-03-08T00:00:00Z",
+                    "2024-03-10T00:00:00Z",
+                    "2024-03-12T00:00:00Z",
+                    "2024-03-16T00:00:00Z",
+                ],
+                &["2024-03-04T00:00:00Z", "2024-03-11T00:00:00Z"],
+            ),
+            // The week of 29 January ends in February and stays with the month it opens in.
+            (
+                Timeframe::Week1,
+                [
+                    "2024-01-22T00:00:00Z",
+                    "2024-01-29T00:00:00Z",
+                    "2024-02-05T00:00:00Z",
+                    "2024-02-19T00:00:00Z",
+                ],
+                &["2024-01-01T00:00:00Z", "2024-02-01T00:00:00Z"],
+            ),
+            (
+                Timeframe::Month1,
+                [
+                    "2024-02-01T00:00:00Z",
+                    "2024-03-01T00:00:00Z",
+                    "2024-04-01T00:00:00Z",
+                    "2024-06-01T00:00:00Z",
+                ],
+                &["2024-01-01T00:00:00Z", "2024-04-01T00:00:00Z"],
+            ),
+            (
+                months(3),
+                [
+                    "2023-07-01T00:00:00Z",
+                    "2023-10-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2024-07-01T00:00:00Z",
+                ],
+                &["2023-01-01T00:00:00Z", "2024-01-01T00:00:00Z"],
+            ),
+            // A twelve-month bar is its own period.
+            (
+                months(12),
+                [
+                    "2021-01-01T00:00:00Z",
+                    "2022-01-01T00:00:00Z",
+                    "2023-01-01T00:00:00Z",
+                    "2025-01-01T00:00:00Z",
+                ],
+                &[
+                    "2021-01-01T00:00:00Z",
+                    "2022-01-01T00:00:00Z",
+                    "2023-01-01T00:00:00Z",
+                    "2025-01-01T00:00:00Z",
+                ],
+            ),
+            // No automatic interval is longer than a chart of more than twelve months.
+            (
+                months(18),
+                [
+                    "2021-01-01T00:00:00Z",
+                    "2022-07-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2027-01-01T00:00:00Z",
+                ],
+                &[
+                    "2021-01-01T00:00:00Z",
+                    "2022-07-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2027-01-01T00:00:00Z",
+                ],
+            ),
+        ];
+        // The third bar closes where it opens, which counts as up.
+        let ohlc = [
+            [10.0, 14.0, 9.0, 12.0],
+            [12.0, 13.0, 7.0, 8.0],
+            [8.0, 15.0, 8.0, 8.0],
+            [8.0, 11.0, 6.0, 10.0],
+        ];
+        for (source, times, opens) in rows {
+            let mut data: Vec<_> = times
+                .iter()
+                .zip(ohlc)
+                .map(|(time, [o, h, l, c])| Bar::new(time.parse().unwrap(), o, h, l, c, 1.0))
+                .collect();
+            let mut study = crate::studies::IndicatorFactory::new()
+                .create("Higher Interval Candles")
+                .unwrap();
+            study.set_timeframe(source);
+            study.calculate(&data);
+            // Two bars fold into a period: first open, highest high, lowest low, last close.
+            let paired = opens.len() == 2;
+            let mut expected = if paired {
+                vec![[10.0, 14.0, 7.0, 8.0], [8.0, 15.0, 6.0, 10.0]]
+            } else {
+                ohlc.to_vec()
+            };
+            let check = |study: &dyn Indicator, expected: &[[f64; 4]]| {
+                let size = if paired { 2 } else { 1 };
+                assert_eq!(study.candles().len(), opens.len(), "{source}");
+                for (n, candle) in study.candles().iter().enumerate() {
+                    let bar = &candle.bar;
+                    assert_eq!(bar.time, opens[n].parse::<DateTime<Utc>>().unwrap());
+                    assert_eq!(candle.bars, n * size..(n + 1) * size, "{source}");
+                    assert_eq!(
+                        [bar.open, bar.high, bar.low, bar.close],
+                        expected[n],
+                        "{source} period {n}"
+                    );
+                    let plot = usize::from(expected[n][3] < expected[n][0]);
+                    for i in candle.bars.clone() {
+                        assert_eq!(study.values().value(plot, i), Some(expected[n][3]));
+                        assert_eq!(study.values().value(1 - plot, i), None, "{source} bar {i}");
+                    }
+                }
+            };
+            check(study.as_ref(), &expected);
+            data[1] = Bar::new(data[1].time, 12.0, 16.0, 11.0, 13.0, 1.0);
+            study.update(&data, 1);
+            if paired {
+                expected[0] = [10.0, 16.0, 9.0, 13.0];
+            } else {
+                expected[1] = [12.0, 16.0, 11.0, 13.0];
+            }
+            check(study.as_ref(), &expected);
+            // The chosen interval, one day, is longer than the chart's only below one day.
+            study
+                .set_input("auto_interval", InputValue::Toggle(false))
+                .unwrap();
+            study.calculate(&data);
+            assert_eq!(
+                study.candles().is_empty(),
+                source.duration_ms() >= Timeframe::Day1.duration_ms(),
+                "{source}"
+            );
+        }
+    }
 
     #[test]
     fn daily_candles_cover_session_gaps_and_replace_the_forming_period() {
