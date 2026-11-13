@@ -259,6 +259,8 @@ pub struct Chart {
     pub(crate) scroll_start_offset: Option<f64>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
+    /// Bar spacing when a time-axis drag began or was last rebased (UI state only)
+    pub(crate) scroll_start_spacing: Option<f32>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.

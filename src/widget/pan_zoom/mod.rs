@@ -214,6 +214,7 @@ impl Chart {
                 if self.scroll_start_offset.is_some() {
                     self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
                     self.scroll_start_pos = response.interact_pointer_pos();
+                    self.scroll_start_spacing = None;
                 }
             }
         }
@@ -311,6 +312,7 @@ impl Chart {
                 if self.scroll_start_offset.is_some() {
                     self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
                     self.scroll_start_pos = response.interact_pointer_pos();
+                    self.scroll_start_spacing = None;
                 }
             }
 
@@ -425,6 +427,7 @@ impl Chart {
                 self.scroll_start_pos = None;
                 self.scroll_start_offset = None;
             }
+            self.scroll_start_spacing = None;
             self.kinetic_scroll.last_pos = None;
             self.kinetic_scroll.last_time = None;
             if !self.kinetic_scroll.is_active {
@@ -451,25 +454,30 @@ impl Chart {
             if price_axis_rect.contains(origin) {
                 // The price axis reads its own drag.
             } else if time_axis_rect.contains(origin) {
-                if !self.chart_options.handle_scale.enabled {
+                let scale = self.chart_options.handle_scale;
+                if !scale.enabled || !scale.axis_pressed_mouse_move.time {
+                    // Rebase while disabled so re-enabling does not replay the blocked movement.
                     self.scroll_start_pos = Some(curr_pos);
+                    self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
+                    self.scroll_start_spacing = None;
                     return;
                 }
-                if self.chart_options.handle_scale.axis_pressed_mouse_move.time {
-                    let dx = curr_pos.x - start_pos.x;
-                    if dx.abs() > 0.1 {
-                        let zoom_point_x = curr_pos.x - chart_rect_min_x;
-                        let zoom_scale = (dx / 100.0).signum() * (dx / 100.0).abs().min(1.0);
-                        let chart_width = time_axis_rect.width();
-                        self.state.time_scale_mut().zoom(
-                            zoom_scale,
-                            zoom_point_x,
-                            chart_rect_min_x,
-                            chart_width,
-                        );
-                        self.scroll_start_pos = Some(curr_pos);
-                    }
-                }
+                // Zoom the view the drag began with by the whole movement since, around the bar
+                // that was pressed: the spacing grows e times per 1000 points whatever frames
+                // the drag spans, and coming back restores the view.
+                let time_scale = self.state.time_scale_mut();
+                let spacing = *self
+                    .scroll_start_spacing
+                    .get_or_insert(time_scale.bar_spacing());
+                time_scale.set_bar_spacing(spacing);
+                time_scale.set_right_offset(start_offset);
+                // TimeScale::zoom applies one tenth of its delta.
+                time_scale.zoom(
+                    ((curr_pos.x - start_pos.x) / 1000.0).min(80.0).exp_m1() * 10.0,
+                    origin.x - chart_rect_min_x,
+                    chart_rect_min_x,
+                    time_axis_rect.width(),
+                );
             } else {
                 let scroll = self.chart_options.handle_scroll;
                 if !scroll.enabled {
@@ -1943,8 +1951,8 @@ mod tests {
             );
             let after = chart.get_time_scale_state();
             if time_axis {
-                // The time-axis sensitivity scales spacing by 1 + (dx/100)*0.1.
-                assert!((after.0 - before.0 * 1.01).abs() < 1e-5);
+                // Ten points on the time axis scale the spacing by e^0.01 = 1.010050.
+                assert!((after.0 - before.0 * 1.010_05).abs() < 1e-5);
             } else {
                 assert_eq!(after.0, before.0);
                 assert!((after.1 - (before.1 - 10.0 / before.0)).abs() < 1e-5);
@@ -1992,6 +2000,65 @@ mod tests {
                 "{steps} frames: {range:?}, expected a span of {span}"
             );
         }
+    }
+
+    /// A drag on the time axis scales the bar spacing by e per 1000 points of its whole movement
+    /// around the bar that was pressed, however many frames it spans, and returning restores the view.
+    #[test]
+    fn time_axis_drag_zoom_is_frame_independent() {
+        // 300 points to the right in one frame and in ten, then out and back.
+        let mut views = Vec::new();
+        for (steps, back) in [(1, false), (10, false), (10, true)] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let rect = chart.last_rendered_price_rect;
+            let start = Pos2::new(
+                rect.left() + rect.width() * 0.25,
+                rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+            );
+            let (spacing, offset) = chart.get_time_scale_state();
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let out = (1..=steps).map(|step| 300.0 * step as f32 / steps as f32);
+            let path: Vec<_> = if back {
+                out.clone().chain(out.rev().skip(1)).chain([0.0]).collect()
+            } else {
+                out.collect()
+            };
+            let mut events = vec![vec![Event::PointerMoved(start)], vec![button(start, true)]];
+            events.extend(
+                path.iter()
+                    .map(|dx| vec![Event::PointerMoved(start + egui::vec2(*dx, 0.0))]),
+            );
+            let end = start + egui::vec2(*path.last().unwrap(), 0.0);
+            events.push(vec![button(end, false)]);
+            for (at, events) in events.into_iter().enumerate() {
+                frame(&ctx, &mut chart, 0.02 * (at + 1) as f64, events);
+            }
+            let (zoomed, moved) = chart.get_time_scale_state();
+            if back {
+                assert_eq!((zoomed, moved), (spacing, offset));
+            } else {
+                // e^0.3 = 1.349859.
+                assert!(
+                    (zoomed - spacing * 1.349_859).abs() < 1e-5,
+                    "{steps} frames: spacing {spacing} -> {zoomed}"
+                );
+                let expected =
+                    offset + (rect.right() - start.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
+                assert!(
+                    (moved - expected).abs() < 1e-4,
+                    "{steps} frames: offset {moved}, expected {expected}"
+                );
+                views.push((zoomed, moved));
+            }
+        }
+        assert_eq!(views[0], views[1], "1 frame against 10");
     }
 
     /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the
@@ -2493,8 +2560,9 @@ mod tests {
                         } else {
                             before
                         };
+                        // 100 points on the time axis scale the spacing by e^0.1 = 1.105171.
                         let expected_spacing = if !price && axis {
-                            spacing * 1.05 * 1.05
+                            spacing * 1.105_171
                         } else {
                             spacing
                         };
