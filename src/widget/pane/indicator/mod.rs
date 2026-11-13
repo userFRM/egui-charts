@@ -95,8 +95,6 @@ pub struct IndicatorPane {
     /// The background of the chart showing the pane: the rect its gradient spans, its style and
     /// its solid colour. A pane shown on its own has the theme's chart background.
     pub(super) background: Option<(Rect, crate::config::BackgroundStyle, egui::Color32)>,
-    /// The chart's container painted the background, so the pane paints none.
-    pub(super) skip_background: bool,
     /// Colour of the legend text and the axis labels, the scale text colour of the chart showing
     /// the pane. A pane shown on its own takes them from the egui style and the theme.
     pub(super) text_color: Option<egui::Color32>,
@@ -126,7 +124,6 @@ impl IndicatorPane {
             axis_options,
             legend_backdrop: 0.6,
             background: None,
-            skip_background: false,
             text_color: None,
         }
     }
@@ -426,8 +423,9 @@ impl IndicatorPane {
 
         let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 
-        // Fill background: the part of the chart's that lies behind the pane
-        if !self.overlay && !self.skip_background {
+        // Fill background: the part of the chart's that lies behind the pane, also when a container
+        // paints the chart's: the fill hides the crosshair line the price frame draws through panes.
+        if !self.overlay {
             match self.background {
                 Some((frame, style, color)) => {
                     crate::widget::frame::paint_background(painter, frame, rect, style, color);

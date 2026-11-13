@@ -1416,8 +1416,9 @@ fn collapsing_the_price_pane_of_a_short_chart_leaves_no_blank_area() {
 /// keep legend text and the labels of a study's own axis readable paint the theme's background,
 /// nor does the plate under the controls of a hovered study pane row. A gradient spans the chart
 /// frame, from 8 to 592 points down the 600 point test frame, and each pane paints the part
-/// behind it. A chart that leaves its background to a container paints none behind a study pane
-/// either.
+/// behind it. A chart that leaves its background to a container paints none behind the price
+/// pane and still fills its study panes, which hides the crosshair line the price frame draws
+/// through them.
 #[test]
 fn custom_background_reaches_study_panes() {
     use crate::config::BackgroundStyle;
@@ -1483,14 +1484,15 @@ fn custom_background_reaches_study_panes() {
             }
         };
         let label = format!("{style:?}, skip_background {skip}");
-        if skip {
-            assert_eq!(fills(pane), Vec::<Vec<Color32>>::new(), "{label}");
-            continue;
-        }
         assert_eq!(fills(pane), [slice(pane)], "{label}");
         let price_height = chart.pane_height(crate::widget::PaneId::MAIN).unwrap();
         let price_frame = Rect::from_min_size(Pos2::new(8.0, 8.0), Vec2::new(784.0, price_height));
-        assert_eq!(fills(price_frame), [slice(price_frame)], "{label}");
+        let price_fills = if skip {
+            Vec::new()
+        } else {
+            vec![slice(price_frame)]
+        };
+        assert_eq!(fills(price_frame), price_fills, "{label}");
         if style == BackgroundStyle::Solid {
             // The theme's background, opaque and at the 60% opacity of a study's legend row.
             let stale: Vec<_> = painted
