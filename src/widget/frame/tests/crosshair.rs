@@ -2140,8 +2140,9 @@ fn touch_hold_released_before_the_click_limit_is_not_a_click() {
 
 #[test]
 fn moving_a_touch_readout_keeps_live_edge_following() {
+    use crate::config::TrackingModeExitMode::{OnNextTap, OnTouchEnd};
     use egui::TouchPhase::{End, Move, Start};
-    for pane in [false, true] {
+    for (pane, exit_mode) in [(false, OnNextTap), (true, OnNextTap), (false, OnTouchEnd)] {
         for move_time in [0.1, 0.7, 1.0]
             .into_iter()
             .filter(|time| !pane || *time > 0.5)
@@ -2150,6 +2151,7 @@ fn moving_a_touch_readout_keeps_live_edge_following() {
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.show_volume = false;
             chart.chart_options.tooltip.on_long_press = true;
+            chart.chart_options.tracking_mode.exit_mode = exit_mode;
             if pane {
                 let id = chart.add_series(Default::default());
                 chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
@@ -2175,10 +2177,14 @@ fn moving_a_touch_readout_keeps_live_edge_following() {
             assert_eq!(
                 chart.is_tracking_mode_active(),
                 move_time > 0.5,
-                "pane={pane}, move={move_time}"
+                "pane={pane}, {exit_mode:?}, move={move_time}"
             );
             frame(&ctx, &mut chart, 3.2, touch_events(End, end));
-            assert_eq!(chart.is_tracking_mode_active(), move_time > 0.5);
+            assert_eq!(
+                chart.is_tracking_mode_active(),
+                move_time > 0.5,
+                "pane={pane}, {exit_mode:?}, move={move_time}: after the release"
+            );
         }
     }
 }
