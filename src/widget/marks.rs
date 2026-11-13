@@ -1489,8 +1489,11 @@ mod tests {
                 "top",
                 "eraser",
                 "moved",
+                "tool",
             ] {
-                if !cfg!(feature = "drawings") && matches!(cover, "drawing" | "top" | "eraser") {
+                if !cfg!(feature = "drawings")
+                    && matches!(cover, "drawing" | "top" | "eraser" | "tool")
+                {
                     continue;
                 }
                 let ctx = Context::default();
@@ -1511,6 +1514,12 @@ mod tests {
                 #[cfg(feature = "drawings")]
                 if cover == "eraser" {
                     chart.drawings_mut().eraser_mode = true;
+                }
+                #[cfg(feature = "drawings")]
+                if cover == "tool" {
+                    chart
+                        .drawings_mut()
+                        .set_active_tool(Some(crate::drawings::DrawingToolType::HorizontalLine));
                 }
                 let time = chart.bars(id)[70].time;
                 chart.set_marker_options(
@@ -1589,9 +1598,11 @@ mod tests {
                         _ => None,
                     })
                     .unwrap_or_else(|| panic!("secondary={secondary}, cover={cover}: {events:?}"));
-                let marked = !matches!(cover, "primitive" | "drawing" | "eraser" | "moved");
+                let marked =
+                    !matches!(cover, "primitive" | "drawing" | "eraser" | "moved" | "tool");
                 // Bar 70 spans 95 to 105, so without the marker the click selects its series; a
-                // click on a drawing clears the selection.
+                // click on a drawing clears the selection, and with the eraser on or a drawing tool
+                // armed it selects nothing.
                 let unmarked =
                     matches!(cover, "primitive" | "moved").then_some(ChartElementId::Series(id));
                 if let Some(primitive) = primitive {
@@ -1627,6 +1638,11 @@ mod tests {
                 #[cfg(feature = "drawings")]
                 if cover == "drawing" {
                     assert!(chart.drawings.is_selected(77), "secondary={secondary}");
+                }
+                // The tool still places its line with the click.
+                #[cfg(feature = "drawings")]
+                if cover == "tool" {
+                    assert_eq!(chart.drawings.drawings.len(), 1, "secondary={secondary}");
                 }
             }
         }
