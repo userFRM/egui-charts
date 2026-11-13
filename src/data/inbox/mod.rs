@@ -92,8 +92,11 @@ pub(crate) struct Updates {
     pub(crate) reset: bool,
     /// One per slot, keyed by its open; the last one is the forming bar.
     pub(crate) bars: BTreeMap<DateTime<Utc>, (Bar, Origin)>,
-    /// The trades folded into `bars`, in arrival order.
+    /// The trades folded into `bars`, in arrival order, and repeats completing the order ids of
+    /// drained ones.
     pub(crate) trades: Trades,
+    /// Ids of the queued repeats, which `bars` did not count.
+    repeats: HashSet<u64>,
     /// The order book, if it changed.
     pub(crate) depth: Option<OrderBook>,
     pub(crate) orders: Option<OrderQueue>,
@@ -131,6 +134,7 @@ impl Updates {
             reset: false,
             bars: BTreeMap::new(),
             trades,
+            repeats: HashSet::new(),
             depth: None,
             orders: None,
             orders_changed: false,

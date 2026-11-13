@@ -227,7 +227,7 @@ impl Chart {
         }
     }
 
-    /// Resolves hover against painted marks and retains host-identified rectangles for clicks.
+    /// Resolves hover against painted marks.
     pub(super) fn record_mark_hits(
         &self,
         painter: &egui::Painter,
@@ -243,11 +243,6 @@ impl Chart {
                 time: mark.time,
             });
         }
-        self.mark_hits.borrow_mut().extend(
-            hits.into_iter()
-                .filter(|(mark, _)| mark.id.is_some())
-                .map(|(_, rect)| rect),
-        );
     }
 
     /// A later painted hit covers any annotation found underneath it.
@@ -310,25 +305,8 @@ impl Chart {
         }
     }
 
-    /// Starts a frame's record of painted marks; clicks resolve against the previous frame's.
-    pub(super) fn begin_mark_hits(&mut self) {
-        self.clickable_marks = std::mem::take(self.mark_hits.get_mut());
-    }
-
-    /// The last host mark painted at `pos` in the previous frame, for selection gating.
-    /// Drawing tools and the eraser take the click first.
-    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&egui::Rect> {
-        #[cfg(feature = "drawings")]
-        if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
-            return None;
-        }
-        self.clickable_marks
-            .iter()
-            .rev()
-            .find(|rect| rect.contains(pos))
-    }
-
-    /// Reports a click only for the host marker selected by this frame's paint order.
+    /// A click whose target, resolved in this frame's paint order, is a host marker selects
+    /// nothing and reports the marker if it has an id.
     pub(super) fn click_mark(&mut self, position: &super::ChartPointer) {
         #[cfg(feature = "drawings")]
         if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
@@ -1063,7 +1041,14 @@ mod tests {
             );
             test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
             test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
-            let pos = chart.clickable_marks.last().unwrap().center();
+            // An in-bar mark is centred on the bar's close.
+            let pos = egui::pos2(
+                chart.get_chart_mapping().idx_to_x(70),
+                chart
+                    .series_price_map(SeriesId::MAIN)
+                    .unwrap()
+                    .price_to_y(chart.state.shown()[70].close),
+            );
             let button = |pressed| {
                 vec![egui::Event::PointerButton {
                     pos,
@@ -1296,7 +1281,7 @@ mod tests {
 
     /// Windowing keeps sub-bar edge marks, future-margin marks and supplied painting order.
     #[test]
-    fn markers_near_the_view_are_drawn_and_hit_in_list_order() {
+    fn markers_near_the_view_are_drawn_in_list_order() {
         let ctx = Context::default();
         let mut chart = test_frames::chart(&[95.0], &[105.0]);
         chart.config_mut().show_volume = false;
@@ -1336,12 +1321,24 @@ mod tests {
                 .collect(),
         );
         let shapes = test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
-        let hits = chart.mark_hits.borrow();
-        assert_eq!(hits.len(), 6);
+        // Each mark is a filled circle of radius 8, centred on its time.
+        let marks: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Circle(circle) if circle.radius == 8.0 && circle.stroke.is_empty() => {
+                    Some(circle.center.x)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks.len(), 6);
         let mapping = chart.get_chart_mapping();
-        for series_hits in hits.as_chunks::<3>().0 {
-            for (rect, index) in series_hits.iter().zip([102.0, left + 0.25, 90.0]) {
-                assert!(rect.x_range().contains(mapping.index_to_x(index)));
+        for series_marks in marks.as_chunks::<3>().0 {
+            for (x, index) in series_marks.iter().zip([102.0, left + 0.25, 90.0]) {
+                assert!(
+                    (x - mapping.index_to_x(index)).abs() < 0.5,
+                    "{x} at {index}"
+                );
             }
         }
         assert_eq!(
@@ -1459,11 +1456,13 @@ mod tests {
         }
     }
 
-    /// Covered marks cannot report a second click on the annotation underneath.
+    /// Covered marks cannot report a second click on the annotation underneath, nor keep the
+    /// click from selecting what it selects without them; neither can a mark moved away.
     #[test]
     fn click_on_primitive_over_marker_reports_no_mark() {
         use crate::widget::{
-            PointerTarget, Primitive, PrimitiveHit, PrimitivePass, PrimitiveView, SeriesOptions,
+            ChartElementId, PointerTarget, Primitive, PrimitiveHit, PrimitivePass, PrimitiveView,
+            SeriesOptions,
         };
         struct Cover;
         impl Primitive for Cover {
@@ -1489,6 +1488,7 @@ mod tests {
                 "fresh",
                 "top",
                 "eraser",
+                "moved",
             ] {
                 if !cfg!(feature = "drawings") && matches!(cover, "drawing" | "top" | "eraser") {
                     continue;
@@ -1555,22 +1555,24 @@ mod tests {
                     chart.series_price_map(id).unwrap().price_to_y(100.0),
                 );
                 test_frames::frame(&ctx, &mut chart, 0.1, vec![egui::Event::PointerMoved(pos)]);
-                if cover == "fresh" {
+                if matches!(cover, "fresh" | "moved") {
                     chart.set_markers(
                         id,
                         vec![
-                            Marker::new(time)
-                                .at_price(100.0, MarkerPos::AtPriceMiddle)
-                                .with_id("under"),
+                            Marker::new(if cover == "moved" {
+                                chart.bars(id)[60].time
+                            } else {
+                                time
+                            })
+                            .at_price(100.0, MarkerPos::AtPriceMiddle)
+                            .with_id("under"),
                         ],
                     );
                 }
                 chart.drain_events().for_each(drop);
                 // A drawing takes the click from a series that is already selected too.
                 if cover == "drawing" {
-                    chart
-                        .selection
-                        .select(crate::widget::ChartElementId::Series(id), None);
+                    chart.selection.select(ChartElementId::Series(id), None);
                 }
                 let click = |pressed| egui::Event::PointerButton {
                     pos,
@@ -1587,14 +1589,21 @@ mod tests {
                         _ => None,
                     })
                     .unwrap_or_else(|| panic!("secondary={secondary}, cover={cover}: {events:?}"));
-                let covered = matches!(cover, "primitive" | "drawing" | "eraser");
+                let marked = !matches!(cover, "primitive" | "drawing" | "eraser" | "moved");
+                // Bar 70 spans 95 to 105, so without the marker the click selects its series; a
+                // click on a drawing clears the selection.
+                let unmarked =
+                    matches!(cover, "primitive" | "moved").then_some(ChartElementId::Series(id));
                 if let Some(primitive) = primitive {
                     assert_eq!(target, PointerTarget::Primitive(primitive));
                 }
                 if cover == "drawing" {
                     assert_eq!(target, PointerTarget::Drawing(77));
                 }
-                if !covered {
+                if cover == "moved" {
+                    assert_eq!(target, PointerTarget::Element(ChartElementId::Series(id)));
+                }
+                if marked {
                     assert!(matches!(target, PointerTarget::Marker { .. }));
                 }
                 let marks: Vec<_> = events
@@ -1603,13 +1612,13 @@ mod tests {
                     .collect();
                 assert_eq!(
                     marks.len(),
-                    usize::from(!covered),
+                    usize::from(marked),
                     "secondary={secondary}, cover={cover}: {events:?}"
                 );
                 if cover != "eraser" {
                     assert_eq!(
                         chart.selected_element(),
-                        None,
+                        unmarked,
                         "secondary={secondary}, cover={cover}"
                     );
                 }
@@ -1646,7 +1655,14 @@ mod tests {
             );
             test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
             test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
-            let pos = chart.clickable_marks.last().unwrap().center();
+            // An in-bar mark is centred on the bar's close.
+            let pos = egui::pos2(
+                chart.get_chart_mapping().idx_to_x(70),
+                chart
+                    .series_price_map(SeriesId::MAIN)
+                    .unwrap()
+                    .price_to_y(chart.state.shown()[70].close),
+            );
             for pressed in [true, false] {
                 test_frames::frame(
                     &ctx,
