@@ -7,8 +7,8 @@ use egui::{Context, Event, KeyboardShortcut};
 ///
 /// Remove a binding to disable it, or replace its key or action to rebind it.
 /// The first binding wins if several actions use the same key combination.
-/// A binding on a punctuation key also runs when the press differs from it only by Shift,
-/// which some layouts need to type that character, unless another binding names that exact
+/// A binding on a punctuation key also runs when the press differs from it only by Shift and
+/// types that key's character, as some layouts need, unless another binding names that exact
 /// combination.
 #[derive(Clone, Debug)]
 pub struct ShortcutMap {
@@ -50,13 +50,14 @@ impl ShortcutMap {
             })
     }
 
-    /// The binding a key press runs. Layouts differ in which punctuation needs Shift, so a key
-    /// named by a punctuation character matches with Shift ignored when no binding names the
-    /// exact modifiers.
+    /// The binding a key press that typed `typed` runs. Layouts differ in which punctuation
+    /// needs Shift, so a key named by a punctuation character matches with Shift ignored when no
+    /// binding names the exact modifiers and the press typed that character or nothing.
     fn binding(
         &self,
         key: egui::Key,
         modifiers: egui::Modifiers,
+        typed: Option<&str>,
     ) -> Option<(KeyboardShortcut, KeyboardAction)> {
         let find = |ignore_shift: bool| {
             let held = |modifiers: egui::Modifiers| egui::Modifiers {
@@ -71,6 +72,8 @@ impl ShortcutMap {
         find(false).or_else(|| {
             typed_char(key)
                 .filter(|c| !c.is_alphanumeric())
+                // Shift+Period typing `>` on a US layout is not the period.
+                .filter(|_| typed.is_none_or(|text| egui::Key::from_name(text) == Some(key)))
                 .and_then(|_| find(true))
         })
     }
@@ -85,8 +88,8 @@ impl ShortcutMap {
     ) -> Option<(KeyboardAction, Event)> {
         ctx.input_mut(|input| {
             let pairs = typed_pairs(&input.events);
-            let bound = |event: &Event| {
-                let (key, modifiers) = match event {
+            let bound = |index: usize| {
+                let (key, modifiers) = match &input.events[index] {
                     Event::Key {
                         key,
                         pressed: true,
@@ -97,7 +100,11 @@ impl ShortcutMap {
                     Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
                     _ => return None,
                 };
-                let (shortcut, action) = self.binding(key, modifiers)?;
+                let typed = pairs[index].and_then(|text| match &input.events[text] {
+                    Event::Text(text) => Some(text.as_str()),
+                    _ => None,
+                });
+                let (shortcut, action) = self.binding(key, modifiers, typed)?;
                 accepts(action, shortcut).then_some(action)
             };
             let (index, action) = input
@@ -108,10 +115,9 @@ impl ShortcutMap {
                     // Typed text ends the search, unless the bound key that typed it follows.
                     !stop_at_text
                         || !matches!(event, Event::Text(text) if starts_entry(text))
-                        || (pairs[*index] == Some(index + 1)
-                            && bound(&input.events[index + 1]).is_some())
+                        || (pairs[*index] == Some(index + 1) && bound(index + 1).is_some())
                 })
-                .find_map(|(index, event)| Some((index, bound(event)?)))?;
+                .find_map(|(index, _)| Some((index, bound(index)?)))?;
             let mut event = input.events.remove(index);
             // The press ran a binding, so its text is dropped whatever character it carries.
             if let Some(text) = pairs[index] {
@@ -450,7 +456,7 @@ impl super::Chart {
                             input.events.remove(index);
                             return Some(key);
                         }
-                        if self.keyboard.map.binding(*key, *modifiers).is_some() {
+                        if self.keyboard.map.binding(*key, *modifiers, None).is_some() {
                             return None;
                         }
                     }
@@ -924,6 +930,8 @@ mod tests {
                 Some(("/", false)),
                 Some(A::OpenIndicatorSearch),
             ),
+            // The key typed another character, so it is not the period.
+            (Key::Period, Modifiers::SHIFT, Some((">", false)), None),
             (Key::D, Modifiers::ALT, None, Some(A::OpenDataWindow)),
             (
                 Key::D,
@@ -1006,7 +1014,15 @@ mod tests {
                     vec![ShortcutRequest::Action(action)],
                     "{key:?} typing {typed:?}"
                 ),
-                None => assert_eq!(offset, before_offset),
+                None => {
+                    assert_eq!(offset, before_offset);
+                    assert!(
+                        !requests
+                            .iter()
+                            .any(|request| matches!(request, ShortcutRequest::Action(_))),
+                        "{key:?} typing {typed:?}: {requests:?}"
+                    );
+                }
             }
             if expected != Some(A::ZoomIn) {
                 assert_eq!(spacing, before_spacing, "{key:?} keeps the zoom");
