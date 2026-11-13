@@ -383,7 +383,10 @@ mod tests {
                 egui_extras::install_image_loaders(ctx);
                 crate::theme::apply_to_egui(ctx, &Theme::dark());
             })
-            .build_ui_state(|ui, d: &mut KeyboardShortcutsDialog| _ = d.show(ui.ctx()), dialog);
+            .build_ui_state(
+                |ui, d: &mut KeyboardShortcutsDialog| _ = d.show(ui.ctx()),
+                dialog,
+            );
         h.run_steps(3);
         for label in [
             "Change the symbol",
