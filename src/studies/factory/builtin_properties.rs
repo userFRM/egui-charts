@@ -19,7 +19,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SWMA::new()),
         Box::new(KAMA::new(l(0)).with_periods(l(1), l(2))),
         Box::new(SmoothedMA::new(l(0))),
-        Box::new(GuppyMA::new()),
+        Box::new(GuppyMA::new().with_periods(std::array::from_fn(&l))),
         Box::new(McGinleyDynamic::new(l(0))),
         Box::new(VIDYA::new(l(0))),
         Box::new(ZLEMA::new(l(0))),

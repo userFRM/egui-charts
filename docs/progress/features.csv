@@ -697,7 +697,7 @@ Studies,Indicators,Exponential Moving Average,unverified,library,src/studies/bui
 Studies,Indicators,Fisher Transform,unverified,library,src/studies/builtin/fisher_transform.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Fixed Range Volume Profile,incomplete,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/studies/template.rs;src/data/order_flow.rs;src/data/footprint.rs,
 Studies,Indicators,Gaps,unverified,library,src/studies/builtin/gaps.rs;src/chart/indicators/plots.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Guppy Multiple Moving Average,incomplete,library,src/studies/builtin/guppy_ma.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
+Studies,Indicators,Guppy Multiple Moving Average,unverified,library,src/studies/builtin/guppy_ma.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Historical Volatility,unverified,library,src/studies/builtin/historical_volatility.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Hull Moving Average,incomplete,library,src/studies/builtin/hma.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Ichimoku Cloud,unverified,library,src/studies/builtin/ichimoku.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
