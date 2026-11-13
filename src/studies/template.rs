@@ -321,8 +321,9 @@ impl StudyTemplate {
                     .collect();
             }
             // A Correlation Coefficient drew its zero guide alone before it opened with guides at
-            // its bounds; hidden, they leave the pane as it was saved. A host study under the
-            // name, which has no log returns, keeps its own guides.
+            // its bounds; hidden, they leave the pane as it was saved. One guide bounded no band,
+            // so a fill saved on draws none between them either. A host study under the name,
+            // which has no log returns, keeps its own guides.
             "Correlation Coefficient"
                 if self.settings.levels.len() < 2 && declares("log_returns") =>
             {
@@ -335,6 +336,7 @@ impl StudyTemplate {
                     levels[2] = *zero;
                 }
                 template.settings.levels = levels;
+                template.settings.fill_between_levels = false;
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -938,6 +940,10 @@ mod tests {
             .create()
             .unwrap();
         assert_eq!(again.settings().levels, shown.levels);
+        // A host could switch the fill on while the one guide bounded no band.
+        let mut filled: StudyTemplate = serde_json::from_str(saved).unwrap();
+        filled.settings.fill_between_levels = true;
+        assert!(!filled.create().unwrap().pane().fill_between_levels);
 
         // An auto anchored VWAP as a chart saved it before the study had bands, its line edited
         // to orange at two pixels and its length to 30: it draws that line alone, and the hidden
