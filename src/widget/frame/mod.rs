@@ -3,6 +3,7 @@
 mod background;
 mod sessions;
 
+pub(super) use background::paint_background;
 #[cfg(feature = "studies")]
 pub(super) use sessions::session_ranges;
 
