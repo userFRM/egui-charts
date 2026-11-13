@@ -946,7 +946,14 @@ pub(crate) fn automatic_row_height(config: &FootprintConfig) -> Option<f32> {
     config.auto_row_height.filter(|h| h.is_finite() && *h > 0.0)
 }
 
-fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &FootprintConfig) -> i64 {
+/// Input rows per displayed row of `bar` under `mapping`: the minimum group, raised until a row
+/// is as tall as a usable automatic height.
+pub(crate) fn row_group(
+    mapping: &ChartMapping,
+    bar: &Bar,
+    flow: &Footprint,
+    config: &FootprintConfig,
+) -> i64 {
     let raw_height =
         (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
     let manual = fixed_row_group(flow, config.row_ticks);
@@ -955,6 +962,32 @@ fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &Footp
             .ceil()
             .clamp(manual as f32, 1_000_000.0) as i64
     })
+}
+
+/// The prices of the bottom edge of the lowest row and the top edge of the highest row of each
+/// complete bar of `bars`, its rows holding `group(bar)` input rows.
+pub(crate) fn row_edges<'a>(
+    bars: &'a [Bar],
+    flow: &'a Footprint,
+    group: impl Fn(&Bar) -> i64 + 'a,
+) -> impl Iterator<Item = f64> + 'a {
+    bars.iter()
+        .filter(move |bar| flow.complete_from().is_some_and(|from| bar.time >= from))
+        .filter_map(move |bar| {
+            let rows = &flow.bar_at(bar.time)?.levels;
+            let (&low, _) = rows.first_key_value()?;
+            let (&high, _) = rows.last_key_value()?;
+            let group = group(bar);
+            let step = flow.price_step() * group as f64;
+            Some(
+                [
+                    low.div_euclid(group) as f64,
+                    high.div_euclid(group) as f64 + 1.0,
+                ]
+                .map(|row| row * step - flow.tick_size() * 0.5),
+            )
+        })
+        .flatten()
 }
 
 fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {

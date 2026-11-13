@@ -723,7 +723,15 @@ impl IndicatorPane {
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
         self.value_range(indicator, visible_range)
-            .unwrap_or((0.0, 100.0))
+            .unwrap_or_else(|| {
+                if indicator.is_volume()
+                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+                {
+                    crate::widget::volume::range(indicator, visible_range, None)
+                } else {
+                    (0.0, 100.0)
+                }
+            })
     }
 
     /// The study's fitted range, without the empty-pane drawing fallback.
@@ -735,7 +743,15 @@ impl IndicatorPane {
         if indicator.is_volume()
             && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
         {
-            return Some(crate::widget::volume::range(indicator, visible_range, None));
+            // Without volume in view the study adds nothing, so its scale keeps its range.
+            let in_view = (0..indicator.line_count())
+                .filter(|line| indicator.plot_style(*line).visible)
+                .any(|line| {
+                    visible_range
+                        .clone()
+                        .any(|bar| indicator.values().value(line, bar).is_some())
+                });
+            return in_view.then(|| crate::widget::volume::range(indicator, visible_range, None));
         }
         if let Some((min, max)) = self.config.y_range {
             return Some((min, max));
