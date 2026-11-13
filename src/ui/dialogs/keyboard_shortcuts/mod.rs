@@ -319,7 +319,10 @@ fn key_badges(ui: &mut Ui, theme: &Theme, keys: &[Keys]) {
                     ui.ctx().format_shortcut(shortcut),
                 )
             }
-            Keys::Typed(text) => ((*text).to_owned(), (*text).to_owned()),
+            Keys::Typed(text) => {
+                let text = l10n::text(ui.ctx(), text);
+                (text.clone(), text)
+            }
         };
         Frame::new()
             .fill(theme.ui.panel_bg_secondary)
