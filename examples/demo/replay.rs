@@ -433,6 +433,10 @@ impl DemoApp {
     }
 
     fn open_recording(&mut self, loaded: LoadedRecording) -> Result<(), String> {
+        // A file picked before own data was entered can arrive after it.
+        if self.synthetic_only("Replay") {
+            return Ok(());
+        }
         if loaded.instrument.symbol != self.chart.symbol() {
             return Err(format!(
                 "Open the {} chart before importing this recording",
@@ -684,6 +688,9 @@ impl DemoApp {
     }
 
     pub(super) fn toggle_replay(&mut self) {
+        if self.synthetic_only("Replay") {
+            return;
+        }
         if self.replay.is_some() && self.replay_control.is_user_dismissed() {
             self.replay_control.show_control();
         } else if self.replay.is_some() || self.replay_selecting {

@@ -919,6 +919,9 @@ impl DemoApp {
     /// Charts a spread picked in symbol search, such as `AAPL-MSFT`, as candles in a pane of its
     /// own, from feeds of its symbols.
     pub(super) fn add_spread(&mut self, symbol: &str) {
+        if self.synthetic_only("Compare") {
+            return;
+        }
         let Ok(expression) = SymbolExpression::parse(symbol) else {
             return;
         };
@@ -944,6 +947,9 @@ impl DemoApp {
     /// Feeds another symbol as candles in a pane of its own, above the price pane, on the left
     /// scale once moved to the price pane.
     pub(super) fn add_series_pane(&mut self) {
+        if self.synthetic_only("Compare") {
+            return;
+        }
         let Some(symbol) = DemoSymbol::catalog()
             .iter()
             .map(|spec| spec.symbol)
