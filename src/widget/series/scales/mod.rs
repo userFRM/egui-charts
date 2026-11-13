@@ -1119,12 +1119,12 @@ impl Chart {
                 }
             }
             // A tenth of the range in the scale's own units, logarithmic ones included.
-            let pad = |(min, max): (f64, f64)| {
-                let padding = crate::scales::auto_scale_span(min, max) * 0.1;
+            let pad = |(min, max): (f64, f64), mode| {
+                let padding = crate::scales::fit_span(mode, min, max) * 0.1;
                 (min - padding, max + padding)
             };
             if bounds.0.is_finite() {
-                bounds = pad(bounds);
+                bounds = pad(bounds, mode);
             }
             for (&id, study) in self
                 .study_ids
@@ -1154,7 +1154,7 @@ impl Chart {
                         include(&mut own, value, transform);
                     }
                     if own.0.is_finite() {
-                        let own = pad(own);
+                        let own = pad(own, mode);
                         bounds = (bounds.0.min(own.0), bounds.1.max(own.1));
                     }
                 } else if !self.is_custom_data(id)
@@ -1177,7 +1177,7 @@ impl Chart {
             if reference.is_none() && mode == PriceScaleMode::Logarithmic && prices.0.is_finite() {
                 // No positive value in view: this frame shows the prices as they are.
                 reference = Some(PriceTransform::default());
-                bounds = pad(prices);
+                bounds = pad(prices, PriceScaleMode::Normal);
             }
             let Some(mut transform) = reference else {
                 continue;
@@ -1187,7 +1187,7 @@ impl Chart {
                 transform.base = 1.0;
             }
             let scale = self.pane_price_scale_mut(pane, key);
-            let manual = (scale.is_manual() && scale.transform().mode == mode)
+            let manual = (scale.is_manual() && scale.transform().mode == transform.mode)
                 .then(|| (scale.range(), scale.bar_ratio()));
             scale.rebase(transform);
             if let Some((range, ratio)) = manual {

@@ -125,6 +125,15 @@ pub(crate) fn auto_scale_span(min: f64, max: f64) -> f64 {
     }
 }
 
+/// The span a fit of `min..max` (scale units of `mode`) takes its margins from.
+pub(crate) fn fit_span(mode: PriceScaleMode, min: f64, max: f64) -> f64 {
+    match mode {
+        // Log units measure ratios: flat data gets 0.01, which is 1% of the price.
+        PriceScaleMode::Logarithmic if max - min <= 1e-9 => 0.01,
+        _ => auto_scale_span(min, max),
+    }
+}
+
 /// Identifies one of a pane's price axes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PriceScaleId {
@@ -391,7 +400,14 @@ impl PriceScale {
         let old = std::mem::replace(&mut self.transform, transform);
         if self.manual && old != transform {
             let rebased = |value| transform.to_scale(old.to_price(value));
-            self.range = PriceRange::new(rebased(self.range.min), rebased(self.range.max));
+            let (min, max) = (rebased(self.range.min), rebased(self.range.max));
+            if min.is_finite() && max.is_finite() && min < max {
+                self.range = PriceRange::new(min, max);
+            } else {
+                // Prices without a value in the new units, such as those at or below zero on a
+                // logarithmic scale, leave no range to keep: the scale fits the data again.
+                self.reset();
+            }
         }
     }
 
@@ -411,11 +427,7 @@ impl PriceScale {
         if self.manual {
             return;
         }
-        let span = match self.transform.mode {
-            // Log units measure ratios: flat data gets 0.01, which is 1% of the price.
-            PriceScaleMode::Logarithmic if max - min <= 1e-9 => 0.01,
-            _ => auto_scale_span(min, max),
-        };
+        let span = fit_span(self.transform.mode, min, max);
         let PriceScaleMargins { top, bottom } = self.options.scale_margins;
         let (top, bottom) = (top.clamp(0.0, 1.0), bottom.clamp(0.0, 1.0));
         let (top, bottom) = if top + bottom < 1.0 {
