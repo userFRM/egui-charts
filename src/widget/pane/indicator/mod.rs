@@ -151,9 +151,7 @@ impl IndicatorPane {
         // Get chart background and text colors from theme
         let colors = ui.active_theme().chart;
         let chart_bg = colors.bg;
-        let text_color = self
-            .text_color
-            .unwrap_or_else(|| ui.style().visuals.text_color());
+        let text_color = ui.style().visuals.text_color();
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
@@ -247,9 +245,7 @@ impl IndicatorPane {
         // Get chart background and text colors from theme
         let colors = ui.active_theme().chart;
         let chart_bg = colors.bg;
-        let text_color = self
-            .text_color
-            .unwrap_or_else(|| ui.style().visuals.text_color());
+        let text_color = ui.style().visuals.text_color();
         let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
