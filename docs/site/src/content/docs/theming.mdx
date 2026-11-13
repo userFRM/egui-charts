@@ -131,9 +131,9 @@ accepts an `Arc<dyn TimeFormatter>` for custom time labels. Its
 [`format_tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.TimeFormatter.html#method.format_tick)
 receives the active locale and can return `None` for the built-in tick text.
 A supplied formatter otherwise replaces the built-in locale and date format.
-Inputs already contain wall-clock fields, in the selected zone or, for the
-daily and longer bars described in [Time zones and sessions](time-zones.mdx),
-in UTC: do not shift them a second time. [`format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time)
+Inputs already contain wall-clock fields, in the selected zone or, when it is
+behind UTC, in UTC for the daily and longer bars described in
+[Time zones and sessions](time-zones.mdx): do not shift them a second time. [`format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time)
 lets a host readout use the chart's time presentation.
 
 Choose the formatter for the values being displayed:
