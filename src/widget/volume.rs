@@ -248,8 +248,8 @@ mod tests {
     use crate::widget::test_frames::{chart, shapes};
     use egui::Context;
 
-    /// The volume study adds a tag to the price axis and rows to the tooltip of a candle chart,
-    /// and neither on the chart types that hide volume.
+    /// The volume study adds columns, a tag on the price axis and rows in the tooltip to a candle
+    /// chart, and none of them on the chart types that hide volume.
     #[test]
     fn price_based_charts_show_no_volume_tag_or_rows() {
         use crate::model::ChartType;
@@ -279,26 +279,39 @@ mod tests {
                     _ => None,
                 }))
             };
-            // The texts on the price axis without a pointer, and whether the tooltip over the
-            // newest element lists a row of the study.
+            // The texts on the price axis and the rectangles in the volume area without a
+            // pointer, and whether the tooltip over the newest element lists a row of the study.
             let readouts = |chart: &mut crate::widget::Chart, time| {
                 shapes(&ctx, chart, time, vec![]);
-                let mut tags = texts(shapes(&ctx, chart, time + 0.1, vec![]));
+                let painted = shapes(&ctx, chart, time + 0.1, vec![]);
+                let area = super::overlay_rect(chart.last_rendered_price_rect, chart.config());
+                let columns = painted
+                    .iter()
+                    .filter(|shape| {
+                        matches!(shape, egui::Shape::Rect(rect) if area.contains_rect(rect.rect))
+                    })
+                    .count();
+                let mut tags = texts(painted);
                 let axis = chart.last_rendered_price_rect.right();
                 tags.retain(|(x, _)| *x >= axis);
                 shapes(&ctx, chart, time + 0.2, vec![pointer.clone()]);
                 let hovered = texts(shapes(&ctx, chart, time + 0.3, vec![pointer.clone()]));
                 shapes(&ctx, chart, time + 0.4, vec![egui::Event::PointerGone]);
                 let rows = hovered.iter().any(|(_, text)| text.starts_with("Volume:"));
-                (tags, rows)
+                (tags, columns, rows)
             };
-            let (tags, rows) = readouts(&mut chart, 0.2);
+            let (tags, columns, rows) = readouts(&mut chart, 0.2);
             assert!(!rows, "{kind:?}: no study, no rows");
             chart.config_mut().show_volume = true;
-            let (with_volume, rows) = readouts(&mut chart, 0.7);
+            let (with_volume, with_columns, rows) = readouts(&mut chart, 0.7);
             if (with_volume != tags) != shown {
                 failures.push(format!(
                     "{kind:?}: price axis {with_volume:?}, was {tags:?}"
+                ));
+            }
+            if (with_columns != columns) != shown {
+                failures.push(format!(
+                    "{kind:?}: {with_columns} rectangles in the volume area, was {columns}"
                 ));
             }
             if rows != shown {
