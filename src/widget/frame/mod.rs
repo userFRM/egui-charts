@@ -2297,17 +2297,26 @@ impl Chart {
             }
         }
 
-        // Resolve a click on the main chart area into a selection. Overlay
-        // indicators take priority over the series beneath them; an empty-area
-        // click clears the selection. Clicks in a study's pane are resolved
-        // where the panes are rendered, outside this rect.
+        // Resolve a click on the main chart area into a selection. A drawing
+        // sits on top and takes the click, which selects it alone, as in a
+        // study's pane. Otherwise overlay indicators take priority over the
+        // series beneath them; an empty-area click clears the selection. Clicks
+        // in a study's pane are resolved where the panes are rendered, outside
+        // this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
-            && self.mark_at(click_pos).is_none()
         {
-            match element_at(click_pos) {
-                Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
-                None => self.selection.deselect(),
+            #[cfg(feature = "drawings")]
+            let on_drawing = self.drawings.hit_test(click_pos).is_some();
+            #[cfg(not(feature = "drawings"))]
+            let on_drawing = false;
+            if on_drawing {
+                self.selection.deselect();
+            } else if self.mark_at(click_pos).is_none() {
+                match element_at(click_pos) {
+                    Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
+                    None => self.selection.deselect(),
+                }
             }
         }
 

@@ -1566,6 +1566,12 @@ mod tests {
                     );
                 }
                 chart.drain_events().for_each(drop);
+                // A drawing takes the click from a series that is already selected too.
+                if cover == "drawing" {
+                    chart
+                        .selection
+                        .select(crate::widget::ChartElementId::Series(id), None);
+                }
                 let click = |pressed| egui::Event::PointerButton {
                     pos,
                     button: egui::PointerButton::Primary,
@@ -1610,6 +1616,10 @@ mod tests {
                 #[cfg(feature = "drawings")]
                 if cover == "top" {
                     assert_eq!(chart.drawings.selected_ids().count(), 0);
+                }
+                #[cfg(feature = "drawings")]
+                if cover == "drawing" {
+                    assert!(chart.drawings.is_selected(77), "secondary={secondary}");
                 }
             }
         }
