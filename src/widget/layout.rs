@@ -909,6 +909,9 @@ pub struct ChartSyncOptions {
     /// Synchronize the hovered timestamp.
     pub sync_crosshair: bool,
     /// Synchronize completed main-pane drawings between charts of the same symbol.
+    /// A chart that comes to a symbol receives the drawings mirrored there. Turning this on links
+    /// equal drawings of the charts of a symbol and mirrors the others both ways, without replaying
+    /// what was done while it was off.
     /// Study-owned drawings stay local because study ids and scales belong to each chart.
     /// Charts that keep their drawings in the same storage are left to it: they read each other's
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history

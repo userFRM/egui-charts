@@ -60,7 +60,7 @@ pub(super) struct DrawingLinks {
     /// chart, whose charts write them once it ends.
     unwritten: HashSet<Key>,
     /// Drawings a chart put aside with a symbol, by slot, symbol and id, with the keys of the
-    /// drawings they were linked to: the chart takes them up again when it returns.
+    /// drawings of that symbol they were linked to: the chart takes them up again when it returns.
     aside: HashMap<(usize, String, usize), Vec<Key>>,
     /// The symbol each chart showed at the last frame, to see a chart come to a symbol.
     shown: Vec<Option<String>>,
@@ -213,7 +213,8 @@ impl DrawingLinks {
                 self.arriving.insert(slot);
             }
         }
-        // A drawing a chart put aside with its symbol keeps the drawings it was linked to.
+        // A drawing a chart put aside with its symbol keeps the drawings of that symbol it was
+        // linked to: those on show, and those put aside that keep it.
         let put_aside: Vec<_> = self
             .previous
             .iter()
@@ -221,16 +222,30 @@ impl DrawingLinks {
             .map(|(&key, old)| (key, old.symbol.clone()))
             .collect();
         for (key, symbol) in &put_aside {
+            let mut partners: Vec<Key> = self
+                .aside
+                .iter()
+                .filter(|((_, aside_symbol, _), linked)| {
+                    aside_symbol == symbol && linked.contains(key)
+                })
+                .map(|((slot, _, id), _)| (*slot, *id))
+                .collect();
             if let Some(origin) = self.origins.get(key) {
-                let partners: Vec<Key> = self
-                    .origins
-                    .iter()
-                    .filter(|&(other, value)| value == origin && other.0 != key.0)
-                    .map(|(&other, _)| other)
-                    .collect();
-                if !partners.is_empty() {
-                    self.aside.insert((key.0, symbol.clone(), key.1), partners);
+                for (other, value) in &self.origins {
+                    if value == origin
+                        && other.0 != key.0
+                        && self
+                            .previous
+                            .get(other)
+                            .is_some_and(|old| old.symbol == *symbol)
+                        && !partners.contains(other)
+                    {
+                        partners.push(*other);
+                    }
                 }
+            }
+            if !partners.is_empty() {
+                self.aside.insert((key.0, symbol.clone(), key.1), partners);
             }
         }
         // Ids belong to a symbol's drawings, so the records of a symbol a chart left go before
@@ -295,6 +310,7 @@ impl DrawingLinks {
             let symbol = charts[key.0].symbol().to_owned();
             let mut saveable = false;
             let mut writers: Vec<usize> = Vec::new();
+            let mut deleted = vec![key];
             for slot in 0..count {
                 // Charts on one storage read each other's stored drawings instead.
                 let stored = drawing.as_ref().is_some_and(|drawing| drawing.saveable);
@@ -364,10 +380,14 @@ impl DrawingLinks {
                         charts[slot].history.drawing_edits += 1;
                     }
                     charts[slot].drawings_mut().delete_drawing(id);
+                    deleted.push((slot, id));
                 }
             }
             if drawing.is_none() {
-                self.delete_aside_copies(charts, count, key);
+                // A copy a chart put aside may be linked to any of the drawings deleted here.
+                for gone in deleted {
+                    self.delete_aside_copies(charts, count, gone);
+                }
             }
             // The copy that stays, or the one deleted, is now the only instance, so it is stored
             // where it is, also when an undo or redo on its chart brings it back.
@@ -555,10 +575,10 @@ impl DrawingLinks {
             .collect();
         for (slot, symbol, id) in gone {
             self.aside.remove(&(slot, symbol.clone(), id));
-            // A drawing the chart stores comes back from its storage, which this does not write.
             if slot >= count {
                 continue;
             }
+            // A drawing the chart stores comes back from its storage, which this does not write.
             let stores = charts[slot].keeps_stored_drawings();
             if let Some((manager, _)) = charts[slot].symbol_drawings.get_mut(&symbol)
                 && manager
@@ -2183,16 +2203,21 @@ mod tests {
         };
         layout.sync.sync_drawings = true;
         layout.sync.sync_symbol = sync_symbol;
-        let mut drawing = line("");
-        drawing.chart_points = vec![ChartPoint::new(2.0, 104.0), ChartPoint::new(4.0, 104.0)];
-        charts[0].drawings_mut().add_drawing(drawing).unwrap();
+        draw(&mut charts[0], 104.0);
         let mut pair = (layout, charts);
         frames(&mut pair.0, &mut pair.1);
         assert_eq!(prices(&pair.1), [vec![104.0], vec![104.0]]);
         pair
     }
 
-    fn frames(layout: &mut ChartLayout, charts: &mut [Chart; 2]) {
+    /// Adds a horizontal trend line at `price` and returns its id.
+    fn draw(chart: &mut Chart, price: f64) -> usize {
+        let mut drawing = line("");
+        drawing.chart_points = vec![ChartPoint::new(2.0, price), ChartPoint::new(4.0, price)];
+        chart.drawings_mut().add_drawing(drawing).unwrap()
+    }
+
+    fn frames<const N: usize>(layout: &mut ChartLayout, charts: &mut [Chart; N]) {
         let ctx = egui::Context::default();
         for _ in 0..4 {
             ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -2203,7 +2228,7 @@ mod tests {
     }
 
     /// The first price of each drawing of each chart, in order.
-    fn prices(charts: &[Chart; 2]) -> [Vec<f64>; 2] {
+    fn prices<const N: usize>(charts: &[Chart; N]) -> [Vec<f64>; N] {
         charts.each_ref().map(|chart| {
             let mut prices: Vec<f64> = chart
                 .drawings()
@@ -2225,8 +2250,9 @@ mod tests {
     }
 
     /// A chart that leaves a symbol and returns takes its mirrored drawings up again: each chart
-    /// holds one line however often it happens, also when the chart that stayed changed the line
-    /// meanwhile, and a line deleted on the chart that stayed does not come back.
+    /// holds one line however often it happens, also when the chart that stayed, or the one that
+    /// came back first, changed the line meanwhile, and a line deleted on another chart of the
+    /// symbol does not come back.
     #[test]
     fn mirrored_drawings_stay_single_through_a_symbol_round_trip() {
         for sync_symbol in [true, false] {
@@ -2274,9 +2300,7 @@ mod tests {
         let (mut layout, mut charts) = mirrored_pair(false);
         charts[1].set_symbol("OTHER");
         frames(&mut layout, &mut charts);
-        let mut elsewhere = line("");
-        elsewhere.chart_points = vec![ChartPoint::new(2.0, 70.0), ChartPoint::new(4.0, 70.0)];
-        charts[1].drawings_mut().add_drawing(elsewhere).unwrap();
+        draw(&mut charts[1], 70.0);
         frames(&mut layout, &mut charts);
         charts[1].set_symbol("SAMPLE");
         frames(&mut layout, &mut charts);
@@ -2293,6 +2317,101 @@ mod tests {
         charts[1].set_symbol("OTHER");
         frames(&mut layout, &mut charts);
         assert_eq!(prices(&charts), [vec![], vec![70.0]], "other symbol kept");
+
+        // Each chart draws a line on the other symbol while the other chart shows the first, each
+        // under the id of its line on the first symbol: they stay two lines, each once on each
+        // chart.
+        let (mut layout, mut charts) = mirrored_pair(false);
+        charts[0].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        draw(&mut charts[0], 70.0);
+        frames(&mut layout, &mut charts);
+        charts[0].set_symbol("SAMPLE");
+        frames(&mut layout, &mut charts);
+        charts[1].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        draw(&mut charts[1], 60.0);
+        frames(&mut layout, &mut charts);
+        charts[0].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [vec![60.0, 70.0], vec![60.0, 70.0]],
+            "two lines on the other symbol"
+        );
+
+        // Both charts away: the one that comes back first changes the line, and the other takes
+        // that version when it comes back, whichever left first.
+        for first in [0, 1] {
+            let (mut layout, mut charts) = mirrored_pair(false);
+            charts[first].set_symbol("OTHER");
+            frames(&mut layout, &mut charts);
+            charts[1 - first].set_symbol("OTHER");
+            frames(&mut layout, &mut charts);
+            charts[first].set_symbol("SAMPLE");
+            frames(&mut layout, &mut charts);
+            move_first(&mut charts[first], 95.0);
+            frames(&mut layout, &mut charts);
+            charts[1 - first].set_symbol("SAMPLE");
+            frames(&mut layout, &mut charts);
+            assert_eq!(
+                prices(&charts),
+                [vec![95.0], vec![95.0]],
+                "both away, chart {first} first"
+            );
+        }
+
+        // Three charts: a deletion that reaches the first chart through the copy of a chart that
+        // came to the symbol after the second left also keeps the line from the second.
+        let mut charts = [bars(60), bars(60), bars(60)];
+        for (chart, symbol) in charts.iter_mut().zip(["SAMPLE", "SAMPLE", "OTHER"]) {
+            chart.set_symbol(symbol);
+        }
+        let mut layout = ChartLayout {
+            mode: super::super::ChartLayoutMode::ThreeHorizontal,
+            ..Default::default()
+        };
+        layout.sync.sync_drawings = true;
+        draw(&mut charts[0], 104.0);
+        frames(&mut layout, &mut charts);
+        charts[1].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        charts[2].set_symbol("SAMPLE");
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [vec![104.0], vec![], vec![104.0]],
+            "copy on arrival"
+        );
+        let id = charts[2].drawings().drawings[0].id;
+        charts[2].drawings_mut().delete_drawing(id);
+        frames(&mut layout, &mut charts);
+        charts[1].set_symbol("SAMPLE");
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [Vec::<f64>::new(), vec![], vec![]],
+            "deleted through a later copy"
+        );
+
+        // A line deleted on another symbol under the key of the line here leaves the copy that the
+        // second chart put aside.
+        let (mut layout, mut charts) = mirrored_pair(false);
+        charts[1].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        charts[0].set_symbol("THIRD");
+        frames(&mut layout, &mut charts);
+        let id = draw(&mut charts[0], 70.0);
+        frames(&mut layout, &mut charts);
+        charts[0].drawings_mut().delete_drawing(id);
+        frames(&mut layout, &mut charts);
+        charts[1].set_symbol("SAMPLE");
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [Vec::<f64>::new(), vec![104.0]],
+            "deleted on another symbol"
+        );
     }
 
     /// A chart that comes to a symbol receives the mirrored drawings its group holds for it, those
@@ -2308,11 +2427,8 @@ mod tests {
             "second chart on OTHER"
         );
         // Made in its absence, one mirrored and one local to its folder.
-        let mut made = line("");
-        made.chart_points = vec![ChartPoint::new(2.0, 90.0), ChartPoint::new(4.0, 90.0)];
-        let id = charts[0].drawings_mut().add_drawing(made.clone()).unwrap();
-        made.chart_points = vec![ChartPoint::new(2.0, 80.0), ChartPoint::new(4.0, 80.0)];
-        let local = charts[0].drawings_mut().add_drawing(made).unwrap();
+        let id = draw(&mut charts[0], 90.0);
+        let local = draw(&mut charts[0], 80.0);
         let folder = ["Local".to_owned()];
         assert!(
             charts[0]
@@ -2332,19 +2448,6 @@ mod tests {
             prices(&charts),
             [vec![80.0, 90.0, 104.0], vec![90.0, 104.0]],
             "second chart back on SAMPLE"
-        );
-        // A chart that never showed the symbol before.
-        charts[1].set_symbol("THIRD");
-        frames(&mut layout, &mut charts);
-        charts[0].set_symbol("THIRD");
-        frames(&mut layout, &mut charts);
-        charts[1].set_symbol("SAMPLE");
-        frames(&mut layout, &mut charts);
-        charts[0].set_symbol("SAMPLE");
-        frames(&mut layout, &mut charts);
-        assert_eq!(
-            prices(&charts),
-            [vec![80.0, 90.0, 104.0], vec![90.0, 104.0]]
         );
     }
 
