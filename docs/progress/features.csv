@@ -728,7 +728,7 @@ Studies,Indicators,Moving Average Multiple,unverified,library,src/studies/builti
 Studies,Indicators,Moving Average Ribbon,unverified,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Moving Average Triple,unverified,library,src/studies/builtin/ma_combination.rs;src/studies/builtin/ma_presets.rs;src/studies/builtin/ma_multiple.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Multi-Time Period Charts,incomplete,library,src/studies/builtin/higher_interval_candles.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Negative Volume Index,incomplete,library,src/studies/builtin/volume_price_trend.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
+Studies,Indicators,Negative Volume Index,unverified,library,src/studies/builtin/volume_price_trend.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Net Volume,incomplete,library,src/studies/builtin/net_volume.rs;src/studies/indicator_trait.rs,173
 Studies,Indicators,On Balance Volume,unverified,library,src/studies/builtin/obv.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Open Interest,unverified,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
@@ -740,7 +740,7 @@ Studies,Indicators,Performance,incomplete,library,src/studies/builtin/performanc
 Studies,Indicators,Periodic Volume Profile,incomplete,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/data/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_profile.rs,2297;2415
 Studies,Indicators,Pivot Points High Low,unverified,library,src/studies/builtin/pivot_points_high_low.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Pivot Points Standard,incomplete,library,src/studies/builtin/pivot_points.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/studies/template.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/settings.rs;src/studies/builtin/projected_pivot_points.rs;src/widget/studies_data.rs,2525;2528;2531
-Studies,Indicators,Positive Volume Index,incomplete,library,src/studies/builtin/volume_price_trend.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
+Studies,Indicators,Positive Volume Index,unverified,library,src/studies/builtin/volume_price_trend.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Price Channel,unverified,library,src/studies/builtin/price_channel.rs;src/studies/builtin/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Price Momentum Oscillator,unverified,library,src/studies/builtin/price_momentum_oscillator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Price Target,incomplete,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs,
