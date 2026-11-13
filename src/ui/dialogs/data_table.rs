@@ -1026,7 +1026,10 @@ mod tests {
         let mut dialog = DataTableDialog::new();
         dialog.open();
         shown_rows(&ctx, &mut dialog, &chart);
-        chart.update(other, Bar::from_value(start + chrono::Duration::days(4), 42.0));
+        chart.update(
+            other,
+            Bar::from_value(start + chrono::Duration::days(4), 42.0),
+        );
         shown_rows(&ctx, &mut dialog, &chart);
         // Newest row first: time, the five main columns, Peer, Other.
         assert_eq!(dialog.cached.as_ref().unwrap().1.rows[0][7], "42.00");
