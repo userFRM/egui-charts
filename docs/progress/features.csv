@@ -751,7 +751,7 @@ Studies,Indicators,RSI Divergence Indicator,incomplete,library,src/studies/built
 Studies,Indicators,Rank Correlation Index,incomplete,library,src/studies/builtin/rank_correlation.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Rate of Change,unverified,library,src/studies/builtin/roc.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2649
 Studies,Indicators,Ratio,incomplete,library,src/services/search/expression.rs,1081
-Studies,Indicators,Relative Strength Index,unverified,library,src/studies/builtin/rsi.rs;src/studies/builtin/rsi_divergence.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs,1089;2335;2673
+Studies,Indicators,Relative Strength Index,unverified,library,src/studies/builtin/rsi.rs;src/studies/builtin/rsi_divergence.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/template.rs,1089;2335;2673;2913
 Studies,Indicators,Relative Vigor Index,unverified,library,src/studies/builtin/relative_vigor.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Relative Volatility Index,unverified,library,src/studies/builtin/relative_volatility_index.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Relative Volume at Time,unverified,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
