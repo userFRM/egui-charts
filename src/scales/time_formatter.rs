@@ -18,8 +18,9 @@ use chrono::Datelike;
 /// Display time and chart locale for one time-axis tick.
 #[derive(Debug, Clone, Copy)]
 pub struct TickMarkContext<'a> {
-    /// Wall-clock fields in the chart's display zone, carried in a UTC value.
-    /// This is not a UTC instant and must not be converted to the display zone again.
+    /// Wall-clock fields in the chart's display zone, carried in a UTC value; bars of a day or
+    /// longer given to a chart without a feed read in UTC unless they sit at the display zone's
+    /// midnight. This is not a UTC instant and must not be converted to a time zone again.
     pub time: DateTime<Utc>,
     /// Calendar or clock precision selected for this tick.
     pub mark_type: TickMarkType,

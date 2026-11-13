@@ -260,8 +260,9 @@ impl Chart {
     /// [`TickMarkContext`](crate::scales::TickMarkContext) and can return `None` to use the
     /// built-in locale-aware text for that tick. Otherwise the
     /// formatter replaces the built-in one, the locale and the date format. It receives
-    /// wall-clock times in the chart's time zone, and the time scale's
-    /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
+    /// wall-clock times in the zone [`format_time`](Self::format_time) reads them in, and the
+    /// time scale's [`time_visible`](crate::config::TimeScaleOptions::time_visible) option
+    /// still applies.
     /// `None` restores the built-in formatter.
     ///
     /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
