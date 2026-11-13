@@ -7,7 +7,8 @@
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice. The first page after a
 //! new subscription on a retained tape also fills the time between the tape and the live stream,
-//! through the instant of the oldest live trade under the same rule.
+//! from the instant of the newest retained trade through that of the oldest live trade, each under
+//! the same rule.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -208,7 +209,10 @@ impl Trades {
     }
 
     /// Starts a new subscription anchor while retaining executions, ids and loss evidence.
-    #[cfg(feature = "widget")]
+    #[cfg_attr(
+        not(any(feature = "widget", test)),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
     pub(crate) fn reanchor(&mut self) {
         self.paged = self.trades.len();
         self.paged_until = self.trades.iter().map(|trade| trade.ts).max();
@@ -374,29 +378,35 @@ impl Trades {
     }
 
     /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. A trade at the instant of the oldest
-    /// live trade follows them when it and every held trade at that instant carry ids and its id
-    /// is not held; one that ids do not tell from the held ones is left out and the instant
-    /// recorded. The oldest go beyond capacity.
+    /// them: nothing streamed while the subscription changed. A trade at the instant of the newest
+    /// retained trade or of the oldest live trade follows them when it and every held trade at
+    /// that instant carry ids and its id is not held; one that ids do not tell from the held ones
+    /// is left out, and the instant of the oldest live trade recorded. The oldest go beyond
+    /// capacity.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
         let Some(until) = self.retained_until.take() else {
             return;
         };
         let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
-        let ids_at_live = (self.trades.iter())
-            .filter(|held| Some(held.ts) == live_from)
-            .all(|held| held.id.is_some());
+        let ids_at = |at: Option<DateTime<Utc>>| {
+            (self.trades.iter())
+                .filter(|held| Some(held.ts) == at)
+                .all(|held| held.id.is_some())
+        };
+        let (ids_at_tape, ids_at_live) = (ids_at(Some(until)), ids_at(live_from));
+        // The tape's last instant is a boundary of its own while the stream starts after it.
+        let after_tape = live_from.is_none_or(|from| until < from);
         let mut left_out = false;
         let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page).into_iter().partition(|t| {
+            let unheld = t.id.is_none_or(|id| !self.ids.contains_key(&id));
             // A live trade stamped inside the retained tape marks no boundary.
-            if Some(t.ts) != live_from || t.ts < until {
+            let at_live = Some(t.ts) == live_from && t.ts >= until;
+            if !at_live && (t.ts != until || !after_tape) {
                 return t.ts > until && live_from.is_none_or(|from| t.ts < from);
             }
-            let Some(id) = t.id.filter(|_| ids_at_live) else {
-                left_out = true;
-                return false;
-            };
-            !self.ids.contains_key(&id)
+            let told_apart = t.id.is_some() && if at_live { ids_at_live } else { ids_at_tape };
+            left_out |= at_live && !told_apart;
+            told_apart && unheld
         });
         *page = older;
         if left_out {
@@ -447,8 +457,10 @@ mod tests {
         /// Trades pushed between two drains.
         Live(Vec<Tick>),
         Page(Vec<Tick>),
+        /// An interval change that retains the held trades.
+        Reanchor,
     }
-    use Step::{Live, Page};
+    use Step::{Live, Page, Reanchor};
 
     /// Group only explicit aggressor ids, across pages and drains, without moving price volume.
     #[test]
@@ -504,6 +516,7 @@ mod tests {
                     Page(page) => {
                         store.prepend(page, &mut |_, _| ());
                     }
+                    Reanchor => store.reanchor(),
                 }
             }
             let combined = combine_trades(store.iter());
@@ -663,6 +676,13 @@ mod tests {
                 vec![Live(vec![trade(10, 10.0), trade(11, 11.0)]),
                     Page(vec![trade(8, 8.0), trade(9, 9.0)]), Live(vec![trade(12, 12.0)])],
                 vec![9.0, 10.0, 11.0, 12.0], 0, vec![10.0, 11.0, 12.0]),
+            // The old stream stopped between two trades of 10:00:02: ids 1 and 2 are held, 3 is not.
+            ("after an interval change, with ids, a page trade at the tape's last instant joins", 10,
+                vec![Live(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]), Reanchor,
+                    Live(vec![id(trade(3, 5.0), 5)]),
+                    Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(2, 3.0), 3),
+                        id(trade(3, 5.0), 5)])],
+                vec![1.0, 2.0, 3.0, 5.0], 0, vec![5.0]),
         ];
         for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);
@@ -675,6 +695,7 @@ mod tests {
                         store.append(pending, &mut |_, _| ());
                     }
                     Page(page) => dropped += store.prepend(page, &mut |_, _| ()),
+                    Reanchor => store.reanchor(),
                 }
             }
             let held = Vec::from_iter(store.iter().map(|trade| trade.price));

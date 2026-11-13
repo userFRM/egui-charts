@@ -519,7 +519,7 @@ Order flow,Order flow data model,Backpressure and per-frame coalescing for high-
 Order flow,Order flow data model,Building bars from trades,unverified,library,src/data/inbox/mod.rs;src/data/mod.rs;src/data/inbox/sink.rs;src/model/clock.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/widget/studies_data.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
 Order flow,Order flow data model,Depth history store,unverified,library,src/data/depth_history.rs;src/widget/feed/mod.rs,
 Order flow,Order flow data model,Grouping fills into parent market orders,unverified,library,src/model/quote.rs;src/data/trades.rs;src/widget/feed/mod.rs;src/data/mod.rs,
-Order flow,Order flow data model,Historical trades and depth paging for a time range,unverified,library,src/data/mod.rs;src/widget/feed/mod.rs;src/data/trades.rs;src/data/depth_history.rs,
+Order flow,Order flow data model,Historical trades and depth paging for a time range,unverified,library,src/data/mod.rs;src/widget/feed/mod.rs;src/data/trades.rs;src/data/depth_history.rs,2724
 Order flow,Order flow data model,Incremental depth updates with sequence numbers and snapshot resync,unverified,library,src/data/depth.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;benches/regression/mod.rs,
 Order flow,Order flow data model,Historical trades and depth request for a time range,incomplete,library,src/data/mod.rs;src/widget/feed/mod.rs;src/data/trades.rs,
 Order flow,Order flow data model,Level 2 order book snapshots,unverified,library,src/model/quote.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/data/depth.rs;src/widget/feed/mod.rs,
