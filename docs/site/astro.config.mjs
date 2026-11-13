@@ -34,7 +34,7 @@ export default defineConfig({
         { label: 'Status', link: '/progress/' },
         {
           label: 'Learning',
-          items: ['installation', 'first-chart', 'tutorial/second-series', { slug: 'builder-guide', label: 'Builder tutorial' }, 'data-model', 'data'],
+          items: ['installation', 'first-chart', 'tutorial/second-series', { slug: 'builder-guide', label: 'Builder tutorial' }, 'data-model', 'data', 'own-data'],
         },
         {
           label: 'Chart concepts',
