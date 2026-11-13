@@ -1126,6 +1126,17 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
+        // The newest close of a price-based chart can lie beyond its newest element. While that
+        // element is in view, the price its last price line shows is fitted with it, so that the
+        // line and its label are drawn. The newest element in view is among the fitted bars.
+        let last_price = (!time_based
+            && self.main_series_visible
+            && self.main_series_style.price_line_source == crate::model::PriceLineSource::LastBar
+            && start_idx < end_idx
+            && end_idx == self.state.shown().len())
+        .then(|| crate::model::last_with_value(&self.state.data().bars))
+        .flatten()
+        .map(|bar| bar.close);
         let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin
             && !self.state.data().is_empty())
         .then(|| {
@@ -1165,6 +1176,7 @@ impl Chart {
                 .into_iter()
                 .chain(primitive_prices)
                 .chain(target_prices)
+                .chain(last_price)
                 .chain(footprint_prices.into_iter().flatten())
                 .chain(profile_prices),
             series_values,
