@@ -3048,19 +3048,25 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             let mut prices = Vec::new();
-            for tag in self
-                .drawings
-                .axis_tags(price_rect, ui.active_theme().chart.axis_text_secondary)
-            {
+            for tag in self.drawings.axis_tags(
+                price_rect,
+                ui.active_theme().chart.axis_text_secondary,
+                self.state.shown(),
+                self.state.revision(),
+            ) {
                 match tag {
-                    crate::drawings::manager::DrawingAxisTag::Price { price, color } => {
+                    crate::drawings::manager::DrawingAxisTag::Price {
+                        price,
+                        color,
+                        decimals,
+                    } => {
                         if show_price_axis
                             && price.is_finite()
                             && price_map
                                 .range()
                                 .contains(price_map.transform().to_scale(price))
                         {
-                            prices.push((price_map.price_to_y(price), price, color));
+                            prices.push((price_map.price_to_y(price), price, color, decimals));
                         }
                     }
                     crate::drawings::manager::DrawingAxisTag::Time { x, anchor, color } => {
@@ -3089,10 +3095,18 @@ impl Chart {
                 if !self.config.price_axis.allow_label_overlap {
                     ys = rendering::axes::spread_axis_ys(&painter, &ys);
                 }
-                for ((_, price, color), y) in prices.into_iter().zip(ys) {
+                for ((_, price, color, decimals), y) in prices.into_iter().zip(ys) {
                     let label = price_map.label(
                         price_map.transform().to_scale(price),
-                        rendering::axes::tag_decimals(&price_map, price_map.price_to_y(price)),
+                        decimals.map_or_else(
+                            || {
+                                rendering::axes::tag_decimals(
+                                    &price_map,
+                                    price_map.price_to_y(price),
+                                )
+                            },
+                            usize::from,
+                        ),
                         price_formatter.as_deref(),
                     );
                     tags.push(rendering::axes::render_axis_value(
