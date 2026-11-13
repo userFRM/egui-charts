@@ -1897,9 +1897,9 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
         }
     }
     // A range scaled by hand keeps its prices while the scale shows prices for want of a
-    // positive value, on the main scale, beside it and in a pane of its own. One scaled by
-    // hand to prices at or below zero leaves nothing to keep when positive prices return, so
-    // the scale fits them again.
+    // positive value, on the main scale, beside it and in a pane of its own, also while no bar
+    // is in view. One scaled by hand to prices at or below zero leaves nothing to keep when
+    // positive prices return, so the scale fits them again.
     for place in ["main", "left", "pane"] {
         let mut input = bars(&[100.0; 20]);
         for (at, bar) in input.iter_mut().enumerate() {
@@ -1967,6 +1967,10 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
             .series_price_scale_mut(id)
             .unwrap()
             .set_range(-25.0, -5.0);
+        let map = view(&mut chart, 30.0);
+        assert_eq!(map.transform().mode, PriceScaleMode::Normal, "{place}");
+        let range = map.range();
+        assert!(near(range, (-25.0, -5.0)), "{place}: {range:?}");
         let range = view(&mut chart, 0.0).range();
         assert!(
             range.min.is_finite() && range.max.is_finite() && range.min < range.max,
@@ -1977,6 +1981,29 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
             "{place}"
         );
     }
+    // The main series without a positive value in view joins a logarithmic scale scaled by
+    // hand to 50..150, which keeps those prices.
+    let mut chart = Chart::new(BarData::from_bars(bars(&[-15.0; 10])));
+    let id = chart.add_series(SeriesOptions {
+        scale: SeriesScale::Left,
+        ..Default::default()
+    });
+    chart.set_data(id, bars(&[50.0, 150.0]));
+    chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Logarithmic;
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let logarithmic = (50.0_f64.ln(), 150.0_f64.ln());
+    chart
+        .series_price_scale_mut(id)
+        .unwrap()
+        .set_range(logarithmic.0, logarithmic.1);
+    assert!(chart.set_series_scale(SeriesId::MAIN, SeriesScale::Left));
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    let range = chart.series_price_map(id).unwrap().range();
+    assert!(
+        (range.min - logarithmic.0).abs() < 1e-9 && (range.max - logarithmic.1).abs() < 1e-9,
+        "join: {range:?}"
+    );
 }
 
 /// A scale other than the main one keeps a tenth of its data's range free above and below

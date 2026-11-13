@@ -473,10 +473,11 @@ impl ChartState {
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
                 (min.min(value), max.max(value))
             });
-        // No positive value in view: this frame shows the prices as they are.
+        // No positive value in view: this frame shows the prices as they are. With no value in
+        // view at all, a scale showing prices keeps showing them, as the other scales do.
         let (transform, min, max) = if transform.mode == PriceScaleMode::Logarithmic
             && !min.is_finite()
-            && raw.0.is_finite()
+            && (raw.0.is_finite() || self.price_scale.transform().mode == PriceScaleMode::Normal)
         {
             (PriceTransform::default(), raw.0, raw.1)
         } else {

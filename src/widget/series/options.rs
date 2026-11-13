@@ -762,11 +762,15 @@ impl Chart {
                 .remove(&scale)
                 .expect("scale was inserted");
             let old = std::mem::replace(self.state.price_scale_mut(), next);
-            // Joining a scale preserves its bounds in scale units, even with a new reference.
+            // Joining a scale preserves its bounds in scale units, even with a new reference. A
+            // fit in other units, such as prices on a logarithmic scale without a positive value
+            // in view, keeps the prices instead.
             if self.state.price_scale().is_manual() {
-                let range = self.state.price_scale().range();
-                self.state.fit_price_scale(std::iter::empty());
-                self.state.price_scale_mut().set_range(range.min, range.max);
+                let scale = self.state.price_scale();
+                let (range, mode) = (scale.range(), scale.transform().mode);
+                if self.state.fit_price_scale(std::iter::empty()).mode == mode {
+                    self.state.price_scale_mut().set_range(range.min, range.max);
+                }
             }
             self.series_scales.insert(self.main_series_scale, old);
             self.main_series_scale = scale;
