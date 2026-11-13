@@ -378,11 +378,11 @@ impl Trades {
     }
 
     /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. A trade at the instant of the newest
-    /// retained trade or of the oldest live trade follows them when it and every held trade at
-    /// that instant carry ids and its id is not held; one that ids do not tell from the held ones
-    /// is left out, and the instant of the oldest live trade recorded. The oldest go beyond
-    /// capacity.
+    /// them: nothing streamed while the subscription changed. One whose id is held stays out. A
+    /// trade at the instant of the newest retained trade or of the oldest live trade follows them
+    /// when it and every held trade at that instant carry ids; one that ids do not tell from the
+    /// held ones is left out, and the instant of the oldest live trade recorded. The oldest go
+    /// beyond capacity.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
         let Some(until) = self.retained_until.take() else {
             return;
@@ -402,7 +402,7 @@ impl Trades {
             // A live trade stamped inside the retained tape marks no boundary.
             let at_live = Some(t.ts) == live_from && t.ts >= until;
             if !at_live && (t.ts != until || !after_tape) {
-                return t.ts > until && live_from.is_none_or(|from| t.ts < from);
+                return unheld && t.ts > until && live_from.is_none_or(|from| t.ts < from);
             }
             let told_apart = t.id.is_some() && if at_live { ids_at_live } else { ids_at_tape };
             left_out |= at_live && !told_apart;
@@ -683,28 +683,48 @@ mod tests {
                     Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(2, 3.0), 3),
                         id(trade(3, 5.0), 5)])],
                 vec![1.0, 2.0, 3.0, 5.0], 0, vec![5.0]),
+            ("after an interval change, with ids, a page trade stamped earlier than the live copy \
+                is dropped", 10,
+                vec![Live(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]), Reanchor,
+                    Live(vec![id(later(trade(3, 5.0), 400), 5)]),
+                    Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(3, 5.0), 5)])],
+                vec![1.0, 2.0, 5.0], 0, vec![5.0]),
         ];
         for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);
             let mut dropped = 0;
+            // The prices `changed` reports added and not evicted since.
+            let mut reported = Vec::new();
+            let mut changed = |trade: &Tick, added| {
+                if added {
+                    reported.push(trade.price);
+                } else {
+                    let evicted = reported.iter().position(|price| *price == trade.price);
+                    reported.remove(evicted.expect(name));
+                }
+            };
             for step in steps {
                 match step {
                     Live(trades) => {
                         let mut pending = store.empty();
                         trades.into_iter().for_each(|trade| pending.push(trade));
-                        store.append(pending, &mut |_, _| ());
+                        store.append(pending, &mut changed);
                     }
-                    Page(page) => dropped += store.prepend(page, &mut |_, _| ()),
+                    Page(page) => dropped += store.prepend(page, &mut changed),
                     Reanchor => store.reanchor(),
                 }
             }
             let held = Vec::from_iter(store.iter().map(|trade| trade.price));
             let live = Vec::from_iter(store.live().map(|trade| trade.price));
+            reported.sort_by(f64::total_cmp);
+            let mut sorted = held.clone();
+            sorted.sort_by(f64::total_cmp);
             assert_eq!(
                 (held, dropped, live),
                 (prices, rejected, live_prices),
                 "{name}"
             );
+            assert_eq!(reported, sorted, "{name}: reported by `changed`");
             let ids = store.iter().filter(|trade| trade.id.is_some()).count();
             assert_eq!(store.ids.len(), ids, "{name}: held ids");
             let repeats: Vec<_> = store.iter().filter(|t| t.id.is_some()).cloned().collect();
