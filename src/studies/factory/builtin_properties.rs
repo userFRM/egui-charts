@@ -126,10 +126,10 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(AccelerationBands::new(l(0), x(4.0))),
         Box::new(Envelopes::new(l(0), x(10.0), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),
-        Box::new(CloseToCloseVol::new(l(0))),
-        Box::new(OhlcVolatility::new(l(0))),
+        Box::new(CloseToCloseVol::new(l(0)).with_trading_days(x(252.0))),
+        Box::new(OhlcVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ParkinsonVol::new(l(0))),
-        Box::new(ZeroTrendVol::new(l(0))),
+        Box::new(ZeroTrendVol::new(l(0)).with_trading_days(x(252.0))),
         Box::new(RelativeVolatilityIndex::new(l(0))),
         Box::new(
             CommoditySelectionIndex::new(l(0))

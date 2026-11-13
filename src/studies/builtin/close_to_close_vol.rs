@@ -6,10 +6,13 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Close-to-Close Volatility
-/// Standard deviation of log returns, annualized by sqrt(252)
+/// Standard deviation of log returns, annualized by the square root of the bars per year (252
+/// by default)
 #[derive(Clone)]
 pub struct CloseToCloseVol {
     period: usize,
+    /// Bars per year the result is annualized over (252 for stocks, 365 for crypto)
+    trading_days: f64,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
@@ -20,10 +23,18 @@ impl CloseToCloseVol {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            trading_days: 252.0,
             values: IndicatorValues::new(),
             colors: vec![palette::LIGHT_BLUE], // Purple
             visible: true,
         }
+    }
+
+    /// Set the bars per year the volatility is annualized over, clamped into 0 to
+    /// `f64::MAX`, NaN to 0.
+    pub fn with_trading_days(mut self, days: f64) -> Self {
+        self.trading_days = super::clamp_param(days, 0.0, f64::MAX);
+        self
     }
 }
 
@@ -76,8 +87,8 @@ impl CloseToCloseVol {
                 valid.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (valid.len() - 1) as f64;
             let std_dev = variance.sqrt();
 
-            // Annualize: std_dev * sqrt(252) * 100 (as percentage)
-            let annualized = std_dev * 252.0_f64.sqrt() * 100.0;
+            // Annualize: std_dev * sqrt(trading_days) * 100 (as percentage)
+            let annualized = std_dev * self.trading_days.sqrt() * 100.0;
             values.push(IndicatorValue::Single(annualized));
         }
 
@@ -93,7 +104,8 @@ impl Indicator for CloseToCloseVol {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        trading_days: number("Trading days per year", 0.0, f64::MAX)
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -160,5 +172,38 @@ impl Indicator for CloseToCloseVol {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("C2C Vol({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::test_support::make_bar;
+
+    /// Closes 100, 110, a bar without a close, 110 and 99 (a tie in the middle of the window), then
+    /// the second close corrected to 105. Expected values come from the definition over the three
+    /// returns of the usable bars, evaluated independently, annualized over 252 and 365 bars.
+    #[test]
+    fn c2c_annualizes_over_the_bars_per_year_across_gaps_ties_and_corrections() {
+        let bars = |second: f64| -> Vec<Bar> {
+            [100.0, second, f64::NAN, 110.0, 99.0]
+                .map(make_bar)
+                .to_vec()
+        };
+        for (days, as_saved, corrected) in [
+            (252.0, 159.34400080811727, 140.25269412585286),
+            (365.0, 191.7705346575994, 168.79414350887444),
+        ] {
+            let mut study = CloseToCloseVol::new(3).with_trading_days(days);
+            let mut data = bars(110.0);
+            study.calculate(&data);
+            assert_eq!(study.values().value(0, 2), None, "{days}: bar without a close");
+            let got = study.values().value(0, 4).unwrap();
+            assert!((got - as_saved).abs() < 1e-9, "{days}: {got}");
+            data = bars(105.0);
+            study.update(&data, 1);
+            let got = study.values().value(0, 4).unwrap();
+            assert!((got - corrected).abs() < 1e-9, "{days} corrected: {got}");
+        }
     }
 }

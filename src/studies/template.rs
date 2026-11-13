@@ -734,6 +734,27 @@ mod tests {
                 vec![("auto_interval", Toggle(true))],
                 vec![("auto_interval", Toggle(true))],
             ),
+            // Saved before the bars per year could be set, when every volatility used 252.
+            (
+                "C2C Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "GK Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("trading_days", Number(365.0))],
+                vec![("trading_days", Number(365.0))],
+            ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (
                 "Vol Profile FR",
