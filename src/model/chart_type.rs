@@ -317,7 +317,8 @@ impl ChartType {
     }
 
     /// Whether this chart type is time-independent, with one time-scale slot per element.
-    /// Studies, drawings and markers are kept but not drawn, hit or edited on these types.
+    /// Studies, drawings and markers are drawn at the element that contains their time, and
+    /// volume is hidden.
     pub fn is_time_independent(&self) -> bool {
         matches!(
             self,

@@ -244,7 +244,7 @@ impl IndicatorPane {
             if count == 0 {
                 return;
             }
-            let spacing = rect.width() / count as f32;
+            let spacing = (rect.width() - 1.0) / count as f32;
             let coords = IndicatorCoordParams::new(
                 spacing,
                 0.0,
@@ -267,7 +267,7 @@ impl IndicatorPane {
         if count == 0 {
             return;
         }
-        let spacing = rect.width() / count as f32;
+        let spacing = (rect.width() - 1.0) / count as f32;
         let coords = IndicatorCoordParams::new(
             spacing,
             0.0,

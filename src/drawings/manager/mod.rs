@@ -505,7 +505,7 @@ impl DrawingManager {
                 (None, false) => {}
             }
         }
-        // A redone addition comes back as it was recorded, before its first edit time.
+        // A state recorded before the drawing's first edit comes back without an edit time.
         let now = chrono::Utc::now().timestamp_millis();
         let affected = self.history.affected_ids().to_vec();
         for drawing in self
