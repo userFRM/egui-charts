@@ -428,7 +428,7 @@ impl TimeScale {
     /// Calculate visible logical range
     pub fn visible_logical_range(&self) -> LogicalRange {
         let base_idx = self.base_idx() as f64;
-        let bars_len = self.width as f64 / self.bar_spacing;
+        let bars_len = (self.width as f64 - 1.0) / self.bar_spacing;
         let right_border = base_idx + self.right_offset;
         let left_border = right_border - bars_len + 1.0;
 
@@ -453,7 +453,10 @@ impl TimeScale {
     /// Plot boundaries in spacing units, retaining precision across large numeric gaps.
     pub(crate) fn visible_positions(&self) -> (f64, f64) {
         let right = self.base_idx() as f64 + self.right_offset + 0.5;
-        (right - f64::from(self.width) / self.bar_spacing, right)
+        (
+            right - (f64::from(self.width) - 1.0) / self.bar_spacing,
+            right,
+        )
     }
 
     /// Convert logical index to x coord
@@ -604,7 +607,8 @@ impl TimeScale {
                     .map_or((0.0, self.live_right_offset), |px| (px, 0.0))
             };
             self.bar_spacing = self.clamp_spacing(
-                (self.width as f64 - pixels as f64) / (right - left + 1.0 + bars as f64).max(1.0),
+                (self.width as f64 - 1.0 - pixels as f64)
+                    / (right - left + 1.0 + bars as f64).max(1.0),
             );
             let margin = if self.fix_right_edge {
                 0.0
@@ -666,7 +670,7 @@ impl TimeScale {
             // Keep the first participating slot at the left border.
             Some(
                 self.content_range().0 - self.base_idx() as f64
-                    + self.width as f64 / self.bar_spacing
+                    + (self.width as f64 - 1.0) / self.bar_spacing
                     - 1.0,
             )
         } else {
@@ -789,15 +793,16 @@ mod tests {
     }
 
     /// Scrolling far into the past stops with the first bar at the left edge while
-    /// `fix_left_edge` is set: 100 bars fit 800 px at a spacing of 8, so the right offset stops
-    /// at 100 - 1,000 bars, and at 100 - 50 bars when every bar fits, leaving the empty space on
-    /// the right. Unset, the view goes on to 100 bars past the first.
+    /// `fix_left_edge` is set: the 799 pixels of an 800 px plot hold 99.875 bars at a spacing of 8,
+    /// so the right offset stops at 99.875 - 1,000 bars, and at 99.875 - 50 bars when every bar
+    /// fits, leaving the empty space on the right. Unset, the view goes on to 100 bars past the
+    /// first.
     #[test]
     fn fix_left_edge_stops_the_view_at_the_first_bar() {
         for (fix, bars, expected) in [
-            (true, 1000, -900.0),
+            (true, 1000, -900.125),
             (false, 1000, -1100.0),
-            (true, 50, 50.0),
+            (true, 50, 49.875),
             (false, 50, -150.0),
         ] {
             let mut ts = TimeScale::new();
@@ -847,7 +852,7 @@ mod tests {
                     assert_eq!(ts.bar_spacing(), 50.0, "{name}, {invalid}");
                     ts.apply_options(8.0, 0.5, 50.0, true, false, invalid, None);
                     assert_eq!(ts.right_offset(), 7.0, "bar offset, {invalid}");
-                    assert_eq!(ts.visible_logical_range(), LogicalRange::new(7.0, 106.0));
+                    assert_eq!(ts.visible_logical_range(), LogicalRange::new(7.125, 106.0));
                 }
             }
         }
@@ -932,10 +937,10 @@ mod tests {
                         assert!(ts.right_offset_precise().is_finite(), "{name}");
                     }
                 }
-                // At the fixed left edge, width / spacing - bar count is the offset.
+                // At the fixed left edge, (width - 1) / spacing - bar count is the offset.
                 if fix_left {
                     ts.scroll_bars(f32::MAX);
-                    let expected = 800.0 / f64::from(zoomed) - 100.0;
+                    let expected = 799.0 / f64::from(zoomed) - 100.0;
                     assert!(
                         (ts.right_offset_precise() - expected).abs() < 1e-6,
                         "{name}"

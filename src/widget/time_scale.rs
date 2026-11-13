@@ -143,7 +143,7 @@ impl Chart {
         self.cancel_view_motion();
         self.tracking_mode_active = false;
         let scale = self.state.time_scale_mut();
-        scale.set_bar_spacing(scale.width() / bars);
+        scale.set_bar_spacing((scale.width() - 1.0) / bars);
         scale.set_right_offset(right - scale.base_idx() as f64);
         true
     }
@@ -739,12 +739,12 @@ mod tests {
         // 40 bar widths across the plot, with bar 49 the last whole bar.
         assert!(chart.set_visible_logical_range(LogicalRange::new(10.0, 49.0)));
         let spacing = chart.get_time_scale_state().0;
-        assert_close(spacing.into(), (width / 40.0).into(), "spacing");
+        assert_close(spacing.into(), ((width - 1.0) / 40.0).into(), "spacing");
         assert_close(chart.get_time_scale_state().1.into(), -50.0, "offset");
         assert_range(&chart, 10.0, 49.0, "set range");
-        // Bar 10 is centred half a bar in from the left edge: the last pixel is width - 1.
+        // Bar 10 is centred half a bar in from the first pixel, as the last pixel is width - 1.
         let x = chart.index_to_x(10.0).unwrap();
-        assert_close(x.into(), (plot.left() + spacing / 2.0 - 1.0).into(), "x");
+        assert_close(x.into(), (plot.left() + spacing / 2.0).into(), "x");
         assert_close(chart.x_to_index(x).unwrap(), 10.0, "index");
         frame(&ctx, &mut chart, 0.2, vec![]);
         let range = chart.visible_logical_range();
@@ -775,7 +775,7 @@ mod tests {
         chart.fit_content();
         assert_close(
             chart.get_time_scale_state().0.into(),
-            (width / 102.5).into(),
+            ((width - 1.0) / 102.5).into(),
             "fit",
         );
         assert_range(&chart, 0.0, 101.5, "fit");
@@ -818,7 +818,7 @@ mod tests {
         chart.fit_content();
         assert_close(
             chart.get_time_scale_state().0.into(),
-            ((width - 60.0) / 100.0).into(),
+            ((width - 1.0 - 60.0) / 100.0).into(),
             "fit with pixels",
         );
         assert_range(

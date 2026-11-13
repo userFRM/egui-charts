@@ -988,7 +988,7 @@ fn views_past_the_bars_keep_the_chart_readable() {
             self.formatter.as_ref().format_crosshair(time, bar_seconds)
         }
     }
-    for (left, right) in [(2427.0, 3854.0), (28131.0, 29558.0)] {
+    for (left, right) in [(2427.0, 3852.0), (28131.0, 29556.0)] {
         let mut control = None;
         for count in [1000, 1001] {
             let start = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();

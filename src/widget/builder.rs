@@ -529,7 +529,7 @@ impl Chart {
         if visible_bars == 0 {
             self.chart_options.time_scale.bar_spacing
         } else {
-            width / visible_bars as f32
+            (width - 1.0) / visible_bars as f32
         }
     }
 
@@ -1310,7 +1310,7 @@ mod tests {
                 );
                 assert_eq!(
                     built.state.time_scale().bar_spacing(),
-                    built.get_rendered_price_rect().width() / 50.0
+                    (built.get_rendered_price_rect().width() - 1.0) / 50.0
                 );
                 assert_eq!(built.get_visible_bars(), set.get_visible_bars());
                 assert_eq!(built.get_visible_bars(), 49);

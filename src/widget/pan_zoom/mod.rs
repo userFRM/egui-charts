@@ -603,7 +603,9 @@ impl Chart {
             time_scale.coord_to_idx_precise((min_x + max_x) / 2.0, chart_rect.min.x, chart_width);
         let center = time_scale.position(center_idx);
         let old = time_scale.bar_spacing();
-        time_scale.set_bar_spacing((old * chart_width / (max_x - min_x)).min(chart_width.max(old)));
+        time_scale.set_bar_spacing(
+            (old * (chart_width - 1.0) / (max_x - min_x)).min(chart_width.max(old)),
+        );
         // The inverse of `coord_to_idx` at the middle of the width.
         let spacing = time_scale.bar_spacing();
         let base_idx = time_scale.base_idx() as f64;
@@ -715,7 +717,7 @@ impl Chart {
                     .as_ref()
                     .is_some_and(|link| !link.paging_stopped);
             let scale = self.state.time_scale_mut();
-            let half_window = (chart_width / scale.bar_spacing() - 1.0) / 2.0;
+            let half_window = ((chart_width - 1.0) / scale.bar_spacing() - 1.0) / 2.0;
             scale.set_right_offset(
                 scale.position(index as f64) - scale.base_idx() as f64 + f64::from(half_window),
             );
@@ -728,7 +730,7 @@ impl Chart {
         if let Some(target_start) = self.pending_start_idx.take() {
             let bar_spacing = self.state.time_scale().bar_spacing();
             if bar_spacing > 0.0 {
-                let visible_len = chart_width / bar_spacing;
+                let visible_len = (chart_width - 1.0) / bar_spacing;
                 let base_idx = self.state.time_scale().base_idx() as f64;
                 let desired_right_border = self.state.time_scale().position(target_start as f64)
                     + f64::from(visible_len)
@@ -1185,7 +1187,7 @@ mod tests {
                 show(&mut chart, 1064.0);
                 let width = chart.last_rendered_price_rect.width();
                 let scale = chart.state.time_scale();
-                let spacing = width / 100.0;
+                let spacing = (width - 1.0) / 100.0;
                 assert!((scale.bar_spacing() - spacing).abs() < 1e-5);
                 let offset = pixels.map_or(2.5, |px| px / spacing);
                 assert!((scale.right_offset() - offset).abs() < 1e-5);
@@ -1208,7 +1210,7 @@ mod tests {
                 show(&mut chart, 1264.0);
                 assert!(
                     (chart.state.time_scale().bar_spacing()
-                        - chart.last_rendered_price_rect.width() / 80.0)
+                        - (chart.last_rendered_price_rect.width() - 1.0) / 80.0)
                         .abs()
                         < 1e-5,
                     "a pending view must take precedence over a locked resize"

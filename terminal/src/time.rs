@@ -192,7 +192,7 @@ impl Terminal {
         let visible = visible_bars_for_range(range, chart.bars(SeriesId::MAIN));
         let width = chart.get_rendered_price_rect().width();
         // Include the latest slot in the scale's exclusive data range.
-        let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+        let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
         chart.disable_tracking_mode();
         chart.apply_synced_time_scale(spacing, 0.5);
         if self.layout.sync.sync_date_range
@@ -729,7 +729,7 @@ mod tests {
                     "{range:?} {shown_start} {shown_end} {start} {end}"
                 );
                 let expected =
-                    chart.get_rendered_price_rect().width() / ((end - start) as f32 + 0.5);
+                    (chart.get_rendered_price_rect().width() - 1.0) / ((end - start) as f32 + 0.5);
                 assert!((chart.get_time_scale_state().0 - expected).abs() < 0.001);
             }
             terminal.charts.push(
