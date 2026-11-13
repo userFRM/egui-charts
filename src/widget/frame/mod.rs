@@ -1456,14 +1456,17 @@ impl Chart {
         };
 
         let timezone = self.display_timezone();
-        let time_scale = self.build_time_formatter();
+        // Sampled once: inferred spacing sorts the gaps of the bars in view.
+        let bar_seconds = self.time_label_seconds();
+        let label_timezone = self.label_timezone(|| bar_seconds);
+        let time_scale = self.time_formatter_in(label_timezone.clone());
         let host_scale = self.horizontal_scale.clone();
         let scale: &dyn crate::scales::HorizontalScale =
             host_scale.as_deref().unwrap_or(&time_scale);
         // The grid and the labels share one set of marks and the merged bars' mapping.
         let (time_marks, time_points, axis_coords) = if time_grid || self.config.show_time_labels {
             // Resolved once: a fixed-offset zone allocates on every clone.
-            let calendar = self.calendar_timezone();
+            let calendar = Self::calendar_zone(label_timezone);
             let numeric = time_coords.numeric_positions.is_some();
             rendering::time_axis_marks(
                 &RenderContext::new(&painter, chart_rect),
@@ -2992,8 +2995,6 @@ impl Chart {
                 }
             }
         }
-
-        let bar_seconds = self.time_label_seconds();
 
         // Handle drawing tools
         #[cfg(feature = "drawings")]

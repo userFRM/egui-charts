@@ -7,7 +7,9 @@ import presentation from '../../../../../examples/docs/scenes/theme.rs?raw';
 
 Store historical bars, streaming updates and shared time ranges as UTC instants.
 The display zone changes calendar and clock labels; changing it does not rewrite
-the supplied timestamps or move bars to a new instant.
+the supplied timestamps or move bars to a new instant. Bars of a day or longer
+given without a feed keep the date of a 00:00 UTC stamp, or of a stamp at the
+display zone's midnight, as the sessions section below describes.
 
 ## Choose a display zone
 
@@ -108,6 +110,14 @@ For feed-built bars, keep the feed's
 and session metadata consistent with the venue. Changing display labels cannot
 reaggregate prebuilt historical OHLC bars. Daily and longer bars identify trading
 dates; follow the [data contract](data-model.mdx) rather than applying an offset
-to every bar. Synchronize charts using the
+to every bar. The bars of the chart's own feed read their dates on the bar clock
+of the display zone. Bars given with `Chart::new`, `ChartBuilder` or
+`Chart::set_data` read in UTC when the display zone is behind UTC, unless they
+sit at its midnight, and in the display zone otherwise, which gives a 00:00 UTC
+stamp the same date. A bar stamped at 00:00 UTC on its trading date therefore
+keeps that date in the crosshair, the tooltip, `Chart::format_time` and the time
+axis marks in every display zone, and so does a bar that bar replay forms at the
+display zone's midnight. Intraday bars always read in the display zone.
+Synchronize charts using the
 [UTC time range](time-scale.mdx#logical-indices-and-utc-instants), even when their
 display clocks differ.

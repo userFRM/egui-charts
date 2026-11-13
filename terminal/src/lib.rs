@@ -118,7 +118,6 @@ pub struct Terminal {
     layouts: layouts::State,
     #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
-    #[allow(dead_code, reason = "the group keeps its state here")]
     commands: commands::State,
 }
 
@@ -292,10 +291,12 @@ impl Terminal {
         self
     }
 
-    /// Offers `formats` in the export dialog and hands each finished export to `save`. Without
-    /// it, alert-log exports are returned to the host as unhandled actions. The host returns an
+    /// Offers `formats` in the export dialog, beside copying to the clipboard, and hands each
+    /// finished export to `save`. Without it, chart images and data go to the clipboard and
+    /// alert-log exports are returned to the host as unhandled actions. The host returns an
     /// error message if saving or opening fails, and opens the saved image when
-    /// [`ExportFile::open`] is true. Errors are shown as toasts; the action remains handled.
+    /// [`ExportFile::open`] is true. Errors are shown as toasts and in the open export dialog;
+    /// the action remains handled.
     pub fn with_file_export(
         mut self,
         formats: &'static [ExportFormat],
@@ -401,9 +402,9 @@ impl Drop for Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame, key};
+    use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame};
     use super::*;
-    use egui::{Key, Modifiers, vec2};
+    use egui::vec2;
     use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
     use egui_charts::ui::top_toolbar::TopToolbarAction;
     use egui_charts::widget::ShortcutRequest;
@@ -464,7 +465,7 @@ mod tests {
             ),
             (
                 Action::Shortcut(ShortcutRequest::SymbolSearch("A".into())),
-                false,
+                true,
             ),
             (menu(ContextMenuAction::MergeTradeProfilePrevious), true),
             (menu(ContextMenuAction::MergeTradeProfileNext), true),
@@ -472,8 +473,6 @@ mod tests {
         ] {
             assert_eq!(terminal.run(action).is_none(), handled);
         }
-        let help = frame(&mut terminal, SIZE, vec![key(Key::F1, Modifiers::NONE)]).actions;
-        assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));
     }
 
     #[test]
