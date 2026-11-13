@@ -374,16 +374,20 @@ impl ChartState {
                             .len()
                             .checked_add_signed(study.plot_offset(index))
                             .unwrap_or(0);
-                        (study_start..study_end.min(available_end))
+                        let mut values = (study_start..study_end.min(available_end))
                             .filter_map(move |bar| study.plot_value(index, bar))
-                            .chain(std::iter::once(0.0).filter(move |_| {
-                                matches!(
-                                    study.plot_style(index).plot_type,
-                                    crate::studies::PlotType::Histogram
-                                        | crate::studies::PlotType::Columns
-                                        | crate::studies::PlotType::Area
-                                )
-                            }))
+                            .filter(|value| value.is_finite())
+                            .peekable();
+                        // Columns and areas reach down to zero beside a value, never in a view
+                        // without one.
+                        let base = values.peek().is_some()
+                            && matches!(
+                                study.plot_style(index).plot_type,
+                                crate::studies::PlotType::Histogram
+                                    | crate::studies::PlotType::Columns
+                                    | crate::studies::PlotType::Area
+                            );
+                        values.chain(base.then_some(0.0))
                     })
                     .chain(
                         study

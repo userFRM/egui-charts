@@ -24,8 +24,9 @@ pub enum PriceScaleMode {
     #[default]
     Normal,
     /// Prices on a logarithmic axis: equal price ratios take equal heights. The fit uses the
-    /// positive values in view; while none is in view, the scale shows prices as
-    /// [`Normal`](PriceScaleMode::Normal) does.
+    /// positive values in view; while every value in view is at or below zero, the scale shows
+    /// prices as [`Normal`](PriceScaleMode::Normal) does. A view without any value keeps the
+    /// units the scale shows.
     Logarithmic,
     /// Change from the first visible value, in percent; that value reads 0%.
     Percentage,

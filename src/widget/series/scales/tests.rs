@@ -1811,6 +1811,8 @@ fn magnet_snaps_to_study_values_on_their_own_scale() {
 /// occupies 80% of the pane; a lone zero-crossing bar instead starts at ln(5).
 #[test]
 fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
+    use crate::studies::{CustomIndicator, IndicatorValue, PlotType, StudyScale};
+    use crate::widget::PaneScale;
     for secondary in [false, true] {
         for count in [1, 2] {
             let mut input = bars(&[10.0, 15.0]);
@@ -2005,6 +2007,51 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
         (range.min - logarithmic.0).abs() < 1e-9 && (range.max - logarithmic.1).abs() < 1e-9,
         "join: {range:?}"
     );
+    // Columns reach down to zero only beside a value in view. A study drawing them keeps the
+    // units and range of its scale in a view without bars, in a pane of its own, beside the main
+    // scale and on it, in both modes; the regular mode fits that zero beside the values.
+    for (place, scale) in [
+        ("pane", None),
+        ("left", Some(StudyScale::Shared(SeriesScale::Left))),
+        ("main", Some(StudyScale::Main)),
+    ] {
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            let mut study = CustomIndicator::new("Columns", |bars| {
+                (0..bars.len())
+                    .map(|at| IndicatorValue::Single(100.0 + 10.0 * at as f64))
+                    .collect()
+            })
+            .with_overlay(scale.is_some())
+            .with_plot_types(vec![PlotType::Histogram]);
+            if let Some(scale) = scale {
+                study = study.with_scale(scale);
+            }
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 10])));
+            let id = chart.add_indicator(Box::new(study));
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let pane = chart.series_pane(id).unwrap();
+            let axis = PaneScale::Named(match scale {
+                Some(StudyScale::Shared(key)) => key,
+                _ => SeriesScale::Right,
+            });
+            chart.pane_scale_mut(pane, axis).unwrap().options_mut().mode = mode;
+            let view = |chart: &mut Chart, first: f32, time: f64| {
+                let range = crate::model::LogicalRange::new(first, first + 9.0);
+                assert!(chart.set_visible_logical_range(range));
+                frame(&ctx, chart, time, vec![]);
+                let scale = chart.pane_scale(pane, axis).unwrap();
+                (scale.transform().mode, scale.range())
+            };
+            let fitted = view(&mut chart, 0.0, 0.1);
+            assert_eq!(fitted.0, mode, "{place}");
+            assert!(
+                mode == PriceScaleMode::Logarithmic || fitted.1.min < 0.0,
+                "{place}: {fitted:?}"
+            );
+            assert_eq!(view(&mut chart, 30.0, 0.2), fitted, "{place}, {mode:?}");
+        }
+    }
 }
 
 /// A scale other than the main one keeps a tenth of its data's range free above and below

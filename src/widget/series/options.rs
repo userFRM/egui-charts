@@ -766,8 +766,8 @@ impl Chart {
             // fit in other units, such as prices on a logarithmic scale without a positive value
             // in view, keeps the prices instead.
             if self.state.price_scale().is_manual() {
-                let scale = self.state.price_scale();
-                let (range, mode) = (scale.range(), scale.transform().mode);
+                let main = self.state.price_scale();
+                let (range, mode) = (main.range(), main.transform().mode);
                 if self.state.fit_price_scale(std::iter::empty()).mode == mode {
                     self.state.price_scale_mut().set_range(range.min, range.max);
                 }

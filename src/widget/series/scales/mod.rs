@@ -39,17 +39,18 @@ fn shared_prices(
                 )
         })
         .flat_map(move |line| {
-            let plot = study.plot_style(line);
-            range
+            let mut values = range
                 .clone()
                 .filter_map(move |bar| study.plot_value(line, bar))
                 .filter(|value| value.is_finite())
-                .chain(std::iter::once(0.0).filter(move |_| {
-                    matches!(
-                        plot.plot_type,
-                        PlotType::Histogram | PlotType::Columns | PlotType::Area
-                    )
-                }))
+                .peekable();
+            // Columns and areas reach down to zero beside a value, never in a view without one.
+            let base = values.peek().is_some()
+                && matches!(
+                    study.plot_style(line).plot_type,
+                    PlotType::Histogram | PlotType::Columns | PlotType::Area
+                );
+            values.chain(base.then_some(0.0))
         })
         .chain(fills)
 }
