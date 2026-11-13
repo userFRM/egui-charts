@@ -1570,6 +1570,10 @@ mod tests {
                     );
                 }
                 chart.drain_events().for_each(drop);
+                // A drawing takes the click from a series that is already selected too.
+                if cover == "drawing" {
+                    chart.selection.select(ChartElementId::Series(id), None);
+                }
                 let click = |pressed| egui::Event::PointerButton {
                     pos,
                     button: egui::PointerButton::Primary,
@@ -1587,7 +1591,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("secondary={secondary}, cover={cover}: {events:?}"));
                 let marked = !matches!(cover, "primitive" | "drawing" | "eraser" | "moved");
                 // Bar 70 spans 95 to 105, so without the marker the click selects its series; a
-                // click on a drawing in a study pane clears the selection.
+                // click on a drawing clears the selection.
                 let unmarked =
                     matches!(cover, "primitive" | "moved").then_some(ChartElementId::Series(id));
                 if let Some(primitive) = primitive {
@@ -1611,9 +1615,7 @@ mod tests {
                     usize::from(marked),
                     "secondary={secondary}, cover={cover}: {events:?}"
                 );
-                // In the price pane a click on a drawing also selects the series under it, which
-                // this test leaves out.
-                if cover != "eraser" && (cover != "drawing" || secondary) {
+                if cover != "eraser" {
                     assert_eq!(
                         chart.selected_element(),
                         unmarked,
@@ -1623,6 +1625,10 @@ mod tests {
                 #[cfg(feature = "drawings")]
                 if cover == "top" {
                     assert_eq!(chart.drawings.selected_ids().count(), 0);
+                }
+                #[cfg(feature = "drawings")]
+                if cover == "drawing" {
+                    assert!(chart.drawings.is_selected(77), "secondary={secondary}");
                 }
             }
         }
