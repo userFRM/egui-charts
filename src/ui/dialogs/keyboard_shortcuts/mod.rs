@@ -29,8 +29,8 @@ struct Entry {
 
 /// The keys the chart and the library's controls read outside the shortcut map, by category.
 ///
-/// They are not rebindable, so the list is fixed; it follows the build (the drawing keys need
-/// the `drawings` feature). The state an entry needs is in its label or its category.
+/// They are not rebindable, so the list is fixed. The state an entry needs is in its label or
+/// its category.
 fn fixed_categories() -> Vec<(&'static str, Vec<Entry>)> {
     let entry = |label: &str, keys: Vec<Keys>| Entry {
         label: label.to_owned(),
@@ -38,57 +38,61 @@ fn fixed_categories() -> Vec<(&'static str, Vec<Entry>)> {
     };
     let key = |key, modifiers| Keys::Shortcut(KeyboardShortcut::new(modifiers, key));
     let none = Modifiers::NONE;
-    let mut categories = vec![(
-        "Typing",
-        vec![
-            entry("Change the symbol", vec![Keys::Typed("Type a ticker")]),
-            entry(
-                "Change the interval",
-                vec![Keys::Typed("0-9"), Keys::Typed(",")],
-            ),
-        ],
-    )];
-    #[cfg(feature = "drawings")]
-    categories.push((
-        "Drawings",
-        vec![
-            entry(
-                "Move the selected drawing one bar earlier",
-                vec![key(Key::ArrowLeft, none)],
-            ),
-            entry(
-                "Move the selected drawing one bar later",
-                vec![key(Key::ArrowRight, none)],
-            ),
-            entry(
-                "Move the selected drawing up one tick",
-                vec![key(Key::ArrowUp, none)],
-            ),
-            entry(
-                "Move the selected drawing down one tick",
-                vec![key(Key::ArrowDown, none)],
-            ),
-        ],
-    ));
-    categories.push((
-        "Replay",
-        vec![
-            entry("Play or pause the replay", vec![key(Key::Space, none)]),
-            entry("Go to the replay start", vec![key(Key::Home, none)]),
-            entry("Go to the replay end", vec![key(Key::End, none)]),
-            entry("Replay one bar back", vec![key(Key::ArrowLeft, none)]),
-            entry("Replay one bar forward", vec![key(Key::ArrowRight, none)]),
-            entry(
-                "Step the replay back",
-                vec![key(Key::ArrowLeft, Modifiers::SHIFT)],
-            ),
-            entry(
-                "Step the replay forward",
-                vec![key(Key::ArrowRight, Modifiers::SHIFT)],
-            ),
-        ],
-    ));
-    categories
+    vec![
+        (
+            "Typing",
+            vec![
+                entry("Change the symbol", vec![Keys::Typed("Type a ticker")]),
+                entry(
+                    "Change the interval",
+                    vec![Keys::Typed("0-9"), Keys::Typed(",")],
+                ),
+            ],
+        ),
+        (
+            "Drawings",
+            vec![
+                entry(
+                    "Move the selected drawing one bar earlier",
+                    vec![key(Key::ArrowLeft, none)],
+                ),
+                entry(
+                    "Move the selected drawing one bar later",
+                    vec![key(Key::ArrowRight, none)],
+                ),
+                entry(
+                    "Move the selected drawing up one tick",
+                    vec![key(Key::ArrowUp, none)],
+                ),
+                entry(
+                    "Move the selected drawing down one tick",
+                    vec![key(Key::ArrowDown, none)],
+                ),
+            ],
+        ),
+        (
+            "Replay",
+            vec![
+                entry("Play or pause the replay", vec![key(Key::Space, none)]),
+                entry("Go to the replay start", vec![key(Key::Home, none)]),
+                entry("Go to the replay end", vec![key(Key::End, none)]),
+                entry(
+                    "Replay one bar back",
+                    vec![
+                        key(Key::ArrowLeft, none),
+                        key(Key::ArrowLeft, Modifiers::SHIFT),
+                    ],
+                ),
+                entry(
+                    "Replay one bar forward",
+                    vec![
+                        key(Key::ArrowRight, none),
+                        key(Key::ArrowRight, Modifiers::SHIFT),
+                    ],
+                ),
+            ],
+        ),
+    ]
 }
 
 /// Action returned by the keyboard shortcuts dialog
@@ -298,7 +302,7 @@ pub(crate) fn shortcut_key_labels(
 
 /// One badge per key combination, joined by a muted "or".
 fn key_badges(ui: &mut Ui, theme: &Theme, keys: &[Keys]) {
-    for (idx, keys) in keys.iter().enumerate() {
+    for (idx, combination) in keys.iter().enumerate() {
         if idx > 0 {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "or"))
@@ -307,7 +311,7 @@ fn key_badges(ui: &mut Ui, theme: &Theme, keys: &[Keys]) {
             );
         }
         // Screen readers get the name.
-        let (text, name) = match keys {
+        let (text, name) = match combination {
             Keys::Shortcut(shortcut) => {
                 let font = FontId::proportional(theme.text.small);
                 (
@@ -394,7 +398,7 @@ mod tests {
             "Move the selected drawing one bar earlier",
             "Move the selected drawing down one tick",
             "Play or pause the replay",
-            "Step the replay forward",
+            "Replay one bar forward",
         ] {
             assert!(h.query_by_label(label).is_some(), "missing {label}");
         }
