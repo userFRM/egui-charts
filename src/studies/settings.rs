@@ -1268,16 +1268,41 @@ impl Indicator for ConfiguredStudy {
             edited.set_input(id, value.clone())?;
         }
         // Styles and tags of the plots before the inputs changed their number keep their place,
-        // and plots they add start with the study's own style and tag.
+        // and plots they add start with the study's own style and tag. Plots that keep their
+        // names at the end, behind plots the inputs add or remove, keep theirs under those names.
         if settings.plots.len() == self.line_count() && edited.line_count() != self.line_count() {
             let defaults = edited.study.settings();
-            let kept = settings.plots.len().min(defaults.plots.len());
-            settings.plots.truncate(kept);
-            settings.plots.extend_from_slice(&defaults.plots[kept..]);
-            settings.untagged_plots.retain(|&line| line < kept);
-            settings
-                .untagged_plots
-                .extend(defaults.untagged_plots.iter().filter(|&&line| line >= kept));
+            let (old, new) = (settings.plots.len(), defaults.plots.len());
+            let (before, after) = (self.line_names(), edited.line_names());
+            let moved = if (before.len(), after.len()) == (old, new) {
+                let same = |(a, b): &(&String, &String)| a == b;
+                let head = before.iter().zip(&after).take_while(same).count();
+                let (before, after) = (before[head..].iter().rev(), after[head..].iter().rev());
+                before.zip(after).take_while(same).count()
+            } else {
+                0
+            };
+            // The plot of the study before the edit that plot `line` continues.
+            let was = |line: usize| {
+                if line + moved >= new {
+                    Some(old - (new - line))
+                } else {
+                    (line + moved < old).then_some(line)
+                }
+            };
+            let flagged = |flags: &[usize], declared: &[usize]| -> Vec<usize> {
+                (0..new)
+                    .filter(|&line| match was(line) {
+                        Some(from) => flags.contains(&from),
+                        None => declared.contains(&line),
+                    })
+                    .collect()
+            };
+            settings.untagged_plots = flagged(&settings.untagged_plots, &defaults.untagged_plots);
+            settings.price_line_plots = flagged(&settings.price_line_plots, &[]);
+            settings.plots = (0..new)
+                .map(|line| was(line).map_or(defaults.plots[line], |from| settings.plots[from]))
+                .collect();
         }
         if settings.plots.len() != edited.line_count() {
             return Err(super::StudyError::PlotCount {
