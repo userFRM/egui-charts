@@ -20,7 +20,6 @@ use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
 use egui_charts::widget::{ChartElementId, ImageExportOptions, ShortcutRequest};
 use std::path::PathBuf;
 
-const DRAWINGS_CLIPBOARD: &str = "egui-charts-drawings\n";
 const STUDY_CLIPBOARD: &str = "egui-charts-study\n";
 
 pub(super) struct State {
@@ -184,12 +183,10 @@ impl Terminal {
                 }
                 self.studies.symbol_search.open_with_query(text);
             }
+            // The drawings group has taken drawing text; other text is ignored.
             Action::Shortcut(ShortcutRequest::PasteDrawing(text)) => {
                 if text.starts_with(STUDY_CLIPBOARD) {
                     self.paste_study(&text);
-                } else if text.starts_with(DRAWINGS_CLIPBOARD) {
-                    // The drawings group takes drawings; left over, they are the host's.
-                    return Some(Action::Shortcut(ShortcutRequest::PasteDrawing(text)));
                 }
             }
             Action::Shortcut(ShortcutRequest::Action(keyboard)) => {
@@ -216,7 +213,6 @@ impl Terminal {
                     },
                     _ => ImageTarget::Clipboard,
                 };
-                self.toasts.clear();
                 let mut options = ImageExportOptions::default();
                 options.include_crosshair = true;
                 self.export_image(target, &options, None);
@@ -228,31 +224,33 @@ impl Terminal {
                 self.export_csv(None)
             }
             Action::Export(ExportResponse::Export { config, save_path }) => match config.format {
-                ExportFormat::Png => {
+                ExportFormat::Png if self.services.save.is_some() => {
                     self.export_image(ImageTarget::File { open: false }, &config.image, save_path);
                 }
-                ExportFormat::Clipboard => {
+                // The layout menu asks for a PNG download without the host's file export too.
+                ExportFormat::Png | ExportFormat::Clipboard => {
                     self.export_image(ImageTarget::Clipboard, &config.image, None);
                 }
                 ExportFormat::Csv => self.export_csv(save_path),
-                ExportFormat::Svg => {
-                    let result = self
-                        .chart()
-                        .export_svg(&self.ctx(), &config.image)
-                        .map_err(|error| error.to_string())
-                        .and_then(|svg| {
-                            self.hand_over(
-                                format!("{}_export.svg", self.chart().symbol()),
-                                save_path,
-                                ExportContents::Text(svg),
-                                false,
-                            )
-                        });
-                    self.report_export(result);
-                }
+                ExportFormat::Svg => match self.chart().export_svg(&self.ctx(), &config.image) {
+                    Ok(svg) => {
+                        let name = format!("{}_export.svg", self.chart().symbol());
+                        self.deliver_text(name, save_path, svg);
+                    }
+                    Err(error) => self.report_export(Err(error.to_string())),
+                },
             },
             Action::DataTable(DataTableAction::Export(csv)) => {
                 self.deliver_text("chart_data.csv".into(), None, csv);
+            }
+            // The table's symbol button stands for the toolbar's, text typed over it for the
+            // chart's typed symbol search.
+            Action::DataTable(DataTableAction::SearchSymbol(query)) => {
+                self.dispatch(if query.is_empty() {
+                    Action::TopToolbar(TopToolbarAction::OpenSymbolSearch)
+                } else {
+                    Action::Shortcut(ShortcutRequest::SymbolSearch(query))
+                });
             }
             Action::DataTable(_) => {}
             Action::Export(ExportResponse::Closed | ExportResponse::None) => {}
@@ -320,10 +318,10 @@ impl Terminal {
                 return None;
             }
             A::PasteDrawing => {
-                let text = self.commands.copied.clone()?;
-                return self
-                    .perform(Action::Shortcut(ShortcutRequest::PasteDrawing(text)))
-                    .map(|_| Action::Shortcut(ShortcutRequest::Action(keyboard)));
+                if let Some(text) = self.commands.copied.clone() {
+                    self.perform(Action::Shortcut(ShortcutRequest::PasteDrawing(text)));
+                }
+                return None;
             }
             _ => return Some(Action::Shortcut(ShortcutRequest::Action(keyboard))),
         };
@@ -349,7 +347,9 @@ impl Terminal {
         }
     }
 
-    fn copy_text(&mut self, text: String) {
+    /// Puts `text` on the system clipboard and keeps it for a paste key that arrives without
+    /// clipboard text.
+    pub(super) fn copy_text(&mut self, text: String) {
         self.ctx().copy_text(text.clone());
         self.commands.copied = Some(text);
     }
@@ -471,7 +471,7 @@ impl Terminal {
             self.hand_over(name, path, ExportContents::Text(text), false)
         } else {
             self.ctx().copy_text(text);
-            Ok("CSV copied to clipboard".to_owned())
+            Ok(format!("Copied {name} to the clipboard"))
         };
         self.report_export(result);
     }
@@ -527,6 +527,7 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
     use egui_charts::drawings::{ChartPoint, Drawing};
     use egui_charts::studies::IndicatorFactory;
+    use egui_charts::ui::dialogs::DrawingContextMenuAction;
     use egui_charts::ui::export::ExportConfig;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -678,7 +679,14 @@ mod tests {
     /// An open dialog of this group takes Escape before the chart does.
     #[test]
     fn open_dialogs_keep_the_keys_of_the_chart() {
-        for dialog in ["quick search", "export", "data table", "help", "indicators"] {
+        for dialog in [
+            "quick search",
+            "export",
+            "data table",
+            "table symbol search",
+            "help",
+            "indicators",
+        ] {
             let mut terminal = terminal();
             frame(&mut terminal, SIZE, vec![]);
             terminal
@@ -696,6 +704,12 @@ mod tests {
                 "data table" => {
                     terminal.run(Action::ChartMenu(ChartContextAction::Chart(
                         ContextMenuAction::OpenDataTable,
+                    )));
+                }
+                // The table's symbol button.
+                "table symbol search" => {
+                    terminal.run(Action::DataTable(DataTableAction::SearchSymbol(
+                        String::new(),
                     )));
                 }
                 "indicators" => {
@@ -745,7 +759,7 @@ mod tests {
             _ => None,
         });
         let copied = copied.expect("system clipboard text");
-        assert!(copied.starts_with(DRAWINGS_CLIPBOARD));
+        assert!(copied.starts_with("egui-charts-drawings\n"));
         terminal.commands.copied = None;
         for (events, count) in [
             (vec![Event::Paste("unrelated clipboard text".into())], 2),
@@ -756,6 +770,15 @@ mod tests {
             assert!(actions.is_empty(), "{actions:?}");
             assert_eq!(terminal.chart().drawings().drawings.len(), count);
         }
+        // A browser sends the paste key before the clipboard text, so the key pastes what the
+        // terminal copied last, here from the drawing menu.
+        terminal.chart_mut().drawings_mut().select_drawings([7, 8]);
+        terminal.run(Action::ChartMenu(ChartContextAction::Drawing(
+            DrawingContextMenuAction::Copy,
+        )));
+        let (_, actions) = frame_output(&mut terminal, vec![key(Key::V, Modifiers::COMMAND)]);
+        assert!(actions.is_empty(), "{actions:?}");
+        assert_eq!(terminal.chart().drawings().drawings.len(), 4);
 
         let studies = |terminal: &Terminal| terminal.chart().indicators().count();
         let rsi = IndicatorFactory::new().create("RSI").unwrap();
@@ -780,8 +803,8 @@ mod tests {
         assert_eq!(studies(&terminal), before);
     }
 
-    /// Images and CSV reach the clipboard without a file export and the host's callback with
-    /// one; opening an image is the host's.
+    /// Exports reach the clipboard without a file export and the host's callback with one;
+    /// opening an image is the host's.
     #[test]
     fn exports_go_to_the_clipboard_or_the_hosts_file_export() {
         let mut small = ImageExportOptions::default();
@@ -800,13 +823,25 @@ mod tests {
         frame(&mut terminal, SIZE, vec![]);
         let open = Action::TopToolbar(TopToolbarAction::OpenImage);
         assert!(terminal.run(open).is_some());
-        assert!(terminal.run(export(ExportFormat::Clipboard)).is_none());
-        assert!(terminal.run(export(ExportFormat::Csv)).is_none());
+        // Every format reaches the clipboard: the layout menu's downloads ask for PNG and CSV
+        // whether or not the host saves files.
+        for format in [
+            ExportFormat::Clipboard,
+            ExportFormat::Png,
+            ExportFormat::Csv,
+            ExportFormat::Svg,
+        ] {
+            assert!(terminal.run(export(format)).is_none());
+        }
         let (commands, _) = frame_output(&mut terminal, vec![]);
-        assert!(commands.iter().any(|command| matches!(command,
-            egui::OutputCommand::CopyImage(image) if image.size == [200, 120])));
+        let images = commands.iter().filter(|command| {
+            matches!(command, egui::OutputCommand::CopyImage(image) if image.size == [200, 120])
+        });
+        assert_eq!(images.count(), 2);
         assert!(commands.iter().any(|command| matches!(command,
             egui::OutputCommand::CopyText(csv) if csv.starts_with("time,"))));
+        assert!(commands.iter().any(|command| matches!(command,
+            egui::OutputCommand::CopyText(svg) if svg.contains("<svg"))));
 
         // With one.
         let files = Rc::new(RefCell::new(Vec::new()));
@@ -921,32 +956,31 @@ mod tests {
     #[test]
     fn typed_symbol_search_keeps_queued_editing_keys() {
         use egui_charts::model::Instrument;
-        for (typed, suffix, expected) in [("AAPX", "L", "AAPL"), ("BTCUSX", "D", "BTCUSD")] {
-            let symbols = Arc::new(vec![Instrument::new(expected)]);
-            let mut terminal = terminal().with_symbol_search(symbols);
-            for _ in 0..3 {
-                frame(&mut terminal, SIZE, vec![]);
-            }
-            terminal
-                .chart_mut()
-                .drawings_mut()
-                .drawings
-                .push(trend_line(7, 100.0));
-            terminal.chart_mut().drawings_mut().select(7);
-            frame(
-                &mut terminal,
-                SIZE,
-                vec![
-                    Event::Text(typed.into()),
-                    key(Key::Backspace, Modifiers::NONE),
-                    Event::Text(suffix.into()),
-                ],
-            );
-            assert_eq!(terminal.chart().drawings().drawings.len(), 1);
-            frame(&mut terminal, SIZE, vec![key(Key::Enter, Modifiers::NONE)]);
-            assert_eq!(terminal.chart().symbol(), expected);
-            assert!(!terminal.keyboard_dialog_open());
+        // A symbol other than the chart's, so a search that changes nothing fails.
+        let symbols = Arc::new(vec![Instrument::new("BTCUSD")]);
+        let mut terminal = terminal().with_symbol_search(symbols);
+        for _ in 0..3 {
+            frame(&mut terminal, SIZE, vec![]);
         }
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .drawings
+            .push(trend_line(7, 100.0));
+        terminal.chart_mut().drawings_mut().select(7);
+        frame(
+            &mut terminal,
+            SIZE,
+            vec![
+                Event::Text("BTCUSX".into()),
+                key(Key::Backspace, Modifiers::NONE),
+                Event::Text("D".into()),
+            ],
+        );
+        assert_eq!(terminal.chart().drawings().drawings.len(), 1);
+        frame(&mut terminal, SIZE, vec![key(Key::Enter, Modifiers::NONE)]);
+        assert_eq!(terminal.chart().symbol(), "BTCUSD");
+        assert!(!terminal.keyboard_dialog_open());
     }
 
     fn terminal_with_files(sink: Rc<RefCell<Vec<ExportFile>>>) -> Terminal {

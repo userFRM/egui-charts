@@ -470,7 +470,7 @@ impl Terminal {
             DrawingContextMenuAction::Edit => self.open_drawing_properties(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
             DrawingContextMenuAction::Copy => match self.chart().copy_selected_drawings() {
-                Ok(Some(text)) => self.ctx().copy_text(text),
+                Ok(Some(text)) => self.copy_text(text),
                 Ok(None) => {}
                 Err(error) => self
                     .toasts

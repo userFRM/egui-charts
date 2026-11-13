@@ -245,7 +245,7 @@ impl Terminal {
             }
             StudyContextMenuAction::Copy => {
                 if let Some(text) = self.chart().copy_indicator(id) {
-                    self.ctx().copy_text(text);
+                    self.copy_text(text);
                 }
             }
             StudyContextMenuAction::Settings => {
