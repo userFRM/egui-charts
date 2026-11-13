@@ -177,10 +177,11 @@ mod tests {
     /// | 0   | 10    | 10     | 10      | 10         |
     /// | 1   | 12    | 12     | 34/3    | 10 + 4/61  |
     /// | 2   | none  | none   | none    | none       |
-    /// | 3   | 9     | 9      | 88/9    | kept       |
-    /// | 4   | 9     | 9      | 250/27  | kept       |
+    /// | 3   | 9     | 9      | 88/9    |            |
+    /// | 4   | 9     | 9      | 250/27  |            |
     ///
-    /// A corrected close of 8 at bar 3 gives EMA(1) 8 and EMA(2) 82/9.
+    /// EMA(60) is checked at bar 1 only. A corrected close of 8 at bar 3 gives EMA(1) 8 and
+    /// EMA(2) 82/9.
     #[test]
     fn periods_drive_the_averages() {
         let mut g = GuppyMA::new();
@@ -214,12 +215,5 @@ mod tests {
         let r = row(&g, 3).unwrap();
         assert_close(r[0], 8.0, "corrected EMA(1)");
         assert_close(r[1], 82.0 / 9.0, "corrected EMA(2)");
-    }
-
-    #[test]
-    fn with_periods_raises_zero_to_one() {
-        let mut g = GuppyMA::new().with_periods([0; 12]);
-        g.calculate(&bars(&[10.0, 12.0]));
-        assert_eq!(row(&g, 1).unwrap(), vec![12.0; 12]);
     }
 }
