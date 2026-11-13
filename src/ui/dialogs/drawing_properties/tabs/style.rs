@@ -50,10 +50,15 @@ impl StyleTab {
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
                 color_picker.sel_color = props.color;
-                if let Some([r, g, b, a]) = ColorPicker::new(color_picker, "drawing_props_color")
-                    .show_unmultiplied(ui, props.color_rgba())
-                    .inner
-                {
+                let picker = ColorPicker::new(color_picker, "drawing_props_color");
+                // Without tool settings only the paint colour is held, which reads back as
+                // another hue at each opacity: the editor then keeps its own exact colour.
+                let picked = if props.tool_settings.is_some() {
+                    picker.show_unmultiplied(ui, props.color_rgba()).inner
+                } else {
+                    picker.show(ui).inner.map(|c| c.to_srgba_unmultiplied())
+                };
+                if let Some([r, g, b, a]) = picked {
                     // The custom editor sets the opacity; a palette swatch keeps the line's.
                     let a = if color_picker.custom_mode {
                         a
@@ -844,6 +849,9 @@ mod tests {
     /// The custom colour editor edits the colour as saved. From the dialog of the default
     /// highlighter, with a blue trend line also selected, an opacity dragged over several frames
     /// reaches both drawings and leaves each its hue, and typed channels give both the new hue.
+    /// Properties a host assembled without tool settings hold only the paint colour: an opacity
+    /// drag, even through 1%, leaves each hue, and a typed hue arrives as that colour holds it
+    /// at 20%.
     #[test]
     fn custom_colour_edits_on_a_selection_keep_or_set_each_hue() {
         #[derive(Debug)]
@@ -851,22 +859,46 @@ mod tests {
             OpacityDragged(&'static [u8]),
             Typed([u8; 3]),
         }
-        for (edit, want) in [
+        for (tool_settings, edit, want) in [
             (
+                true,
                 Edit::OpacityDragged(&[51, 102, 153, 204, 255]),
                 [[242, 54, 69, 255], [41, 98, 255, 255]],
             ),
             (
+                true,
                 Edit::OpacityDragged(&[51, 96, 141, 186, 230]),
                 [[242, 54, 69, 230], [41, 98, 255, 230]],
             ),
             (
+                true,
                 Edit::OpacityDragged(&[51, 141, 230, 192, 153]),
                 [[242, 54, 69, 153], [41, 98, 255, 153]],
             ),
             (
+                true,
                 Edit::Typed([236, 60, 66]),
                 [[236, 60, 66, 51], [236, 60, 66, 255]],
+            ),
+            (
+                false,
+                Edit::OpacityDragged(&[51, 102, 153, 204, 255]),
+                [[242, 54, 69, 255], [41, 98, 255, 255]],
+            ),
+            (
+                false,
+                Edit::OpacityDragged(&[51, 96, 141, 186, 230]),
+                [[242, 54, 69, 230], [41, 98, 255, 230]],
+            ),
+            (
+                false,
+                Edit::OpacityDragged(&[51, 20, 2, 60, 153]),
+                [[242, 54, 69, 153], [41, 98, 255, 153]],
+            ),
+            (
+                false,
+                Edit::Typed([236, 60, 66]),
+                [[235, 60, 65, 51], [235, 60, 65, 255]],
             ),
         ] {
             let ctx = Context::default();
@@ -881,6 +913,9 @@ mod tests {
             chart.drawings_mut().drawings = vec![highlighter, line];
             chart.drawings_mut().select_drawings([1, 2]);
             let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            if !tool_settings {
+                props.tool_settings = None;
+            }
             let paint = props.color;
             let mut pickers: [ColorPickerState; 2] = Default::default();
             pickers[0].is_open = true;
@@ -925,7 +960,7 @@ mod tests {
                     .map(|d| d.color)
                     .collect::<Vec<_>>(),
                 want,
-                "{edit:?}"
+                "{edit:?}, tool settings: {tool_settings}"
             );
         }
     }
