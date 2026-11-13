@@ -620,6 +620,12 @@ impl DrawingManager {
         self.dragging_handle
     }
 
+    /// Whether a drag or a continuous edit is in progress, which [`Self::end_drag_handle`] records
+    /// as one step from the state it started in.
+    pub(crate) fn drag_in_progress(&self) -> bool {
+        self.drag_old_state.is_some()
+    }
+
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
     /// first click. The host picker uses `registry.custom_tools()` for its ids and names.
     pub fn set_custom_tool(&mut self, id: &str) -> Result<(), &'static str> {

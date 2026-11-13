@@ -1181,7 +1181,7 @@ impl ChartLayout {
                         .iter()
                         .filter(|chart| chart.history.holds_layout_edit(*id))
                     {
-                        if chart.history.blocked() {
+                        if chart.history_blocked() {
                             return false;
                         }
                         belongs = true;

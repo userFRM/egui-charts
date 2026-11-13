@@ -212,7 +212,7 @@ struct Study {
 }
 
 impl ChartHistory {
-    pub(super) fn blocked(&self) -> bool {
+    fn blocked(&self) -> bool {
         self.pending.is_some() || self.resizing.strong_count() > 0
     }
 
@@ -839,13 +839,15 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
-    /// Returns false while a user action is in progress; finish that action first.
+    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
+    /// finish it first.
     pub fn undo(&mut self) -> bool {
         self.step_chart_history(false)
     }
 
     /// Redo the most recently undone chart user action.
-    /// Returns false while a user action is in progress; finish that action first.
+    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
+    /// finish it first.
     pub fn redo(&mut self) -> bool {
         self.step_chart_history(true)
     }
@@ -887,8 +889,19 @@ impl Chart {
         }
     }
 
+    /// Whether undo and redo wait for a user action, a divider drag or a drawing drag to end. The
+    /// end of a drawing drag records the drawing as the drag found it, which a step taken
+    /// meanwhile would no longer lead back to.
+    pub(super) fn history_blocked(&self) -> bool {
+        #[cfg(feature = "drawings")]
+        if self.drawings.drag_in_progress() {
+            return true;
+        }
+        self.history.blocked()
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history.blocked() {
+        if self.history_blocked() {
             return false;
         }
         let stack = if redo {
@@ -1743,6 +1756,75 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Undo waits for a drawing drag to end, and the release records the drag as one step: a
+    /// line added at 15.0 and dragged 20 px down with Ctrl+Z pressed before the release goes
+    /// back to 15.0 on the first undo and leaves the chart on the second.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn undo_waits_for_a_drawing_drag_to_end() {
+        use crate::widget::test_frames::frame;
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.user_action(|chart| {
+            let mut line = host_line();
+            line.chart_points = vec![ChartPoint::new(30.0, 15.0), ChartPoint::new(60.0, 15.0)];
+            chart.drawings_mut().add_synced_drawing(line).unwrap();
+        });
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let prices = |chart: &Chart| -> Vec<f64> {
+            let drawings = &chart.drawings().drawings;
+            drawings
+                .iter()
+                .flat_map(|drawing| &drawing.chart_points)
+                .map(|point| point.price)
+                .collect()
+        };
+        let start = egui::pos2(
+            chart.get_chart_mapping().idx_to_x(45),
+            chart.last_price_map.price_to_y(15.0),
+        );
+        let end = start + egui::vec2(0.0, 20.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let command = Modifiers::COMMAND | Modifiers::CTRL;
+        for (step, events) in [
+            vec![Event::PointerMoved(start), button(start, true)],
+            vec![Event::PointerMoved(end)],
+            vec![Event::Key {
+                key: Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: command,
+            }],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+        }
+        assert!(!chart.undo(), "a toolbar button follows the same rule");
+        frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+        let moved = prices(&chart);
+        assert_eq!(moved.len(), 2, "the line is still on the chart");
+        assert!(moved.iter().all(|price| *price < 15.0), "{moved:?}");
+        assert!(chart.undo());
+        assert_eq!(prices(&chart), [15.0, 15.0]);
+        assert!(chart.undo());
+        assert!(prices(&chart).is_empty());
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        assert_eq!(prices(&chart), [15.0, 15.0]);
+        assert!(chart.redo());
+        assert_eq!(prices(&chart), moved);
+        assert!(!chart.can_redo());
     }
 
     #[test]
