@@ -1266,9 +1266,9 @@ fn cell_color(
 
 /// Draws a compact per-bar statistics table under the footprint at the same x coordinates.
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
-/// delta percentage and ask/bid ratio (undefined without a denominator). Select execution
-/// counts and average size with [`render_footprint_statistics_rows`] or
-/// [`FootprintConfig::statistics_rows`] in [`crate::widget::Chart::show_footprint`]. Bars before
+/// delta percentage and ask/bid ratio (undefined without a denominator). Select other rows with
+/// [`render_footprint_statistics_rows`] or [`FootprintConfig::statistics_rows`] in
+/// [`crate::widget::Chart::show_footprint`]. Bars before
 /// [`Footprint::complete_from`] get no column and no share of the cumulative delta.
 /// Shared labels occupy the left margin. Numeric columns stay aligned with their bars and
 /// use unabbreviated volume values when they fit, then compact units. Percentages have one
@@ -1284,27 +1284,31 @@ pub fn render_footprint_statistics(
     flow: &Footprint,
     text_color: Color32,
 ) {
-    render_footprint_statistics_rows(
-        painter,
-        mapping,
-        bars,
-        flow,
+    let config = FootprintConfig {
         text_color,
-        &FootprintStatistic::ALL[..9],
-    );
+        ..Default::default()
+    };
+    render_footprint_statistics_rows(painter, mapping, bars, flow, &config);
 }
 
-/// Draws the selected statistics in their supplied order, including execution counts and average
-/// size. An empty selection draws nothing. Uses the same fitting and clipping rules as
-/// [`render_footprint_statistics`]; an undefined average is shown as `n/a`.
+/// Draws the rows of [`FootprintConfig::statistics_rows`] in their order and in
+/// [`FootprintConfig::text_color`]. An empty selection draws nothing. Uses the same fitting and
+/// clipping rules as [`render_footprint_statistics`]; an undefined value is shown as `n/a`.
+///
+/// Buy and sell percentages are shares of the bar's total volume, and the volume change is
+/// relative to the previous bar with executions and blank for the first; all percentages have
+/// one decimal. The range is the bar's high minus its low. The point of control is the lowest
+/// price of the highest-volume row among the rows [`render_footprint`] groups for `config` under
+/// the price mapping of `mapping`, so it names the row marked in the bar. Range and point of
+/// control are written at the decimals of the instrument's tick.
 pub fn render_footprint_statistics_rows(
     painter: &Painter,
     mapping: &ChartMapping,
     bars: &[Bar],
     flow: &Footprint,
-    text_color: Color32,
-    rows: &[FootprintStatistic],
+    config: &FootprintConfig,
 ) {
+    let (rows, text_color) = (config.statistics_rows.as_slice(), config.text_color);
     if rows.is_empty() {
         return;
     }
@@ -1323,6 +1327,7 @@ pub fn render_footprint_statistics_rows(
         .fold(0.0, f32::max)
         + 8.0;
     let mut cumulative = 0.0;
+    let mut last_volume = None;
     let complete = flow.complete_from();
     let mut has_data = false;
     let mut columns = Vec::new();
@@ -1334,6 +1339,8 @@ pub fn render_footprint_statistics_rows(
             continue;
         };
         cumulative += row.delta();
+        let volume = row.volume();
+        let previous = last_volume.replace(volume);
         let x = mapping.idx_to_x(i);
         if !mapping.is_x_visible(x) {
             continue;
@@ -1344,8 +1351,17 @@ pub fn render_footprint_statistics_rows(
         {
             continue;
         }
+        let share = |side: f64| (volume > 0.0).then(|| side / volume * 100.0);
+        let poc = rows
+            .contains(&FootprintStatistic::PointOfControl)
+            .then(|| {
+                let group = row_group(mapping, bar, flow, config);
+                let step = flow.price_step() * group as f64;
+                group_bar(row, group).poc().map(|level| level as f64 * step)
+            })
+            .flatten();
         let values = [
-            Some(row.volume()),
+            Some(volume),
             Some(row.bid),
             Some(row.ask),
             Some(row.delta()),
@@ -1356,10 +1372,18 @@ pub fn render_footprint_statistics_rows(
             (row.bid > 0.0).then(|| row.ask / row.bid),
             Some(row.trades() as f64),
             row.average_size(),
+            share(row.bid),
+            share(row.ask),
+            Some(bar.high - bar.low),
+            poc,
+            previous
+                .filter(|previous| *previous > 0.0)
+                .map(|previous| (volume - previous) / previous * 100.0),
         ];
         let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
-        columns.push((x, values));
+        columns.push((x, previous.is_none(), values));
     }
+    let decimals = crate::scales::decimals(flow.tick_size());
     let mut size = 10.0;
     let mut fitted = Vec::new();
     if mapping.bar_spacing >= 22.0 && rows_fit {
@@ -1368,7 +1392,7 @@ pub fn render_footprint_statistics_rows(
                 size = font_size;
                 fitted = columns
                     .iter()
-                    .map(|(x, values)| {
+                    .map(|(x, first, values)| {
                         (
                             *x,
                             values
@@ -1376,18 +1400,29 @@ pub fn render_footprint_statistics_rows(
                                 .copied()
                                 .enumerate()
                                 .map(|(line, value)| {
-                                    let text = value.map_or_else(
-                                        || "n/a".to_owned(),
-                                        |value| match rows[line] {
-                                            FootprintStatistic::DeltaPercent => {
-                                                format!("{value:.1}%")
-                                            }
-                                            FootprintStatistic::AskBidRatio => {
-                                                format!("{value:.2}:1")
-                                            }
-                                            _ => volume_text(value, abbreviate),
-                                        },
-                                    );
+                                    let text = match (rows[line], value) {
+                                        // The first bar has no bar to change from.
+                                        (FootprintStatistic::VolumeChange, None) if *first => {
+                                            String::new()
+                                        }
+                                        (_, None) => "n/a".to_owned(),
+                                        (
+                                            FootprintStatistic::DeltaPercent
+                                            | FootprintStatistic::BidPercent
+                                            | FootprintStatistic::AskPercent
+                                            | FootprintStatistic::VolumeChange,
+                                            Some(value),
+                                        ) => format!("{value:.1}%"),
+                                        (FootprintStatistic::AskBidRatio, Some(value)) => {
+                                            format!("{value:.2}:1")
+                                        }
+                                        (
+                                            FootprintStatistic::Range
+                                            | FootprintStatistic::PointOfControl,
+                                            Some(value),
+                                        ) => format!("{value:.decimals$}"),
+                                        (_, Some(value)) => volume_text(value, abbreviate),
+                                    };
                                     painter.layout_no_wrap(
                                         text,
                                         FontId::monospace(size),
@@ -2747,6 +2782,13 @@ mod tests {
     /// Shared row labels and complete numeric columns survive narrow detail widths; a short pane
     /// reports unavailable detail instead of clipping a row. The first bar has 13 buys and 3 sells:
     /// delta 10, 62.5%, ask/bid 4.33:1, three executions averaging 16/3; the second adds 2500 sells.
+    ///
+    /// The tallest pane holds every row. Of the first bar's volume of 16, 3 sold are 18.75% and
+    /// 13 bought 81.25%, written to the even digit as 18.8% and 81.2%; it ranges from 100.00 to
+    /// 100.25, and has no bar to change from. Rows of 0.25 are 11.3 points tall here, so the
+    /// footprint draws them in pairs and both bars have their point of control in the row at
+    /// 100.00, where the busiest price of the first is 100.25. The second bar trades 2500 after
+    /// 16, a change of 2484 / 16 = 15525%, all of it sold, at one price.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -2774,9 +2816,16 @@ mod tests {
             (40.0, true, true, 136.0),
             (60.0, true, false, 90.0),
             (60.0, true, false, 112.0),
+            (60.0, true, false, 196.0),
         ] {
             // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
-            let count = if height == 112.0 { 9 } else { 11 };
+            let count = if height == 112.0 {
+                9
+            } else if height == 196.0 {
+                16
+            } else {
+                11
+            };
             let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
@@ -2815,14 +2864,12 @@ mod tests {
                     if count == 9 {
                         render_footprint_statistics(ui.painter(), &map, &bars, flow, Color32::WHITE)
                     } else {
-                        render_footprint_statistics_rows(
-                            ui.painter(),
-                            &map,
-                            &bars,
-                            flow,
-                            Color32::WHITE,
-                            &FootprintStatistic::ALL,
-                        )
+                        let config = FootprintConfig {
+                            text_color: Color32::WHITE,
+                            statistics_rows: FootprintStatistic::ALL[..count].to_vec(),
+                            ..Default::default()
+                        };
+                        render_footprint_statistics_rows(ui.painter(), &map, &bars, flow, &config)
                     }
                 },
             );
@@ -2872,16 +2919,17 @@ mod tests {
             for (column, expected) in [
                 [
                     "16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1", "3", "5.333",
+                    "18.8%", "81.2%", "0.25", "100.00", "",
                 ],
                 if large {
                     [
                         "123.5M", "123.5M", "0", "-123.5M", "-123.5M", "0", "-123.5M", "-100.0%",
-                        "0.00:1", "2", "61.7M",
+                        "0.00:1", "2", "61.7M", "", "", "", "", "",
                     ]
                 } else {
                     [
                         "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
-                        "1", "2500",
+                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%",
                     ]
                 },
             ]

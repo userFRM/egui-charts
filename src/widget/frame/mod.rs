@@ -2238,8 +2238,7 @@ impl Chart {
                         &self.get_chart_mapping().with_rect(table),
                         self.bars(super::SeriesId::MAIN),
                         flow,
-                        config.text_color,
-                        statistics_rows.as_deref().unwrap(),
+                        config,
                     );
                 }
                 if let Some((_, Some(volume))) = &merged {

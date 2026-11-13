@@ -537,11 +537,22 @@ pub enum FootprintStatistic {
     Trades,
     /// Total volume divided by execution count; undefined for an empty bar.
     AverageSize,
+    /// Sell volume divided by total volume, in percent.
+    BidPercent,
+    /// Buy volume divided by total volume, in percent.
+    AskPercent,
+    /// The bar's high minus its low.
+    Range,
+    /// The lowest price of the bar's highest-volume row, as the footprint groups its rows.
+    PointOfControl,
+    /// The change of total volume from the previous bar with executions, in percent; the first
+    /// such bar has none.
+    VolumeChange,
 }
 
 impl FootprintStatistic {
     /// All available rows in their display order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 16] = [
         Self::Volume,
         Self::Bid,
         Self::Ask,
@@ -553,6 +564,11 @@ impl FootprintStatistic {
         Self::AskBidRatio,
         Self::Trades,
         Self::AverageSize,
+        Self::BidPercent,
+        Self::AskPercent,
+        Self::Range,
+        Self::PointOfControl,
+        Self::VolumeChange,
     ];
 
     /// Shared table label.
@@ -569,6 +585,11 @@ impl FootprintStatistic {
             Self::AskBidRatio => "Ask/Bid",
             Self::Trades => "Trades",
             Self::AverageSize => "Average size",
+            Self::BidPercent => "Bid %",
+            Self::AskPercent => "Ask %",
+            Self::Range => "Range",
+            Self::PointOfControl => "POC",
+            Self::VolumeChange => "Vol change %",
         }
     }
 }
@@ -907,7 +928,8 @@ mod tests {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_value_area": 0.010003969988090037,
-            "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
+            "footprint_statistics": true,
+            "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
             "footprint_imbalance_colors": [[200, 30, 220, 255], null],
             "tpo_letters": false,
