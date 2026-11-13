@@ -309,9 +309,12 @@ impl HistoryService {
                     modified_at,
                 });
             }
-            DrawingCommand::Add(drawing) => {
-                // Undo add = remove the drawing
-                drawings.retain(|d| d.id != drawing.id);
+            DrawingCommand::Add(mut drawing) => {
+                // Undo add = remove the drawing, keeping it as it is now for redo: it has taken
+                // on state since it was recorded, such as what its first display adopts.
+                if let Some(at) = drawings.iter().position(|d| d.id == drawing.id) {
+                    drawing = drawings.remove(at);
+                }
                 self.redo_stack.push(DrawingCommand::Add(drawing));
             }
             DrawingCommand::Delete { drawing, index } => {

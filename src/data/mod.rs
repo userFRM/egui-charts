@@ -39,6 +39,7 @@ use std::time::Duration;
 
 pub(crate) mod depth;
 mod depth_history;
+mod financials;
 mod footprint;
 #[cfg(feature = "http")]
 pub mod http;
@@ -66,6 +67,7 @@ mod study;
 mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
+pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
 #[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
@@ -321,6 +323,16 @@ pub trait Datafeed: MaybeSend + 'static {
     /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
     /// which leaves the chart without targets and shows no error.
     fn price_targets(&self, symbol: &str, reply: Reply<crate::data::PriceTargets>) {
+        let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Reported company figures for `symbol`, with periods oldest first and missing figures
+    /// left as `None`. The host supplies the statements and their currency; no analytics or
+    /// currency conversion run in the library. The default answers [`FeedError::NotSupported`],
+    /// which keeps Financials out of the symbol details' More menu in the terminal. Declared by
+    /// [`FeedService::Financials`].
+    fn financials(&self, symbol: &str, reply: Reply<CompanyFinancials>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
     }

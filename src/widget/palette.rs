@@ -1,7 +1,7 @@
 //! Active palette propagation for chart configuration colours.
 
 use super::Chart;
-use crate::config::ChartConfig;
+use crate::config::{BackgroundStyle, ChartConfig};
 use crate::model::{ChartTypeStyles, HlcAreaStyle};
 use crate::theme::Theme;
 
@@ -108,8 +108,24 @@ pub(crate) fn follow_candle_colors(
 }
 
 /// Replaces every colour of `config` equal to the same colour of one of the `old` palettes by
-/// the one of `new`; the others were edited and stay.
+/// the one of `new`; the others were edited and stay. A gradient's endpoints start as copies of
+/// the background colour and follow it in the same way.
 fn follow_palette(config: &mut ChartConfig, old: &[ChartConfig], new: &ChartConfig) {
+    if let BackgroundStyle::VerticalGradient {
+        top_color: first,
+        bottom_color: second,
+    }
+    | BackgroundStyle::HorizontalGradient {
+        left_color: first,
+        right_color: second,
+    } = &mut config.background_style
+    {
+        for color in [first, second] {
+            if old.iter().any(|old| *color == old.background_color) {
+                *color = new.background_color;
+            }
+        }
+    }
     macro_rules! follow {
         ($($field:ident),+ $(,)?) => { $(if old.iter().any(|old| config.$field == old.$field) { config.$field = new.$field; })+ };
     }
@@ -273,6 +289,43 @@ mod tests {
                         .filter(|section| !text.galley.text()[section.byte_range.start.0..section.byte_range.end.0].trim().is_empty())
                         .all(|section| section.format.font_id.size == size)));
             assert!(matches, "theme text size for {prefix}");
+        }
+    }
+
+    /// A gradient chosen under the light preset without picking colours holds two copies of its
+    /// white background. Both follow a change to the dark preset, whose background is black,
+    /// through the chart's own theme and through the context; an endpoint the user picked stays.
+    #[test]
+    fn unedited_gradient_endpoints_follow_the_theme() {
+        use crate::config::BackgroundStyle;
+        use egui::Color32;
+        const EDITED: Color32 = Color32::from_rgb(1, 2, 3);
+        for via_override in [false, true] {
+            for edited in [false, true] {
+                let ctx = egui::Context::default();
+                apply_to_egui(&ctx, &Theme::light());
+                let mut chart = chart(&[100.0], &[110.0]);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.config_mut().background_style = BackgroundStyle::VerticalGradient {
+                    top_color: Color32::WHITE,
+                    bottom_color: if edited { EDITED } else { Color32::WHITE },
+                };
+                if via_override {
+                    chart.set_theme_override(Some(Theme::dark()));
+                } else {
+                    apply_to_egui(&ctx, &Theme::dark());
+                }
+                frame(&ctx, &mut chart, 1.0, vec![]);
+                assert_eq!(
+                    chart.config().background_style,
+                    BackgroundStyle::VerticalGradient {
+                        top_color: Color32::BLACK,
+                        bottom_color: if edited { EDITED } else { Color32::BLACK },
+                    },
+                    "override {via_override}"
+                );
+                assert_eq!(chart.config().text_color, Color32::WHITE);
+            }
         }
     }
 
