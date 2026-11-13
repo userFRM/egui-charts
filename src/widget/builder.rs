@@ -245,6 +245,7 @@ impl Chart {
             marks: Default::default(),
             marker_options: Default::default(),
             change_marks: None,
+            frame_clock: None,
             price_lines: Vec::new(),
             next_price_line: 0,
             #[cfg(feature = "ui")]

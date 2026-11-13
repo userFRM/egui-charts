@@ -250,7 +250,7 @@ impl DemoApp {
         }
     }
 
-    fn refresh_active_chart(&mut self) {
+    pub(super) fn refresh_active_chart(&mut self) {
         self.comparison_settings = None;
         self.refresh_strategy_signals();
         self.last_chart_click = None;
@@ -267,8 +267,10 @@ impl DemoApp {
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
         ] {
-            self.timeframe_toolbar
-                .set_control_visible(control, DemoSymbol::has_hours(&self.state.symbol));
+            self.timeframe_toolbar.set_control_visible(
+                control,
+                self.own_data.is_none() && DemoSymbol::has_hours(&self.state.symbol),
+            );
         }
         let (session, adjusted) = self.live.view(self.chart.extended_hours());
         self.timeframe_toolbar.set_session(session);
@@ -282,7 +284,7 @@ impl DemoApp {
     }
 
     pub(super) fn show_layout_tabs(&mut self, ui: &mut egui::Ui) {
-        if self.layout_tabs.len() <= 1 {
+        if self.layout_tabs.len() <= 1 || self.own_data.is_some() {
             return;
         }
         let bars = self.chart.bars(SeriesId::MAIN);
@@ -381,7 +383,43 @@ impl DemoApp {
         });
         self.layout_tab = index;
         self.refresh_layout_menu();
-        // Other tabs may have edited the same symbol since this tab was last shown.
+        self.refresh_workspace();
+    }
+
+    /// Sets the active tab's workspace aside in the tab's own slot, where an inactive tab keeps
+    /// its workspace, and shows `chart` alone. Theme and number format changes therefore keep
+    /// reaching the charts set aside. Nothing is saved or stopped here.
+    pub(super) fn park_workspace(&mut self, chart: Chart) {
+        let workspace = Workspace {
+            chart: std::mem::replace(&mut self.chart, chart),
+            live: self.live.clone(),
+            comparisons: std::mem::take(&mut self.comparisons),
+            spreads: std::mem::take(&mut self.spreads),
+            extra: std::mem::take(&mut self.extra_charts),
+            layout: std::mem::take(&mut self.layout),
+            slot: std::mem::take(&mut self.layout_slot),
+        };
+        self.layout_tabs[self.layout_tab].workspace = Some(workspace);
+    }
+
+    /// Brings back the workspace `park_workspace` set aside and points the toolbars at it.
+    pub(super) fn resume_workspace(&mut self) {
+        let Some(workspace) = self.layout_tabs[self.layout_tab].workspace.take() else {
+            return;
+        };
+        self.chart = workspace.chart;
+        self.live = workspace.live;
+        self.comparisons = workspace.comparisons;
+        self.spreads = workspace.spreads;
+        self.extra_charts = workspace.extra;
+        self.layout = workspace.layout;
+        self.layout_slot = workspace.slot;
+        self.refresh_workspace();
+    }
+
+    /// Points storage, the toolbars and the grid selector at the workspace on show.
+    fn refresh_workspace(&mut self) {
+        // Other tabs may have edited the same symbol since this workspace was last shown.
         self.chart.set_storage(self.storage.clone());
         for chart in &mut self.extra_charts {
             chart.chart.set_storage(self.storage.clone());
@@ -484,6 +522,15 @@ impl DemoApp {
     }
 
     pub(super) fn handle_layout_action(&mut self, action: LayoutAction) {
+        // While own data is on, nothing selects, creates, restores or saves a layout: the
+        // synthetic workspace waits in the slot of the active tab.
+        if !matches!(
+            action,
+            LayoutAction::DownloadData | LayoutAction::DownloadImage | LayoutAction::None
+        ) && self.synthetic_only("Layouts")
+        {
+            return;
+        }
         match action {
             LayoutAction::SelectGrid(mode) => {
                 self.grid_edits += 1;
@@ -637,6 +684,9 @@ impl DemoApp {
 
     /// Saves the open layout under its tab's name.
     fn save_layout(&mut self) {
+        if self.own_data.is_some() {
+            return;
+        }
         let name = self.layout_tabs[self.layout_tab].name.clone();
         match self.capture_layout() {
             Ok(layout) => match self.save_comparisons(&name) {
@@ -807,6 +857,13 @@ impl DemoApp {
         settings.theme = self.theme_choice.clone();
         settings.symbol = Some(self.state.symbol.clone());
         settings.interval = Some(self.state.timeframe);
+        if self.own_data.is_some()
+            && let Some(parked) = &self.layout_tabs[self.layout_tab].workspace
+        {
+            // The visitor's symbol is not a symbol of the synthetic session.
+            settings.symbol = Some(parked.chart.symbol().to_owned());
+            settings.interval = parked.chart.timeframe();
+        }
         let toolbar = &self.drawing_toolbar.state;
         settings.drawing_favorites = toolbar.favorites.clone();
         settings.cursor_favorites = toolbar.cursor_favorites.clone();
