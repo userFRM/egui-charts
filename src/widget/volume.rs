@@ -248,6 +248,65 @@ mod tests {
     use crate::widget::test_frames::{chart, shapes};
     use egui::Context;
 
+    /// The volume study adds a tag to the price axis and rows to the tooltip of a candle chart,
+    /// and neither on the chart types that hide volume.
+    #[test]
+    fn price_based_charts_show_no_volume_tag_or_rows() {
+        use crate::model::ChartType;
+        let mut failures = Vec::new();
+        for (kind, shown) in [
+            (ChartType::Candles, true),
+            (ChartType::Renko, false),
+            (ChartType::Kagi, false),
+            (ChartType::LineBreak, false),
+            (ChartType::PointAndFigure, false),
+        ] {
+            let ctx = Context::default();
+            // Closes of 100, 103, 106 and 109 in turn build elements at the default sizes.
+            let mut chart = chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+            chart.set_chart_type(kind);
+            chart.config_mut().show_volume = false;
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            shapes(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let newest = chart.state.shown().len() - 1;
+            let pointer =
+                egui::Event::PointerMoved(egui::pos2(map.idx_to_x(newest), map.rect.center().y));
+            let texts = |painted: Vec<egui::Shape>| {
+                Vec::from_iter(painted.into_iter().filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some((text.pos.x, text.galley.text().to_owned())),
+                    _ => None,
+                }))
+            };
+            // The texts on the price axis without a pointer, and whether the tooltip over the
+            // newest element lists a row of the study.
+            let readouts = |chart: &mut crate::widget::Chart, time| {
+                shapes(&ctx, chart, time, vec![]);
+                let mut tags = texts(shapes(&ctx, chart, time + 0.1, vec![]));
+                let axis = chart.last_rendered_price_rect.right();
+                tags.retain(|(x, _)| *x >= axis);
+                shapes(&ctx, chart, time + 0.2, vec![pointer.clone()]);
+                let hovered = texts(shapes(&ctx, chart, time + 0.3, vec![pointer.clone()]));
+                shapes(&ctx, chart, time + 0.4, vec![egui::Event::PointerGone]);
+                let rows = hovered.iter().any(|(_, text)| text.starts_with("Volume:"));
+                (tags, rows)
+            };
+            let (tags, rows) = readouts(&mut chart, 0.2);
+            assert!(!rows, "{kind:?}: no study, no rows");
+            chart.config_mut().show_volume = true;
+            let (with_volume, rows) = readouts(&mut chart, 0.7);
+            if (with_volume != tags) != shown {
+                failures.push(format!(
+                    "{kind:?}: price axis {with_volume:?}, was {tags:?}"
+                ));
+            }
+            if rows != shown {
+                failures.push(format!("{kind:?}: volume rows in the tooltip: {rows}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     #[test]
     fn volume_switch_and_pane_keep_volume_off_the_price_scale() {
         let ctx = Context::default();

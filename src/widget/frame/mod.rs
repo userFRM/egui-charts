@@ -2806,6 +2806,10 @@ impl Chart {
                 .filter(|(idx, _)| study_indices.contains(idx))
                 .map(|(_, study)| study)
             {
+                // A chart type that hides volume tags no volume value.
+                if study.is_volume() && !self.chart_type.supports_volume() {
+                    continue;
+                }
                 if study.is_volume()
                     && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                 {
@@ -3652,8 +3656,10 @@ impl Chart {
                             .study_rows_at(start_idx + local_idx)
                             .into_iter()
                             .filter(|(id, _)| {
-                                !tooltip_options.on_long_press
-                                    || tooltip_options.show_volume_details
+                                // A chart type that hides volume lists no volume rows.
+                                (self.chart_type.supports_volume()
+                                    && (!tooltip_options.on_long_press
+                                        || tooltip_options.show_volume_details))
                                     || self
                                         .study_ids
                                         .iter()
