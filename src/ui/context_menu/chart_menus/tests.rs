@@ -345,12 +345,14 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
         ]
     };
     for theme in [Theme::light(), Theme::dark()] {
-        for (time, left, ratio, short) in [
-            (false, false, false, false),
-            (false, true, false, false),
-            (true, false, false, false),
-            (false, false, true, false),
-            (false, false, false, true),
+        for (time, left, ratio, short, pane, hours) in [
+            (false, false, false, false, false, false),
+            (false, true, false, false, false, false),
+            (true, false, false, false, false, false),
+            (false, false, true, false, false, false),
+            (false, false, false, true, false, false),
+            (false, false, false, false, true, false),
+            (true, false, false, false, false, true),
         ] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -362,11 +364,22 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
             let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
             chart.config_mut().show_left_axis = left;
             chart.config_mut().show_right_axis = !left;
+            let pane = pane
+                .then(|| chart.add_indicator(Box::new(crate::studies::RSI::new(14))))
+                .and_then(|study| chart.series_pane(study));
             let mut menus = ChartMenus::default();
             paint(&ctx, &mut chart, &mut menus, vec![], size);
             let plot = chart.get_rendered_price_rect();
             let anchor = if time {
                 Pos2::new(plot.center().x, plot.bottom() + 10.0)
+            } else if pane.is_some() {
+                Pos2::new(
+                    plot.right() + 25.0,
+                    chart.get_rendered_indicator_panes()[0]
+                        .panel_rect
+                        .center()
+                        .y,
+                )
             } else {
                 Pos2::new(
                     if left {
@@ -417,8 +430,28 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                     );
                 }
             }
+            if pane.is_some() {
+                assert!(chart.menu_open, "a study pane's axis menu is an open menu");
+                // One menu, with the rows of a scale that holds no price chart.
+                for (label, count) in [
+                    ("Invert scale", 1),
+                    ("Lock price to bar ratio", 1),
+                    ("Hide unused axes", 1),
+                    ("Indicator values", 1),
+                    ("Scale price chart only", 0),
+                    ("Last price label", 0),
+                ] {
+                    let rows = shapes
+                        .iter()
+                        .filter(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == label))
+                        .count();
+                    assert_eq!(rows, count, "{label} on a study pane's axis");
+                }
+            }
             let label = if short {
                 "High and low"
+            } else if hours {
+                "Extended hours"
             } else if time {
                 "Local time"
             } else if ratio {
@@ -463,10 +496,22 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                 assert!(
                     (chart.state().price_scale().range().length() - before / 2.0).abs() < 0.00001
                 );
+            } else if hours {
+                assert!(chart.extended_hours(), "redo applies the choice again");
+                assert!(chart.undo());
+                assert!(!chart.extended_hours(), "undo restores the earlier session");
+                chart.set_extended_hours(true);
+                assert!(!chart.can_undo(), "a host call is no user action");
             } else if time {
                 assert_eq!(
                     chart.chart_options().time_scale.timezone,
                     TimezoneMode::Local
+                );
+            } else if let Some(pane) = pane {
+                let axis = crate::widget::PaneScale::Named(crate::model::SeriesScale::Right);
+                assert_eq!(
+                    chart.pane_scale(pane, axis).unwrap().options().mode,
+                    PriceScaleMode::Percentage
                 );
             } else {
                 assert_eq!(
@@ -475,6 +520,133 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                 );
             }
         }
+    }
+}
+
+/// A touch held on a price axis or on the time axis opens that axis' menu, which stays open once
+/// the finger lifts. A drag still zooms the scale and a double tap resets it, and neither opens
+/// a menu.
+#[test]
+fn long_press_opens_the_axis_menus() {
+    use egui::{Shape, TouchDeviceId, TouchId, TouchPhase};
+    for axis in ["price", "pane", "time"] {
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let study = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        let mut menus = ChartMenus::default();
+        let mut now = 0.0;
+        let mut frame = |chart: &mut Chart, menus: &mut ChartMenus, wait: f64, events| {
+            now += wait;
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    time: Some(now),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                    menus.show(ui.ctx(), chart);
+                },
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        frame(&mut chart, &mut menus, 0.0, vec![]);
+        let pane = chart.series_pane(study).unwrap();
+        let plot = chart.get_rendered_price_rect();
+        let panel = chart.get_rendered_indicator_panes()[0].panel_rect;
+        let (pos, slide) = match axis {
+            "price" => (
+                Pos2::new(plot.right() + 25.0, plot.center().y),
+                Vec2::new(0.0, 40.0),
+            ),
+            "pane" => (
+                Pos2::new(plot.right() + 25.0, panel.center().y),
+                Vec2::new(0.0, 40.0),
+            ),
+            _ => (
+                Pos2::new(plot.center().x, panel.bottom() + 10.0),
+                Vec2::new(40.0, 0.0),
+            ),
+        };
+        let zoomed = |chart: &Chart| match axis {
+            "price" => chart.state().price_scale().is_manual(),
+            "pane" => {
+                let axis = crate::widget::PaneScale::Named(crate::model::SeriesScale::Right);
+                chart.pane_scale(pane, axis).unwrap().is_manual()
+            }
+            _ => chart.get_time_scale_state().0 != chart.chart_options().time_scale.bar_spacing,
+        };
+        assert!(!zoomed(&chart), "{axis}: the scale starts fitted");
+        let touch = |phase, pos| Event::Touch {
+            device_id: TouchDeviceId(1),
+            id: TouchId(1),
+            phase,
+            pos,
+            force: None,
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let press = |pos| {
+            vec![
+                touch(TouchPhase::Start, pos),
+                Event::PointerMoved(pos),
+                button(pos, true),
+            ]
+        };
+        let slide_to = |pos| vec![touch(TouchPhase::Move, pos), Event::PointerMoved(pos)];
+        let lift = |pos| {
+            vec![
+                touch(TouchPhase::End, pos),
+                button(pos, false),
+                Event::PointerGone,
+            ]
+        };
+
+        // A drag, held at its end for longer than a long press takes.
+        frame(&mut chart, &mut menus, 0.1, press(pos));
+        frame(&mut chart, &mut menus, 0.1, slide_to(pos + slide / 2.0));
+        frame(&mut chart, &mut menus, 0.1, slide_to(pos + slide));
+        frame(&mut chart, &mut menus, 1.0, vec![]);
+        frame(&mut chart, &mut menus, 0.1, lift(pos + slide));
+        assert!(!chart.menu_open, "{axis}: a drag opens no menu");
+        assert!(zoomed(&chart), "{axis}: a drag zooms the scale");
+
+        for _ in 0..2 {
+            frame(&mut chart, &mut menus, 0.1, press(pos));
+            frame(&mut chart, &mut menus, 0.05, lift(pos));
+        }
+        assert!(!chart.menu_open, "{axis}: a double tap opens no menu");
+        assert!(!zoomed(&chart), "{axis}: a double tap resets the scale");
+
+        frame(&mut chart, &mut menus, 1.0, press(pos));
+        frame(&mut chart, &mut menus, 0.5, vec![]);
+        assert!(!chart.menu_open, "{axis}: a touch held for half a second");
+        frame(&mut chart, &mut menus, 0.5, vec![]);
+        let shapes = frame(&mut chart, &mut menus, 0.1, lift(pos));
+        assert!(
+            chart.menu_open,
+            "{axis}: the menu stays once the finger lifts"
+        );
+        let row = if axis == "time" {
+            "Session breaks"
+        } else {
+            "Auto scale"
+        };
+        assert!(
+            shapes.iter().any(
+                |shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == row)
+            ),
+            "{axis}: a held touch opens the menu with {row}"
+        );
     }
 }
 

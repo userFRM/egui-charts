@@ -11,6 +11,7 @@ use egui_charts::model::Tick;
 use egui_charts::model::{Bar, Watchlist};
 use egui_charts::services::{ProfileDirectory, ProfileId, Profiles, UserSettings};
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
+use egui_charts::ui::financials::FinancialsPanel;
 use egui_charts::ui::profile::ProfileCard;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
 use egui_charts::ui::widget_bar::{
@@ -120,6 +121,9 @@ pub(super) struct State {
     tape_symbol: String,
     /// The newest trade listed: its time and how many trades share that time.
     tape_cursor: Option<(DateTime<Utc>, usize)>,
+    /// Open financials in place of the charts: the symbol and whether its figures had arrived
+    /// when the panel was made.
+    financials: Option<((String, bool), FinancialsPanel)>,
 }
 
 impl Default for State {
@@ -151,6 +155,7 @@ impl Default for State {
             adding_symbol: false,
             tape_symbol: String::new(),
             tape_cursor: None,
+            financials: None,
         }
     }
 }
@@ -226,7 +231,6 @@ impl Terminal {
         if let Some(storage) = &self.services.storage {
             market.details.set_storage(storage.clone());
         }
-        market.details.set_financials_visible(false);
         market.details.set_feed(self.feed.clone());
         market.highlights.set_feed(self.feed.clone());
         market.news.set_feed(self.feed.clone());
@@ -272,6 +276,47 @@ impl Terminal {
             .set_notification_cnt(RightBarIcon::Notifications, unread);
         self.feed_heatmap(ctx);
         self.feed_market_panels(ctx);
+        self.feed_financials();
+    }
+
+    /// Offers Financials once the feed has answered with figures for the details' symbol, and
+    /// keeps open financials on that symbol, showing its figures once they arrive.
+    fn feed_financials(&mut self) {
+        let details = &mut self.panels.market.details;
+        let available = details.financials().is_some();
+        details.set_financials_visible(available);
+        let key = (details.symbol().unwrap_or_default().to_owned(), available);
+        if details.take_financials_request() {
+            self.panel = None;
+        } else if self
+            .panels
+            .financials
+            .as_ref()
+            .is_none_or(|(shown, _)| *shown == key)
+        {
+            return;
+        }
+        let title = self.charts[self.active]
+            .instrument()
+            .filter(|instrument| instrument.symbol == key.0)
+            .and_then(|instrument| instrument.description.clone())
+            .unwrap_or_else(|| key.0.clone());
+        let panel = FinancialsPanel::new(title, details.financials().cloned());
+        self.panels.financials = Some((key, panel));
+    }
+
+    /// Replaces the chart workspace until the user returns to it.
+    pub(super) fn show_financials(&mut self, ui: &mut egui::Ui) -> bool {
+        let Some((_, panel)) = &mut self.panels.financials else {
+            return false;
+        };
+        let back = egui::Frame::NONE
+            .inner_margin(12.0)
+            .show(ui, |ui| panel.show(ui));
+        if back.inner {
+            self.panels.financials = None;
+        }
+        true
     }
 
     /// Subscribes to every heatmap symbol, including symbols outside the active watchlist.
@@ -769,7 +814,10 @@ impl Terminal {
     }
 
     pub(super) fn panels_modal(&self) -> bool {
-        self.panels.import.is_some() || self.panels.wide_watchlist || self.panels.profile.is_some()
+        self.panels.import.is_some()
+            || self.panels.wide_watchlist
+            || self.panels.profile.is_some()
+            || self.panels.financials.is_some()
     }
 }
 
@@ -1006,6 +1054,124 @@ mod tests {
                 .count();
         }
         assert_eq!(listed, 1);
+    }
+
+    /// Unsupported feeds leave no entry; host figures open in place of the chart, and a late
+    /// answer for another symbol cannot replace the active company's figures.
+    #[test]
+    fn financials_only_offer_and_show_the_active_symbols_host_figures() {
+        use super::super::test_support::click;
+        use egui_charts::data::{CompanyFinancials, FinancialPage};
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Host(Mutex<Vec<(String, Reply<CompanyFinancials>)>>);
+        impl Datafeed for Host {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                reply.send(Ok(Instrument::new(symbol).with_description("Host company")));
+            }
+
+            fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+                TestFeed.history(request, reply);
+            }
+
+            fn financials(&self, symbol: &str, reply: Reply<CompanyFinancials>) {
+                self.0.lock().unwrap().push((symbol.into(), reply));
+            }
+        }
+        let menu = |terminal: &mut Terminal| {
+            frame(terminal, SIZE, vec![]);
+            let ctx = terminal.ctx.clone().unwrap();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                    ..Default::default()
+                },
+                |ui| drop(terminal.show(ui)),
+            );
+            // The symbol details' More button is below the watchlist's More button.
+            let more = output
+                .platform_output
+                .accesskit_update
+                .iter()
+                .flat_map(|update| &update.nodes)
+                .filter(|(_, node)| node.label() == Some("More"))
+                .filter_map(|(_, node)| node.bounds())
+                .max_by(|a, b| a.y0.total_cmp(&b.y0))
+                .expect("symbol menu");
+            let pos = egui::pos2(
+                ((more.x0 + more.x1) / 2.0) as f32,
+                ((more.y0 + more.y1) / 2.0) as f32,
+            );
+            output.drop_without_applying_deltas();
+            click(terminal, SIZE, pos);
+            frame(terminal, SIZE, vec![])
+        };
+        let mut unsupported = terminal();
+        frame(&mut unsupported, SIZE, vec![]);
+        let shown = menu(&mut unsupported);
+        assert!(shown.text_at("Copy symbol").is_some());
+        assert!(shown.text_at("Financials").is_none());
+
+        let host = Arc::new(Host::default());
+        let mut terminal = Terminal::new(host.clone()).with_symbol("AAPL");
+        frame(&mut terminal, SIZE, vec![]);
+        assert!(menu(&mut terminal).text_at("Financials").is_none());
+        egui::Popup::close_all(&terminal.ctx.clone().unwrap());
+        let (symbol, reply) = host.0.lock().unwrap().pop().unwrap();
+        assert_eq!(symbol, "AAPL");
+        let figures = |name: &str, value| {
+            CompanyFinancials::new(
+                Some("USD".into()),
+                vec![
+                    FinancialPage::new("Income statement", vec!["FY 2025".into()])
+                        .with_row(name, vec![Some(value)]),
+                ],
+            )
+        };
+        reply.send(Ok(figures("Host revenue", 42.0)));
+        let shown = menu(&mut terminal);
+        click(
+            &mut terminal,
+            SIZE,
+            shown.text_at("Financials").expect("host figures available"),
+        );
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        assert!(shown.text_at("Back to chart").is_some());
+        let shown = texts(&mut terminal);
+        assert!(shown.iter().any(|text| text == "Host company"));
+        assert!(shown.iter().any(|text| text == "Host revenue"));
+        assert!(shown.iter().any(|text| text == "42.00"));
+        assert_eq!(terminal.panel, None, "analysis gets the whole workspace");
+        assert!(
+            host.0.lock().unwrap().is_empty(),
+            "do not request per frame"
+        );
+
+        terminal.switch_symbol("MSFT");
+        frame(&mut terminal, SIZE, vec![]);
+        let (_, late) = host.0.lock().unwrap().pop().unwrap();
+        assert!(
+            !texts(&mut terminal)
+                .iter()
+                .any(|text| text == "Host revenue")
+        );
+        terminal.switch_symbol("NVDA");
+        frame(&mut terminal, SIZE, vec![]);
+        let (symbol, current) = host.0.lock().unwrap().pop().unwrap();
+        assert_eq!(symbol, "NVDA");
+        current.send(Ok(figures("Current revenue", 84.0)));
+        late.send(Ok(figures("Stale revenue", 21.0)));
+        let shown = texts(&mut terminal);
+        assert!(shown.iter().any(|text| text == "Current revenue"));
+        assert!(!shown.iter().any(|text| text == "Stale revenue"));
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        click(&mut terminal, SIZE, shown.text_at("Back to chart").unwrap());
+        assert!(
+            frame(&mut terminal, SIZE, vec![])
+                .text_at("Back to chart")
+                .is_none()
+        );
     }
 
     /// Host pushes reach hidden panels once, quotes cover heatmap symbols outside the list,

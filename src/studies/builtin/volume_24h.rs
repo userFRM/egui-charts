@@ -171,25 +171,11 @@ impl Volume24h {
         Self::CURRENCIES.get(self.target.checked_sub(1)?).copied()
     }
 
-    /// Whether two currency codes name the same currency: exact for a code that mixes cases
-    /// (`GBp`, pence), else regardless of case.
-    fn same_currency(a: &str, b: &str) -> bool {
-        let mixed = |code: &str| {
-            code.bytes().any(|c| c.is_ascii_lowercase())
-                && code.bytes().any(|c| c.is_ascii_uppercase())
-        };
-        if mixed(a) || mixed(b) {
-            a == b
-        } else {
-            a.eq_ignore_ascii_case(b)
-        }
-    }
-
     /// The exchange rates converting quote amounts into a target currency other than the quote
     /// currency.
     fn rate_request(&self) -> Option<StudyDataRequest> {
         let (from, to) = (self.currency.as_deref()?, self.target()?);
-        (self.quote_units && !Self::same_currency(from, to))
+        (self.quote_units && !crate::model::same_currency(from, to))
             .then(|| StudyDataRequest::exchange_rate(from, to))
     }
 
