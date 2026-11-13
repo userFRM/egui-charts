@@ -19,7 +19,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SWMA::new()),
         Box::new(KAMA::new(l(0)).with_periods(l(1), l(2))),
         Box::new(SmoothedMA::new(l(0))),
-        Box::new(GuppyMA::new()),
+        Box::new(GuppyMA::new().with_periods(std::array::from_fn(&l))),
         Box::new(McGinleyDynamic::new(l(0))),
         Box::new(VIDYA::new(l(0))),
         Box::new(ZLEMA::new(l(0))),
@@ -594,11 +594,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
 
     // Every length equal, then each length alone huge, then each alone longer than the rest
     // (a swapped fast/slow pair, for example).
-    let mut lengths: Vec<[usize; 9]> = vec![[0; 9], [1; 9], [usize::MAX; 9]];
-    for k in 0..9 {
-        let mut huge = [1; 9];
+    let mut lengths: Vec<[usize; 12]> = vec![[0; 12], [1; 12], [usize::MAX; 12]];
+    for k in 0..12 {
+        let mut huge = [1; 12];
         huge[k] = usize::MAX;
-        let mut longer = [20; 9];
+        let mut longer = [20; 12];
         longer[k] = 50;
         lengths.extend([huge, longer]);
     }

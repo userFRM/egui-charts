@@ -814,6 +814,12 @@ mod tests {
                     ("extend_val", Toggle(false)),
                 ],
             ),
+            // Saved before the twelve lengths were inputs.
+            (
+                "GMMA",
+                vec![],
+                vec![("periods [0]", Length(3)), ("periods [11]", Length(60))],
+            ),
         ];
         let factory = IndicatorFactory::new();
         let periods = (0..7).map(|period| {
