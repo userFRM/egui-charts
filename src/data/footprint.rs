@@ -779,13 +779,15 @@ impl Footprint {
     /// the bar before closes at another price than every execution at the start's time, and the
     /// page's end only when it ends with the last of `history`. The newest proven run is kept, so
     /// its bars have no gap. Older bars get no cells and draw candles. With `before`, adds only
-    /// the executions strictly before it.
+    /// the executions strictly before it. Unless `ended`, executions after the last one may be
+    /// missing: the page does not end there, and that end proves nothing.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
         trades: &[&Tick],
         history: &[crate::model::Bar],
         before: Option<DateTime<Utc>>,
+        ended: bool,
     ) {
         let Some(timeframe) = self.clock.timeframe().filter(|tf| tf.is_trade_based()) else {
             return;
@@ -826,6 +828,7 @@ impl Footprint {
                 &history[first..],
                 trades[start].size,
                 None,
+                ended,
             );
             // The page's end pins the split only with the last bar: an earlier one has executions
             // after the page, and when they sum to the part a grouping moved, it matches as well.
@@ -991,7 +994,8 @@ fn near(a: f64, b: f64) -> bool {
 }
 
 /// Groups `trades` from their first execution along `history`, the bars from the one it opens.
-/// `first` is the part of that execution in this bar, and `previous` the open of the bar before.
+/// `first` is the part of that execution in this bar, `previous` the open of the bar before, and
+/// `ended` whether the page ends with the last of `trades`.
 #[cfg(feature = "widget")]
 fn history_run<'a>(
     timeframe: crate::model::Timeframe,
@@ -1000,6 +1004,7 @@ fn history_run<'a>(
     history: &[crate::model::Bar],
     first: f64,
     previous: Option<DateTime<Utc>>,
+    ended: bool,
 ) -> HistoryRun<'a> {
     use crate::model::Bar;
     let same = |grouped: &Bar, bar: Option<&Bar>| {
@@ -1043,7 +1048,7 @@ fn history_run<'a>(
         }
     }
     // The page ends here, so a last bar that sums as grouped closes no earlier than it should.
-    if forming.is_some_and(|grouped| same(&grouped, history.get(matched))) {
+    if ended && forming.is_some_and(|grouped| same(&grouped, history.get(matched))) {
         return HistoryRun {
             parts,
             proven: true,
@@ -1096,6 +1101,7 @@ pub(crate) fn live_run<'a>(
         &history[first..],
         rest,
         previous,
+        true,
     );
     let end = run.end?;
     (run.parts.last()?.1 == history.last()?.time).then_some((run.parts, end))
@@ -1481,9 +1487,9 @@ mod tests {
         let references: Vec<_> = trades.iter().collect();
         let mut flow = fresh();
         let empty = flow.revision();
-        flow.push_history(&references, &history, Some(time));
+        flow.push_history(&references, &history, Some(time), true);
         assert_eq!(flow.revision(), empty);
-        flow.push_history(&references, &history, None);
+        flow.push_history(&references, &history, None, true);
         assert_ne!(flow.revision(), empty);
         assert_eq!(flow.bars().len(), 2);
         let mut copied = fresh();

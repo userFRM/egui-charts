@@ -245,7 +245,10 @@ impl FeedLink {
             if live.is_some_and(|live| self.trades.left_out_at() == Some(live)) {
                 paged_bars = paged_bars.saturating_sub(1);
             }
-            flow.push_history(&paged, &history[..paged_bars], before);
+            // Until a trade page fills the time after the retained executions, some that traded
+            // after them may be missing: their end is not the page's and proves nothing.
+            let ended = self.trades.retained_until().is_none();
+            flow.push_history(&paged, &history[..paged_bars], before, ended);
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
             for trade in trades() {
                 let _ = flow.push(trade);
