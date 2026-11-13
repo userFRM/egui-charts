@@ -313,8 +313,14 @@ impl Chart {
                 && kinetic
                 && self.scroll_start_pos.is_some()
             {
-                // The release can carry the pointer's last movement itself.
-                if let Some(pos) = response.interact_pointer_pos() {
+                // A pointer that came to rest before the release throws nothing.
+                let moving = |last: Option<f64>| last.is_some_and(|last| now - last <= 0.05);
+                // Frames slower than that rest leave the release to carry the pointer's last
+                // movement itself. Faster frames have measured the speed over a whole frame,
+                // which a release that arrives part way through its own would understate.
+                if !moving(self.kinetic_scroll.last_time)
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
                     self.sample_kinetic_speed(pos, now);
                 }
                 let move_distance = self
@@ -326,13 +332,7 @@ impl Chart {
                 let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
                 let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
 
-                // A pointer that came to rest before the release throws nothing.
-                let moving = self
-                    .kinetic_scroll
-                    .last_time
-                    .is_some_and(|last| now - last <= 0.05);
-
-                if moving
+                if moving(self.kinetic_scroll.last_time)
                     && move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
                     && self.kinetic_scroll.velocity.abs() >= min_v_px_s
                 {
@@ -1942,8 +1942,8 @@ mod tests {
         }
     }
 
-    /// A fast horizontal drag continues after release only when inertia is enabled for its
-    /// device and the pointer was still moving, and a new drag stops it.
+    /// A fast horizontal drag continues after release, at its speed, only when inertia is
+    /// enabled for its device and the pointer was still moving, and a new drag stops it.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn released_drag_continues_under_its_device_inertia() {
@@ -1960,6 +1960,7 @@ mod tests {
             (true, 0.5, true, 0.0),
             (false, 0.1, false, 15.0),
             (true, 0.1, false, 15.0),
+            (true, 0.02, false, 2.0),
         ] {
             for (touch_inertia, mouse_inertia) in
                 [(false, false), (true, false), (false, true), (true, true)]
@@ -2020,6 +2021,20 @@ mod tests {
                     inertia && (rest <= 0.05 || slide > 0.0),
                     "touch={touch}, rest={rest}, frames={frames}, slide={slide}, touch \
                      inertia={touch_inertia}, mouse inertia={mouse_inertia}"
+                );
+                // The drag moved 15 points every 20 ms. A release within 50 ms continues at that
+                // speed, whatever part of its own frame's movement it brings, and a later one
+                // at the speed of the movement it brings.
+                let speed = if rest <= 0.05 {
+                    -750.0
+                } else {
+                    -slide / rest as f32
+                };
+                assert!(
+                    !chart.kinetic_scroll.is_active
+                        || (chart.kinetic_scroll.velocity - speed).abs() < 1.0,
+                    "touch={touch}, rest={rest}, slide={slide}: {}",
+                    chart.kinetic_scroll.velocity
                 );
 
                 let press = input(button(end, true), egui::TouchPhase::Start, end);
