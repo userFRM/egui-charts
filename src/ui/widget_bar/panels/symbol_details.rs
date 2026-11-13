@@ -137,7 +137,7 @@ impl SymbolDetailsPanel {
         self.storage = Some(storage);
         self.notes.clear();
         self.requests
-            .retain(|_, request| matches!(request, Request::Details(_)));
+            .retain(|_, request| matches!(request, Request::Details(_) | Request::Financials(_)));
         if let Some(symbol) = self.symbol().map(str::to_owned) {
             self.load_notes(symbol);
         }
@@ -962,16 +962,22 @@ fn volume_bar(ui: &mut Ui, volume: f64, average: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HistoryPage, HistoryRequest, Reply};
+    use crate::data::{FinancialPage, HistoryPage, HistoryRequest, Reply};
     use std::sync::Mutex;
 
-    /// Keeps detail requests for the test to answer in any order.
+    /// Keeps detail requests for the test to answer in any order, and answers financials at once
+    /// with a page named after the symbol.
     #[derive(Default)]
     struct Feed(Mutex<Vec<(String, Reply<SymbolDetails>)>>);
 
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
             reply.send(Ok(HistoryPage::default()));
+        }
+
+        fn financials(&self, symbol: &str, reply: Reply<CompanyFinancials>) {
+            let page = FinancialPage::new(symbol, Vec::new());
+            reply.send(Ok(CompanyFinancials::new(None, vec![page])));
         }
 
         fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
@@ -1054,9 +1060,10 @@ mod tests {
         let store = Arc::new(Store::default());
         let mut panel = SymbolDetailsPanel::new();
         panel.set_feed(feed.clone());
-        panel.set_storage(store.clone());
         panel.set_instrument(&Instrument::new("AAPL"));
         panel.set_instrument(&Instrument::new("MSFT"));
+        // Storage attached while the feed's answers are on their way does not drop them.
+        panel.set_storage(store.clone());
         // The answer for the previous symbol arrives last and must not replace the current one.
         let requests = std::mem::take(&mut *feed.0.lock().unwrap());
         for (symbol, reply) in requests.into_iter().rev() {
@@ -1073,6 +1080,7 @@ mod tests {
         assert!(shown.contains(&"Facts".into()), "{shown:?}");
         assert!(!shown.contains(&"Key statistics".into()), "{shown:?}");
         assert!(!shown.contains(&"Profile".into()), "{shown:?}");
+        assert_eq!(panel.financials().unwrap().pages[0].name, "MSFT");
 
         // A second edit waits for the first write of the same document, then writes the latest text.
         let edit = |panel: &mut SymbolDetailsPanel, text: &str| {
