@@ -30,7 +30,9 @@
 //!   Chop Zone.
 //! - The conventional floor-trader pivot points with Tom DeMark's and Nick Stott's Camarilla levels,
 //!   from the previous period of UTC dates; the time-weighted mean of ohlc4 and Berkowitz, Logue and
-//!   Noser's volume-weighted mean of hlc3 since an anchor bar.
+//!   Noser's volume-weighted mean of hlc3 since an anchor bar, with bands at one, two and three
+//!   volume-weighted population standard deviations of hlc3 since that bar, or multiples of a
+//!   percentage of the mean.
 //! - Time-study rows run on hand-built series in calendar time: 24-hour volume over the bars opening
 //!   in the last 24 hours; relative volume at time as the cumulative or single-bar volume over its
 //!   mean at the same offset into the previous periods (the last earlier bar of a period at that
@@ -1128,6 +1130,13 @@ fn staple_studies_match_published_definitions() {
     let mut monthly = PivotPoints::new().with_method(PivotMethod::Woodie);
     monthly.set_timeframe(crate::model::Timeframe::Day1);
     let auto = |anchor| Box::new(VwapAutoAnchored::new().with_anchor(anchor));
+    let mut auto_percent = VwapAutoAnchored::new();
+    for (id, value) in [
+        ("percentage_bands", crate::studies::InputValue::Toggle(true)),
+        ("band_multiplier", crate::studies::InputValue::Number(1.5)),
+    ] {
+        auto_percent.set_input(id, value).unwrap();
+    }
     studies.extend([
         (
             "Pivots-Woodie-auto-daily",
@@ -1162,6 +1171,8 @@ fn staple_studies_match_published_definitions() {
         ("AutoVWAP-HH", auto(AutoAnchor::HighestHigh), bars.clone()),
         ("AutoVWAP-LL", auto(AutoAnchor::LowestLow), bars.clone()),
         ("AutoVWAP-HV", auto(AutoAnchor::HighestVolume), bars.clone()),
+        // Bands at 1.5, 3 and 4.5 percent of the VWAP.
+        ("AutoVWAP-pct", Box::new(auto_percent), bars.clone()),
     ]);
     let available = |name: &str| match name {
         "RVOL-chicago" | "Sessions-default" => cfg!(feature = "timezones"),
