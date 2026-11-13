@@ -710,7 +710,10 @@ mod tests {
         assert!(matches!(action, DataTableAction::Export(csv) if csv.contains("RSI: RSI(14)")));
 
         assert_eq!(headers(&mut dialog, &first), without_sma);
-        let saved = first.snapshot().unwrap();
+        // Read back as storage would, which must keep the chart that took it.
+        let saved =
+            serde_json::from_str(&serde_json::to_string(&first.snapshot().unwrap()).unwrap())
+                .unwrap();
         for _ in 0..2 {
             first.restore(&saved).unwrap();
             assert_eq!(first.data_table().headers.len(), 7);
@@ -943,10 +946,10 @@ mod tests {
         }
     }
 
-    /// After a chart restores its own layout and then the layout of another chart, turning off
-    /// the column of one study hides that study only, also when the studies share a title. A
-    /// study restored under the same id as a study of another title keeps its choice when its
-    /// layout is restored again.
+    /// After a chart restores its own layout, a study of another chart's layout starts with its
+    /// column shown, also when it was saved under the id of a study whose column is off here, and
+    /// turning off the column of one study hides that study only, also when the studies share a
+    /// title. Another chart's layout restored again starts with every column shown.
     #[test]
     fn restored_studies_of_one_title_keep_separate_column_choices() {
         let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
@@ -954,9 +957,12 @@ mod tests {
             .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
             .collect();
         let mut other = Chart::new(BarData::from_bars(bars.clone()));
-        other.add_indicator(Box::new(crate::studies::SMA::new(5)));
+        let five = other.add_indicator(Box::new(crate::studies::SMA::new(5)));
         other.add_indicator(Box::new(crate::studies::SMA::new(20)));
         let layout = other.snapshot().unwrap();
+        // The same chart's layout once its SMA(5) is removed: the SMA(20) alone, saved with id 3.
+        other.remove_series(five);
+        let lone = other.snapshot().unwrap();
         // The layout of a third chart, with an EMA under the saved id of the SMA(5).
         let mut third = Chart::new(BarData::from_bars(bars.clone()));
         third.add_indicator(Box::new(crate::studies::EMA::new(9)));
@@ -985,11 +991,15 @@ mod tests {
                 .map(|(header, _)| header.clone())
                 .collect::<Vec<_>>()
         };
+        // `lone` saved its SMA(20) with id 3, the id of the SMA(10) turned off here.
+        assert!(shown(&chart, Some("SMA: SMA(10)")).is_empty());
+        chart.restore(&lone).unwrap();
+        assert_eq!(shown(&chart, None), ["SMA: SMA(20)"]);
         chart.restore(&layout).unwrap();
         assert_eq!(shown(&chart, Some("SMA: SMA(5)")), ["SMA: SMA(20)"]);
         chart.restore(&mixed).unwrap();
         assert_eq!(shown(&chart, Some("EMA: EMA(9)")), ["SMA: SMA(20)"]);
         chart.restore(&mixed).unwrap();
-        assert_eq!(shown(&chart, None), ["SMA: SMA(20)"]);
+        assert_eq!(shown(&chart, None), ["EMA: EMA(9)", "SMA: SMA(20)"]);
     }
 }

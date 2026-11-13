@@ -4454,6 +4454,60 @@ fn market_replay_profile_drawings_follow_the_cursor() {
     assert_eq!(row(top(&mut chart)), 101.5, "sought to where it played");
 }
 
+/// An order-flow study present when a market replay starts follows the driver's cursor through
+/// playback and seeks. Bars open at 0, 60 and 120 s and the per-bar delta is each buy's size: 1 at
+/// 10 s, 2 at 70 s and 4 at 130 s, so 75 s shows [1, 2] over two bars and 140 s [1, 2, 4] over three.
+#[cfg(feature = "studies")]
+#[test]
+fn market_replay_order_flow_studies_follow_the_cursor() {
+    use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+    use crate::model::OrderSide::Buy;
+    use crate::studies::OrderFlowStudy;
+    let start = DateTime::UNIX_EPOCH;
+    let second = |seconds| start + TimeDelta::seconds(seconds);
+    let events = [(10, 1.0), (70, 2.0), (130, 4.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (seconds, size))| {
+            let fill = Tick::new(second(seconds), 100.0, size, Some(Buy)).with_id(at as u64);
+            ReplayEvent::new("A", second(seconds), at as u64, MarketEvent::Trade(fill))
+        })
+        .collect();
+    let instruments = vec![Instrument::new("A").with_tick_size(1.0)];
+    let driver = Arc::new(ReplayDriver::new(events, instruments).unwrap());
+    driver.set_speed(0.0).unwrap();
+    driver.seek(second(75));
+    let mut chart = Chart::new(BarData::new());
+    chart.set_symbol("A");
+    chart.set_timeframe(Timeframe::Min1);
+    chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+    chart.set_market_replay(Some(driver.clone()));
+    let mut frames = Frames::new();
+    let mut deltas = |chart: &mut Chart| {
+        for _ in 0..8 {
+            frames.run(chart);
+        }
+        let bars = chart.bars(SeriesId::MAIN).len();
+        let study = chart.indicators().next().unwrap().1;
+        (bars, study.values().line(0).to_vec())
+    };
+    let sought = deltas(&mut chart);
+    driver.set_speed(1.0).unwrap();
+    driver.advance(std::time::Duration::from_secs(65)).unwrap();
+    driver.set_speed(0.0).unwrap();
+    let played = deltas(&mut chart);
+    driver.seek(second(75));
+    let sought_back = deltas(&mut chart);
+    assert_eq!(
+        (sought, played, sought_back),
+        (
+            (2, vec![1.0, 2.0]),
+            (3, vec![1.0, 2.0, 4.0]),
+            (2, vec![1.0, 2.0])
+        )
+    );
+}
+
 /// Answers every request at once with bars closing at the symbol's base plus their index:
 /// AAPL from 100, MSFT from 40. It records the history requests.
 #[derive(Default)]
