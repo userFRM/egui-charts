@@ -340,6 +340,27 @@ impl StudyTemplate {
                         .collect();
                 }
             }
+            // An auto anchored VWAP drew one line before it had bands; hidden, the bands and their
+            // fill keep the styles they take once shown.
+            "VWAP Auto Anchored" if !has("band_multiplier") && self.settings.plots.len() == 1 => {
+                let declared = crate::studies::VwapAutoAnchored::new().settings();
+                template.inputs.extend([
+                    ("percentage_bands".to_owned(), InputValue::Toggle(false)),
+                    ("band_multiplier".to_owned(), InputValue::Number(1.0)),
+                ]);
+                for mut plot in declared.plots.into_iter().skip(1) {
+                    plot.visible = false;
+                    template.settings.plots.push(plot);
+                }
+                template
+                    .settings
+                    .untagged_plots
+                    .extend(declared.untagged_plots);
+                template.settings.fills = declared.fills;
+                for fill in &mut template.settings.fills {
+                    fill.visible = false;
+                }
+            }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
                 if self
@@ -783,9 +804,9 @@ mod tests {
         }
     }
 
-    /// An RSI and a VWAP saved before their defaults gained an average and a band restore with the
-    /// plots they had, and a Rank Correlation saved before it had an average, levels and a filled
-    /// band restores without them.
+    /// An RSI, a VWAP and an auto anchored VWAP saved before their defaults gained an average and
+    /// bands restore with the plots they had, and a Rank Correlation saved before it had an
+    /// average, levels and a filled band restores without them.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -846,6 +867,24 @@ mod tests {
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
 
+        // An auto anchored VWAP as a chart saved it before the study had bands, its line edited
+        // to orange at two pixels and its length to 30: it draws that line alone, and the hidden
+        // bands are tagged as on a study added now.
+        let saved = r#"{"name":"VWAP Auto Anchored","inputs":[["anchor",{"Choice":0}],["length",{"Length":30}],["source",{"Choice":5}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VwapAutoAnchored.html","plots":[{"color":[230,81,0,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,9,14,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.plot_style(0), saved.settings.plots[0]);
+        let lines = 0..restored.line_count();
+        let drawn: Vec<_> = lines
+            .clone()
+            .filter(|&line| restored.plot_style(line).visible)
+            .collect();
+        let tagged: Vec<_> = lines.filter(|&line| restored.plot_tagged(line)).collect();
+        assert_eq!((drawn, tagged), (vec![0], vec![0, 1, 2]));
+        assert!(restored.fills().is_empty());
+        let length = restored.inputs().into_iter().find(|i| i.id == "length");
+        assert_eq!(length.unwrap().value, InputValue::Length(30));
+
         // A Rank Correlation as the release before its levels saved it draws none of them and
         // fills no band, one saved before it had an average draws none, and one saved since draws
         // the average, all three levels and the band.
@@ -884,6 +923,7 @@ mod tests {
         let rows = [
             ("RSI", vec![], 1),
             ("VWAP", vec![], 1),
+            ("VWAP Auto Anchored", vec![], 1),
             ("Trading Sessions", vec![], 1),
             // Built-in templates with `offset_percent` restore as Envelopes, which draws three
             // lines too.
