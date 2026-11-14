@@ -69,9 +69,9 @@ pub struct TradeProfile {
     pub volume: FootprintBar,
     /// Developing POC as `(bar open, grouped price level)`, including lower-price ties.
     pub developing_poc: Vec<(DateTime<Utc>, i64)>,
-    /// Whether the executions of every bar in `range` are held. False when `range` starts
-    /// before [`Footprint::complete_from`], or no bar is complete: `volume` and
-    /// `developing_poc` then leave out the bars before it, and the profile is partial.
+    /// Whether `range` starts inside held coverage and contains no incomplete bar.
+    /// `volume` and `developing_poc` omit incomplete bars but include complete prepared bars
+    /// before a missing join. A range crossing that join is partial.
     pub complete: bool,
     /// Rows of the footprint grouped into each row of `volume`, so a level's price is its key
     /// times `group` times [`Footprint::price_step`]. One unless [`trade_profiles_with_rows`]
@@ -160,8 +160,9 @@ impl TradeProfile {
 /// Builds exact profiles from footprint rows. No OHLC volume is distributed across prices.
 /// Ranges select whole bars, so session and split boundaries must align with the footprint's
 /// bar clock. Unknown aggressor volume remains separate and contributes only to total volume.
-/// Bars before [`Footprint::complete_from`], whose executions are not all held, are left
-/// out; [`TradeProfile::complete`] tells whether a range starts before it.
+/// Incomplete bars are left out, including bars cut by raw-trade loss and missing joins.
+/// Complete prepared bars before a join still contribute; [`TradeProfile::complete`] reports
+/// whether the range starts inside known coverage and contains no incomplete bar.
 pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<TradeProfile> {
     trade_profiles_with_rows(flow, ranges, ProfileRows::Feed)
 }
@@ -175,7 +176,6 @@ pub fn trade_profiles_with_rows(
     ranges: &TradeProfileRanges,
     rows: ProfileRows,
 ) -> Vec<TradeProfile> {
-    let complete_from = flow.complete_from();
     ranges
         .ranges()
         .iter()
@@ -210,7 +210,13 @@ pub fn trade_profiles_with_rows(
                 range: range.clone(),
                 volume,
                 developing_poc,
-                complete: complete_from.is_some_and(|from| from <= range.start),
+                complete: flow.span_is_complete(
+                    range.start,
+                    range
+                        .end
+                        .checked_sub_signed(chrono::TimeDelta::nanoseconds(1))
+                        .unwrap_or(range.end),
+                ),
                 group,
             }
         })
@@ -223,6 +229,29 @@ mod tests {
     use crate::data::FootprintLevel;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::TimeDelta;
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn profiles_use_known_coverage_on_both_sides_of_a_gap() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |minute| start + TimeDelta::minutes(minute);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for minute in 0..6 {
+            flow.push(&Tick::new(at(minute), 100.0, 1.0, None)).unwrap();
+        }
+        flow.add_missing(at(2), at(4));
+        for (from, end, volume, complete) in [
+            (-1, 2, 2.0, false),
+            (0, 2, 2.0, true),
+            (1, 5, 2.0, false),
+            (4, 6, 2.0, true),
+        ] {
+            let ranges = TradeProfileRanges::new(vec![at(from)..at(end)]).unwrap();
+            let profiles = trade_profiles(&flow, &ranges);
+            assert_eq!(profiles[0].volume.volume(), volume);
+            assert_eq!(profiles[0].complete, complete, "{from}..{end}");
+        }
+    }
 
     #[test]
     fn sessions_merge_and_split_without_estimating_side_or_developing_poc() {

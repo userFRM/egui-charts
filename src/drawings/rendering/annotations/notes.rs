@@ -14,6 +14,9 @@ const PIN_HEAD_RADIUS: f32 = 6.0;
 const PIN_HEAD_HEIGHT: f32 = 16.0;
 /// Height of a pin's popup above its tip: the top of the head and an 8 px leader line.
 const PIN_POPUP_OFFSET: f32 = PIN_HEAD_HEIGHT + PIN_HEAD_RADIUS + 8.0;
+/// Distance around a pin's marker within which the pointer reveals its popup, in egui logical
+/// points.
+const PIN_HOVER_MARGIN: f32 = 3.0;
 
 impl Drawing {
     /// Paints a card holding `galley` in the colours of [`Drawing::text_box_colors`].
@@ -46,29 +49,38 @@ impl Drawing {
     }
 
     /// Renders a pin: a map-pin marker with its tip on the anchor, and its text in a popup above
-    /// it while selected, tied to the head by a thin line.
+    /// it while selected or under the pointer, tied to the head by a thin neutral line. The popup
+    /// stays away while [`AnnotationMarker::show_text`](crate::drawings::AnnotationMarker) is off.
     pub(crate) fn render_anchored_note(&self, painter: &egui::Painter, selected: bool) {
         let Some(&tip) = self.points.first() else {
             return;
         };
         let color = self.color32();
+        let theme = painter.ctx().active_theme();
         // The sides are tangent to the head, which the outline follows over the top.
         let head = tip - egui::vec2(0.0, PIN_HEAD_HEIGHT);
         let tangent = (PIN_HEAD_RADIUS / PIN_HEAD_HEIGHT).acos();
-        let outline = std::iter::once(tip)
+        let outline: Vec<Pos2> = std::iter::once(tip)
             .chain((0..=15).map(|step| {
                 let angle = tangent + (std::f32::consts::TAU - 2.0 * tangent) * step as f32 / 15.0;
                 head + PIN_HEAD_RADIUS * egui::vec2(-angle.sin(), angle.cos())
             }))
             .collect();
+        let reach = Rect::from_points(&outline).expand(PIN_HOVER_MARGIN);
         painter.add(egui::epaint::PathShape::convex_polygon(
             outline,
             color,
             Stroke::NONE,
         ));
-        painter.circle_filled(head, 2.0, painter.ctx().active_theme().chart.bg);
+        painter.circle_filled(head, 2.0, theme.chart.bg);
 
-        if selected && let Some(text) = self.text.as_deref().filter(|text| !text.is_empty()) {
+        let hovered = painter.ctx().pointer_hover_pos().is_some_and(|pointer| {
+            painter.clip_rect().contains(pointer) && reach.contains(pointer)
+        });
+        if self.marker.show_text
+            && (selected || hovered)
+            && let Some(text) = self.text.as_deref().filter(|text| !text.is_empty())
+        {
             let text_color = self.text_box_colors(painter.ctx()).text;
             let galley = self.annotation_galley(painter, text.to_owned(), text_color);
             let size = galley.size() + card_padding() * 2.0;
@@ -81,7 +93,7 @@ impl Drawing {
                     popup.center_bottom(),
                     head - egui::vec2(0.0, PIN_HEAD_RADIUS),
                 ],
-                Stroke::new(stroke::HAIRLINE, color),
+                Stroke::new(stroke::HAIRLINE, theme.chart.axis_text_secondary),
             );
             self.paint_card(painter, popup, galley);
         }

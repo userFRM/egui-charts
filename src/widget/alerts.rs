@@ -2,7 +2,7 @@
 
 use crate::Chart;
 use crate::chart::series::SeriesId;
-use crate::model::AlertSource;
+use crate::model::{AlertSource, AlertSourceName};
 
 impl Chart {
     /// Lend loaded live bars to the alert evaluator. A paused chart, or one in candle or market
@@ -134,7 +134,9 @@ impl Chart {
 
     /// Every output of every study and every level of every completed drawing, with the name the
     /// alert dialog shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar.
-    pub fn alert_sources(&self) -> Vec<(AlertSource, String)> {
+    /// A name keeps the study's name, the drawing's number and a fork level's value as given and
+    /// translates the study output, the drawing tool and the level when shown.
+    pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
         let bar = self.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
         let scale = self.config().right_axis_scale_mode;
         let studies = self.indicators().flat_map(|(id, study)| {
@@ -148,7 +150,11 @@ impl Chart {
                             id: id.0.to_string(),
                             output,
                         },
-                        format!("{}: {name}", study.name()),
+                        AlertSourceName::new(
+                            "{study}: {output}",
+                            &[("study", study.name())],
+                            &[("output", name.as_str())],
+                        ),
                     )
                 })
         });
@@ -161,15 +167,24 @@ impl Chart {
                 let levels = d.alert_levels_with_bars(bar, scale, self.bars(SeriesId::MAIN));
                 let single = levels.len() == 1;
                 levels.into_iter().map(move |(level, name, _)| {
-                    let drawing = format!("{} {}", d.tool_type.as_str(), d.id);
-                    (
-                        d.alert_source(level),
-                        if single {
-                            drawing
-                        } else {
-                            format!("{drawing}: {name}")
-                        },
-                    )
+                    let id = d.id.to_string();
+                    let tool = ("tool", d.tool_type.as_str());
+                    let name = if single {
+                        AlertSourceName::new("{tool} {id}", &[("id", id.as_str())], &[tool])
+                    } else if let Some((line, value)) = d.fork_line(level) {
+                        AlertSourceName::new(
+                            line,
+                            &[("id", id.as_str()), ("value", value.as_str())],
+                            &[tool],
+                        )
+                    } else {
+                        AlertSourceName::new(
+                            "{tool} {id}: {level}",
+                            &[("id", id.as_str())],
+                            &[tool, ("level", name.as_str())],
+                        )
+                    };
+                    (d.alert_source(level), name)
                 })
             });
         studies.chain(drawings).collect()
@@ -200,6 +215,16 @@ mod tests {
         line.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(2.0, 120.0)];
         line.completed = true;
         chart.drawings_mut().drawings.push(line);
+        let mut fork = Drawing::new(9, DrawingToolType::Pitchfork);
+        fork.chart_points = vec![
+            ChartPoint::new(0.0, 100.0),
+            ChartPoint::new(1.0, 200.0),
+            ChartPoint::new(2.0, 50.0),
+        ];
+        // Saved without a config: levels 0, 0.5, 1 and 1.5, all shown.
+        fork.pitchfork = None;
+        fork.completed = true;
+        chart.drawings_mut().drawings.push(fork);
         let average = AlertSource::Study {
             id: study.0.to_string(),
             output: 0,
@@ -240,11 +265,20 @@ mod tests {
                 "{source:?} at {bar}"
             );
         }
+        // Names keep the English text of the names that alerts and presets saved before.
+        let fork = |level: &str| AlertSource::Drawing(format!("9{level}"));
         assert_eq!(
             chart.alert_sources(),
             [
-                (average, "SMA: SMA(2)".to_owned()),
-                (trend, "Trend Line 7".to_owned())
+                (average, AlertSourceName::from("SMA: SMA(2)")),
+                (trend, "Trend Line 7".into()),
+                (fork(""), "Pitchfork 9: Median".into()),
+                (fork("#2"), "Pitchfork 9: 0.5: first line".into()),
+                (fork("#3"), "Pitchfork 9: 0.5: second line".into()),
+                (fork("#4"), "Pitchfork 9: 1: first line".into()),
+                (fork("#5"), "Pitchfork 9: 1: second line".into()),
+                (fork("#6"), "Pitchfork 9: 1.5: first line".into()),
+                (fork("#7"), "Pitchfork 9: 1.5: second line".into()),
             ]
         );
     }

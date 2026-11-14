@@ -322,9 +322,7 @@ impl Drawing {
     ) -> Rc<Option<VolumeProfile>> {
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
-            let complete = flow
-                .complete_from()
-                .is_some_and(|from| from <= executed.time);
+            let complete = flow.span_is_complete(start.time, end.time);
             if let Some(profile) = VolumeProfile::from_executions(
                 &executed,
                 flow.price_step(),
@@ -343,8 +341,8 @@ impl Drawing {
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
     /// with its [source](VolumeProfile::source): executed volume when
-    /// [`ChartView::executions`] holds complete bars in the selected span, those from
-    /// [`Footprint::complete_from`](crate::data::Footprint::complete_from), else the finer bars
+    /// [`ChartView::executions`] holds complete bars in the selected span, including prepared
+    /// bars before a missing join, else the finer bars
     /// of [`ChartView::finer`], else the bar estimate.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
@@ -1557,6 +1555,13 @@ mod tests {
             ProfileSource::Executions { complete: false }
         );
         assert_eq!(profile.volume(), [3.0]);
+        let mut gap = flow.clone();
+        gap.add_missing(bars[2].time, bars[3].time);
+        for (first, last, complete) in [(0.0, 1.0, false), (1.0, 1.0, true), (1.0, 2.0, false)] {
+            select(&mut drawing, first, last);
+            let profile = drawing.volume_profile_of(&view(Some(&gap))).unwrap();
+            assert_eq!(profile.source(), ProfileSource::Executions { complete });
+        }
     }
 
     /// Finer bars replace only the chart bars they cover; executions still take precedence.

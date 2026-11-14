@@ -66,6 +66,20 @@ pub fn format_text(ctx: &Context, english: &str, values: &[(&str, impl AsRef<str
     substitute(lookup(ctx, english).as_deref().unwrap_or(english), values)
 }
 
+/// [`format_text`] for a context retained from the last frame, with the English text before
+/// the first frame.
+#[cfg(feature = "drawings")]
+pub(crate) fn format_text_or_english(
+    ctx: Option<&Context>,
+    english: &str,
+    values: &[(&str, impl AsRef<str>)],
+) -> String {
+    match ctx {
+        Some(ctx) => format_text(ctx, english, values),
+        None => substitute(english, values),
+    }
+}
+
 /// The host's translation of `english`, or `None` to keep the English text.
 pub(crate) fn lookup(ctx: &Context, english: &str) -> Option<String> {
     let translator = ctx.data(|data| data.get_temp::<Translator>(translator_id()));

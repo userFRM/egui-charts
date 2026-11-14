@@ -318,6 +318,10 @@ impl DrawingProps {
                     position_target_color,
                     position_stop_color,
                     position_style,
+                    marker.show_text,
+                    marker.glyph,
+                    marker.show_glyph,
+                    marker.glyph_color,
                     volume_profile,
                     regression_trend,
                     vwap,
@@ -480,6 +484,9 @@ impl DrawingProps {
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
+            if !settings.marker.is_valid() {
+                return Err("Glyph must be 1 to 32 bytes");
+            }
             if !settings.position_sizing.is_valid() {
                 return Err(
                     "Position economics must be positive and finite; quantity step cannot be negative",
@@ -617,10 +624,8 @@ mod tests {
             chart.drawings_mut().select_drawings([7, 8]);
             let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
-                let mut pickers = [
-                    crate::ui_kit::ColorPickerState::new(props.color),
-                    crate::ui_kit::ColorPickerState::new(props.color),
-                ];
+                let mut pickers =
+                    [(); 3].map(|_| crate::ui_kit::ColorPickerState::new(props.color));
                 super::super::tabs::StyleTab::show(
                     ui,
                     &mut props,
@@ -708,6 +713,13 @@ mod tests {
             settings.position_target_color = Some([40, 100, 220, 255]);
             settings.position_stop_color = Some([220, 140, 40, 255]);
             settings.position_style.font_size = 16.0;
+            let marker = crate::drawings::AnnotationMarker {
+                show_text: false,
+                glyph: "🚀".into(),
+                show_glyph: true,
+                glyph_color: Some([7, 8, 9, 255]),
+            };
+            settings.marker = marker.clone();
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -781,6 +793,7 @@ mod tests {
             assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.position_style.font_size, 16.0);
+            assert_eq!(saved.marker, marker);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.line_measurements, measurements);

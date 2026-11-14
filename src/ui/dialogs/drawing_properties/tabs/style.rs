@@ -1,5 +1,6 @@
 //! Style tab - color, line width, line style.
 
+use crate::drawings::glyphs::GLYPHS;
 use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -25,7 +26,7 @@ impl StyleTab {
     pub fn show(
         ui: &mut Ui,
         props: &mut DrawingProps,
-        pickers: &mut [ColorPickerState; 2],
+        pickers: &mut [ColorPickerState; 3],
         badge_pickers: &mut [ColorPickerState; 3],
     ) {
         let tool = props.tool_settings.as_ref().map(|t| t.settings.tool_type);
@@ -35,7 +36,7 @@ impl StyleTab {
             tool,
             Some(DrawingToolType::PriceLabel | DrawingToolType::PriceNote)
         );
-        let [color_picker, fill_picker] = pickers;
+        let [color_picker, fill_picker, glyph_picker] = pickers;
         // Positions style their lines, labels and zones from their own settings below.
         let position = matches!(
             tool,
@@ -171,6 +172,49 @@ impl StyleTab {
                     {
                         settings.fib_config = Some(config);
                     }
+                    ui.end_row();
+                }
+                if settings.tool_type == DrawingToolType::Signpost {
+                    let marker = &mut settings.marker;
+                    let label = ui.label(l10n::text(ui.ctx(), "Emoji"));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut marker.show_glyph, l10n::text(ui.ctx(), "Show emoji"))
+                            .labelled_by(label.id);
+                        if !marker.show_glyph {
+                            return;
+                        }
+                        // Until a disc colour is chosen, the disc takes the drawing's.
+                        let [r, g, b, a] = marker.glyph_color.unwrap_or(exact);
+                        let disc = Color32::from_rgba_unmultiplied(r, g, b, a);
+                        if let Some(picked) =
+                            color_swatch(ui, glyph_picker, disc, "signpost_glyph_color")
+                        {
+                            marker.glyph_color = Some(
+                                keep_opacity(picked, disc, glyph_picker.custom_mode)
+                                    .to_srgba_unmultiplied(),
+                            );
+                        }
+                        let emoji = || GLYPHS.iter().filter(|g| g.category.starts_with("Emoji"));
+                        // Keep a host-supplied glyph selectable when reopening it.
+                        let mut choices: Vec<String> = emoji().map(|g| g.id.to_owned()).collect();
+                        if !choices.contains(&marker.glyph) {
+                            choices.push(marker.glyph.clone());
+                        }
+                        let ctx = ui.ctx().clone();
+                        let font = egui::TextStyle::Button.resolve(ui.style());
+                        ui.combo_select("signpost_glyph", &mut marker.glyph, choices, |id| {
+                            let Some(glyph) = emoji().find(|g| g.id == id) else {
+                                return id.clone();
+                            };
+                            let name = l10n::text(&ctx, glyph.name);
+                            // Name alone where the fonts cannot draw the emoji.
+                            if ctx.fonts_mut(|f| f.has_glyphs(&font, id)) {
+                                format!("{id} {name}")
+                            } else {
+                                name
+                            }
+                        });
+                    });
                     ui.end_row();
                 }
                 if position {
@@ -678,7 +722,7 @@ mod tests {
                 }
             }
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
-            let mut pickers: [ColorPickerState; 2] = Default::default();
+            let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[picker].is_open = true;
             let swatch = MAIN_COLORS[3];
             let mut frame = |events| {
@@ -769,7 +813,7 @@ mod tests {
             chart.drawings_mut().select_drawings([1, 2]);
             let target = chart.drawings().drawings[opened - 1].clone();
             let mut props = DrawingProps::from_drawing(&target, &chart);
-            let mut pickers: [ColorPickerState; 2] = Default::default();
+            let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[0].is_open = true;
             let mut frame = |events| {
                 let output = ctx.run_ui(
@@ -917,7 +961,7 @@ mod tests {
                 props.tool_settings = None;
             }
             let paint = props.color;
-            let mut pickers: [ColorPickerState; 2] = Default::default();
+            let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[0].is_open = true;
             let mut frame = |events| {
                 let output = ctx.run_ui(

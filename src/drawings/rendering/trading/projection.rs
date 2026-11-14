@@ -4,6 +4,7 @@ use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::ChartView;
 use crate::drawings::rendering::measurements::boxed_label;
 use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -186,13 +187,14 @@ impl Drawing {
         // Projection target label
         let zone_height = (dy.abs() * 0.2).max(20.0);
         let target_label = self.chart_points.get(2).map_or_else(
-            || "Target: n/a".to_owned(),
+            || l10n::text(painter.ctx(), "Target: n/a"),
             |c| {
                 let target = c.price + self.chart_points[1].price - self.chart_points[0].price;
-                match price_formatter {
-                    Some(formatter) => format!("Target: {}", formatter.format(target)),
-                    None => format!("Target: {target:.2}"),
-                }
+                let price = match price_formatter {
+                    Some(formatter) => formatter.format(target),
+                    None => format!("{target:.2}"),
+                };
+                l10n::format_text(painter.ctx(), "Target: {price}", &[("price", price)])
             },
         );
         boxed_label(

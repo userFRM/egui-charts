@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Datelike, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::{Bar, Timeframe, TimezoneId};
 
@@ -157,7 +158,7 @@ pub struct AlertInputs {
     /// Exchange calendar of the creation symbol. Other symbols resolve their own calendars.
     pub calendar: Option<AlertCalendar>,
     /// Source choices shown when editing, independent of the currently displayed chart.
-    pub sources: Vec<(AlertSource, String)>,
+    pub sources: Vec<(AlertSource, AlertSourceName)>,
     /// Include extended trading sessions.
     pub extended_hours: bool,
     /// Host currency or unit conversion.
@@ -193,7 +194,9 @@ impl Default for AlertInputs {
 
 impl AlertInputs {
     /// Offer newly available study sources during an explicit edit. Existing identifiers keep
-    /// their original definitions, including when another chart reuses an identifier.
+    /// their original definitions, including when another chart reuses an identifier. A saved
+    /// name whose English text equals the offered name takes the offered one, so a name saved
+    /// as finished text is translated from then on.
     pub fn add_sources_from(&mut self, other: &Self) {
         for study in &other.studies {
             if !self.studies.iter().any(|saved| saved.id == study.id) {
@@ -201,8 +204,10 @@ impl AlertInputs {
             }
         }
         for (source, name) in &other.sources {
-            if !self.sources.iter().any(|(saved, _)| saved == source) {
-                self.sources.push((source.clone(), name.clone()));
+            match self.sources.iter_mut().find(|(saved, _)| saved == source) {
+                Some((_, saved)) if *saved == *name => *saved = name.clone(),
+                Some(_) => {}
+                None => self.sources.push((source.clone(), name.clone())),
             }
         }
     }
@@ -335,8 +340,8 @@ impl Alert {
     /// fired, both in RFC 3339, `{{open}}`, `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of
     /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
     /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
-    /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the label
-    /// that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
+    /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the English
+    /// name that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
     /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
     /// joined by `, `, and empty if it tests no drawing. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
@@ -403,7 +408,7 @@ impl Alert {
                         .flatten()
                         .filter(|source| matches!(source, AlertSource::Drawing(_)))
                         .filter_map(|source| saved.iter().find(|(s, _)| s == source))
-                        .map(|(_, label)| label.as_str())
+                        .map(|(_, label)| label.to_string())
                         .collect();
                     labels.join(", ")
                 }
@@ -571,6 +576,120 @@ pub enum AlertSource {
     /// The bar's volume.
     Volume,
 }
+
+/// The name an alert source is shown with: English text, translated only when shown.
+///
+/// `Chart::alert_sources` builds each name from an English template such as
+/// `"{tool} {id}: {level}"`, whose placeholders take values shown as given, such as a study's
+/// name or a drawing's number, and labels translated whole, such as a drawing tool, a level or a
+/// study output, and keeps the English text they make. A host's own name converts from a string
+/// and is translated whole. A name is stored and compared by its English text, which
+/// [`Display`](std::fmt::Display) gives, so names saved as finished text, as alerts and presets
+/// stored every name before names kept their parts, still match the chart's names.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AlertSourceName(SourceName);
+
+/// A name with its parts, or finished text: a host's own name, or one that alerts and presets
+/// saved before names kept their parts hold.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum SourceName {
+    /// `template` with each `{name}` taken from `values` as given or from `labels` translated,
+    /// and `text`, the English it makes.
+    Parts {
+        text: String,
+        template: String,
+        values: BTreeMap<String, String>,
+        labels: BTreeMap<String, String>,
+    },
+    /// Text translated whole.
+    Text(String),
+}
+
+impl AlertSourceName {
+    /// A name built from `template`, whose placeholders take `values` as given and `labels`
+    /// translated when shown.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn new(template: &str, values: &[(&str, &str)], labels: &[(&str, &str)]) -> Self {
+        let owned = |parts: &[(&str, &str)]| {
+            parts
+                .iter()
+                .map(|&(name, part)| (name.to_owned(), part.to_owned()))
+                .collect()
+        };
+        Self(SourceName::Parts {
+            text: crate::localization::substitute(template, &[values, labels].concat()),
+            template: template.to_owned(),
+            values: owned(values),
+            labels: owned(labels),
+        })
+    }
+
+    /// The name in the language of `ctx`'s translator: each label looked up whole, then the
+    /// template looked up and filled with the values and the translated labels, as
+    /// [`format_text`](crate::localization::format_text) does. A name without parts is looked up
+    /// whole. Without a translator this is the English text.
+    #[cfg(feature = "widget")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+    pub fn text(&self, ctx: &egui::Context) -> String {
+        use crate::localization as l10n;
+        match &self.0 {
+            SourceName::Text(text) => l10n::text(ctx, text),
+            SourceName::Parts {
+                template,
+                values,
+                labels,
+                ..
+            } => {
+                let labels: Vec<_> = labels
+                    .iter()
+                    .map(|(name, label)| (name.as_str(), l10n::text(ctx, label)))
+                    .collect();
+                let parts: Vec<(&str, &str)> = values
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .chain(labels.iter().map(|(name, label)| (*name, label.as_str())))
+                    .collect();
+                l10n::format_text(ctx, template, &parts)
+            }
+        }
+    }
+
+    /// The English text.
+    fn english(&self) -> &str {
+        match &self.0 {
+            SourceName::Parts { text, .. } | SourceName::Text(text) => text,
+        }
+    }
+}
+
+impl From<String> for AlertSourceName {
+    fn from(text: String) -> Self {
+        Self(SourceName::Text(text))
+    }
+}
+
+impl From<&str> for AlertSourceName {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+impl std::fmt::Display for AlertSourceName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.english())
+    }
+}
+
+/// Names are equal when their English text is, whether or not they keep their parts.
+impl PartialEq for AlertSourceName {
+    fn eq(&self, other: &Self) -> bool {
+        self.english() == other.english()
+    }
+}
+
+impl Eq for AlertSourceName {}
 
 /// Comparison of two outputs. Crossings require a strict previous side and include equality now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
