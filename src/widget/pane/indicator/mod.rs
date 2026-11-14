@@ -213,6 +213,7 @@ impl IndicatorPane {
             y_min,
             y_max,
             indicator,
+            visible_range.end.checked_sub(1),
             Some(crate::scales::PriceScaleId::Right),
             None,
         );
@@ -309,6 +310,7 @@ impl IndicatorPane {
             y_min,
             y_max,
             indicator,
+            crate::chart::rendering::axes::last_bar_in_view(&horizontal),
             Some(crate::scales::PriceScaleId::Right),
             None,
         );
@@ -655,7 +657,15 @@ impl IndicatorPane {
             axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
             // Draw y-axis labels
             self.measured_axis_width = self.draw_y_axis_labels(
-                painter, rect, chart_rect, y_min, y_max, indicator, axis, tag,
+                painter,
+                rect,
+                chart_rect,
+                y_min,
+                y_max,
+                indicator,
+                crate::chart::rendering::axes::last_bar_in_view(&mapping),
+                axis,
+                tag,
             );
         }
 

@@ -2835,6 +2835,7 @@ impl Chart {
                 ));
         }
         if show_price_axis && study_axis.show_study_values {
+            let last_in_view = rendering::axes::last_bar_in_view(&coords);
             for study in studies
                 .indicators()
                 .iter()
@@ -2863,6 +2864,7 @@ impl Chart {
                             price_rect,
                             &mapping.price,
                             study.as_ref(),
+                            last_in_view,
                             axis_edge,
                             &mut tags,
                             &study_axis,
@@ -2880,6 +2882,7 @@ impl Chart {
                     price_rect,
                     &price_map,
                     study.as_ref(),
+                    last_in_view,
                     axis_edge,
                     &mut tags,
                     price_formatter.as_deref(),

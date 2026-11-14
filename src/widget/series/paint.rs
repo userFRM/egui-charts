@@ -650,6 +650,8 @@ impl Chart {
                 ));
             }
             if study_axis.show_study_values {
+                let last_in_view =
+                    crate::chart::rendering::axes::last_bar_in_view(&self.get_chart_mapping());
                 for study in &assigned {
                     let mapping = study
                         .scale_mapping()
@@ -661,6 +663,7 @@ impl Chart {
                         label_rect,
                         &mapping,
                         *study,
+                        last_in_view,
                         axis.right(),
                         &mut tags,
                         None,
