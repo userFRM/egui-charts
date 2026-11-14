@@ -1,6 +1,9 @@
 use super::super::test_frames::{candle_ys, frame, shapes};
 use super::*;
-use crate::data::{DepthPage, FeedError, HistoryPage, Sink, Subscription, TradePage};
+use crate::data::{
+    DepthPage, FeedError, FootprintPage, FootprintRequest, HistoryPage, Sink, Subscription,
+    TradePage,
+};
 use crate::model::{Bar, BarData, ChartType};
 use crate::widget::ChartBuilder;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -13,6 +16,7 @@ enum Call {
     Subscribe(SubscriptionId, String, Timeframe, bool),
     Unsubscribe(SubscriptionId),
     Trades(TradeRequest),
+    Footprints(FootprintRequest),
     Snapshot(SubscriptionId),
     Depth(DepthRequest),
 }
@@ -24,6 +28,8 @@ struct Script {
     resolves: Mutex<Vec<Reply<Instrument>>>,
     pages: Mutex<Vec<Reply<HistoryPage>>>,
     trades: Mutex<Vec<Reply<TradePage>>>,
+    footprints: Mutex<Vec<Reply<FootprintPage>>>,
+    prepared_footprints: AtomicBool,
     depth: Mutex<Vec<Reply<DepthPage>>>,
     sinks: Mutex<Vec<Sink>>,
     /// `unsubscribe` drops the replies it keeps.
@@ -85,11 +91,20 @@ impl Datafeed for Script {
             self.resolves.lock().unwrap().clear();
             self.pages.lock().unwrap().clear();
             self.trades.lock().unwrap().clear();
+            self.footprints.lock().unwrap().clear();
         }
     }
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
         self.calls.lock().unwrap().push(Call::Trades(request));
         self.trades.lock().unwrap().push(reply);
+    }
+    fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
+        if self.prepared_footprints.load(Ordering::Relaxed) {
+            self.calls.lock().unwrap().push(Call::Footprints(request));
+            self.footprints.lock().unwrap().push(reply);
+        } else {
+            reply.send(Err(FeedError::NotSupported));
+        }
     }
     fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
         self.calls.lock().unwrap().push(Call::Depth(request));
@@ -523,6 +538,1053 @@ fn fed(feed: &Arc<Script>, symbol: Option<&str>) -> Chart {
         Some(symbol) => builder.with_symbol(symbol).build(),
         None => builder.build(),
     }
+}
+
+fn prepared_chart() -> (Arc<Script>, Chart, Frames) {
+    let feed = Arc::new(Script::default());
+    feed.prepared_footprints.store(true, Ordering::Relaxed);
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(5), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    (feed, chart, frames)
+}
+
+fn prepared_page(trades: &[Tick], before: DateTime<Utc>, end: bool) -> FootprintPage {
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for trade in trades {
+        flow.push(trade).unwrap();
+    }
+    FootprintPage::new(flow.bars().values().cloned().collect(), before, end)
+}
+
+/// The exclusive cutoff is independent of reply order and unordered execution ids.
+#[test]
+fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
+    use crate::model::OrderSide::{Buy, Sell};
+    let start = bars(1)[0].time;
+    let cutoff = start + TimeDelta::seconds(150);
+    let saved = vec![
+        Tick::new(start, 100.0, 2.0, Some(Buy)),
+        Tick::new(start + TimeDelta::minutes(1), 101.0, 3.0, Some(Sell)),
+        Tick::new(start + TimeDelta::minutes(2), 102.0, 5.0, None),
+    ];
+    for (page_first, delay) in [(false, 0), (true, 0), (false, 2), (true, 2)] {
+        let first = cutoff + TimeDelta::seconds(delay);
+        let live = vec![
+            Tick::new(first, 102.0, 7.0, Some(Buy)).with_id(99),
+            Tick::new(first, 102.0, 11.0, None).with_id(7),
+            Tick::new(first + TimeDelta::seconds(1), 102.0, 13.0, Some(Sell)).with_id(42),
+        ];
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let mut reply = Some(feed.footprints.lock().unwrap().remove(0));
+        let mut deliver = || {
+            reply
+                .take()
+                .unwrap()
+                .send(Ok(prepared_page(&saved, cutoff, true)))
+        };
+        if page_first {
+            deliver();
+            frames.run(&mut chart);
+        }
+        let sink = feed.sink();
+        sink.push_tick(Tick::new(
+            cutoff - TimeDelta::seconds(1),
+            102.0,
+            999.0,
+            None,
+        ));
+        for trade in &live {
+            sink.push_tick(trade.clone());
+        }
+        frames.run(&mut chart);
+        if !page_first {
+            deliver();
+            frames.run(&mut chart);
+        }
+        // A raw page still serves the tape, but its covered trades cannot add to saved rows.
+        feed.trades
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(TradePage::new(
+                saved.iter().chain(&live).cloned().collect(),
+                true,
+            )));
+        frames.run(&mut chart);
+        sink.push_tick(live[2].clone());
+        frames.run(&mut chart);
+        let expected = prepared_page(
+            &saved.iter().chain(&live).cloned().collect::<Vec<_>>(),
+            cutoff,
+            true,
+        );
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            flow.bars().values().cloned().collect::<Vec<_>>(),
+            expected.bars,
+            "page first: {page_first}"
+        );
+        assert_eq!(flow.complete_from(), Some(start), "{page_first}, {delay}");
+        assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 16.0);
+    }
+}
+
+#[test]
+fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    let cutoff = start + TimeDelta::minutes(2);
+    let saved = [Tick::new(start, 100.0, 5.0, None)];
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(&saved, cutoff, true)));
+    frames.run(&mut chart);
+    chart.feed_link.as_mut().unwrap().trades = Trades::new(2);
+    let row_address = |chart: &Chart| {
+        let row = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .bar_at(start)
+            .unwrap()
+            .levels
+            .values()
+            .next()
+            .unwrap();
+        std::ptr::from_ref(row) as usize
+    };
+    let original = row_address(&chart);
+    for minute in 2..6 {
+        feed.sink().push_tick(Tick::new(
+            start + TimeDelta::minutes(minute),
+            102.0,
+            1.0,
+            None,
+        ));
+        frames.run(&mut chart);
+        assert_eq!(row_address(&chart), original);
+    }
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(saved.to_vec(), true)));
+    frames.run(&mut chart);
+    assert_eq!(row_address(&chart), original);
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert_eq!(flow.bar_at(start).unwrap().unknown, 5.0);
+    assert_eq!(
+        flow.complete_bars(..)
+            .map(|bar| bar.time)
+            .collect::<Vec<_>>(),
+        vec![
+            start,
+            start + TimeDelta::minutes(4),
+            start + TimeDelta::minutes(5)
+        ]
+    );
+}
+
+#[test]
+fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    let cutoff = start + TimeDelta::seconds(90);
+    let saved = [
+        Tick::new(start, 100.0, 5.0, None),
+        Tick::new(start + TimeDelta::minutes(1), 100.0, 7.0, None),
+    ];
+    for (second, size, id) in [(130, 11.0, 7), (180, 13.0, 42)] {
+        feed.sink().push_tick(
+            Tick::new(start + TimeDelta::seconds(second), 100.0, size, None).with_id(id),
+        );
+    }
+    frames.run(&mut chart);
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(&saved, cutoff, true)));
+    frames.run(&mut chart);
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(3)));
+    assert_eq!(
+        flow.complete_bars(..)
+            .map(|bar| bar.time)
+            .collect::<Vec<_>>(),
+        vec![start, start + TimeDelta::minutes(3)]
+    );
+    assert!(flow.complete_bar_at(cutoff).is_none());
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(
+            vec![Tick::new(cutoff, 100.0, 2.0, None).with_id(99)],
+            false,
+        )));
+    frames.run(&mut chart);
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert!(!flow.span_has_gap(start, None));
+    assert_eq!(flow.complete_from(), Some(start));
+    assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 9.0);
+}
+
+#[test]
+fn prepared_pages_reject_invalid_ranges_and_nonprogressing_continuations() {
+    let start = bars(1)[0].time;
+    for case in 0..7 {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let request = feed
+            .calls()
+            .into_iter()
+            .find_map(|call| match call {
+                Call::Footprints(request) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        let mut page = prepared_page(
+            &[Tick::new(start, 100.0, 5.0, None)],
+            start + TimeDelta::minutes(1),
+            true,
+        );
+        let mut asked = request;
+        match case {
+            0 => page.bars[0].unknown = -1.0,
+            1 => asked.before = Some(start),
+            2 => asked.since = Some(start + TimeDelta::seconds(1)),
+            3 => page.complete_before = start,
+            4 => asked.count = 0,
+            _ => {
+                page.bars.clear();
+                asked.before = Some(page.complete_before);
+                page.continue_before = asked.before;
+                if case == 6 {
+                    page.continue_before = Some(start);
+                    page.complete_before -= TimeDelta::seconds(1);
+                }
+            }
+        }
+        // Keep the normal reply key and replace only its requested limits for this validation row.
+        let link = chart.feed_link.as_mut().unwrap();
+        for (_, request, _) in &mut link.pending {
+            if let Request::Footprints(request) = request {
+                *request = asked.clone();
+            }
+        }
+        feed.footprints.lock().unwrap().remove(0).send(Ok(page));
+        frames.run(&mut chart);
+        assert!(
+            matches!(chart.feed.last_error, Some(FeedError::InvalidData(_))),
+            "case {case}"
+        );
+        assert!(
+            chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .is_none_or(|flow| flow.prepared_before().is_none())
+        );
+        assert_eq!(chart.bars(SeriesId::MAIN).len(), 5);
+    }
+}
+
+#[test]
+fn prepared_replies_follow_context_and_do_not_load_trade_intervals() {
+    let start = bars(1)[0].time;
+    for change in 0..5 {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let stale = feed.footprints.lock().unwrap().remove(0);
+        match change {
+            0 => chart.set_symbol("B"),
+            1 => chart.set_timeframe(Timeframe::Min5),
+            2 => chart.set_extended_hours(true),
+            3 => chart.set_dividend_adjusted(true),
+            _ => chart.set_conversion(Some("EUR".into())),
+        }
+        frames.run(&mut chart);
+        stale.send(Ok(prepared_page(
+            &[Tick::new(start, 100.0, 5.0, None)],
+            start + TimeDelta::minutes(1),
+            true,
+        )));
+        frames.run(&mut chart);
+        assert!(
+            chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .is_none_or(|flow| flow.prepared_before().is_none())
+        );
+    }
+    for interval in ["2t", "5v", "2r"] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        chart.set_timeframe(interval.parse().unwrap());
+        frames.run(&mut chart);
+        feed.calls();
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        assert!(
+            !feed
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::Footprints(_)))
+        );
+    }
+}
+
+#[test]
+fn prepared_pages_continue_backwards_without_bridging_disjoint_coverage() {
+    let start = bars(1)[0].time;
+    for disjoint in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let boundary = start + TimeDelta::minutes(2);
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(prepared_page(
+                &[Tick::new(boundary, 100.0, 5.0, None)],
+                boundary + TimeDelta::minutes(1),
+                false,
+            )));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let calls = feed.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|c| matches!(c, Call::Footprints(r) if r.before == Some(boundary)))
+        );
+        // The empty reply certifies its own window; the next reply knows only its request.
+        let cursor = start + TimeDelta::minutes(1);
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(
+                FootprintPage::new(Vec::new(), boundary, false).with_continue_before(cursor)
+            ));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(
+            feed.calls()
+                .iter()
+                .any(|c| matches!(c, Call::Footprints(r) if r.before == Some(cursor)))
+        );
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(prepared_page(
+                &[Tick::new(start, 100.0, 7.0, None)],
+                if disjoint {
+                    cursor - TimeDelta::seconds(1)
+                } else {
+                    cursor
+                },
+                true,
+            )));
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert_eq!(flow.bar_at(start).is_none(), disjoint);
+        assert_eq!(flow.bar_at(boundary).unwrap().unknown, 5.0);
+        assert_eq!(
+            matches!(chart.feed.last_error, Some(FeedError::InvalidData(_))),
+            disjoint
+        );
+        frames.run(&mut chart);
+        assert!(feed.footprints.lock().unwrap().is_empty());
+    }
+    let (feed, mut chart, mut frames) = prepared_chart();
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(FootprintPage::new(Vec::new(), start, false)));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert!(
+        feed.footprints.lock().unwrap().is_empty(),
+        "an empty page without a cursor ends paging"
+    );
+}
+
+#[test]
+fn prepared_join_uses_the_stream_start_after_a_context_change() {
+    let start = bars(1)[0].time;
+    for resume in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let tick = |minute, size| Tick::new(start + TimeDelta::minutes(minute), 100.0, size, None);
+        feed.sink().push_tick(tick(20, 7.0));
+        frames.run(&mut chart);
+        feed.footprints.lock().unwrap().clear();
+        if resume {
+            chart.set_feed_paused(true);
+            frames.run(&mut chart);
+            chart.set_feed_paused(false);
+        } else {
+            chart.set_timeframe(Timeframe::Min5);
+        }
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(24), true));
+        frames.run(&mut chart);
+        feed.sink().push_tick(tick(21, 11.0));
+        feed.sink().push_tick(tick(23, 13.0));
+        frames.run(&mut chart);
+        let timeframe = if resume {
+            Timeframe::Min1
+        } else {
+            Timeframe::Min5
+        };
+        let mut saved = Footprint::new(BarClock::new(timeframe), 1.0, 1).unwrap();
+        for trade in [tick(20, 7.0), tick(21, 11.0)] {
+            saved.push(&trade).unwrap();
+        }
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(FootprintPage::new(
+                saved.bars().values().cloned().collect(),
+                start + TimeDelta::seconds(1290),
+                true,
+            )));
+        for trade_page in [false, true] {
+            if trade_page {
+                feed.trades
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+                    .send(Ok(TradePage::new(
+                        vec![tick(20, 7.0), tick(21, 11.0)],
+                        false,
+                    )));
+            }
+            frames.run(&mut chart);
+            let flow = chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap();
+            assert!(
+                !flow.span_has_gap(start, None),
+                "resume {resume}, trade page {trade_page}"
+            );
+            assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(20)));
+        }
+    }
+}
+
+#[test]
+fn prepared_repeated_retained_trade_before_cutoff_keeps_its_bar_complete() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    let retained = Tick::new(start + TimeDelta::minutes(3), 100.0, 7.0, None);
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            std::slice::from_ref(&retained),
+            start + TimeDelta::minutes(5),
+            true,
+        )));
+    feed.sink().push_tick(retained.clone());
+    frames.run(&mut chart);
+    chart.set_feed_paused(true);
+    frames.run(&mut chart);
+    chart.set_feed_paused(false);
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    frames.run(&mut chart);
+    feed.trades
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(Ok(TradePage::new(vec![retained.clone()], false)));
+    frames.run(&mut chart);
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        flow.complete_bar_at(retained.ts).map(|bar| bar.unknown),
+        Some(7.0)
+    );
+}
+
+#[test]
+fn prepared_repeated_maximum_timestamp_does_not_panic() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &[Tick::new(start, 100.0, 5.0, None)],
+            start + TimeDelta::minutes(1),
+            true,
+        )));
+    frames.run(&mut chart);
+    let trade = Tick::new(DateTime::<Utc>::MAX_UTC, 100.0, 1.0, None);
+    let link = chart.feed_link.as_mut().unwrap();
+    link.trades.prepend(vec![trade.clone()], &mut |_, _| ());
+    link.trades.reanchor();
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(vec![trade], false)));
+    frames.run(&mut chart);
+    assert_eq!(
+        chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .bar_at(start)
+            .unwrap()
+            .unknown,
+        5.0
+    );
+}
+
+#[test]
+fn prepared_request_matches_ohlc_context() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    chart.set_extended_hours(true);
+    chart.set_dividend_adjusted(true);
+    chart.set_conversion(Some("EUR".into()));
+    chart.set_timeframe(Timeframe::Min5);
+    feed.calls();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let calls = feed.calls();
+    let history = calls
+        .iter()
+        .find_map(|c| match c {
+            Call::History(r) => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    let rows = calls
+        .iter()
+        .find_map(|c| match c {
+            Call::Footprints(r) => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (
+            &rows.symbol,
+            rows.timeframe,
+            &rows.clock,
+            rows.before,
+            rows.since,
+            rows.count,
+            rows.extended_hours,
+            rows.adjusted,
+            &rows.conversion
+        ),
+        (
+            &history.symbol,
+            history.timeframe,
+            &history.clock,
+            history.before,
+            history.since,
+            history.count,
+            history.extended_hours,
+            history.adjusted,
+            &history.conversion
+        )
+    );
+    assert_eq!((rows.tick_size, rows.ticks_per_row), (0.25, 1));
+}
+
+#[test]
+fn prepared_rows_clear_on_context_reset_and_tick_size_changes() {
+    let start = bars(1)[0].time;
+    for change in 0..7 {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(prepared_page(
+                &[Tick::new(start, 100.0, 5.0, None)],
+                start + TimeDelta::minutes(1),
+                true,
+            )));
+        frames.run(&mut chart);
+        match change {
+            0 => chart.set_symbol("B"),
+            1 => chart.set_timeframe(Timeframe::Min5),
+            2 => chart.set_extended_hours(true),
+            3 => chart.set_dividend_adjusted(true),
+            4 => chart.set_conversion(Some("EUR".into())),
+            5 => feed.sink().reset_replay(start),
+            _ => {
+                chart.set_feed_paused(true);
+                frames.run(&mut chart);
+                chart.set_feed_paused(false);
+                frames.run(&mut chart);
+                feed.resolve()
+                    .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+            }
+        }
+        frames.run(&mut chart);
+        assert!(
+            chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .is_none_or(|flow| flow.prepared_before().is_none()),
+            "change {change}"
+        );
+    }
+}
+
+#[test]
+fn unused_prepared_rows_do_not_request_more_raw_trades() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &[Tick::new(start, 100.0, 5.0, None)],
+            start + TimeDelta::minutes(5),
+            true,
+        )));
+    frames.run(&mut chart);
+    chart.set_chart_type(ChartType::Candles);
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(
+            vec![Tick::new(start + TimeDelta::minutes(2), 100.0, 1.0, None)],
+            false,
+        )));
+    feed.calls();
+    for _ in 0..2 {
+        frames.run(&mut chart);
+    }
+    assert!(
+        !feed
+            .calls()
+            .iter()
+            .any(|call| matches!(call, Call::Trades(_)))
+    );
+    assert!(
+        chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .prepared_before()
+            .is_some()
+    );
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    for _ in 0..2 {
+        frames.run(&mut chart);
+    }
+    assert!(
+        feed.calls()
+            .iter()
+            .any(|call| matches!(call, Call::Trades(_)))
+    );
+}
+
+#[test]
+fn prepared_first_live_instant_needs_trade_history_even_on_a_bar_open() {
+    let start = bars(1)[0].time;
+    for page_first in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let cutoff = start + TimeDelta::minutes(1);
+        let first = Tick::new(cutoff, 100.0, 7.0, None).with_id(7);
+        let reply = feed.footprints.lock().unwrap().remove(0);
+        if !page_first {
+            feed.sink().push_tick(first.clone());
+            frames.run(&mut chart);
+        }
+        reply.send(Ok(prepared_page(
+            &[Tick::new(start, 100.0, 5.0, None)],
+            cutoff,
+            true,
+        )));
+        frames.run(&mut chart);
+        if page_first {
+            feed.sink().push_tick(first.clone());
+            frames.run(&mut chart);
+        }
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert!(flow.complete_bar_at(start).is_some());
+        assert!(
+            flow.complete_bar_at(cutoff).is_none(),
+            "page first {page_first}"
+        );
+        feed.trades
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(TradePage::new(vec![first], false)));
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            flow.complete_bar_at(cutoff).map(|bar| bar.unknown),
+            Some(7.0)
+        );
+    }
+}
+
+#[test]
+fn host_footprint_overrides_prepared_rows_for_one_draw() {
+    use crate::chart::overlays::{FootprintConfig, FootprintMode};
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let time = bars(5)[4].time;
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &[Tick::new(time, 104.0, 999.0, None)],
+            time + TimeDelta::minutes(1),
+            true,
+        )));
+    frames.run(&mut chart);
+    let mut host = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    host.push(&Tick::new(time, 104.0, 777.0, None)).unwrap();
+    chart.apply_synced_time_scale(160.0, 1.0);
+    let config = FootprintConfig {
+        modes: vec![FootprintMode::Volume],
+        auto_row_height: None,
+        ..Default::default()
+    };
+    let mut output = frames.ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1440.0, 900.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            chart.show_footprint(ui, &host, &config);
+        },
+    );
+    output.textures_delta.clear();
+    let texts: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains(&"777"));
+    assert!(!texts.contains(&"999"));
+    assert_eq!(
+        chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .bar_at(time)
+            .unwrap()
+            .unknown,
+        999.0
+    );
+}
+
+#[test]
+fn prepared_resume_retains_known_rows_before_the_new_subscription_gap() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    let tick = |second| {
+        Tick::new(start + TimeDelta::seconds(second), 100.0, 1.0, None).with_id(second as u64)
+    };
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &[Tick::new(start, 100.0, 5.0, None)],
+            start + TimeDelta::minutes(1),
+            true,
+        )));
+    for second in [60, 120, 180] {
+        feed.sink().push_tick(tick(second));
+    }
+    frames.run(&mut chart);
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(vec![tick(60)], false)));
+    frames.run(&mut chart);
+    for (seconds, expected) in [
+        (vec![310, 360, 420, 480], vec![0, 1, 2, 6, 7, 8]),
+        (vec![610, 660], vec![0, 1, 2, 6, 7, 11]),
+    ] {
+        chart.set_feed_paused(true);
+        frames.run(&mut chart);
+        chart.set_feed_paused(false);
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(Ok(HistoryPage::new(
+            bars((seconds.last().unwrap() / 60 + 1) as usize),
+            true,
+        )));
+        frames.run(&mut chart);
+        for second in seconds {
+            feed.sink().push_tick(tick(second));
+        }
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert!(
+            flow.prepared_before().is_some(),
+            "prepared footprint lost: {flow:?}"
+        );
+        assert_eq!(
+            flow.complete_bars(..)
+                .map(|bar| (bar.time - start).num_minutes())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    // Filling only the latest reconnect must not certify the earlier missing executions.
+    feed.trades
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(Ok(TradePage::new(
+            [420, 480, 550].map(tick).to_vec(),
+            false,
+        )));
+    frames.run(&mut chart);
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        flow.complete_bars(..)
+            .map(|bar| (bar.time - start).num_minutes())
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 6, 7, 8, 9, 10, 11]
+    );
+}
+
+#[test]
+fn prepared_history_is_independent_of_raw_row_bar_and_tape_budgets() {
+    let count = FOOTPRINT_BARS + 1;
+    let start = bars(1)[0].time;
+    let cutoff = start + TimeDelta::minutes(count as i64);
+    let feed = Arc::new(Script::default());
+    feed.prepared_footprints.store(true, Ordering::Relaxed);
+    let mut chart = ChartBuilder::new()
+        .with_feed(feed.clone())
+        .with_symbol("A")
+        .with_initial_bars(count)
+        .with_chart_type(ChartType::VolumeFootprint)
+        .build();
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    let mut source = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for price in 0..=FOOTPRINT_ROWS {
+        source
+            .push(&Tick::new(start, price as f64, 1.0, None))
+            .unwrap();
+    }
+    let mut candles = vec![Bar::new(
+        start,
+        0.0,
+        FOOTPRINT_ROWS as f64,
+        0.0,
+        FOOTPRINT_ROWS as f64,
+        (FOOTPRINT_ROWS + 1) as f64,
+    )];
+    for minute in 1..count {
+        let time = start + TimeDelta::minutes(minute as i64);
+        source.push(&Tick::new(time, 100.0, 1.0, None)).unwrap();
+        candles.push(Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+    }
+    feed.page().send(page(candles, true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(FootprintPage::new(
+            source.bars().values().cloned().collect(),
+            cutoff,
+            true,
+        )));
+    frames.run(&mut chart);
+    chart.feed_link.as_mut().unwrap().trades = Trades::new(2);
+    for minute in 0..3 {
+        feed.sink().push_tick(Tick::new(
+            cutoff + TimeDelta::minutes(minute),
+            100.0,
+            1.0,
+            None,
+        ));
+        frames.run(&mut chart);
+    }
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        flow.bars().first_key_value().map(|(time, _)| *time),
+        Some(start)
+    );
+    assert_eq!(flow.bars().len(), count + 2);
+    assert_eq!(flow.bar_at(start).unwrap().levels.len(), FOOTPRINT_ROWS + 1);
+    assert_eq!(chart.trades(SeriesId::MAIN).count(), 2);
+}
+
+#[test]
+fn ambiguous_trade_page_boundary_keeps_prepared_cells_but_not_the_join_bar() {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    let start = bars(1)[0].time;
+    let cutoff = start + TimeDelta::seconds(90);
+    let saved = Tick::new(start, 100.0, 5.0, None);
+    let boundary = Tick::new(cutoff, 100.0, 7.0, None);
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            std::slice::from_ref(&saved),
+            cutoff,
+            true,
+        )));
+    feed.sink().push_tick(boundary.clone());
+    feed.sink()
+        .push_tick(Tick::new(start + TimeDelta::minutes(2), 100.0, 11.0, None));
+    frames.run(&mut chart);
+    // Without ids, the page's boundary print could repeat the live one or precede it.
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(vec![saved, boundary], true)));
+    frames.run(&mut chart);
+    let flow = chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap();
+    assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 7.0);
+    assert_eq!(
+        flow.complete_bars(..)
+            .map(|bar| (bar.time - start).num_minutes())
+            .collect::<Vec<_>>(),
+        vec![0, 2]
+    );
 }
 
 /// Changing symbols fits the new prices, with or without a feed. Repeating a symbol,
@@ -3740,6 +4802,24 @@ fn feed_lifecycle() {
     }
     log::set_logger(&Warnings).unwrap();
     log::set_max_level(log::LevelFilter::Warn);
+    {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        WARNINGS.set(Some(Vec::new()));
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(5), true));
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        assert!(
+            WARNINGS.take().unwrap().is_empty(),
+            "unsupported footprint history is normal"
+        );
+    }
     WARNINGS.set(Some(Vec::new()));
     chart.set_start_idx(0);
     for _ in 0..5 {

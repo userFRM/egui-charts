@@ -137,8 +137,8 @@ impl Default for FootprintStudyConfig {
 }
 
 /// Finds stacked imbalances, unfinished highs and lows, naked POCs, delta POCs, clusters, single
-/// prints and bars whose delta percentage or bid/ask ratio reaches a threshold, in the bars from
-/// [`Footprint::complete_from`] on.
+/// prints and bars whose delta percentage or bid/ask ratio reaches a threshold, from complete
+/// execution bars. Outcomes that depend on a missing history join are withheld.
 ///
 /// Missing price rows break a stack. Stacks, POCs and unfinished levels end at the first
 /// subsequent bar whose executed range revisits them, or expire as `config.extend_bars` says;
@@ -146,13 +146,14 @@ impl Default for FootprintStudyConfig {
 /// scans subsequent bars.
 pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec<FootprintStudy> {
     let bars: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
-    footprint_studies_on_rows(&bars, config)
+    footprint_studies_on_rows(&bars, config, flow)
 }
 
 /// Each bar's row keys are in multiples of its display grouping; output keys use input rows.
 pub(crate) fn footprint_studies_on_rows(
     bars: &[(&FootprintBar, i64)],
     config: &FootprintStudyConfig,
+    flow: &Footprint,
 ) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
     for (index, &(bar, group)) in bars.iter().enumerate() {
@@ -319,6 +320,9 @@ pub(crate) fn footprint_studies_on_rows(
             }
         }
     }
+    result.retain(|study| {
+        study.state == FootprintStudyState::Local || !flow.span_has_gap(study.start, study.end)
+    });
     result
 }
 
@@ -327,6 +331,57 @@ mod tests {
     use super::*;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::TimeDelta;
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn missing_join_withholds_only_unproven_annotation_outcomes() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        for (price, expiry) in [(110.0, None), (100.0, None), (110.0, Some(1))] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (minute, price) in [(0, 100.0), (1, 100.0), (4, price)] {
+                flow.push(&Tick::new(
+                    start + TimeDelta::minutes(minute),
+                    price,
+                    5.0,
+                    Some(OrderSide::Buy),
+                ))
+                .unwrap();
+            }
+            let rows: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
+            let config = FootprintStudyConfig {
+                extend_bars: expiry,
+                ..Default::default()
+            };
+            let all = footprint_studies_on_rows(&rows, &config, &flow);
+            flow.add_missing(start + TimeDelta::minutes(2), start + TimeDelta::minutes(4));
+            let certain = footprint_studies(&flow, &config);
+            assert!(all.iter().any(|s| s.start == start + TimeDelta::minutes(1)
+                && s.kind == FootprintStudyKind::NakedPoc));
+            assert!(
+                !certain
+                    .iter()
+                    .any(|s| s.start == start + TimeDelta::minutes(1)
+                        && s.kind == FootprintStudyKind::NakedPoc)
+            );
+            assert!(
+                certain
+                    .iter()
+                    .any(|s| s.start == start && s.state == FootprintStudyState::Revisited)
+            );
+            assert!(
+                certain
+                    .iter()
+                    .any(|s| s.start == start + TimeDelta::minutes(1)
+                        && s.state == FootprintStudyState::Local)
+            );
+            assert!(
+                certain
+                    .iter()
+                    .any(|s| s.start == start + TimeDelta::minutes(4)
+                        && s.kind == FootprintStudyKind::NakedPoc)
+            );
+        }
+    }
 
     #[test]
     fn adjacent_diagonals_extend_only_until_a_later_revisit() {
