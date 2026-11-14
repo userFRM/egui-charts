@@ -1140,10 +1140,12 @@ impl Chart {
             .collect::<Vec<_>>();
         // The newest close of a price-based chart can lie beyond its newest element. While that
         // element is in view, the price its last price line shows is fitted with it, so that the
-        // line and its label are drawn. The newest element in view is among the fitted bars.
+        // line and its label are drawn. The newest element in view is among the fitted bars, as
+        // is the close of that element, which the line shows instead when the type labels it.
         let last_price = (!time_based
             && self.main_series_visible
             && self.main_series_style.price_line_source == crate::model::PriceLineSource::LastBar
+            && !self.chart_type_params.labels_element_price(self.chart_type)
             && start_idx < end_idx
             && end_idx == self.state.shown().len())
         .then(|| crate::model::last_with_value(&self.state.data().bars))
@@ -1751,8 +1753,13 @@ impl Chart {
 
         let style = &self.main_series_style;
         // Last price line & label, from the newest bar even when it is scrolled out of view, or
-        // from the newest bar in view
+        // from the newest bar in view. A price-based chart can label its newest element instead.
         let (last_bars, last_from) = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar
+                if self.chart_type_params.labels_element_price(self.chart_type) =>
+            {
+                (self.state.shown(), 0)
+            }
             crate::model::PriceLineSource::LastBar => (self.state.data().bars.as_slice(), 0),
             crate::model::PriceLineSource::LastVisible => {
                 let (from, to) = self.state.visible_range();

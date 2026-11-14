@@ -1103,18 +1103,40 @@ mod tests {
 
     /// The newest close adds no element and lies beyond the elements in view, further than the
     /// scale margins of a tenth of the pane reach: the fit holds the last price line and its
-    /// label all the same.
+    /// label all the same. A type that labels its newest element instead shows that element's
+    /// close: closes that rise to 139 and end at 138.6, short of a new element, leave the newest
+    /// brick, line and column at 139.
     #[test]
     fn last_price_line_stays_in_view_on_price_based_charts() {
         use crate::model::{BarData, LineStyle};
         use crate::widget::test_frames::{frame, shapes};
         use crate::widget::{Chart, SeriesId};
         use egui::{Color32, Shape};
-        // (chart type, parameters, first open, closes, label of the newest close)
+        // (chart type, parameters, first open, closes, label of the price line)
         type Row<'a> = (ChartType, ChartTypeParams, Option<f64>, &'a [f64], &'a str);
         // Lines of 10 from 100 to 340, then 241: above 240, the low of the last ten lines. Any
         // close that adds no line lies within those, so this chart is read with fewer in view.
         let stairs = Vec::from_iter((1..=24).map(|i| 100.0 + 10.0 * f64::from(i)).chain([241.0]));
+        let rise = [100.0, 139.0, 138.6];
+        let mut choices: Vec<Row> = Vec::new();
+        for kind in [
+            ChartType::Renko,
+            ChartType::Kagi,
+            ChartType::LineBreak,
+            ChartType::PointAndFigure,
+        ] {
+            for real in [true, false] {
+                let mut params = ChartTypeParams::default();
+                *match kind {
+                    ChartType::Renko => &mut params.renko_real_price,
+                    ChartType::Kagi => &mut params.kagi_real_price,
+                    ChartType::LineBreak => &mut params.line_break_real_price,
+                    _ => &mut params.pnf_real_price,
+                } = real;
+                let label = if real { "138.60" } else { "139.00" };
+                choices.push((kind, params, None, &rise, label));
+            }
+        }
         let rows: [Row; 4] = [
             // Bricks of 1 from 100 to 103, fitted up to 103.375.
             (
@@ -1155,7 +1177,7 @@ mod tests {
             ),
         ];
         let mut failures = Vec::new();
-        for (kind, params, first_open, closes, label) in rows {
+        for (kind, params, first_open, closes, label) in rows.into_iter().chain(choices) {
             let ctx = egui::Context::default();
             let mut chart = Chart::new(BarData::from_bars(bars(0, closes, first_open)));
             chart.set_chart_type_params(params);
@@ -1169,9 +1191,7 @@ mod tests {
             frame(&ctx, &mut chart, 0.1, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
             let plot = chart.get_rendered_price_rect();
-            let y = chart
-                .get_chart_mapping()
-                .price_to_y(closes[closes.len() - 1]);
+            let y = chart.get_chart_mapping().price_to_y(label.parse().unwrap());
             if !painted.iter().any(|shape| {
                 matches!(shape,
                     Shape::LineSegment { points, stroke }

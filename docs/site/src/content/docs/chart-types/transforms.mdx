@@ -75,6 +75,12 @@ takes priority over reversal and at most one direction is processed per source
 bar. OHLC range bars are an approximation; original executions give their actual path.
 See the [order-flow guide](../../../../../order-flow.md) for supplying executions.
 
+The price scale of Renko, Kagi, Line Break and Point and Figure labels the last
+real price by default. Set `renko_real_price`, `kagi_real_price`,
+`line_break_real_price` or `pnf_real_price` to `false` to label the close of the
+newest element instead: closes that rise to 139 and end at 138.6 then show
+139.00, where the newest brick, line or column ends, rather than 138.60.
+
 ## Sizes, styles and axis restrictions
 
 Renko, Kagi, Range and Point and Figure support

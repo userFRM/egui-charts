@@ -709,6 +709,18 @@ pub struct ChartTypeParams {
     pub pnf_reversal: u32,
     /// Line Break: the number of lines a close must break through to reverse, 1 to 10.
     pub line_break_count: usize,
+    /// Renko: label the last real price on the price scale; `false` labels the close of the
+    /// newest brick.
+    pub renko_real_price: bool,
+    /// Kagi: label the last real price on the price scale; `false` labels the end of the newest
+    /// line.
+    pub kagi_real_price: bool,
+    /// Line Break: label the last real price on the price scale; `false` labels the close of
+    /// the newest line.
+    pub line_break_real_price: bool,
+    /// Point and Figure: label the last real price on the price scale; `false` labels the end
+    /// of the newest column.
+    pub pnf_real_price: bool,
     /// Baseline: where the base line is drawn.
     pub baseline: BaselineLevel,
     /// Columns: the price the columns rise above or fall below; `None` draws them up from the
@@ -807,6 +819,10 @@ impl Default for ChartTypeParams {
             pnf_box_size: 1.0,
             pnf_reversal: 3,
             line_break_count: 3,
+            renko_real_price: true,
+            kagi_real_price: true,
+            line_break_real_price: true,
+            pnf_real_price: true,
             baseline: BaselineLevel::PercentOfPane(50.0),
             columns_base: None,
             tpo_period_minutes: 30,
@@ -857,6 +873,20 @@ impl ChartTypeParams {
         Self {
             renko_brick_size: atr * multiplier,
             ..Default::default()
+        }
+    }
+
+    /// Whether the price scale of `chart_type` labels the close of its newest element instead
+    /// of the last real price.
+    #[cfg(feature = "widget")]
+    pub(crate) fn labels_element_price(&self, chart_type: super::ChartType) -> bool {
+        use super::ChartType::{Kagi, LineBreak, PointAndFigure, Renko};
+        match chart_type {
+            Renko => !self.renko_real_price,
+            Kagi => !self.kagi_real_price,
+            LineBreak => !self.line_break_real_price,
+            PointAndFigure => !self.pnf_real_price,
+            _ => false,
         }
     }
 
