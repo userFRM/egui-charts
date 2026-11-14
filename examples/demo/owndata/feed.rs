@@ -39,9 +39,11 @@ struct State {
     joins: Vec<(Key, Join)>,
     /// The run of empty windows of each symbol and interval.
     runs: HashMap<(String, Timeframe), Run>,
-    /// The trades fed to the chart that time and sales has not taken yet, oldest first, each
-    /// with its symbol, at most [`TAPE`].
-    tape: VecDeque<(String, Tick)>,
+    /// How many subscriptions have been made, which gives each its number.
+    subscribed: u64,
+    /// The trades fed to the charts that time and sales has not taken yet, oldest first, each
+    /// with the number of the subscription that fed it, at most [`TAPE`].
+    tape: VecDeque<(u64, Tick)>,
 }
 
 /// The bars that belong together: those of one symbol and interval on one clock. The clock is
@@ -77,6 +79,8 @@ struct Run {
 struct Live {
     sink: Sink,
     key: Key,
+    /// Its number in the order the subscriptions were made.
+    serial: u64,
     /// The address of the stream without its query, for errors and log lines.
     endpoint: String,
     aggregator: Aggregator,
@@ -155,13 +159,28 @@ impl MappedFeed {
         }
     }
 
-    /// The trades of `symbol` fed to the chart since the last call, oldest first, at most the
-    /// latest 10,000, for time and sales. Trades of another symbol, left from before a change of
-    /// symbol, are dropped.
-    pub(crate) fn drain_tape(&self, symbol: &str) -> Vec<Tick> {
-        let tape = std::mem::take(&mut self.shared.state().tape);
-        let held = tape.into_iter().filter(|(of, _)| of == symbol);
-        held.map(|(_, tick)| tick).collect()
+    /// The trades fed to the chart of `symbol` and `timeframe` since the last call, oldest
+    /// first, at most the latest 10,000, for time and sales. A study that reads the chart's
+    /// symbol, on the chart's interval or another, has a subscription of its own that receives
+    /// the same trades again, so only those of the first subscription of `symbol` and
+    /// `timeframe` still held are listed. Trades left from before a change of symbol or
+    /// interval are dropped.
+    // shortcut: the first subscription stands for the chart's, which the feed cannot tell from
+    // a study's on the same interval, so while their sockets differ, as when one reconnects,
+    // time and sales follows the first; take the chart's own once the Datafeed names it.
+    pub(crate) fn drain_tape(&self, symbol: &str, timeframe: Option<Timeframe>) -> Vec<Tick> {
+        let (tape, first) = {
+            let mut state = self.shared.state();
+            let first = state
+                .subscriptions
+                .values()
+                .filter(|live| live.key.symbol == symbol && Some(live.key.timeframe) == timeframe)
+                .map(|live| live.serial)
+                .min();
+            (std::mem::take(&mut state.tape), first)
+        };
+        let listed = tape.into_iter().filter(|(by, _)| Some(*by) == first);
+        listed.map(|(_, tick)| tick).collect()
     }
 }
 
@@ -271,9 +290,11 @@ impl Datafeed for MappedFeed {
             if join.in_flight == 0 {
                 aggregator.start(join.newest.clone());
             }
+            state.subscribed += 1;
             let live = Live {
                 sink,
                 key,
+                serial: state.subscribed,
                 endpoint,
                 aggregator,
                 pushed: None,
@@ -522,9 +543,9 @@ impl Shared {
                             live.endpoint
                         );
                     }
-                    let (sink, symbol) = (live.sink.clone(), live.key.symbol.clone());
+                    let (sink, serial) = (live.sink.clone(), live.serial);
                     let fed = pushes.iter().filter_map(|(tick, _)| tick.clone());
-                    state.tape.extend(fed.map(|tick| (symbol.clone(), tick)));
+                    state.tape.extend(fed.map(|tick| (serial, tick)));
                     let over = state.tape.len().saturating_sub(TAPE);
                     state.tape.drain(..over);
                     sink

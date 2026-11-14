@@ -846,7 +846,8 @@ pub(crate) mod tests {
         see(&mut chart, "a new slot", &[B3, B4, B5A, T6]);
         let trades = fed(chart.trades(SeriesId::MAIN).cloned().collect());
         assert_eq!(trades, [P1, P2, P4, P6]);
-        assert_eq!(fed(feed.drain_tape("ABC")), [P1, P2, P4, P6]);
+        let tape = feed.drain_tape("ABC", Some(Timeframe::Min1));
+        assert_eq!(fed(tape), [P1, P2, P4, P6]);
 
         // 4. The connection is lost. The chart says so with the endpoint, and without the key
         // that travels in the address: in its path the key is shown by its name.
@@ -907,7 +908,7 @@ pub(crate) mod tests {
         // The chart keeps the trades of the shown symbol only, and so does time and sales: the
         // trades of steps 5 and 7, still in the tape, are of the old symbol.
         assert_eq!(fed(chart.trades(SeriesId::MAIN).cloned().collect()), [P9]);
-        assert_eq!(fed(feed.drain_tape("XYZ")), [P9]);
+        assert_eq!(fed(feed.drain_tape("XYZ", Some(Timeframe::Min1))), [P9]);
 
         let lines: Vec<String> = server.seen().iter().map(|seen| seen.line.clone()).collect();
         assert_eq!(lines.len(), 7, "{lines:?}");
@@ -938,5 +939,83 @@ pub(crate) mod tests {
             peer.received(),
             [[LOGIN, ABC], [LOGIN, ABC], [LOGIN, ABC], [LOGIN, XYZ]]
         );
+    }
+
+    /// Time and sales lists a trade once while a study reads the chart's symbol on the chart's
+    /// interval, as Volume Delta does on a one-minute chart: the study's subscription has a
+    /// socket of its own, which receives the trade again. A second chart on the feed stands for
+    /// the study.
+    #[test]
+    fn a_trade_is_listed_once_while_a_study_streams_the_same_interval() {
+        use super::super::feed::tests::{Server, profile, shown, until};
+        // The bar of midnight on 11 November 2026, which the trade ten seconds later continues.
+        const BAR: &str = r#"[{"t":1794355200,"o":101.25,"h":101.5,"l":100.0,"c":100.25,"v":700}]"#;
+        const TRADE: &str = r#"{"type":"trade","data":[{"p":101.75,"s":3,"t":1794355210000}]}"#;
+        let server = Server::start(|_, seen| {
+            // A request for bars before the bar held gets none, which ends history.
+            let older = seen.line.contains("&to=1794355200&");
+            let page = if older { "[]" } else { BAR };
+            (200, page.to_owned())
+        });
+        // One socket at a time: the first gets the trade and is closed, then the second gets the
+        // trade too, and the first one's new socket waits behind it.
+        let peer = Peer::start(vec![
+            vec![
+                Step::Receive(1),
+                Step::Hold,
+                Step::Send(TRADE),
+                Step::Close(1000),
+            ],
+            vec![Step::Receive(1), Step::Send(TRADE), Step::UntilClosed],
+        ]);
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let mut profile = profile(&server.origin);
+        profile.stream = Some(Stream {
+            url: peer.url.clone(),
+            connect: vec![r#"{"symbol":"{symbol}"}"#.to_owned()],
+            records: key("data"),
+            route_by: key("type"),
+            routes: vec![Route {
+                value: "trade".to_owned(),
+                kind: RouteKind::Trades(TradeFields {
+                    time: TimeSpec::Instant {
+                        field: key("t"),
+                        unit: TimeUnit::Milliseconds,
+                    },
+                    price: key("p"),
+                    size: key("s"),
+                    ..TradeFields::default()
+                }),
+            }],
+            ..Stream::default()
+        });
+        let feed = Arc::new(MappedFeed::new(profile, Vec::new()));
+        let open = || {
+            ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("ABC")
+                .with_timeframe(Timeframe::Min1)
+                .with_initial_bars(3)
+                .build()
+        };
+        let (mut chart, mut study) = (open(), open());
+        let ctx = egui::Context::default();
+        // Whether the newest bar of a chart holds this volume.
+        let holds = |volume: f64| {
+            move |chart: &Chart| {
+                let newest = shown(chart).last().and_then(|(_, bar)| *bar);
+                newest.is_some_and(|bar| bar[4] == volume)
+            }
+        };
+        until(&ctx, &mut chart, "the chart's bar", holds(700.0));
+        until(&ctx, &mut study, "the study's bar", holds(700.0));
+        peer.release();
+        // Both subscriptions fold the trade: 700 + 3.
+        until(&ctx, &mut chart, "the chart's trade", holds(703.0));
+        until(&ctx, &mut study, "the study's trade", holds(703.0));
+        let row = |t: &Tick| (t.ts.timestamp_millis(), t.price);
+        let tape = feed.drain_tape("ABC", Some(Timeframe::Min1));
+        let listed: Vec<_> = tape.iter().map(row).collect();
+        assert_eq!(listed, [(1794355210000, 101.75)]);
     }
 }

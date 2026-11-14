@@ -3013,7 +3013,7 @@ impl DemoApp {
     /// and sales the executions of the live feed and reports matching filters as notifications.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
         if let Some(own) = &self.own_data {
-            let tape = own.feed.drain_tape(self.chart.symbol());
+            let tape = own.feed.drain_tape(self.chart.symbol(), self.chart.timeframe());
             self.feed_time_and_sales(tape);
             return;
         }
