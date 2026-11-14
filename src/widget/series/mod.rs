@@ -850,7 +850,8 @@ impl Chart {
         self.anchor_drawing_points();
         self.chart_type_params
             .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
-        // Range bars come from the held trades, as of the replay cutoff, while there are any.
+        // Range bars come from the held trades, as of the replay cutoff, while there are any,
+        // after the approximation of the bars before them.
         let cutoff = self.replay_time();
         let ranges = &mut self.execution_ranges;
         let executions = self
@@ -860,6 +861,9 @@ impl Chart {
             .and_then(|link| {
                 ranges.bars(
                     &self.chart_type_params,
+                    &self.state.data().bars,
+                    self.state.revision(),
+                    &link.clock,
                     link.trades.revision(),
                     link.trades.iter(),
                     cutoff,
