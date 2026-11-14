@@ -271,6 +271,9 @@ pub struct Chart {
     scroll_animation: Option<time_scale::ScrollAnimation>,
     /// Time axis below the plots in the last frame; zero height while its labels are hidden
     time_axis_rect: Rect,
+    /// Whether the last price frame took a double-click on its plot, below its status line and
+    /// away from the drawings, series and primitives there
+    price_plot_double_click: bool,
     /// Chart type (candlestick, line, area, bar, Renko, Kagi)
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
@@ -507,6 +510,16 @@ pub struct Chart {
     size: Option<Vec2>,
     /// The main bars in groups that fall within one pixel, while zoomed out that far.
     merge_groups: merge::Groups,
+}
+
+impl std::fmt::Debug for Chart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Chart")
+            .field("symbol", &self.symbol())
+            .field("timeframe", &self.timeframe())
+            .field("bars", &self.bars(SeriesId::MAIN).len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// The object a right-click landed on, with the data needed to position and

@@ -817,7 +817,9 @@ fn an_eviction_drops_the_scroll_back_page_in_flight_and_its_continuation() {
         assert_eq!(feed.pages.lock().unwrap().len(), 1, "{name}: in flight");
         feed.calls();
         match name {
-            "lowered limit" => chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(16)),
+            "lowered limit" => {
+                chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(16));
+            }
             "live bars" => {
                 let sink = feed.sink();
                 for minute in 23..27 {

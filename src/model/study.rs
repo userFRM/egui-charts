@@ -5,6 +5,7 @@ use egui::Color32;
 
 /// A price series or an output of another study on the chart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum StudySource {
     /// A field or average of fields of the input bars.
     Price(PriceSource),
