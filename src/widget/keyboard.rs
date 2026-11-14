@@ -71,7 +71,8 @@ impl ShortcutMap {
         };
         find(false).or_else(|| {
             typed_char(key)
-                .filter(|c| !c.is_alphanumeric())
+                // Punctuation only: Shift with a letter, a digit or space is its own shortcut.
+                .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
                 // Shift+Period typing `>` on a US layout is not the period.
                 .filter(|_| typed.is_none_or(|text| egui::Key::from_name(text) == Some(key)))
                 .and_then(|_| find(true))
@@ -168,9 +169,15 @@ fn starts_entry(text: &str) -> bool {
         .is_some_and(|c| !c.is_control() && !c.is_whitespace())
 }
 
-/// The character naming a letter, digit or punctuation key, the keys whose press types text.
+/// The character of a letter, digit, punctuation or space key, the keys whose press types text.
 fn typed_char(key: egui::Key) -> Option<char> {
-    let mut symbol = key.symbol_or_name().chars();
+    let mut symbol = match key {
+        // egui names these two by a word, although they type a character.
+        egui::Key::Quote => "'",
+        egui::Key::Space => " ",
+        _ => key.symbol_or_name(),
+    }
+    .chars();
     let c = symbol.next()?;
     // The arrows are named by a glyph and type nothing; the minus key by the minus sign.
     (symbol.next().is_none() && (c.is_ascii() || key == egui::Key::Minus)).then_some(c)
@@ -814,7 +821,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "drawings")]
     fn press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
@@ -1174,28 +1180,56 @@ mod tests {
                 assert_eq!(chart.take_shortcut_requests(), vec![request]);
             }
         }
-        chart.shortcuts_mut().bindings.push((
-            KeyboardShortcut::new(Modifiers::NONE, Key::F),
-            KeyboardAction::FitContent,
-        ));
-        // A press that ran a binding types nothing, whatever character its text carries.
-        for (key, modifiers, text) in [
-            (Key::F, Modifiers::NONE, "f"),
-            (Key::L, Modifiers::ALT, "¬"),
-            (Key::Minus, Modifiers::NONE, "-"),
+        let typed = |text: &str| Event::Text(text.into());
+        let quote = press(Key::Quote, Modifiers::NONE);
+        ctx.run_ui(
+            RawInput {
+                events: vec![quote.clone(), typed("'")],
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(
+            chart.take_shortcut_requests(),
+            vec![ShortcutRequest::SymbolSearch("'".into())],
+            "an unbound quote key types its character"
+        );
+        for (key, action) in [
+            (Key::F, KeyboardAction::FitContent),
+            (Key::Quote, KeyboardAction::ToggleGrid),
         ] {
+            chart
+                .shortcuts_mut()
+                .bindings
+                .push((KeyboardShortcut::new(Modifiers::NONE, key), action));
+        }
+        // A press that ran a binding types nothing, whatever character its text carries and in
+        // either order, and a space typed before it in the same frame is not taken for its text.
+        for (events, text) in [
+            (vec![press(Key::F, Modifiers::NONE), typed("f")], "f"),
+            (vec![press(Key::L, Modifiers::ALT), typed("¬")], "¬"),
+            (vec![press(Key::Minus, Modifiers::NONE), typed("-")], "-"),
+            (vec![quote.clone(), typed("'")], "'"),
+            (vec![typed("'"), quote.clone()], "'"),
+            (
+                vec![
+                    press(Key::Space, Modifiers::NONE),
+                    typed(" "),
+                    press(Key::Minus, Modifiers::NONE),
+                    typed("-"),
+                ],
+                "-",
+            ),
+        ] {
+            let grid = chart.config().show_grid;
+            let toggles_grid = events.contains(&quote);
+            let fed = format!("{events:?}");
             ctx.run_ui(
                 RawInput {
-                    events: vec![
-                        Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers,
-                        },
-                        Event::Text(text.into()),
-                    ],
+                    events,
                     ..Default::default()
                 },
                 |ui| {
@@ -1203,14 +1237,16 @@ mod tests {
                 },
             )
             .drop_without_applying_deltas();
-            assert!(
-                chart.take_shortcut_requests().is_empty(),
-                "{key:?} is bound and must not also open symbol search"
+            assert_eq!(
+                chart.take_shortcut_requests(),
+                vec![],
+                "{fed} is bound and must not also open symbol search"
             );
             assert!(
-                !ctx.input(|input| input.events.contains(&Event::Text(text.into()))),
-                "{key:?} leaves no text for a host dialog"
+                !ctx.input(|input| input.events.contains(&typed(text))),
+                "{fed} leaves no text for a host dialog"
             );
+            assert_eq!(chart.config().show_grid, grid != toggles_grid, "{fed}");
         }
         assert_eq!(
             chart.state.price_scale().options().mode,
