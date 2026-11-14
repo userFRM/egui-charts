@@ -168,6 +168,8 @@ impl TextEditState {
             );
         }
         shown.text = Some(self.shown_text(ctx));
+        // A pin whose popup is switched off still shows the text being written.
+        shown.marker.show_text = true;
         shown
     }
 }
