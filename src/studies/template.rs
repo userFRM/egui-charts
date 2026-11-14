@@ -1027,6 +1027,40 @@ mod tests {
         assert_eq!(drawn(&oldest), (1, (3, 0), false));
         let current = StudyTemplate::from_study(&RankCorrelationIndex::default());
         assert_eq!(drawn(&current), (2, (3, 3), true));
+
+        // A Technical Ratings as the release before its table inputs saved it, its fast length
+        // edited to 20 and its summary to orange: it rates every vote, requests no other interval
+        // and draws its table where and as it did.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Technical Ratings","inputs":[["fast",{"Length":20}],["medium",{"Length":50}],["slow",{"Length":200}],["simple",{"Toggle":true}],["exponential",{"Toggle":true}],["rsi",{"Toggle":true}],["rsi_period",{"Length":14}],["stochastic",{"Toggle":true}],["stochastic_period",{"Length":14}],["cci",{"Toggle":true}],["cci_period",{"Length":20}],["macd",{"Toggle":true}],["macd_fast",{"Length":12}],["macd_slow",{"Length":26}],["macd_signal",{"Length":9}],["momentum",{"Toggle":true}],["momentum_period",{"Length":10}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TechnicalRatings.html","plots":[{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[230,81,0,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[46,78,123,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,77,77,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[11,11,12,16],"untagged_plots":[0,1,2,3,4,5],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let mut restored = saved.create().unwrap();
+        assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert!(restored.data_requests().is_empty());
+        let inputs = restored.inputs();
+        let value = |id: &str| inputs.iter().find(|i| i.id == id).unwrap().value.clone();
+        assert_eq!(
+            [value("fast"), value("basis")],
+            [InputValue::Length(20), InputValue::Choice(0)]
+        );
+        restored.calculate(&[]);
+        let table = restored.table().unwrap();
+        assert_eq!(
+            (
+                table.position,
+                table.text_size,
+                table.header_color,
+                table.text_color
+            ),
+            (
+                crate::studies::TablePosition::BottomRight,
+                crate::studies::TableTextSize::Normal,
+                Some(Color32::from_rgb(41, 91, 121)),
+                Some(Color32::WHITE)
+            )
+        );
+        assert_eq!(table.rows.len(), 3);
     }
 
     /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
