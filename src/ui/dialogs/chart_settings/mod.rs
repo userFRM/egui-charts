@@ -1341,15 +1341,17 @@ mod tests {
     }
 
     /// The time zone list names exchange time and local time as rows, shows the chart's mode by
-    /// its row and applies the row picked: #2885.
+    /// its row and applies the row picked, while settings keep the text saved before: #2885.
     #[test]
     fn time_zone_dropdown_offers_exchange_and_local_time() {
         use crate::{Chart, model::BarData, scales::TimezoneMode};
         let mut chart = Chart::new(BarData::new());
-        chart.chart_options.time_scale.timezone =
-            TimezoneMode::Exchange(crate::model::TimezoneId::utc());
+        let exchange = TimezoneMode::Exchange("+05:45".parse().unwrap());
+        chart.chart_options.time_scale.timezone = exchange.clone();
+        let saved = ChartSettingsState::from_chart(&chart);
+        assert_eq!(saved.timezone, "Exchange:+05:45");
         let mut dialog = SettingsDialog::new();
-        dialog.open(ChartSettingsState::from_chart(&chart));
+        dialog.open(saved.clone());
         let SettingsAction::Apply(settings) = click_through(
             &mut dialog,
             &["scroll", "Exchange time", "Local time", "Ok"],
@@ -1362,6 +1364,8 @@ mod tests {
             chart.chart_options().time_scale.timezone,
             TimezoneMode::Local
         );
+        saved.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(chart.chart_options().time_scale.timezone, exchange);
     }
 
     #[test]
