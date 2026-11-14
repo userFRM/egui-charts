@@ -286,6 +286,13 @@ impl TimeframeVisibility {
 }
 
 /// Drawing interaction options
+///
+/// ```
+/// use egui_charts::drawings::DrawingOptions;
+///
+/// let mut options = DrawingOptions::default();
+/// options.handle_size = 10.0;
+/// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DrawingOptions {

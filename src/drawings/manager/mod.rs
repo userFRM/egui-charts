@@ -50,6 +50,25 @@ pub enum DrawingSyncAction {
 /// This struct is passed to [`DrawingManager::sync_from_app_state`] at the start
 /// of each frame to ensure the manager stays in sync with toolbar selections,
 /// keyboard shortcuts, and other UI actions that modify drawing state.
+///
+/// ```
+/// use egui_charts::drawings::services::HandleConfig;
+/// use egui_charts::drawings::{
+///     DrawingManager, DrawingManagerOptions, DrawingState, DrawingToolType, HandlePos,
+/// };
+///
+/// let mut state = DrawingState::default();
+/// state.active_tool = Some(DrawingToolType::TrendLine);
+/// let mut handles = HandleConfig::default();
+/// handles.size = 10.0;
+/// let mut options = DrawingManagerOptions::default();
+/// options.snap_to_price = true;
+/// options.handle_config = handles;
+/// let mut manager = DrawingManager::new();
+/// manager.options = options;
+/// manager.sync_from_app_state(&state);
+/// manager.start_drag_handle(1, HandlePos::End);
+/// ```
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DrawingState {

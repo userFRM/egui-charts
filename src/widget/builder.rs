@@ -878,6 +878,18 @@ impl ChartBuilder {
     }
 
     /// Format time labels, as [`Chart::set_time_formatter`] does.
+    ///
+    /// ```
+    /// use egui_charts::scales::{DefaultTimeFormatter, LocaleTimeFormatter};
+    /// use egui_charts::widget::ChartBuilder;
+    /// use std::sync::Arc;
+    ///
+    /// let mut clock = DefaultTimeFormatter::default();
+    /// clock.use_24_hour = false;
+    /// let english = ChartBuilder::new().with_time_formatter(Arc::new(clock));
+    /// let german = LocaleTimeFormatter::new("de-DE");
+    /// let german = ChartBuilder::new().with_time_formatter(Arc::new(german));
+    /// ```
     #[must_use]
     pub fn with_time_formatter(mut self, formatter: Arc<dyn crate::scales::TimeFormatter>) -> Self {
         self.time_formatter = Some(formatter);

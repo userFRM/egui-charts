@@ -988,6 +988,7 @@ impl Default for ChartSyncOptions {
 /// let mut b = Chart::new(egui_charts::model::BarData::new());
 /// let mut layout = ChartLayout::default();
 /// layout.mode = ChartLayoutMode::TwoHorizontal;
+/// layout.sync.sync_crosshair = true;
 /// layout.show(ui, &mut [&mut a, &mut b]);
 /// # }
 /// ```

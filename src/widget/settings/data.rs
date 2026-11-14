@@ -570,6 +570,16 @@ pub struct OrderFlowSettings {
 }
 
 /// Serializable display settings shared by the chart and its settings dialog.
+///
+/// ```
+/// use egui_charts::widget::settings::ChartSettingsState;
+///
+/// let mut settings = ChartSettingsState::default();
+/// settings.candle_colors.show_wick = false;
+/// settings.status_line.show_logo = false;
+/// settings.trading.instant_orders = true;
+/// settings.alerts.play_sound = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 // The trait impls below wrap the derived ones.

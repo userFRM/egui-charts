@@ -295,6 +295,14 @@ pub struct PriceScale {
 
 impl PriceScale {
     /// Creates an auto-scaled price scale.
+    ///
+    /// ```
+    /// use egui_charts::scales::{PriceScale, PriceScaleMode, PriceScaleOptions};
+    ///
+    /// let mut options = PriceScaleOptions::default();
+    /// options.mode = PriceScaleMode::Percentage;
+    /// let scale = PriceScale::new(options);
+    /// ```
     pub fn new(options: PriceScaleOptions) -> Self {
         Self {
             options,
