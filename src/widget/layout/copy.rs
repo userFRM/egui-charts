@@ -261,7 +261,7 @@ fn apply_to_other_chart(
         own.styles = params.styles;
         own.footprint_colors = params.footprint_colors;
         if &own != chart.chart_type_params() {
-            chart.set_chart_type_params(own);
+            chart.apply_chart_type_params(own);
         }
     }
     let own = ChartSettingsState::from_chart(chart).order_flow;

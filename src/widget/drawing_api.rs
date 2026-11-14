@@ -191,6 +191,39 @@ impl Chart {
         Ok(())
     }
 
+    /// Replace an anchored VWAP's settings (source, bands and their unit, fills, line plot,
+    /// latest-value tracking and its precision) as one undoable edit. Unknown ids, locked
+    /// drawings, other tools and invalid settings change nothing.
+    pub fn set_vwap_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::VwapConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::AnchoredVWAP {
+            return Err(DrawingError::Invalid("Drawing is not an anchored VWAP"));
+        }
+        if !config.is_valid() {
+            return Err(DrawingError::Invalid("Invalid anchored VWAP settings"));
+        }
+        if drawing.vwap.unwrap_or_default() != config {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.vwap = Some(config));
+            });
+        }
+        Ok(())
+    }
+
     /// Replace a position drawing's statistics, account currency and quantity precision in
     /// one undoable edit. A different currency needs a host-supplied conversion rate before
     /// monetary statistics can be calculated. Invalid settings and locked drawings change nothing.
@@ -905,6 +938,70 @@ mod tests {
             chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
             assert!(chart.set_fibonacci_config(7, edited).is_err());
         }
+    }
+
+    /// Hosts set an anchored VWAP's source, band unit, fills, line plot and tracking in one
+    /// history entry, which templates and saved drawings carry; invalid settings, locked, missing
+    /// and other drawings change nothing.
+    #[test]
+    fn anchored_vwap_settings_are_validated_and_undoable() {
+        use crate::drawings::{DrawingTemplate, VwapBandMode, VwapConfig, VwapFill};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        let mut drawing = Drawing::new(7, DrawingToolType::AnchoredVWAP);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        let edited = VwapConfig {
+            source: crate::model::PriceSource::OHLC4,
+            band_mode: VwapBandMode::Percentage,
+            show_line: false,
+            plot_type: crate::drawings::VwapPlotType::StepLine,
+            track_price: true,
+            precision: Some(3),
+            band_fill: VwapFill::new(false, Some([1, 2, 3, 255]), 0.4).unwrap(),
+            background: VwapFill::new(true, None, 0.2).unwrap(),
+            ..VwapConfig::default()
+        };
+        chart.set_vwap_config(7, edited).unwrap();
+        assert_eq!(chart.drawings().drawings[0].vwap, Some(edited));
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].vwap, None);
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        // An unchanged assignment does not create a second history entry.
+        chart.set_vwap_config(7, edited).unwrap();
+        assert!(chart.undo());
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        let template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
+        let mut peer = Drawing::new(8, DrawingToolType::AnchoredVWAP);
+        template.apply_to(&mut peer).unwrap();
+        assert_eq!(peer.vwap, Some(edited));
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        let mut restored = Chart::new(BarData::default());
+        restored.load_drawings(&saved).unwrap();
+        assert_eq!(restored.drawings().drawings[0].vwap, Some(edited));
+        let invalid = VwapConfig {
+            precision: Some(9),
+            ..edited
+        };
+        assert!(chart.set_vwap_config(7, invalid).is_err());
+        chart.drawings_mut().drawings[0].locked = true;
+        assert_eq!(
+            chart.set_vwap_config(7, VwapConfig::default()),
+            Err(DrawingError::Locked(7))
+        );
+        assert_eq!(
+            chart.set_vwap_config(77, VwapConfig::default()),
+            Err(DrawingError::UnknownDrawing(77))
+        );
+        chart.drawings_mut().drawings[0].locked = false;
+        chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
+        assert!(chart.set_vwap_config(7, VwapConfig::default()).is_err());
+        chart.drawings_mut().drawings[0].tool_type = DrawingToolType::AnchoredVWAP;
+        assert_eq!(chart.drawings().drawings[0].vwap, Some(edited));
+        assert!(chart.undo());
+        assert!(!chart.can_undo());
     }
 
     /// Readout edits and reversal each undo in one step, preserve times and identity, and

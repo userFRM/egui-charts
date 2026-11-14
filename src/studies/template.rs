@@ -254,6 +254,12 @@ impl StudyTemplate {
                     .inputs
                     .push(("auto_interval".to_owned(), InputValue::Toggle(false)));
             }
+            // A majority rule drew the signed direction before it could report the percentage.
+            "MajRule" if !has("mode") => {
+                template
+                    .inputs
+                    .push(("mode".to_owned(), InputValue::Choice(1)));
+            }
             // An RSI drew no average and no middle line before it opened with both; the hidden
             // level keeps the styles saved for the other two and stays within their band. Its
             // average then chose from None, SMA and EMA, under ids of its own, before it took the
@@ -509,11 +515,12 @@ mod tests {
         let rows: Vec<Box<dyn Indicator>> = vec![
             // Exported studies outside the catalogue.
             Box::new(CVD::default()),
-            Box::new(CloseToCloseVol::default()),
             Box::new(HL2::default()),
             Box::new(HLC3::default()),
             Box::new(PriceChannel::default()),
             Box::new(EhlersFisher::default()),
+            // A catalogue study with the bars per year it is annualized over.
+            Box::new(CloseToCloseVol::default().with_trading_days(365.0)),
             // Fewer averages than the ribbon that the name creates, with a crossing pair.
             Box::new(
                 MACombination::new(vec![
@@ -752,6 +759,33 @@ mod tests {
                 vec![("auto_interval", Toggle(true))],
                 vec![("auto_interval", Toggle(true))],
             ),
+            // Saved before the bars per year could be set, when every volatility used 252.
+            (
+                "C2C Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "GK Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("trading_days", Number(252.0))],
+            ),
+            (
+                "Zero-Trend Vol",
+                vec![("trading_days", Number(365.0))],
+                vec![("trading_days", Number(365.0))],
+            ),
+            // Saved before the output could be chosen, when it was the signed direction.
+            (
+                "MajRule",
+                vec![("period", Length(10))],
+                vec![("period", Length(10)), ("mode", Choice(1))],
+            ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (
                 "Vol Profile FR",
@@ -779,6 +813,12 @@ mod tests {
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
                 ],
+            ),
+            // Saved before the twelve lengths were inputs.
+            (
+                "GMMA",
+                vec![],
+                vec![("periods [0]", Length(3)), ("periods [11]", Length(60))],
             ),
         ];
         let factory = IndicatorFactory::new();

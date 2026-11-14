@@ -465,7 +465,7 @@ impl ChartSettingsState {
                     reason: error,
                 });
             }
-            chart.set_chart_type_params(params.clone());
+            chart.apply_chart_type_params(params.clone());
         }
         if let Some(source) = self.price_source {
             chart.config_mut().price_source = source;
@@ -739,7 +739,7 @@ impl ChartSettingsState {
             style.wick_up = colors.wick_up;
             style.wick_down = colors.wick_down;
             if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         } else if self.chart_type == crate::model::ChartType::HollowCandles {
             let mut params = chart.chart_type_params().clone();
@@ -755,7 +755,7 @@ impl ChartSettingsState {
             style.wick_up = colors.wick_up;
             style.wick_down = colors.wick_down;
             if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         } else if self.chart_type == crate::model::ChartType::VolumeCandles {
             let mut params = chart.chart_type_params().clone();
@@ -784,7 +784,7 @@ impl ChartSettingsState {
                 style.wick_down = colors.wick_down;
             }
             if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         } else if self.chart_type != crate::model::ChartType::Bars {
             let candles = CandlesStyle {
@@ -792,11 +792,10 @@ impl ChartSettingsState {
                 wick_visible: self.candle_colors.show_wick,
                 color_by_previous_close: self.candle_colors.color_by_previous_close,
             };
-            // Other chart type parameters re-resolve their box sizes when set, so only a change is set.
             if chart.chart_type_params().styles.candles != candles {
                 let mut params = chart.chart_type_params().clone();
                 params.styles.candles = candles;
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         }
         Ok(())
@@ -1301,7 +1300,8 @@ mod tests {
 
     /// The state read from a chart applies back without changing its configuration, so pressing
     /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
-    /// left as shown while the one it fell back to changes keeps what it showed.
+    /// left as shown while the one it fell back to changes keeps what it showed. A size resolved
+    /// from history keeps its value until its method is edited.
     #[test]
     fn unedited_settings_apply_records_no_undo() {
         let bars = || {
@@ -1341,6 +1341,102 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // An ATR(14) reversal of 2 on 14 bars with a true range of 2 stays through a streamed
+        // bar with a true range of 16 and an unedited apply, which would make it
+        // (13 * 2 + 16) / 14 = 3. An edited period resolves again: ATR(15) seeds 44 / 15.
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
+        let bar = |minute, high| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+            Bar::new(time, 100.0, high, 99.0, 100.0, 0.0)
+        };
+        let atr = |period| BoxSizeMethod::Atr {
+            period,
+            multiplier: 1.0,
+        };
+        let mut chart = Chart::new(BarData::from_bars((0..14).map(|i| bar(i, 101.0)).collect()));
+        chart.set_chart_type(ChartType::Kagi);
+        chart.set_chart_type_params(ChartTypeParams {
+            kagi_size_method: atr(14),
+            ..Default::default()
+        });
+        chart.update(crate::widget::SeriesId::MAIN, bar(14, 115.0));
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        assert!(!chart.can_undo());
+        // An edited candle style and an unedited series settings apply keep it too.
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.candle_colors.show_wick = !settings.candle_colors.show_wick;
+        settings.apply_to_chart(&mut chart).unwrap();
+        let series = chart.series_settings();
+        chart.apply_series_settings(&series);
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings
+            .chart_type_params
+            .as_mut()
+            .unwrap()
+            .kagi_size_method = atr(15);
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert!((chart.chart_type_params().kagi_reversal - 44.0 / 15.0).abs() < 1e-12);
+    }
+
+    /// A size that waits for more history than is loaded is not invalid: the chart names the
+    /// bars it waits for and other settings apply. A fixed size of 0 is still rejected. Whitespace
+    /// bars do not count, so the size resolves once 14 bars with prices are loaded.
+    #[test]
+    fn settings_apply_while_a_history_derived_size_waits() {
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
+        use crate::widget::test_frames::shapes;
+        let time = |minute| chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+        let bar = |minute| Bar::new(time(minute), 100.0, 101.0, 99.0, 100.0, 0.0);
+        let bars = (-10..0)
+            .map(|minute| Bar::whitespace(time(minute)))
+            .chain((0..5).map(bar))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Atr {
+                period: 14,
+                multiplier: 1.0,
+            },
+            ..Default::default()
+        });
+        ChartSettingsState::from_chart(&chart)
+            .apply_to_chart(&mut chart)
+            .unwrap();
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.scales_and_lines.show_price_line = !chart.config().show_price_line;
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(
+            chart.config().show_price_line,
+            settings.scales_and_lines.show_price_line
+        );
+        let ctx = Context::default();
+        let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(t)
+            if t.galley.text() == "Waiting for 14 bars of history to size the chart")));
+
+        let params = settings.chart_type_params.as_mut().unwrap();
+        params.renko_size_method = BoxSizeMethod::Fixed;
+        params.renko_brick_size = 0.0;
+        assert!(matches!(
+            settings.apply_to_chart(&mut chart),
+            Err(ChartSettingsError::ChartTypeParams {
+                chart_type: ChartType::Renko,
+                ..
+            })
+        ));
+        for minute in 5..14 {
+            chart.update(crate::widget::SeriesId::MAIN, bar(minute));
+        }
+        chart.show_elements();
+        assert!((chart.chart_type_params().renko_brick_size - 2.0).abs() < 1e-12);
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the

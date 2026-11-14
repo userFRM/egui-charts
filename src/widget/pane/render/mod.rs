@@ -262,19 +262,26 @@ impl Chart {
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
-        // The price frame has no height for time navigation in these layouts.
-        let shared_plot =
-            (main_at.is_none() || main_collapsed || maximized.is_some_and(|id| id != main_pane))
-                .then(|| {
-                    ui.interact(
-                        Rect::from_min_max(
-                            Pos2::new(plot.left(), available.top()),
-                            Pos2::new(plot.right(), time_axis.top()),
-                        ),
-                        ui.scope_id().with((maximized, "plot")),
-                        Sense::click_and_drag(),
-                    )
-                });
+        // The plot of every row but the expanded price frame, made before that frame so that
+        // time navigation reads their drags, wheel and pinch with its own. A row's own response
+        // lies above its plot and keeps the clicks and the keyboard focus.
+        let pane_plots: Vec<_> = panes
+            .iter()
+            .zip(&rects)
+            .filter(|((_, id, collapsed), _)| *id != main_pane || *collapsed)
+            .map(|((_, id, _), rect)| {
+                let response = ui.interact(
+                    Rect::from_x_y_ranges(plot.x_range(), rect.y_range()),
+                    ui.scope_id().with((*id, "plot")),
+                    Sense::CLICK | Sense::DRAG,
+                );
+                (*id, response)
+            })
+            .collect();
+        let shared_plot = pane_plots
+            .iter()
+            .map(|(_, plot)| plot.clone())
+            .reduce(|plots, plot| plots.union(plot));
         let price_frame = if main_collapsed {
             Rect::from_min_size(main_rect.min, egui::vec2(main_rect.width(), 0.0))
         } else {
@@ -938,15 +945,11 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let mut pane_response = match shared_plot.as_ref().filter(|_| {
-                        maximized.is_some()
-                            || ui
-                                .input(|input| input.pointer.interact_pos())
-                                .is_some_and(|pos| chart_rect.contains(pos))
-                    }) {
-                        Some(plot) => pane_response.union(plot.clone()),
-                        None => pane_response.interact(Sense::click_and_drag()),
-                    };
+                    // A drag belongs to the pane it began in, wherever the pointer goes.
+                    let mut pane_response = pane_plots
+                        .iter()
+                        .filter(|(id, _)| *id == pane_id)
+                        .fold(pane_response, |pane, (_, plot)| pane.union(plot.clone()));
                     if self.chart_options.tooltip.enabled
                         && self.chart_options.tooltip.on_long_press
                         && touch_readout.touch_input
@@ -1437,7 +1440,10 @@ impl Chart {
                     let mut cursors = std::mem::take(&mut self.cursor_modes);
                     let timescale = self.state.time_scale().clone();
                     let painter = ui.painter().clone();
-                    let time_formatter = self.build_time_formatter();
+                    // Sampled once: inferred spacing sorts the gaps of the bars in view.
+                    let bar_seconds = self.time_label_seconds();
+                    let time_formatter =
+                        self.time_formatter_in(self.label_timezone(|| bar_seconds));
                     self.handle_pane_drawings(
                         ui,
                         &mut drawings,
@@ -1447,7 +1453,7 @@ impl Chart {
                         &drawing_map,
                         &painter,
                         &timescale,
-                        (time_formatter.as_ref(), self.time_label_seconds()),
+                        (time_formatter.as_ref(), bar_seconds),
                         Some(pane_id),
                     );
                     let drawing_hit = pane_response

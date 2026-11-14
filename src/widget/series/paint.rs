@@ -558,31 +558,18 @@ impl Chart {
         widget: Rect,
         rect: Rect,
     ) {
-        let interaction = self.chart_options.handle_scale;
         for (key, axis) in self.secondary_axes(widget, rect) {
             let response = ui.interact(
                 axis,
                 ui.scope_id().with(("series_axis", key)),
-                egui::Sense::drag(),
+                egui::Sense::click_and_drag(),
             );
+            let gestures = self.price_axis_gestures(ui, &response, Rect::EVERYTHING);
             let scale = self.pane_price_scale_mut(self.main_series_pane(), key);
-            if response.double_clicked()
-                && interaction.enabled
-                && interaction.axis_double_click_reset.price
-            {
+            if gestures.reset {
                 scale.reset();
-            } else if response.dragged()
-                && interaction.enabled
-                && interaction.axis_pressed_mouse_move.price
-            {
-                let delta = ui.input(|input| input.pointer.delta().y);
-                let range = scale.range();
-                let anchor = (range.min + range.max) * 0.5;
-                scale.zoom(
-                    (f64::from(delta) / f64::from(rect.height().max(1.0))).exp(),
-                    anchor,
-                );
             }
+            gestures.zoom(scale, rect.top(), rect.bottom());
         }
     }
 
