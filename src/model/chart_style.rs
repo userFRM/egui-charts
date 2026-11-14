@@ -552,15 +552,24 @@ impl HighLowStyle {
     }
 }
 
-/// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
-/// the lines of that thickness.
+/// The Kagi chart's strokes. Widths are in logical points; non-positive or non-finite widths
+/// hide the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct KagiStyle {
     /// Width of the thick lines of an uptrend.
     pub thick_width: f32,
     /// Width of the thin lines of a downtrend.
     pub thin_width: f32,
+    /// Colour of the thick lines. [`Color32::PLACEHOLDER`] draws them in the chart's rising
+    /// candle body colour, as documents saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub up_color: Color32,
+    /// Colour of the thin lines. [`Color32::PLACEHOLDER`] draws them in the chart's falling
+    /// candle body colour, as documents saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub down_color: Color32,
 }
 
 impl Default for KagiStyle {
@@ -568,15 +577,76 @@ impl Default for KagiStyle {
         Self {
             thick_width: 2.5,
             thin_width: 1.5,
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
+        }
+    }
+}
+
+impl KagiStyle {
+    /// How a Kagi chart drew before it had colours of its own: in the candle body colours.
+    fn saved_without_colors() -> Self {
+        Self {
+            up_color: Color32::PLACEHOLDER,
+            down_color: Color32::PLACEHOLDER,
+            ..Self::default()
+        }
+    }
+}
+
+/// What a missing colour of a style that once drew in the candle body colours reads.
+fn candle_body_color() -> Color32 {
+    Color32::PLACEHOLDER
+}
+
+/// `color`, or `candle` for [`Color32::PLACEHOLDER`]: the candle body colour that a style saved
+/// before it had colours of its own draws in.
+#[cfg(feature = "widget")]
+pub(crate) fn or_candle(color: Color32, candle: Color32) -> Color32 {
+    if color == Color32::PLACEHOLDER {
+        candle
+    } else {
+        color
+    }
+}
+
+/// The Point and Figure chart's colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PointFigureStyle {
+    /// Colour of the X columns. [`Color32::PLACEHOLDER`] draws them in the chart's rising candle
+    /// body colour, as documents saved before this colour read.
+    pub up_color: Color32,
+    /// Colour of the O columns. [`Color32::PLACEHOLDER`] draws them in the chart's falling
+    /// candle body colour, as documents saved before this colour read.
+    pub down_color: Color32,
+}
+
+impl Default for PointFigureStyle {
+    fn default() -> Self {
+        Self {
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
+        }
+    }
+}
+
+impl PointFigureStyle {
+    /// How a Point and Figure chart drew before it had this style: in the candle body colours.
+    fn saved_without_style() -> Self {
+        Self {
+            up_color: Color32::PLACEHOLDER,
+            down_color: Color32::PLACEHOLDER,
         }
     }
 }
 
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
-/// step, marker, area, HLC area, baseline and Kagi chart types.
+/// step, marker, area, HLC area, baseline, Kagi and Point and Figure chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ChartTypeStyles {
     /// Line chart.
     pub line: LinePlotStyle,
@@ -614,8 +684,14 @@ pub struct ChartTypeStyles {
     /// were drawn.
     #[serde(default = "HighLowStyle::saved_without_style")]
     pub high_low: HighLowStyle,
-    /// Kagi chart.
+    /// Kagi chart. Documents saved before its colours draw in the candle body colours, as they
+    /// were drawn.
+    #[serde(default = "KagiStyle::saved_without_colors")]
     pub kagi: KagiStyle,
+    /// Point and Figure chart. Documents saved before this style draw in the candle body
+    /// colours, as they were drawn.
+    #[serde(default = "PointFigureStyle::saved_without_style")]
+    pub point_figure: PointFigureStyle,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
     /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
     /// radii hide it, the default.
@@ -649,6 +725,7 @@ impl Default for ChartTypeStyles {
             columns: ColumnsStyle::default(),
             high_low: HighLowStyle::default(),
             kagi: KagiStyle::default(),
+            point_figure: PointFigureStyle::default(),
             crosshair_marker_radius: 0.0,
             crosshair_marker_fill: None,
             crosshair_marker_border_color: None,
@@ -665,6 +742,8 @@ impl ChartTypeStyles {
             volume_candles: VolumeCandlesStyle::saved_without_style(),
             heikin: HeikinStyle::saved_without_style(),
             high_low: HighLowStyle::saved_without_style(),
+            kagi: KagiStyle::saved_without_colors(),
+            point_figure: PointFigureStyle::saved_without_style(),
             ..Self::default()
         }
     }

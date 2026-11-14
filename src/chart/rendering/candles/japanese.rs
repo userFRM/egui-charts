@@ -324,6 +324,7 @@ mod tests {
         let style = KagiStyle {
             thick_width: 4.0,
             thin_width: 1.0,
+            ..Default::default()
         };
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             render_kagi(

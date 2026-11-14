@@ -54,7 +54,9 @@ and `pnf_reversal`; a box size of 0.25 and reversal count of 3 require a
 `pnf_source` can select close. With a reversal of one box,
 `pnf_one_step_back` draws a reversal that follows a column of one symbol in that
 column: the closes 100, 101, 100 and 101 with boxes of 1 give two columns instead
-of three, the second holding an O at 100 and an X at 101. See
+of three, the second holding an O at 100 and an X at 101. The columns are drawn
+in the rising and falling colours of
+[`styles.point_figure`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.PointFigureStyle.html). See
 [`PointFigureConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/point_figure/struct.PointFigureConfig.html)
 for grid and reversal rules.
 
@@ -68,7 +70,7 @@ These main renderers share the parameter workflow above:
 
 | Type | Source and parameters | Style and definition |
 | --- | --- | --- |
-| `Kagi` | Close by default, or `kagi_source` high/low; `kagi_reversal` in price units and `kagi_size_method` | Chart up/down colours and `styles.kagi` thick/thin widths; [`KagiConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/kagi/struct.KagiConfig.html) |
+| `Kagi` | Close by default, or `kagi_source` high/low; `kagi_reversal` in price units and `kagi_size_method` | `styles.kagi` thick and thin line widths and colours, `up_color` for thick lines and `down_color` for thin ones; [`KagiConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/kagi/struct.KagiConfig.html) |
 | `LineBreak` | Close by default, or `line_break_source` high/low; `line_break_count` reversal lookback, 1 to 10 | Chart up/down colours; [`LineBreakConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/line_break/struct.LineBreakConfig.html) |
 | `Range` | Retained executions in order, or an OHLC path approximation when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
 
@@ -98,7 +100,10 @@ to apply a copy of the current parameters, preserving unrelated styles.
 Main transform colours and dimensions come from
 [`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html);
 Kagi has separate [`KagiStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.KagiStyle.html)
-stroke widths, and Renko has its wick switch. The main candle style switches
+stroke widths and colours, Point and Figure its own column colours, and Renko
+its wick switch. The Kagi and Point and Figure colours
+follow the theme while unedited, and documents saved before they existed draw
+these types in their candle body colours. The main candle style switches
 are specific to `Candles`; they are not universal transform settings.
 
 Renko, Kagi, Line Break, Point and Figure, and Range have one time-scale slot per

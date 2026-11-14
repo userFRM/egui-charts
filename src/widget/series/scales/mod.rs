@@ -602,6 +602,17 @@ impl Chart {
                 styles.volume_candles.body_up,
                 styles.volume_candles.body_down,
             ),
+            ChartType::Kagi | ChartType::PointAndFigure => {
+                let (up, down) = if self.chart_type == ChartType::Kagi {
+                    (styles.kagi.up_color, styles.kagi.down_color)
+                } else {
+                    (styles.point_figure.up_color, styles.point_figure.down_color)
+                };
+                (
+                    crate::model::or_candle(up, self.config.bullish_color),
+                    crate::model::or_candle(down, self.config.bearish_color),
+                )
+            }
             _ => (self.config.bullish_color, self.config.bearish_color),
         }
     }
