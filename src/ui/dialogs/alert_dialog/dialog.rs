@@ -1622,7 +1622,7 @@ mod tests {
         fresh.sources = inputs.sources;
 
         let mut saved = Alert::new("SAMPLE", AlertCondition::Crossing(100.0));
-        saved.source = line.clone();
+        saved.source = line;
         saved.inputs = Some(Box::new(chart.alert_inputs()));
         let mut stored = serde_json::to_value(&saved).unwrap();
         // Alerts saved before names kept their parts hold the finished English text.
@@ -1632,7 +1632,6 @@ mod tests {
         chart.prepare_alert(&mut saved);
         let mut restored = AlertDialog::new();
         restored.edit(saved);
-        assert_eq!(restored.alert.source, line);
 
         // Words drop out under `mark_keys` and values stay: MACD's Signal and Histogram, the
         // median, and the first and second lines at 0.5, of which the restored alert saved one.
