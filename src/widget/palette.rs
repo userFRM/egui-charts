@@ -29,6 +29,16 @@ impl Chart {
             })
     }
 
+    /// Lets the colours that undo or redo brought back, where they still match the palette
+    /// `recorded` with them, follow the theme the chart follows, or the active theme on the next
+    /// frame of a chart that follows none yet. The others were edited and stay.
+    pub(super) fn follow_recorded_palette(&mut self, recorded: ChartConfig) {
+        self.restored_palettes.push(recorded);
+        if let Some(theme) = self.inherited_theme.clone() {
+            self.follow_chart_theme(&theme);
+        }
+    }
+
     /// Lets the colours of a restored configuration that still match the palette they were saved
     /// with follow a per-chart theme immediately, or the active theme on the next frame. Layouts
     /// saved without that palette are compared with both built-in themes.
@@ -110,7 +120,7 @@ pub(crate) fn follow_candle_colors(
 /// Replaces every colour of `config` equal to the same colour of one of the `old` palettes by
 /// the one of `new`; the others were edited and stay. A gradient's endpoints start as copies of
 /// the background colour and follow it in the same way.
-fn follow_palette(config: &mut ChartConfig, old: &[ChartConfig], new: &ChartConfig) {
+pub(super) fn follow_palette(config: &mut ChartConfig, old: &[ChartConfig], new: &ChartConfig) {
     if let BackgroundStyle::VerticalGradient {
         top_color: first,
         bottom_color: second,

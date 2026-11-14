@@ -38,6 +38,8 @@ struct Pending {
     study_order: Vec<SeriesId>,
     /// Added series removed during the action, with their bars, price formatters and bar limits.
     removed_series: Vec<HeldSeries>,
+    /// The palette the chart's unedited colours followed when the action began.
+    palette: ChartConfig,
 }
 
 #[derive(Default)]
@@ -49,6 +51,8 @@ struct Action {
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
+    /// The palette that the unedited colours of `config` and `chart_type` follow.
+    palette: Option<ChartConfig>,
     /// The main series of the other state, when the action removed it.
     main_series: Option<MainSeries>,
     main_series_visible: Option<bool>,
@@ -74,6 +78,15 @@ struct Action {
 
 impl Action {
     fn is_empty(&self) -> bool {
+        self.view.is_none() && self.keeps_all_but_the_view()
+    }
+
+    /// Whether the action is a navigation step: it only moved the view.
+    fn is_navigation(&self) -> bool {
+        self.view.is_some() && self.keeps_all_but_the_view()
+    }
+
+    fn keeps_all_but_the_view(&self) -> bool {
         #[cfg(feature = "drawings")]
         let drawings_changed = self.drawings.can_undo() || self.unshown.is_some();
         #[cfg(not(feature = "drawings"))]
@@ -83,7 +96,6 @@ impl Action {
             && self.layout_edit.is_none()
             && self.symbol.is_none()
             && self.series.is_none()
-            && self.view.is_none()
             && self.config.is_none()
             && self.main_series.is_none()
             && self.main_series_visible.is_none()
@@ -214,7 +226,7 @@ struct Study {
 }
 
 impl ChartHistory {
-    pub(super) fn blocked(&self) -> bool {
+    fn blocked(&self) -> bool {
         self.pending.is_some() || self.resizing.strong_count() > 0
     }
 
@@ -309,7 +321,14 @@ impl ChartHistory {
         if action.drawings.can_undo() {
             self.drawing_edits += 1;
         }
-        self.redo.clear();
+        // Moving the view costs the user neither the edits they could undo nor those they could
+        // redo: a navigation step keeps redo, and the one under it already restores the view
+        // from before both.
+        if !action.is_navigation() {
+            self.redo.clear();
+        } else if self.undo.last().is_some_and(Action::is_navigation) {
+            return;
+        }
         if self.undo.len() == 100 {
             self.undo.remove(0);
         }
@@ -398,6 +417,11 @@ impl Chart {
     /// Apply one user action from a host toolbar, menu, dialog or intent as one undo step.
     /// Nested actions belong to the outer action. Unchanged chart/study settings add no history.
     ///
+    /// An action that only moves the view, such as an arrow-key pan or a navigation button, is a
+    /// navigation step. Consecutive navigation steps are one undo step, which restores the view
+    /// from before the first of them, and a navigation step leaves redo available. Any other
+    /// action is a step of its own and clears redo.
+    ///
     /// Chart-owned drawing interactions and shortcuts record themselves. Ordinary host calls
     /// (including data/feed updates, setters and `drawings_mut`) do not enter chart history;
     /// wrap only edits originating from a user action in this method. Drawing commands and
@@ -453,6 +477,7 @@ impl Chart {
             standalone_drawings,
             study_order: self.study_ids.clone(),
             removed_series: Vec::new(),
+            palette: self.followed_palette(),
         });
     }
 
@@ -502,6 +527,18 @@ impl Chart {
         if action.symbol.is_none() && action.view == Some(self.get_time_scale_state()) {
             action.view = None;
         }
+        // A theme change during the action is not an edit: the colours recorded before it
+        // follow it, as the chart's did.
+        let palette = self.followed_palette();
+        if pending.palette != palette {
+            let old = std::slice::from_ref(&pending.palette);
+            if let Some(config) = &mut action.config {
+                super::palette::follow_palette(config, old, &palette);
+            }
+            if let Some((_, params)) = &mut action.chart_type {
+                super::palette::follow_candle_colors(&mut params.styles, old, &palette);
+            }
+        }
         if action.config.as_ref() == Some(&self.config) {
             action.config = None;
         }
@@ -528,6 +565,9 @@ impl Chart {
         }
         if action.extended_hours == Some(self.extended_hours) {
             action.extended_hours = None;
+        }
+        if action.config.is_some() || action.chart_type.is_some() {
+            action.palette = Some(palette);
         }
         if let Some(scale) = &action.scale
             && same_scale(scale, self.state.price_scale())
@@ -845,13 +885,15 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
-    /// Returns false while a user action is in progress; finish that action first.
+    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
+    /// finish it first.
     pub fn undo(&mut self) -> bool {
         self.step_chart_history(false)
     }
 
     /// Redo the most recently undone chart user action.
-    /// Returns false while a user action is in progress; finish that action first.
+    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
+    /// finish it first.
     pub fn redo(&mut self) -> bool {
         self.step_chart_history(true)
     }
@@ -894,8 +936,19 @@ impl Chart {
         }
     }
 
+    /// Whether undo and redo wait for a user action, a divider drag or a drawing drag to end. The
+    /// end of a drawing drag records the drawing as the drag found it, which a step taken
+    /// meanwhile would no longer lead back to.
+    pub(super) fn history_blocked(&self) -> bool {
+        #[cfg(feature = "drawings")]
+        if self.drawings.drag_in_progress() {
+            return true;
+        }
+        self.history.blocked()
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history.blocked() {
+        if self.history_blocked() {
             return false;
         }
         let stack = if redo {
@@ -994,6 +1047,11 @@ impl Chart {
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
+        }
+        // The theme is not part of an action: the colours brought back follow the chart's.
+        if let Some(palette) = &mut action.palette {
+            let recorded = std::mem::replace(palette, self.followed_palette());
+            self.follow_recorded_palette(recorded);
         }
         if let Some(visible) = &mut action.price_targets_visible {
             std::mem::swap(&mut self.show_price_targets, visible);
@@ -1582,6 +1640,50 @@ mod tests {
         assert_eq!(chart.get_time_scale_state(), (15.0, -11.0));
     }
 
+    /// Undo and redo restore what the user edited and leave the colours that follow the theme on
+    /// the active one: the grid hidden under the dark theme comes back under the light theme on
+    /// its white background with its light lines, and axis text set to blue before the switch
+    /// comes back blue.
+    #[test]
+    fn undo_after_a_theme_change_keeps_the_active_theme_colours() {
+        use crate::theme::{Theme, apply_to_egui};
+        use crate::widget::test_frames::frame;
+        const LIGHT_GRID: Color32 = Color32::from_rgb(229, 229, 229);
+        for edited in [false, true] {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &Theme::dark());
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(chart.config().background_color, Color32::BLACK);
+            if edited {
+                chart.user_action(|chart| chart.config_mut().text_color = Color32::BLUE);
+            }
+            chart.user_action(|chart| chart.config_mut().show_grid = false);
+            apply_to_egui(&ctx, &Theme::light());
+            frame(&ctx, &mut chart, 1.0, vec![]);
+            let text = if edited {
+                Color32::BLUE
+            } else {
+                Color32::BLACK
+            };
+            for (redo, grid) in [(false, true), (true, false)] {
+                assert!(if redo { chart.redo() } else { chart.undo() });
+                let config = chart.config();
+                assert_eq!(config.show_grid, grid, "edited {edited}, redo {redo}");
+                assert_eq!(config.background_color, Color32::WHITE);
+                assert_eq!(config.grid_color, LIGHT_GRID);
+                assert_eq!(config.text_color, text);
+            }
+            if edited {
+                // The colour edit is undone to the colour the text has under the active theme.
+                assert!(chart.undo());
+                assert!(chart.undo());
+                assert_eq!(chart.config().text_color, Color32::BLACK);
+                assert_eq!(chart.config().background_color, Color32::WHITE);
+            }
+        }
+    }
+
     #[test]
     #[cfg(feature = "drawings")]
     fn host_updates_and_unchanged_actions_do_not_enter_or_clear_history() {
@@ -1756,6 +1858,75 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Undo waits for a drawing drag to end, and the release records the drag as one step: a
+    /// line added at 15.0 and dragged 20 px down with Ctrl+Z pressed before the release goes
+    /// back to 15.0 on the first undo and leaves the chart on the second.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn undo_waits_for_a_drawing_drag_to_end() {
+        use crate::widget::test_frames::frame;
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.user_action(|chart| {
+            let mut line = host_line();
+            line.chart_points = vec![ChartPoint::new(30.0, 15.0), ChartPoint::new(60.0, 15.0)];
+            chart.drawings_mut().add_synced_drawing(line).unwrap();
+        });
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let prices = |chart: &Chart| -> Vec<f64> {
+            let drawings = &chart.drawings().drawings;
+            drawings
+                .iter()
+                .flat_map(|drawing| &drawing.chart_points)
+                .map(|point| point.price)
+                .collect()
+        };
+        let start = egui::pos2(
+            chart.get_chart_mapping().idx_to_x(45),
+            chart.last_price_map.price_to_y(15.0),
+        );
+        let end = start + egui::vec2(0.0, 20.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let command = Modifiers::COMMAND | Modifiers::CTRL;
+        for (step, events) in [
+            vec![Event::PointerMoved(start), button(start, true)],
+            vec![Event::PointerMoved(end)],
+            vec![Event::Key {
+                key: Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: command,
+            }],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+        }
+        assert!(!chart.undo(), "a toolbar button follows the same rule");
+        frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+        let moved = prices(&chart);
+        assert_eq!(moved.len(), 2, "the line is still on the chart");
+        assert!(moved.iter().all(|price| *price < 15.0), "{moved:?}");
+        assert!(chart.undo());
+        assert_eq!(prices(&chart), [15.0, 15.0]);
+        assert!(chart.undo());
+        assert!(prices(&chart).is_empty());
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        assert_eq!(prices(&chart), [15.0, 15.0]);
+        assert!(chart.redo());
+        assert_eq!(prices(&chart), moved);
+        assert!(!chart.can_redo());
     }
 
     #[test]
