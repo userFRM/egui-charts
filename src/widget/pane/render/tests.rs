@@ -1586,3 +1586,23 @@ fn custom_background_reaches_study_panes() {
         }
     }
 }
+
+/// A study in its own pane draws its table in that pane, not over the price pane.
+#[test]
+fn study_tables_sit_in_their_own_pane() {
+    let ctx = Context::default();
+    let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+    chart.set_size(Some(Vec2::new(800.0, 600.0)));
+    chart.add_indicator(Box::new(crate::studies::TechnicalRatings::default()));
+    crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+    let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+    let heading = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.text() == "Coverage" => Some(text.pos),
+            _ => None,
+        })
+        .expect("table painted");
+    let pane = chart.get_rendered_indicator_panes()[0].chart_rect;
+    assert!(pane.contains(heading), "{heading:?} outside {pane:?}");
+}

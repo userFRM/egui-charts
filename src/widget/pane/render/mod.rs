@@ -1554,7 +1554,7 @@ impl Chart {
                 }
             }
             if !collapsed {
-                let mut table_rect = plot;
+                let mut table_rect = pane_plot;
                 for id in &members {
                     if let Some(idx) = self.study_ids.iter().position(|study| study == id) {
                         let study = &studies.indicators()[idx];
