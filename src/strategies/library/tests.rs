@@ -590,6 +590,8 @@ fn every_default_strategy_is_causal_and_declares_valid_defaults() {
     for name in StrategyFactory::new().list() {
         let mut strategy = configured(name, &[]);
         for input in strategy.study_inputs() {
+            // A strategy draws no study table.
+            assert!(!input.id.starts_with("table_"), "{name}: {}", input.id);
             assert!(input.accepts(&input.value), "{name}: {}", input.id);
             assert!(
                 input.accepts(&input.default),

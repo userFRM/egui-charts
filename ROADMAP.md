@@ -135,7 +135,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Add a dedicated log-return correlation study.
 - [x] Trend Strength Index plots the rolling correlation of price with bar position.
 - [x] Automatic chart-pattern, wedge and key-level detection studies.
-- [x] Composite technical ratings and lunar phases.
+- [x] Composite technical ratings, rated on both groups or one, with higher-interval rows and a placed, sized and coloured table, and lunar phases.
 - [ ] Add a dedicated volatility-index study.
 - [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies.
 - [ ] Add the remaining specialised reversal and ghost-pivot studies.
