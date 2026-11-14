@@ -49,6 +49,14 @@ pub struct CustomHorizontalScale<K> {
     format: Box<dyn Fn(&K) -> String + Send + Sync>,
 }
 
+impl<K> std::fmt::Debug for CustomHorizontalScale<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomHorizontalScale")
+            .field("keys", &self.keys.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<K: Ord> CustomHorizontalScale<K> {
     /// Builds a domain sorted by key, with one entry per distinct key. Formatting never changes
     /// ordering: distinct keys may have the same label.
