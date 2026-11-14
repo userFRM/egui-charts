@@ -9,6 +9,7 @@ use super::core::Direction;
 use super::layout::Region;
 use super::{Action, Terminal};
 use egui_charts::config::KeyboardAction;
+use egui_charts::drawings::{DrawingTemplate, DrawingToolType};
 use egui_charts::localization as l10n;
 use egui_charts::services::UserSettings;
 use egui_charts::ui::Control;
@@ -19,6 +20,7 @@ use egui_charts::ui_kit::modal::Modal;
 use egui_charts::widget::{
     Chart, ChartBuilder, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId, ShortcutRequest,
 };
+use std::collections::HashMap;
 
 /// An open layout. The one on show lives in the terminal; the others keep their slots here.
 struct Tab {
@@ -240,6 +242,58 @@ impl Terminal {
         self.top_toolbar.chart_grid_selector.set_layout(mode);
     }
 
+    /// The drawing defaults every chart agrees on, with the active chart winning where
+    /// charts disagree. Settings hold one set, so a pick made on one chart is the
+    /// terminal's default everywhere.
+    pub(super) fn merged_drawing_defaults(&self) -> HashMap<DrawingToolType, DrawingTemplate> {
+        let mut merged: HashMap<DrawingToolType, DrawingTemplate> = HashMap::new();
+        let take = |merged: &mut HashMap<DrawingToolType, DrawingTemplate>, chart: &Chart| {
+            for (tool, template) in &chart.drawings().tool_defaults {
+                merged.entry(*tool).or_insert_with(|| template.clone());
+            }
+        };
+        for chart in &self.charts {
+            take(&mut merged, chart);
+        }
+        for tab in &self.layouts.tabs {
+            if let Some(workspace) = &tab.workspace {
+                for chart in &workspace.charts {
+                    take(&mut merged, chart);
+                }
+            }
+        }
+        // A pick just made on the active chart wins over a stale default parked elsewhere.
+        if let Some(chart) = self.charts.get(self.active) {
+            for (tool, template) in &chart.drawings().tool_defaults {
+                merged.insert(*tool, template.clone());
+            }
+        }
+        merged
+    }
+
+    /// Gives every chart, on show and parked in a layout tab, the same drawing defaults.
+    pub(super) fn apply_drawing_defaults(
+        &mut self,
+        defaults: &HashMap<DrawingToolType, DrawingTemplate>,
+    ) {
+        for chart in &mut self.charts {
+            chart.drawings_mut().tool_defaults = defaults.clone();
+        }
+        for tab in &mut self.layouts.tabs {
+            if let Some(workspace) = &mut tab.workspace {
+                for chart in &mut workspace.charts {
+                    chart.drawings_mut().tool_defaults = defaults.clone();
+                }
+            }
+        }
+    }
+
+    /// Carries a default written on one chart to every other chart.
+    pub(super) fn sync_drawing_defaults(&mut self) {
+        let merged = self.merged_drawing_defaults();
+        self.apply_drawing_defaults(&merged);
+    }
+
     /// A chart that shows what the chart in slot `from` shows: its snapshot, and the properties
     /// the snapshot leaves out. The caller wires it into its slot.
     fn copy_slot(&mut self, from: usize) -> Option<Chart> {
@@ -270,6 +324,9 @@ impl Terminal {
         chart.set_data(SeriesId::MAIN, source.bars(SeriesId::MAIN).to_vec());
         chart.set_conversion(source.conversion().map(str::to_owned));
         chart.set_study_limit(source.study_limit());
+        // A snapshot carries no drawing defaults, so a new slot starts from the
+        // terminal's current defaults, not the built-in ones.
+        chart.drawings_mut().tool_defaults = self.merged_drawing_defaults();
         Some(chart)
     }
 
@@ -391,6 +448,8 @@ impl Terminal {
         for slot in 0..self.charts.len() {
             self.wire_slot(slot);
         }
+        // A default picked while another tab was on show reaches the tab just shown.
+        self.sync_drawing_defaults();
         let grid = &mut self.top_toolbar.chart_grid_selector;
         grid.set_layout(self.layout.mode);
         grid.sync = self.layout.sync.clone();
@@ -542,6 +601,7 @@ impl Terminal {
             return;
         }
         let source = self.chart();
+        let defaults = self.merged_drawing_defaults();
         let mut charts = Vec::with_capacity(layout.charts.len());
         let mut skipped_drawings = 0;
         for snapshot in &layout.charts {
@@ -564,6 +624,9 @@ impl Terminal {
             chart.set_price_targets_visible(source.price_targets_visible());
             chart.set_event_visibility(source.event_visibility().clone());
             chart.set_conversion(source.conversion().map(str::to_owned));
+            // A saved layout carries no drawing defaults, so a reopened layout
+            // starts from the terminal's current defaults.
+            chart.drawings_mut().tool_defaults = defaults.clone();
             charts.push(chart);
         }
         if skipped_drawings > 0 {
