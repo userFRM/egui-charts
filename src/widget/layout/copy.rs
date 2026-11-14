@@ -260,6 +260,7 @@ fn apply_to_other_chart(
         let mut own = chart.chart_type_params().clone();
         own.styles = params.styles;
         own.footprint_colors = params.footprint_colors;
+        own.footprint_imbalance_colors = params.footprint_imbalance_colors;
         if &own != chart.chart_type_params() {
             chart.apply_chart_type_params(own);
         }

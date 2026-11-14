@@ -537,11 +537,22 @@ pub enum FootprintStatistic {
     Trades,
     /// Total volume divided by execution count; undefined for an empty bar.
     AverageSize,
+    /// Sell volume divided by total volume, in percent.
+    BidPercent,
+    /// Buy volume divided by total volume, in percent.
+    AskPercent,
+    /// The bar's high minus its low.
+    Range,
+    /// The lowest price of the bar's highest-volume row, as the footprint groups its rows.
+    PointOfControl,
+    /// The change of total volume from the previous bar with executions, in percent; the first
+    /// such bar has none.
+    VolumeChange,
 }
 
 impl FootprintStatistic {
     /// All available rows in their display order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 16] = [
         Self::Volume,
         Self::Bid,
         Self::Ask,
@@ -553,6 +564,11 @@ impl FootprintStatistic {
         Self::AskBidRatio,
         Self::Trades,
         Self::AverageSize,
+        Self::BidPercent,
+        Self::AskPercent,
+        Self::Range,
+        Self::PointOfControl,
+        Self::VolumeChange,
     ];
 
     /// Shared table label.
@@ -569,6 +585,11 @@ impl FootprintStatistic {
             Self::AskBidRatio => "Ask/Bid",
             Self::Trades => "Trades",
             Self::AverageSize => "Average size",
+            Self::BidPercent => "Bid %",
+            Self::AskPercent => "Ask %",
+            Self::Range => "Range",
+            Self::PointOfControl => "POC",
+            Self::VolumeChange => "Vol change %",
         }
     }
 }
@@ -595,6 +616,9 @@ pub struct ChartTypeParams {
     pub footprint_color_by: FootprintColor,
     /// Footprint: buy, sell, text and neutral colours. None follows the chart theme.
     pub footprint_colors: [Option<egui::Color32>; 4],
+    /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
+    /// imbalance zones. None follows the buy or sell colour.
+    pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom.
     pub footprint_row_ticks: u32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
@@ -646,6 +670,9 @@ pub struct ChartTypeParams {
     pub footprint_statistics: bool,
     /// Footprint: statistics rows in display order; an empty list hides the table.
     pub footprint_statistics_rows: Vec<FootprintStatistic>,
+    /// Footprint: restart the cumulative delta row at the first bar of each session, rather than
+    /// summing every complete bar.
+    pub footprint_session_cumulative_delta: bool,
     /// Execution-based session profile display settings.
     pub profile: TradeProfileSettings,
     /// Independent line, area and baseline styles, retained across chart type changes.
@@ -733,6 +760,7 @@ impl Default for ChartTypeParams {
             footprint_profile: false,
             footprint_color_by: FootprintColor::VolumeSteps,
             footprint_colors: [None; 4],
+            footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
             footprint_imbalance: true,
             footprint_poc: true,
@@ -761,6 +789,7 @@ impl Default for ChartTypeParams {
                 FootprintStatistic::Delta,
                 FootprintStatistic::DeltaPercent,
             ],
+            footprint_session_cumulative_delta: false,
             profile: TradeProfileSettings::default(),
             styles: super::ChartTypeStyles::default(),
             renko_size_method: super::BoxSizeMethod::Fixed,
@@ -941,8 +970,11 @@ mod tests {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_value_area": 0.010003969988090037,
-            "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
+            "footprint_statistics": true,
+            "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
+            "footprint_session_cumulative_delta": true,
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
+            "footprint_imbalance_colors": [[200, 30, 220, 255], null],
             "tpo_letters": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
@@ -992,6 +1024,11 @@ mod tests {
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
         );
+        assert_eq!(
+            legacy["footprint_imbalance_colors"],
+            serde_json::json!([null, null])
+        );
+        assert_eq!(legacy["footprint_session_cumulative_delta"], false);
         for field in [
             "footprint_stacked_imbalances",
             "footprint_naked_poc",
