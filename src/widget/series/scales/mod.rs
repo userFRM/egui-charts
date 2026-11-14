@@ -1006,10 +1006,14 @@ impl Chart {
         let logarithmic = self
             .series_price_scale(item.id)
             .is_some_and(|scale| scale.options().mode == PriceScaleMode::Logarithmic);
-        let base = item
-            .options
-            .columns_base
-            .filter(|_| item.options.chart_type == ChartType::Columns && !bars.is_empty());
+        // The base counts beside a value in view, never over whitespace alone.
+        let base = item.options.columns_base.filter(|_| {
+            item.options.chart_type == ChartType::Columns
+                && bars
+                    .iter()
+                    .flat_map(|bar| item.extremes(bar))
+                    .any(f64::is_finite)
+        });
         let range = |positive: bool| {
             bars.iter()
                 .flat_map(|bar| item.extremes(bar))

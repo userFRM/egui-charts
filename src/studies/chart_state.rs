@@ -380,14 +380,14 @@ impl ChartState {
                             .peekable();
                         // Columns and areas reach down to zero beside a value, never in a view
                         // without one.
-                        let base = values.peek().is_some()
+                        let zero = values.peek().is_some()
                             && matches!(
                                 study.plot_style(index).plot_type,
                                 crate::studies::PlotType::Histogram
                                     | crate::studies::PlotType::Columns
                                     | crate::studies::PlotType::Area
                             );
-                        values.chain(base.then_some(0.0))
+                        values.chain(zero.then_some(0.0))
                     })
                     .chain(
                         study

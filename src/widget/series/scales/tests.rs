@@ -2052,6 +2052,46 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
             assert_eq!(view(&mut chart, 30.0, 0.2), fitted, "{place}, {mode:?}");
         }
     }
+    // A host's columns base counts only beside a value of its series in view: over whitespace
+    // bars alone the scale keeps its units and range, beside the main scale and in a pane of
+    // its own.
+    for place in ["left", "pane"] {
+        for mode in [PriceScaleMode::Logarithmic, PriceScaleMode::Normal] {
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 10])));
+            let id = chart.add_series(SeriesOptions {
+                chart_type: ChartType::Columns,
+                columns_base: Some(0.0),
+                scale: if place == "left" {
+                    SeriesScale::Left
+                } else {
+                    SeriesScale::Right
+                },
+                ..Default::default()
+            });
+            if place == "pane" {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            let mut data = bars(&[10.0, 20.0, 30.0, 40.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            for bar in &mut data[5..] {
+                *bar = Bar::whitespace(bar.time);
+            }
+            chart.set_data(id, data);
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+            let view = |chart: &mut Chart, first: f32, last: f32, time: f64| {
+                let range = crate::model::LogicalRange::new(first, last);
+                assert!(chart.set_visible_logical_range(range));
+                frame(&ctx, chart, time, vec![]);
+                let scale = chart.series_price_scale(id).unwrap();
+                (scale.transform().mode, scale.range())
+            };
+            let fitted = view(&mut chart, 0.0, 4.0, 0.1);
+            assert_eq!(fitted.0, mode, "{place}");
+            assert_eq!(view(&mut chart, 6.0, 9.0, 0.2), fitted, "{place}, {mode:?}");
+        }
+    }
 }
 
 /// A scale other than the main one keeps a tenth of its data's range free above and below
