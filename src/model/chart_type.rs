@@ -935,17 +935,21 @@ impl ChartTypeParams {
         let newest = loaded.next().unwrap_or(0);
         let complete = loaded.take(length);
         let first = complete.clone().last().unwrap_or(newest);
+        let count = complete.count();
         let average = super::BoxSizeMethod::Atr {
-            period: complete.count(),
+            period: count,
             multiplier: 0.2,
         };
-        average
+        match average
             .resolve(0.0, &bars[first..newest])
             .map(|size| size / tick)
             .filter(|ticks| ticks.is_finite())
-            .map_or(self.footprint_row_ticks, |ticks| {
-                ticks.round().clamp(1.0, 1_000_000.0) as u32
-            })
+        {
+            Some(ticks) => ticks.round().clamp(1.0, 1_000_000.0) as u32,
+            // The chart holds valid bars only, so complete bars without a size never moved.
+            None if count > 0 => 1,
+            None => self.footprint_row_ticks,
+        }
     }
 
     /// Why `chart_type` cannot be drawn with these parameters, if it cannot. A size derived from
@@ -1099,8 +1103,8 @@ mod tests {
     /// so older bars that a pan loads leave them as they are. Every bar closes at 100 with its
     /// range centred on it, so its true range is its own range. At length 3 the three bars of
     /// 10 before the newest, whose 50 may still be forming, average 10, and a fifth of that is 2
-    /// ticks, also with bars of 100 loaded before them. With no complete bar the ticks per row
-    /// apply.
+    /// ticks, also with bars of 100 loaded before them. Bars that never moved have no positive
+    /// average and get rows of one tick; with no complete bar the ticks per row apply.
     #[cfg(feature = "widget")]
     #[test]
     fn footprint_rows_average_the_last_complete_bars() {
@@ -1123,15 +1127,16 @@ mod tests {
             .map(|minute| bar(minute, 100.0))
             .chain(recent.clone())
             .collect();
+        let flat: Vec<_> = (0..4).map(|minute| bar(minute, 0.0)).collect();
         let params = ChartTypeParams {
             footprint_row_ticks: 4,
             footprint_row_atr: true,
             footprint_row_atr_length: 3,
             ..Default::default()
         };
-        let rows = [&recent[..], &paged[..], &recent[5..]]
+        let rows = [&recent[..], &paged[..], &flat[..], &recent[5..]]
             .map(|bars| params.footprint_row_size(bars, 1.0));
-        assert_eq!(rows, [2, 2, 4], "recent, older loaded, only the newest");
+        assert_eq!(rows, [2, 2, 1, 4], "recent, paged, flat, newest only");
     }
 
     /// A zone chosen from the session zone list is listed once when the list is opened again,
