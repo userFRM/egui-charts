@@ -362,6 +362,7 @@ impl Trading {
                 "order_preview",
                 "Order preview",
                 ticket::preview_message(
+                    ui.ctx(),
                     request,
                     estimate,
                     &self.rules,
@@ -414,7 +415,7 @@ impl Trading {
             return;
         }
         let market = self.market(chart, &colors);
-        if let Ok(request) = self.ticket.request(&market)
+        if let Ok(request) = self.ticket.request(ui.ctx(), &market)
             && request.order_type != OrderType::Market
         {
             let _theme = chart

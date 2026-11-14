@@ -36,7 +36,7 @@ impl OrderTicket {
                 }
             }
         }
-        let request = self.request(market);
+        let request = self.request(ui.ctx(), market);
         let entry = self
             .entry(market)
             .map(|price| to_step(price, market.tick, f64::round));
@@ -88,10 +88,21 @@ impl OrderTicket {
                                 _ => "Last",
                             };
                             let ticks = ((*price - touch) / market.tick).round();
+                            let key = match (reference, ticks < 0.0) {
+                                ("Ask", false) => "Ask + {ticks}",
+                                ("Ask", true) => "Ask - {ticks}",
+                                ("Bid", false) => "Bid + {ticks}",
+                                ("Bid", true) => "Bid - {ticks}",
+                                (_, false) => "Last + {ticks}",
+                                (_, true) => "Last - {ticks}",
+                            };
                             match ticks {
                                 0.0 => reference.to_owned(),
-                                ticks if ticks < 0.0 => format!("{reference} - {}", -ticks),
-                                ticks => format!("{reference} + {ticks}"),
+                                ticks => l10n::format_text(
+                                    ui.ctx(),
+                                    key,
+                                    &[("ticks", ticks.abs().to_string())],
+                                ),
                             }
                         };
                         muted(ui, &suffix);
@@ -527,10 +538,13 @@ impl OrderTicket {
             let mut mode = bracket.mode;
             let enabled = ui
                 .horizontal(|ui| {
-                    let response = dropdown(
-                        ui,
-                        format!("{title}, {}", bracket.mode.name(market.currency)),
+                    let mode_name = l10n::text(ui.ctx(), bracket.mode.name(market.currency));
+                    let caption = l10n::format_text(
+                        ui.ctx(),
+                        "{exit}, {mode}",
+                        &[("exit", title), ("mode", mode_name.as_str())],
                     );
+                    let response = dropdown(ui, caption);
                     egui::Popup::menu(&response).show(|ui| {
                         for option in BracketMode::ALL {
                             ui.selectable_value(
@@ -626,7 +640,7 @@ impl OrderTicket {
             let title = l10n::format_text(ui.ctx(), "Take profit {0}", &[("0", "1".to_owned())]);
             (title, level_per_point(0, rest))
         } else {
-            ("Take profit".to_owned(), per_point)
+            (l10n::text(ui.ctx(), "Take profit"), per_point)
         };
         let (on, bracket) = &mut self.take_profit;
         exit_fields(
@@ -644,12 +658,13 @@ impl OrderTicket {
         if several {
             ui.add_enabled_ui(false, |ui| share_field(ui, 0, &mut rest));
         }
+        let stop_loss = l10n::text(ui.ctx(), "Stop loss");
         let (on, bracket) = &mut self.stop_loss;
         exit_fields(
             ui,
             per_point,
             false,
-            "Stop loss",
+            &stop_loss,
             0,
             bracket,
             &mut |ui: &mut Ui| {
