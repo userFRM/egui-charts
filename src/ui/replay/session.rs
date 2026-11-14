@@ -21,7 +21,8 @@ impl ReplayController {
     }
 
     /// The exclusive cutoff after the current source bar, suitable for `Chart::set_replay_time`.
-    /// Pass the source interval's clock, including its calendar timezone.
+    /// Pass the source interval's clock, including its calendar timezone. For the chart's own
+    /// interval that is [`Chart::bar_clock`](crate::widget::Chart::bar_clock).
     pub fn cutoff(&self, clock: &crate::model::BarClock) -> Option<DateTime<Utc>> {
         if !self.state.is_active() {
             return None;
