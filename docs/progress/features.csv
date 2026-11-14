@@ -582,7 +582,7 @@ Studies,Indicators,Advance/Decline Ratio,unverified,host,src/studies/builtin/mar
 Studies,Indicators,Advance/Decline Ratio bars,unverified,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,All Candlestick Patterns,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/chart/rendering/indicator.rs,177
 Studies,Indicators,All Chart Patterns,incomplete,library,;src/studies/builtin/chart_patterns.rs,1084;1085
-Studies,Indicators,Analyst price forecast,unverified,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs,
+Studies,Indicators,Analyst price forecast,unverified,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs;src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2981
 Studies,Indicators,Anchored Volume Profile,unverified,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/studies/template.rs;src/chart/rendering/legend/mod.rs;src/data/order_flow.rs;src/data/footprint.rs,
 Studies,Indicators,Arnaud Legoux Moving Average,unverified,library,src/studies/builtin/alma.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Aroon Indicator,incomplete,library,src/studies/builtin/aroon.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
@@ -744,7 +744,7 @@ Studies,Indicators,Pivot Points Standard,incomplete,library,src/studies/builtin/
 Studies,Indicators,Positive Volume Index,unverified,library,src/studies/builtin/volume_price_trend.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Price Channel,unverified,library,src/studies/builtin/price_channel.rs;src/studies/builtin/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Price Momentum Oscillator,unverified,library,src/studies/builtin/price_momentum_oscillator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Price Target,incomplete,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs,
+Studies,Indicators,Price Target,incomplete,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs;src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2981
 Studies,Indicators,Price Volume Trend,incomplete,library,src/studies/builtin/volume_price_trend.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Pring's Special K,unverified,library,src/studies/builtin/special_k.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,RCI Ribbon,unverified,library,src/studies/builtin/rci_ribbon.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
