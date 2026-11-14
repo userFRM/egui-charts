@@ -280,14 +280,16 @@ impl Chart {
             .or_else(|| self.series_pane(SeriesId::MAIN));
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
+        let [drawn_above, drawn_below] =
+            [false, true].map(|down| self.drawn_neighbour(pane_idx, down));
         child.menu_button("...", |ui| {
             let members = self.pane_series(id);
             let editable = members.iter().all(|member| {
                 !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member)
             });
             for (label, enabled, command) in [
-                ("Move pane up", above.is_some(), 0),
-                ("Move pane down", below.is_some(), 1),
+                ("Move pane up", drawn_above.is_some(), 0),
+                ("Move pane down", drawn_below.is_some(), 1),
                 (
                     if collapsed {
                         "Expand pane"
@@ -353,8 +355,9 @@ impl Chart {
             self.begin_user_action();
         }
         match action {
-            Some(0) => self.pane_layout.panes.swap(pane_idx, pane_idx - 1),
-            Some(1) => self.pane_layout.panes.swap(pane_idx, pane_idx + 1),
+            // Hidden panes in between keep their place next to the panes not moved.
+            Some(0) => self.pane_layout.panes[drawn_above.unwrap()..=pane_idx].rotate_right(1),
+            Some(1) => self.pane_layout.panes[pane_idx..=drawn_below.unwrap()].rotate_left(1),
             Some(2) => self.pane_layout.panes[pane_idx].collapsed = Some(!collapsed),
             Some(3 | 4) => {
                 let target = if action == Some(3) {
@@ -383,6 +386,17 @@ impl Chart {
         if action.is_some() {
             self.end_user_action();
             ui.ctx().request_repaint();
+        }
+    }
+
+    /// The index of the nearest pane drawn below or above the pane at `at`.
+    fn drawn_neighbour(&self, at: usize, down: bool) -> Option<usize> {
+        let panes = &self.pane_layout.panes;
+        let drawn = |idx: &usize| self.pane_drawn(&panes[*idx]);
+        if down {
+            (at + 1..panes.len()).find(drawn)
+        } else {
+            (0..at).rev().find(drawn)
         }
     }
 
@@ -750,6 +764,47 @@ mod tests {
                     "{location} {modifiers:?}"
                 );
             }
+        }
+    }
+
+    /// The move entries of a pane's menu pass the hidden panes next to it.
+    #[test]
+    fn move_pane_entries_skip_hidden_panes() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        for hide_rsi in [false, true] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0; 20], &[110.0; 20]);
+            let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            let macd = chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+            let [rsi_pane, macd_pane] = [rsi, macd].map(|id| chart.series_pane(id).unwrap());
+            let (hidden, pane, expected) = if hide_rsi {
+                (rsi, macd_pane, [macd_pane, PaneId::MAIN, rsi_pane])
+            } else {
+                (macd, rsi_pane, [rsi_pane, PaneId::MAIN, macd_pane])
+            };
+            chart.set_series_visible(hidden, false);
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .build_ui_state(
+                    |ui, chart: &mut Chart| {
+                        let rect = ui.max_rect();
+                        let at = chart.pane_layout.panes.iter().position(|p| p.id == pane);
+                        chart.pane_actions(ui, at.unwrap(), pane, rect, rect, false);
+                    },
+                    chart,
+                );
+            harness.hover_at(egui::pos2(400.0, 300.0));
+            harness.run();
+            harness.get_by_label("...").click();
+            harness.run();
+            let down = harness.get_by_label("Move pane down");
+            assert!(down.accesskit_node().is_disabled(), "{hide_rsi}");
+            harness.get_by_label("Move pane up").click();
+            harness.run();
+            assert_eq!(harness.state().panes(), expected, "{hide_rsi}");
         }
     }
 
