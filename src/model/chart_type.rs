@@ -872,21 +872,30 @@ impl ChartTypeParams {
         }
     }
 
-    /// Why `chart_type` cannot be drawn with these parameters, if it cannot.
+    /// Why `chart_type` cannot be drawn with these parameters, if it cannot. A size derived from
+    /// history is judged by its method, since it is 0 while it waits for history.
     #[cfg(feature = "widget")]
     pub(crate) fn invalid(&self, chart_type: ChartType) -> Option<&'static str> {
-        let usable = |size: f64| size > 0.0 && size.is_finite();
+        use super::BoxSizeMethod::{Atr, Fixed, Percentage};
+        let positive = |n: f64| n > 0.0 && n.is_finite();
+        let usable = |method, size| match method {
+            Fixed => positive(size),
+            Atr { period, multiplier } => period > 0 && positive(multiplier),
+            Percentage(percent) => positive(percent),
+        };
         match chart_type {
-            ChartType::Renko if !usable(self.renko_brick_size) => {
+            ChartType::Renko if !usable(self.renko_size_method, self.renko_brick_size) => {
                 Some("Renko brick size must be a positive number")
             }
-            ChartType::Kagi if !usable(self.kagi_reversal) => {
+            ChartType::Kagi if !usable(self.kagi_size_method, self.kagi_reversal) => {
                 Some("Kagi reversal amount must be a positive number")
             }
-            ChartType::Range if !usable(self.range_size) => {
+            ChartType::Range if !usable(self.range_size_method, self.range_size) => {
                 Some("Range size must be a positive number")
             }
-            ChartType::PointAndFigure if !usable(self.pnf_box_size) || self.pnf_reversal == 0 => {
+            ChartType::PointAndFigure
+                if !usable(self.pnf_size_method, self.pnf_box_size) || self.pnf_reversal == 0 =>
+            {
                 Some(
                     "Point and Figure box size must be a positive number and the reversal at least 1 box",
                 )
@@ -895,6 +904,25 @@ impl ChartTypeParams {
                 Some("Line Break line count must be 1 to 10")
             }
             _ => None,
+        }
+    }
+
+    /// The bars of history the size of `chart_type` needs, while its method derives it from
+    /// history and it is not yet a positive size.
+    #[cfg(feature = "widget")]
+    pub(crate) fn bars_needed(&self, chart_type: ChartType) -> Option<usize> {
+        let (method, size) = match chart_type {
+            ChartType::Renko => (self.renko_size_method, self.renko_brick_size),
+            ChartType::Kagi => (self.kagi_size_method, self.kagi_reversal),
+            ChartType::Range => (self.range_size_method, self.range_size),
+            ChartType::PointAndFigure => (self.pnf_size_method, self.pnf_box_size),
+            _ => return None,
+        };
+        match method {
+            _ if size > 0.0 && size.is_finite() => None,
+            super::BoxSizeMethod::Atr { period, .. } => Some(period),
+            super::BoxSizeMethod::Percentage(_) => Some(1),
+            super::BoxSizeMethod::Fixed => None,
         }
     }
 }

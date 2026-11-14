@@ -1312,6 +1312,54 @@ mod tests {
         assert!((chart.chart_type_params().kagi_reversal - 44.0 / 15.0).abs() < 1e-12);
     }
 
+    /// A size that waits for more history than is loaded is not invalid: the chart names the
+    /// bars it waits for and other settings apply. A fixed size of 0 is still rejected.
+    #[test]
+    fn settings_apply_while_a_history_derived_size_waits() {
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
+        use crate::widget::test_frames::shapes;
+        let bars = (0..5)
+            .map(|minute| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 0.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Atr {
+                period: 14,
+                multiplier: 1.0,
+            },
+            ..Default::default()
+        });
+        ChartSettingsState::from_chart(&chart)
+            .apply_to_chart(&mut chart)
+            .unwrap();
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.scales_and_lines.show_price_line = !chart.config().show_price_line;
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(
+            chart.config().show_price_line,
+            settings.scales_and_lines.show_price_line
+        );
+        let ctx = Context::default();
+        let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(t)
+            if t.galley.text() == "Waiting for 14 bars of history to size the chart")));
+
+        let params = settings.chart_type_params.as_mut().unwrap();
+        params.renko_size_method = BoxSizeMethod::Fixed;
+        params.renko_brick_size = 0.0;
+        assert!(matches!(
+            settings.apply_to_chart(&mut chart),
+            Err(ChartSettingsError::ChartTypeParams {
+                chart_type: ChartType::Renko,
+                ..
+            })
+        ));
+    }
+
     /// Hollow candles colour by the close against the previous close, and are hollow when the
     /// close is above the open; volume candles colour by their open or the previous close and are
     /// always filled. Each component has its own switch and colours, and saved styles and undo
