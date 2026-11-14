@@ -5,6 +5,7 @@
 use super::{ChartView, bars_between};
 use crate::drawings::LineTextVerticalAlign;
 use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
@@ -161,7 +162,7 @@ impl Drawing {
             return None;
         }
         let settings = self.line_measurements;
-        let text = self.line_measurement_label(view);
+        let text = self.line_measurement_label(painter.ctx(), view);
         if text.is_empty() {
             return None;
         }
@@ -301,7 +302,7 @@ impl Drawing {
     /// displayed geometry; length is measured in horizontal bar spacings, not price units.
     /// Up to three lines, each present only with a readout: the price change and its percentage
     /// and pips, then the bars, elapsed time and length, then the inclination.
-    fn line_measurement_label(&self, view: &ChartView) -> String {
+    fn line_measurement_label(&self, ctx: &egui::Context, view: &ChartView) -> String {
         let ([a, b, ..], [start, end, ..]) = (self.chart_points.as_slice(), self.points.as_slice())
         else {
             return String::new();
@@ -319,13 +320,15 @@ impl Drawing {
             (price, percent) => price.or(percent),
         });
         if settings.pip_change {
-            prices.extend(unit_change_text(change, view.instrument, false));
+            prices.extend(unit_change_text(ctx, change, view.instrument, false));
         }
         let mut spans = Vec::new();
         if settings.bar_count {
-            spans.push(format!(
-                "{} bars",
-                (b.bar_idx.round() - a.bar_idx.round()).abs() as i64
+            let count = (b.bar_idx.round() - a.bar_idx.round()).abs() as i64;
+            spans.push(l10n::format_text(
+                ctx,
+                "{count} bars",
+                &[("count", count.to_string())],
             ));
         }
         if settings.elapsed_time && view.time_axis {
@@ -348,7 +351,11 @@ impl Drawing {
             let spacing = ((view.bar_to_x)(a.bar_idx + 1.0) - (view.bar_to_x)(a.bar_idx)).abs();
             let length = delta.length() / spacing;
             if spacing > 0.0 && length.is_finite() {
-                spans.push(format!("{length:.2} periods"));
+                spans.push(l10n::format_text(
+                    ctx,
+                    "{length} periods",
+                    &[("length", format!("{length:.2}"))],
+                ));
             }
         }
         let mut lines = vec![prices.join("  "), spans.join(", ")];
@@ -371,6 +378,7 @@ impl Drawing {
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
         &self,
+        ctx: &egui::Context,
         bars: &[Bar],
         instrument: Option<&crate::model::Instrument>,
         time_axis: bool,
@@ -385,14 +393,15 @@ impl Drawing {
             "{} ({pct:+.2}%)",
             change_text(a.price, change, instrument, price_formatter)
         );
-        if let Some(text) = unit_change_text(b.price - a.price, instrument, true) {
+        if let Some(text) = unit_change_text(ctx, b.price - a.price, instrument, true) {
             change.push_str(&format!("  {text}"));
         }
         if self.tool_type == DrawingToolType::PriceRange {
             return Some(change);
         }
         let (from, to) = (a.bar_idx.round(), b.bar_idx.round());
-        let mut span = format!("{} bars", (to - from).abs() as i64);
+        let count = (to - from).abs() as i64;
+        let mut span = l10n::format_text(ctx, "{count} bars", &[("count", count.to_string())]);
         if let Some(ms) = elapsed_ms(bars, from, to).filter(|_| time_axis) {
             span = format!("{span}, {}", format_duration(ms));
         }
@@ -408,7 +417,13 @@ impl Drawing {
                 let unit = &text[digits.len()..];
                 // Precision 2 writes a point, so trimming zeros never eats an integer digit.
                 let digits = digits.trim_end_matches('0').trim_end_matches('.');
-                format!("\nVol {digits}{unit}")
+                let mut volume = String::from("\n");
+                volume.push_str(&l10n::format_text(
+                    ctx,
+                    "Vol {volume}",
+                    &[("volume", format!("{digits}{unit}"))],
+                ));
+                volume
             })
             .unwrap_or_default();
         Some(match self.tool_type {
@@ -421,7 +436,11 @@ impl Drawing {
     }
 
     /// The rectangle's width in bars and height in price, from its stored anchors.
-    pub(crate) fn size_labels(&self, price_formatter: Option<&dyn PriceFormatter>) -> Vec<String> {
+    pub(crate) fn size_labels(
+        &self,
+        ctx: &egui::Context,
+        price_formatter: Option<&dyn PriceFormatter>,
+    ) -> Vec<String> {
         let gap = |a: f64, b: f64| {
             let (low, gap) = (a.min(b), (a - b).abs());
             let pct = percent_change(low, low + gap);
@@ -435,7 +454,11 @@ impl Drawing {
         };
         match (self.tool_type, &self.chart_points[..]) {
             (DrawingToolType::Rect, [a, b, ..]) => vec![
-                format!("{} bars", (b.bar_idx - a.bar_idx).abs() as i64),
+                l10n::format_text(
+                    ctx,
+                    "{count} bars",
+                    &[("count", ((b.bar_idx - a.bar_idx).abs() as i64).to_string())],
+                ),
                 gap(a.price, b.price),
             ],
             _ => Vec::new(),
@@ -463,6 +486,7 @@ fn change_text(
 
 /// Pips when supplied by the instrument, otherwise ticks; omit unavailable or inexact counts.
 fn unit_change_text(
+    ctx: &egui::Context,
     change: f64,
     instrument: Option<&crate::model::Instrument>,
     whole: bool,
@@ -495,8 +519,13 @@ fn unit_change_text(
         &text
     };
     let text = if text == "-0" { "+0" } else { text };
-    let plural = if matches!(text, "+1" | "-1") { "" } else { "s" };
-    Some(format!("{text} {unit}{plural}"))
+    let key = match (unit, matches!(text, "+1" | "-1")) {
+        ("pip", true) => "{0} pip",
+        ("pip", false) => "{0} pips",
+        (_, true) => "{0} tick",
+        (_, false) => "{0} ticks",
+    };
+    Some(l10n::format_text(ctx, key, &[("0", text)]))
 }
 
 /// Decimals of a price change from `price`, as the chart writes prices: the instrument's price
@@ -527,6 +556,7 @@ impl Drawing {
     fn range_card(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
         let (Some(text), [first, second, ..]) = (
             self.measurement_label(
+                painter.ctx(),
                 view.bars,
                 view.instrument,
                 view.time_axis,
@@ -738,17 +768,28 @@ mod tests {
             let mut drawing = Drawing::new(1, tool);
             drawing.chart_points = vec![ChartPoint::new(b1, p1), ChartPoint::new(b2, p2)];
             drawing.update_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32);
-            let got = drawing.measurement_label(&bars, None, true, None);
+            let got = drawing.measurement_label(&egui::Context::default(), &bars, None, true, None);
             if got.as_deref() != Some(want) {
                 wrong.push(format!("{tool:?}: got {got:?}, want {want:?}"));
             }
         }
+        // The bar count and the volume reach the host's lookup as templates.
+        let marked = egui::Context::default();
+        crate::localization::mark_keys(&marked);
+        let mut drawing = Drawing::new(1, DrawingToolType::Measure);
+        drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(4.0, 95.0)];
+        assert_eq!(
+            drawing
+                .measurement_label(&marked, &bars, None, true, None)
+                .as_deref(),
+            Some("-5.00 (-5.00%)\n~3~, 3h\n~900~")
+        );
         let mut drawing = Drawing::new(0, DrawingToolType::Measure);
         drawing.chart_points = vec![ChartPoint::new(1.0, 1.1000), ChartPoint::new(4.0, 1.0995)];
         // On a horizontal scale other than time the bar times are keys, not times.
         assert_eq!(
             drawing
-                .measurement_label(&bars, None, false, None)
+                .measurement_label(&egui::Context::default(), &bars, None, false, None)
                 .as_deref(),
             Some("-0.0005 (-0.05%)\n3 bars\nVol 900")
         );
@@ -789,7 +830,13 @@ mod tests {
             instrument.pip_size = pip;
             instrument.price_decimals = precision;
             let label = drawing
-                .measurement_label(&bars, Some(&instrument), true, None)
+                .measurement_label(
+                    &egui::Context::default(),
+                    &bars,
+                    Some(&instrument),
+                    true,
+                    None,
+                )
                 .unwrap();
             assert_eq!(
                 label.lines().next(),
@@ -800,7 +847,13 @@ mod tests {
         // Counts beyond the exactly representable integers, including overflow, are omitted.
         let instrument = crate::model::Instrument::new("PAIR").with_tick_size(1e-300);
         let label = drawing
-            .measurement_label(&bars, Some(&instrument), true, None)
+            .measurement_label(
+                &egui::Context::default(),
+                &bars,
+                Some(&instrument),
+                true,
+                None,
+            )
             .unwrap();
         assert!(
             !label.contains("ticks") && !label.contains("pips"),
@@ -889,9 +942,16 @@ mod tests {
                 drawing.chart_points.reverse();
             }
             drawing.update_screen_coords(x, y);
-            assert!(drawing.line_measurement_label(&view).is_empty());
+            assert!(
+                drawing
+                    .line_measurement_label(&egui::Context::default(), &view)
+                    .is_empty()
+            );
             drawing.line_measurements = options;
-            assert_eq!(drawing.line_measurement_label(&view), want);
+            assert_eq!(
+                drawing.line_measurement_label(&egui::Context::default(), &view),
+                want
+            );
             // Each switch independently removes exactly its own readout.
             for (index, label) in want
                 .split(['\n', ','])
@@ -914,7 +974,7 @@ mod tests {
                 }
                 drawing.line_measurements = only;
                 assert_eq!(
-                    drawing.line_measurement_label(&view),
+                    drawing.line_measurement_label(&egui::Context::default(), &view),
                     label,
                     "readout {index}"
                 );
@@ -1018,7 +1078,7 @@ mod tests {
             };
             drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(3.0, 101.25)];
             assert_eq!(
-                drawing.line_measurement_label(&view),
+                drawing.line_measurement_label(&egui::Context::default(), &view),
                 if pip.is_some() {
                     "+2.5 pips"
                 } else {
@@ -1043,7 +1103,10 @@ mod tests {
                 if reverse {
                     drawing.chart_points.reverse();
                 }
-                assert_eq!(drawing.line_measurement_label(&view), "3h 15m");
+                assert_eq!(
+                    drawing.line_measurement_label(&egui::Context::default(), &view),
+                    "3h 15m"
+                );
             }
             drawing.line_measurements = Default::default();
         }
@@ -1166,7 +1229,10 @@ mod tests {
     fn size_labels_are_in_price_and_bars() {
         let mut drawing = Drawing::new(1, DrawingToolType::Rect);
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(20.0, 110.0)];
-        assert_eq!(drawing.size_labels(None), ["20 bars", "10.00 (10.00%)"]);
+        assert_eq!(
+            drawing.size_labels(&egui::Context::default(), None),
+            ["20 bars", "10.00 (10.00%)"]
+        );
     }
 
     /// In a 500 x 400 pane, info lines near its top and bottom edges and steep ones in either
@@ -1516,7 +1582,11 @@ mod tests {
                 drawing.chart_points =
                     vec![ChartPoint::new(from, 100.0), ChartPoint::new(to, 100.0)];
                 drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
-                assert_eq!(drawing.line_measurement_label(&view), want, "{tool:?}");
+                assert_eq!(
+                    drawing.line_measurement_label(&egui::Context::default(), &view),
+                    want,
+                    "{tool:?}"
+                );
             }
         }
         let (_, shapes) = paint_trend_angle(

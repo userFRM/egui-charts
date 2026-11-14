@@ -3,6 +3,7 @@
 use crate::drawings::domain::{ChartPoint, Drawing};
 use crate::drawings::rendering::measurements::{boxed_label, elapsed_ms, format_duration};
 use crate::drawings::rendering::{ChartView, bars_between};
+use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
 use crate::scales::{DefaultPriceFormatter, instrument_price_precision, price_decimals};
 use crate::theme::ThemeExt;
@@ -54,15 +55,21 @@ impl Drawing {
         } else {
             "+"
         };
-        let mut target = format!(
+        let moved = format!(
             "{sign}{change_text} ({:+.2}%)",
             percent_change(from.price, to.price)
         );
-        if let Some(ms) = elapsed_ms(view.bars, from.bar_idx, to.bar_idx).filter(|_| view.time_axis)
-        {
-            target.push_str(&format!(" in {}", format_duration(ms)));
-        }
-        target.push_str(&format!("\n{}", anchor_label(to)));
+        let mut target =
+            match elapsed_ms(view.bars, from.bar_idx, to.bar_idx).filter(|_| view.time_axis) {
+                Some(ms) => l10n::format_text(
+                    painter.ctx(),
+                    "{change} in {duration}",
+                    &[("change", moved), ("duration", format_duration(ms))],
+                ),
+                None => moved,
+            };
+        target.push('\n');
+        target.push_str(&anchor_label(to));
 
         let up = change >= 0.0;
         let gap = DESIGN_TOKENS.spacing.md;
