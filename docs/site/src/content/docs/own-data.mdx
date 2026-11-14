@@ -40,6 +40,10 @@ offers:
   can be listed, and the chart opens on the first row.
 - **Time zone.** The zone of every time that names none and of bounds printed as dates.
   It is UTC unless you change it.
+- **Price step.** The smallest price change of the symbols, such as `0.01`. The footprint
+  and the volume profiles group trades by it. Without it the volume footprint and session
+  volume profile charts draw candles, and the volume profile studies keep their estimate
+  from bars. One step serves every symbol of the profile.
 - **Keys.** A name and a value. Write the name in braces, such as `{key}`, where the value
   belongs in an address, a header, a body or a message. Values are sent only to the
   endpoints of the profile. *Keep keys in this browser*, *Keep keys on this device* in the
@@ -259,25 +263,34 @@ only. Map bars or trades for a chart, not both.
 ### Trades and conditions
 
 A trades route maps a time, a price, a size and, optionally, a condition, which may be one
-value or a list. Trades are folded into bars of the chart's interval. Each condition value
-has one of three rules:
+value or a list, and a side. Trades are folded into bars of the chart's interval. Each
+condition value has one of three rules:
 
-| Rule | Effect on the bar |
-| --- | --- |
-| *Price and volume* | The price moves high, low and close, and the size is added to the volume |
-| *Volume only* | The size is added to the volume |
-| *Ignore* | None |
+| Rule | Effect on the bar | Effect on the trades |
+| --- | --- | --- |
+| *Price and volume* | The price moves high, low and close, and the size is added to the volume | Listed and counted |
+| *Volume only* | The size is added to the volume | Listed and counted at its price |
+| *Ignore* | None | Left out |
 
 With several conditions the strictest rule applies. The list fills from the log, and a
 value that is not listed counts price and volume. A *Volume only* trade that opens a slot
 shows as a flat bar at the last close.
 
+Trades reach the chart as trades too, so time and sales, the footprint, the volume bubbles
+and the order-flow studies follow them. The side field names the trade's aggressor: type
+the value that marks a buy and the value that marks a sell beside it, compared as text, so
+`true` and `false` work as well as `B` and `S`. A trade without the field, or with another
+value, has an unknown side, and the footprint and the delta studies count it for neither
+side.
+
 - A trade for a slot older than the bar being built is dropped, and a trade the service
   sends twice is counted twice.
 - A trade between the history page and the first trade of the stream is in neither until
   the symbol is loaded again.
-- Trades reach the chart as bars only, so time and sales, the footprint and the order-flow
-  studies stay empty.
+- A trade older than the trade before it is in its bar and in time and sales, but not in
+  the footprint or the studies.
+- The bars a reconnect or a resume loads from REST hold no trades: the footprint and the
+  studies show that span as if nothing traded.
 
 ## Reconnecting, pausing and changing symbol
 
@@ -359,8 +372,9 @@ The demo shows one chart, in the profile's zone.
 - **Keeps working:** chart types, studies, drawings, the data table, the exports, go to
   date, the settings and the paper order ticket.
 - **Off, and says so:** alerts, compare, layouts, replay, the samples, the strategy tester
-  and watchlists. The market panels show an empty state. The liquidity heatmap, the price
-  unit and the market recording are unavailable.
+  and watchlists. The market panels show an empty state, except time and sales, which lists
+  the trades of a trades route. The liquidity heatmap, the price unit and the market
+  recording are unavailable.
 
 Studies and drawings made on own data are not saved, and connecting a changed profile
 starts a new chart. The paper account is the same on both data sources and is priced at

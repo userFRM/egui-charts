@@ -94,7 +94,7 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     (
         "targets",
         "Analyst price targets",
-        "Requires SAMPLE on the daily interval.",
+        "Synthetic high, average and low targets for SAMPLE on the daily interval.",
     ),
     (
         "financials",
@@ -350,8 +350,26 @@ impl DemoApp {
                 return;
             }
             "targets" => {
-                if self.chart.symbol() != "SAMPLE" {
-                    self.notify("Analyst targets require SAMPLE. Select SAMPLE, then try again.");
+                let symbol = self.chart.symbol().to_owned();
+                if symbol != super::live::TARGETS_SYMBOL {
+                    self.notify(format!(
+                        "{symbol} has no analyst targets in this demo. Select {}, then try again.",
+                        super::live::TARGETS_SYMBOL
+                    ));
+                    return;
+                }
+                if self.chart.chart_type().is_time_independent() {
+                    self.notify(
+                        "Analyst targets need a time-based chart type, such as candles. Change \
+                         the chart type, then try again.",
+                    );
+                    return;
+                }
+                if !self.chart.is_main_series_visible() {
+                    self.notify(
+                        "Analyst targets start at the last close. Show the price series, then try \
+                         again.",
+                    );
                     return;
                 }
                 self.switch_timeframe(egui_charts::model::Timeframe::Day1);
@@ -534,6 +552,7 @@ impl DemoApp {
 mod tests {
     use super::*;
     use egui::{Event, RawInput};
+    use egui_charts::model::ChartType;
     use egui_charts::widget::{Chart, ChartLayoutMode, ImageExportOptions};
 
     fn choose_scope(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
@@ -1158,10 +1177,54 @@ mod tests {
             );
         }
         assert!(app.open_panel == Some(super::super::SidePanel::TimeAndSales));
-        app.switch_symbol("BTCUSD");
-        let before = app.state.timeframe;
+        let refused = [
+            (
+                "BTCUSD",
+                ChartType::Candles,
+                true,
+                "BTCUSD has no analyst targets",
+            ),
+            ("SAMPLE", ChartType::Renko, true, "time-based chart type"),
+            ("SAMPLE", ChartType::Candles, false, "Show the price series"),
+        ];
+        for (symbol, kind, series, reason) in refused {
+            app.switch_symbol(symbol);
+            app.chart.set_chart_type(kind);
+            app.chart.set_main_series_visible(series);
+            frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            let (interval, range) = (app.state.timeframe, app.chart.visible_logical_range());
+            app.execute_search_command(&ctx, "targets");
+            assert_eq!(app.state.timeframe, interval, "{symbol} {kind:?}");
+            assert_eq!(
+                app.chart.visible_logical_range(),
+                range,
+                "{symbol} {kind:?}"
+            );
+            assert!(!app.chart.price_targets_visible(), "{symbol} {kind:?}");
+            assert!(
+                app.toasts
+                    .toasts()
+                    .last()
+                    .is_some_and(|toast| toast.message.contains(reason)),
+                "{reason}"
+            );
+        }
+        app.chart.set_main_series_visible(true);
         app.execute_search_command(&ctx, "targets");
-        assert_eq!(app.state.timeframe, before);
-        assert!(!app.chart.price_targets_visible());
+        let output = frame(&mut app, &ctx, vec![]);
+        for name in ["High ", "Average ", "Low "] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text().starts_with(name))),
+                "{name}"
+            );
+        }
+        output.drop_without_applying_deltas();
+        let horizon = app.chart.price_targets().unwrap().horizon;
+        let horizon = horizon.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        assert!(
+            f64::from(app.chart.visible_logical_range().unwrap().right)
+                >= app.chart.time_to_index(horizon).unwrap()
+        );
     }
 }
