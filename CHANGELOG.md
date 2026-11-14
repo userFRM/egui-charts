@@ -497,6 +497,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `FootprintBar::empty` is public, so hosts can populate prepared rows and totals after the type became non-exhaustive. `Footprint::from_bars` still validates the completed aggregate. ([#3059](https://github.com/userFRM/egui-charts/issues/3059))
+
 - Footprint annotations reuse cached studies without comparing every price row on unchanged repaints, and recalculation no longer copies ungrouped rows first. ([#2569](https://github.com/userFRM/egui-charts/issues/2569))
 
 - Time-axis wheel zoom applies the same total change regardless of frame batching, without a smoothed remainder turning into pan or price zoom after the pointer or modifiers change. Pinches and native trackpad zoom follow their reported ratios, so reciprocal pinches restore the starting zoom. Smoothed wheel input no longer cancels pending programmatic scrolling. ([#2567](https://github.com/userFRM/egui-charts/issues/2567))
