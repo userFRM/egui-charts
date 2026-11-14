@@ -8,6 +8,7 @@ use crate::data::merge::{Origin, fold, merge};
 use crate::model::{Bar, BarClock, Timeframe};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 use std::sync::Arc;
 
 pub(super) struct ReplayWindow {
@@ -37,10 +38,15 @@ impl ReplayWindow {
         let count = count.min(bars.len());
         if id == SeriesId::MAIN
             && count > 0
-            && let Some((source, _)) = &mut self.source
+            && let Some((source, source_clock)) = &mut self.source
         {
             let through = clock.bar_open(bars[count - 1].time);
-            let end = source.partition_point(|bar| clock.bar_open(bar.time) <= through);
+            let end = match trading_dates(source, source_clock, clock) {
+                // Source bars that join no chart bar before the first date kept leave too.
+                Some(runs) => (runs.iter().find(|(slot, _)| *slot > through))
+                    .map_or(source.len(), |(_, run)| run.start),
+                None => source.partition_point(|bar| clock.bar_open(bar.time) <= through),
+            };
             source.drain(..end);
             super::series::shrink_bars(source);
         }
@@ -261,6 +267,16 @@ impl Chart {
     /// and summed volume. Earlier chart history stays available. The host must supply all finer
     /// bars in the covered chart slots; missing bars are treated as periods without trades.
     ///
+    /// A source bar joins the chart bar that holds its open on [`bar_clock`](Self::bar_clock).
+    /// On a daily or longer chart whose instrument has a session, intraday bars and trades join
+    /// the bar of their trading date instead, as
+    /// [`data::resample_with_session`](crate::data::resample_with_session) dates it: a bar
+    /// belongs to the selected window that holds its first instant inside the selected hours,
+    /// and to that window's date, which starts at the date's earliest window. Post-market hours
+    /// after 00:00 UTC and a session that opens the evening before stay with their date. Bars
+    /// that reach no selected window join no chart bar, and the source replaces the chart bars
+    /// of the dates it covers.
+    ///
     /// Recorded trades replay one at a time as bars of one trade each under a clock of
     /// `Timeframe::Ticks` one, as [`data::aggregate_trades`](crate::data::aggregate_trades) builds
     /// them. A trade is an instant: it falls in the chart bar that holds it and is complete once
@@ -369,13 +385,10 @@ impl Chart {
         };
         let mut visible = completed(bars, &clock, time).to_vec();
         if let Some((source, source_clock)) = &replay.source
-            && let Some(first) = source.first()
-            && let Some(last) = source.last()
+            && let Some((start, end)) = covered(source, source_clock, &clock)
             && let Some(partial) =
                 fold_source(completed(source, source_clock, time), source_clock, &clock)
         {
-            let start = clock.bar_open(first.time);
-            let end = clock.bar_open(last.time);
             visible.retain(|bar| {
                 let slot = clock.bar_open(bar.time);
                 slot < start || slot > end
@@ -488,12 +501,31 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
 }
 
 /// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do
-/// not nest in them. A bar of one trade is an instant and falls in the chart bar that holds it;
-/// other sources go through `data::resample`, which refuses the other trade-based intervals,
-/// whose bars are stamped at their first trade. Replay folds the completed trades on every step,
-/// so they are folded per chart bar, bisecting for its last trade, instead of a clock lookup per
-/// trade: a session clock's lookup is not cheap. `bar_open` is ordered, as `completed` assumes.
+/// not nest in them. On a daily or longer chart with a session, intraday bars and trades build
+/// the bars of their trading dates, as `trading_dates` places them. Elsewhere a bar of one
+/// trade is an instant and falls in the chart bar that holds it; other sources go through
+/// `data::resample`, which refuses the other trade-based intervals, whose bars are stamped at
+/// their first trade. Replay folds the completed trades on every step, so they are folded per
+/// chart bar, bisecting for its last trade, instead of a clock lookup per trade: a session
+/// clock's lookup is not cheap. `bar_open` is ordered, as `completed` assumes.
 fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<Bar>> {
+    if let Some(runs) = trading_dates(bars, source, chart) {
+        let mut folded: Vec<Bar> = Vec::new();
+        for (slot, run) in runs {
+            for bar in &bars[run] {
+                match folded.last_mut() {
+                    Some(last) if last.time == slot => *last = fold(last, bar)?,
+                    _ => folded.push(Bar {
+                        time: slot,
+                        colors: None,
+                        payload: None,
+                        ..bar.clone()
+                    }),
+                }
+            }
+        }
+        return Some(folded);
+    }
     let instants = matches!(source.timeframe(), Some(Timeframe::Ticks(count)) if count.get() == 1)
         && chart
             .timeframe()
@@ -525,6 +557,78 @@ fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<
     // shortcut: every step refolds all trades before the cutoff; keep the folded complete chart
     // bars if long trade sources make playback slow.
     Some(folded)
+}
+
+/// The opens of the first and last chart bars that `bars` of the `source` clock join under
+/// `chart`, `None` when they join none.
+fn covered(
+    bars: &[Bar],
+    source: &BarClock,
+    chart: &BarClock,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    match trading_dates(bars, source, chart) {
+        Some(runs) => Some((runs.first()?.0, runs.last()?.0)),
+        None => Some((
+            chart.bar_open(bars.first()?.time),
+            chart.bar_open(bars.last()?.time),
+        )),
+    }
+}
+
+/// The chart bars that intraday bars or trades of the `source` clock join on a daily or longer
+/// `chart` with a session, by trading date as `data::resample_with_session` dates them. A bar
+/// joins the selected window that holds its first instant inside the selected hours, which for
+/// a bar that opens before a window and ends inside it is the window's open, and the chart bar
+/// of that window's trading date, which starts at the date's earliest window. Bars that reach
+/// no window join no chart bar. Returns one entry per window holding bars, with the chart bar's
+/// open and the range of those bars, in order, and `None` for other charts and sources, which
+/// `bar_open` places. The lookups follow the windows, not the bars.
+fn trading_dates(
+    bars: &[Bar],
+    source: &BarClock,
+    chart: &BarClock,
+) -> Option<Vec<(DateTime<Utc>, Range<usize>)>> {
+    let timeframe = source.timeframe()?;
+    let intraday = match timeframe {
+        Timeframe::Ticks(count) => count.get() == 1,
+        _ => !timeframe.is_trade_based() && timeframe.duration_ms() < Timeframe::Day1.duration_ms(),
+    };
+    let daily = (chart.timeframe())
+        .is_some_and(|interval| interval.duration_ms() >= Timeframe::Day1.duration_ms());
+    if !(intraday && daily && chart.has_session()) {
+        return None;
+    }
+    // On an intraday interval an instant takes the date of the last session open at or before it.
+    let sessions = chart.sessions().with_timeframe(Timeframe::Min1);
+    // Zero for a trade, which is an instant.
+    let span = timeframe.duration();
+    let mut runs = Vec::new();
+    let mut at = 0;
+    while let Some(bar) = bars.get(at) {
+        // The window holding the bar's open or the next one; none within a year ends the walk.
+        let Some(open) = sessions.open_at_or_after(bar.time) else {
+            break;
+        };
+        let Some(close) = sessions.session_close(open, true) else {
+            break;
+        };
+        // Bars that end by the window's open hold none of its trades.
+        let start = at
+            + bars[at..].partition_point(|bar| {
+                bar.time < open
+                    && (bar.time.checked_add_signed(span)).is_some_and(|end| end <= open)
+            });
+        let end = start + bars[start..].partition_point(|bar| bar.time < close);
+        if start < end
+            && let Some(slot) = chart.open_on_date(sessions.trading_date(open))
+        {
+            runs.push((slot, start..end));
+        }
+        // The bar at `at` either reaches the window, which closes after it opens, or ends before
+        // it, so each pass moves past at least one bar.
+        at = end;
+    }
+    Some(runs)
 }
 
 impl ChartLayout {
@@ -941,6 +1045,119 @@ mod tests {
         let pairs = crate::data::aggregate_trades(&trades, two_trades.clone()).unwrap();
         assert!(!chart.set_replay_source(pairs, two_trades));
         assert_eq!(chart.bars(SeriesId::MAIN), shown);
+    }
+
+    /// With an exchange session, a finer replay source forms the bar of each source bar's
+    /// trading date, which opens at the earliest window of that date, and replaces only the
+    /// dates it covers. In winter the New York post-market hour from 19:00 to 20:00 opens at
+    /// 00:00 UTC of the next date, and the Chicago session of Tuesday 6 February opens at 23:00
+    /// UTC on Monday. In the break before it, the hour from 16:00 joins no bar, and a 4-hour bar
+    /// from 16:00 holds the session's first hours. Evicting the dates before the source's keeps
+    /// all of its bars. Daily bars carry volume 100 and source bars volume 1.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn replay_folds_post_market_bars_into_their_trading_date() {
+        use crate::model::{Instrument, Session, SessionWindow, TimezoneId};
+        use crate::scales::TimezoneMode;
+        use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
+        use chrono::{Duration, NaiveTime, TimeZone};
+        let at = |day, hour| Utc.with_ymd_and_hms(2024, 2, day, hour, 0, 0).unwrap();
+        let hm = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        // `count` bars of volume 1, `step` hours apart from `first`.
+        let bars = |first: DateTime<Utc>, step: i64, count: i64| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let time = first + Duration::hours(step * i);
+                    Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0)
+                })
+                .collect()
+        };
+        let four_hours =
+            |zone: &TimezoneId| BarClock::new(Timeframe::Hour4).with_timezone(zone.clone());
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let chicago = TimezoneId::named("America/Chicago").unwrap();
+        // Each source with the dates and volumes the chart shows once it is set.
+        for (zone, session, cursor, sources, evict) in [
+            (
+                new_york.clone(),
+                Session::new([SessionWindow::new(weekdays, hm(9, 30), hm(16, 0))])
+                    .with_extended_windows([
+                        SessionWindow::new(weekdays, hm(4, 0), hm(9, 30)),
+                        SessionWindow::new(weekdays, hm(16, 0), hm(20, 0)),
+                    ]),
+                // 21:00 on Monday 5 February in New York, an hour after its post-market closed.
+                at(6, 2),
+                vec![
+                    // The 16 hours from 04:00; the last, 19:00 to 20:00, opens at 00:00 UTC.
+                    (
+                        bars(at(5, 9), 1, 16),
+                        BarClock::new(Timeframe::Hour1),
+                        vec![(1, 100.0), (2, 100.0), (5, 16.0)],
+                    ),
+                    // The four 4-hour bars from 04:00; the last ends at 01:00 UTC.
+                    (
+                        bars(at(5, 9), 4, 4),
+                        four_hours(&new_york),
+                        vec![(1, 100.0), (2, 100.0), (5, 4.0)],
+                    ),
+                ],
+                2,
+            ),
+            (
+                chicago.clone(),
+                Session::new([SessionWindow::new(weekdays, hm(17, 0), hm(16, 0))]),
+                // 09:00 on Tuesday 6 February in Chicago, 16 hours into its session.
+                at(6, 15),
+                vec![
+                    // The hour from 16:00 on Monday, in the break, and the 23 of the session.
+                    (
+                        bars(at(5, 22), 1, 24),
+                        BarClock::new(Timeframe::Hour1),
+                        vec![(1, 100.0), (2, 100.0), (5, 100.0), (6, 16.0)],
+                    ),
+                    // The six 4-hour bars from 16:00 on Monday; four have ended.
+                    (
+                        bars(at(5, 22), 4, 6),
+                        four_hours(&chicago),
+                        vec![(1, 100.0), (2, 100.0), (5, 100.0), (6, 4.0)],
+                    ),
+                ],
+                3,
+            ),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(
+                [1, 2, 5, 6, 7]
+                    .into_iter()
+                    .map(|day| Bar::new(at(day, 0), 100.0, 110.0, 100.0, 110.0, 100.0))
+                    .collect(),
+            ));
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(zone.clone());
+            let instrument = Instrument::new("XYZ").with_time_zone(zone.clone());
+            chart.set_instrument(Some(instrument.with_session(session)));
+            chart.set_extended_hours(true);
+            chart.set_replay_time(Some(cursor));
+            let shown = |chart: &Chart| -> Vec<_> {
+                (chart.bars(SeriesId::MAIN).iter())
+                    .map(|bar| (chart.format_time(bar.time), bar.volume))
+                    .collect()
+            };
+            let mut expected = Vec::new();
+            for (source, clock, days) in sources {
+                expected = (days.iter())
+                    .map(|&(day, volume)| (format!("Feb {day:02}, 2024"), volume))
+                    .collect();
+                let accepted = chart.set_replay_source(source, clock);
+                assert_eq!(
+                    (accepted, shown(&chart)),
+                    (true, expected.clone()),
+                    "{zone:?}"
+                );
+            }
+            chart.remove_oldest_bars(SeriesId::MAIN, evict);
+            assert_eq!(shown(&chart), expected[expected.len() - 1..], "{zone:?}");
+        }
     }
 
     #[test]

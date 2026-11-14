@@ -902,8 +902,8 @@ Terminal,Replay,"Start options: select date, random bar, first available date",u
 Terminal,Replay,Step forward and back one bar,unverified,library,src/ui/replay/mod.rs;src/ui/replay/state.rs;src/widget/replay.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,2501
 Terminal,Replay,Synchronised replay across the charts of a layout,incomplete,library,src/widget/replay.rs;src/data/replay.rs;src/widget/feed/pump.rs;examples/demo/live.rs,2491
 Terminal,Replay,Tick replay,unverified,library,src/data/replay.rs;src/widget/replay.rs;examples/demo/replay.rs,
-Terminal,Replay,Trade-by-trade updates during bar replay,incomplete,library,src/widget/replay.rs;src/ui/replay/floating.rs;src/data/replay.rs;examples/demo/replay.rs,
-Terminal,Replay,Update interval smaller than the chart interval,unverified,library,src/widget/replay.rs;src/ui/replay/floating.rs,
+Terminal,Replay,Trade-by-trade updates during bar replay,incomplete,library,src/widget/replay.rs;src/ui/replay/floating.rs;src/data/replay.rs;examples/demo/replay.rs,3031
+Terminal,Replay,Update interval smaller than the chart interval,unverified,library,src/widget/replay.rs;src/ui/replay/floating.rs,3031
 Terminal,Templates and layouts,Autosave,unverified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,
 Terminal,Templates and layouts,Chart settings templates,incomplete,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2517;2141;2504
 Terminal,Templates and layouts,Cloud sync of layouts and settings across devices,incomplete,host,src/services/storage.rs;src/services/document.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/core.rs,

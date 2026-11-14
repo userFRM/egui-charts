@@ -119,8 +119,10 @@ keeps that date in the crosshair, the tooltip, `Chart::format_time` and the time
 axis marks in every display zone. `Chart::bar_clock` runs on the same dates, so
 bar replay completes such a bar when its date ends and forms the bar of the
 cursor's date there, and studies group the bars into weeks and months by those
-dates; pass it to `ReplayController::cutoff`. Intraday bars always read in the
-display zone.
+dates; pass it to `ReplayController::cutoff`. When the instrument has a session,
+the finer bars given with `Chart::set_replay_source` form the bar of their
+trading date instead, as `data::resample_with_session` dates them. Intraday bars
+always read in the display zone.
 Synchronize charts using the
 [UTC time range](time-scale.mdx#logical-indices-and-utc-instants), even when their
 display clocks differ.
