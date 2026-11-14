@@ -51,7 +51,10 @@ builds columns of rising Xs or falling Os. Set
 [`pnf_box_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.pnf_box_size)
 and `pnf_reversal`; a box size of 0.25 and reversal count of 3 require a
 0.75 move against the column to reverse. High/low is the default input;
-`pnf_source` can select close. See
+`pnf_source` can select close. With a reversal of one box,
+`pnf_one_step_back` draws a reversal that follows a column of one symbol in that
+column: the closes 100, 101, 100 and 101 with boxes of 1 give two columns instead
+of three, the second holding an O at 100 and an X at 101. See
 [`PointFigureConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/point_figure/struct.PointFigureConfig.html)
 for grid and reversal rules.
 
