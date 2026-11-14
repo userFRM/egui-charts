@@ -519,7 +519,10 @@ impl<'a> Fields<'a> {
             if timed {
                 let mut form = TimeForm::of(self.time);
                 let label = |form: &TimeForm| form.label().to_owned();
-                if ui.combo_select("time_form", &mut form, TimeForm::ALL, label) {
+                let chosen = ui.name_inputs("Form of the time", |ui| {
+                    ui.combo_select("time_form", &mut form, TimeForm::ALL, label)
+                });
+                if chosen {
                     form.apply(self.time);
                 }
             }
@@ -529,7 +532,9 @@ impl<'a> Fields<'a> {
             {
                 let units = [ClockUnit::Milliseconds, ClockUnit::Seconds, ClockUnit::Text];
                 let label = |unit: &ClockUnit| clock_label(unit).to_owned();
-                ui.combo_select("clock_unit", &mut clock.unit, units, label);
+                ui.name_inputs("Form of the time of day", |ui| {
+                    ui.combo_select("clock_unit", &mut clock.unit, units, label);
+                });
             }
             if timed && let Some(record) = record {
                 ui.weak(stamp_text(record, self.time, zone));
@@ -1128,9 +1133,12 @@ impl DataSourceDialog {
             "A chart interval and the text the service expects for it, such as 1m, 60 or 60000. \
              The chart opens on the first row.",
         );
-        // The table takes the full width below its label, so that a row fits a phone.
+        // The table takes the full width below its label, so that a row fits a phone. Out of
+        // the row, its controls take the label as their name.
         intervals.show(ui, |_| {});
-        interval_rows(ui, &mut draft.profile.intervals);
+        ui.name_inputs("Intervals", |ui| {
+            interval_rows(ui, &mut draft.profile.intervals);
+        });
         let zone = FormRow::new("Time zone").description(
             "The zone of every time that names none, and of bounds printed as dates: UTC, a \
              name such as America/New_York or an offset such as +05:30.",
@@ -1276,18 +1284,18 @@ impl DataSourceDialog {
         self.symbol = self.symbol.min(profile.symbols.len().saturating_sub(1));
         self.interval = self.interval.min(profile.intervals.len().saturating_sub(1));
         let symbol = |at: &usize| profile.symbols.get(*at).cloned().unwrap_or_default();
-        ui.combo_select(
-            "test_symbol",
-            &mut self.symbol,
-            0..profile.symbols.len(),
-            symbol,
-        );
+        ui.name_inputs("Symbol", |ui| {
+            let symbols = 0..profile.symbols.len();
+            ui.combo_select("test_symbol", &mut self.symbol, symbols, symbol);
+        });
         let interval = |at: &usize| {
             let row = profile.intervals.get(*at);
             row.map(|row| row.chart.to_string()).unwrap_or_default()
         };
         let rows = 0..profile.intervals.len();
-        ui.combo_select("test_interval", &mut self.interval, rows, interval);
+        ui.name_inputs("Interval", |ui| {
+            ui.combo_select("test_interval", &mut self.interval, rows, interval);
+        });
     }
 
     /// The History step: the request, its Test and the mapping of the response.
@@ -1659,13 +1667,17 @@ impl DataSourceDialog {
              subprotocols ends when the server selects none.",
         );
         protocols.show(ui, |_| {});
-        text_rows(ui, "protocol", &mut stream.protocols, "Add subprotocol");
+        ui.name_inputs("Subprotocols", |ui| {
+            text_rows(ui, "protocol", &mut stream.protocols, "Add subprotocol");
+        });
         let connect = FormRow::new("Connect messages").description(
             "Sent as typed, in this order, every time the socket opens: the login first, then \
              the subscribe message.",
         );
         connect.show(ui, |_| {});
-        text_rows(ui, "connect", &mut stream.connect, "Add message");
+        ui.name_inputs("Connect messages", |ui| {
+            text_rows(ui, "connect", &mut stream.connect, "Add message");
+        });
         let keep_alive = FormRow::new("Keep-alive")
             .description("A message and its period in seconds. An empty message sends none.");
         keep_alive.show(ui, |ui| {
@@ -2797,6 +2809,8 @@ mod tests {
         text: String,
         /// The hint of a field.
         hint: String,
+        /// Whether the node has a name: a label, a label it is labelled by or a hint.
+        named: bool,
         rect: egui::Rect,
     }
 
@@ -2906,11 +2920,15 @@ mod tests {
             }
             let bounds = node.bounds()?;
             let corner = |x: f64, y: f64| egui::pos2(x as f32, y as f32);
+            let given = |text: Option<&str>| text.is_some_and(|text| !text.trim().is_empty());
             Some(Node {
                 id: *id,
                 role: node.role(),
                 text: node.label().or(node.value()).unwrap_or_default().to_owned(),
                 hint: node.placeholder().unwrap_or_default().to_owned(),
+                named: given(node.label())
+                    || !node.labelled_by().is_empty()
+                    || given(node.placeholder()),
                 rect: egui::Rect::from_min_max(
                     corner(bounds.x0, bounds.y0),
                     corner(bounds.x1, bounds.y1),
@@ -3274,7 +3292,7 @@ mod tests {
     }
 
     /// At the width of a phone every control and text of each step lies within the step, so
-    /// nothing has to be scrolled to sideways.
+    /// nothing has to be scrolled to sideways, and every control keeps its name.
     #[test]
     fn every_step_fits_a_phone() {
         // The steps of the dialog, not those of a test server.
@@ -3337,7 +3355,7 @@ mod tests {
             accesskit::Role::MultilineTextInput,
             accesskit::Role::PasswordInput,
         ];
-        let mut outside = Vec::new();
+        let mut faults = Vec::new();
         for size in [egui::vec2(393.0, 852.0), egui::vec2(360.0, 800.0)] {
             for (step, top, controls) in steps {
                 let storage = Arc::new(DemoStorage::default());
@@ -3368,7 +3386,11 @@ mod tests {
                         && node.rect.right() <= area.right() + 0.5;
                     if !inside {
                         let (text, rect) = (&node.text, node.rect);
-                        outside.push(format!("{name}: {text:?} at {rect:?}, step at {area:?}"));
+                        faults.push(format!("{name}: {text:?} at {rect:?}, step at {area:?}"));
+                    }
+                    if egui::accessibility::is_input(node.role) && !node.named {
+                        let (role, text) = (node.role, &node.text);
+                        faults.push(format!("{name}: {role:?} {text:?} has no name"));
                     }
                 }
                 for control in controls.split(", ") {
@@ -3377,7 +3399,7 @@ mod tests {
                 }
             }
         }
-        assert!(outside.is_empty(), "past the step:\n{}", outside.join("\n"));
+        assert!(faults.is_empty(), "\n{}", faults.join("\n"));
     }
 
     /// A click on a time-of-day field picks the form its value reads in, so the preview reads
