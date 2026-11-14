@@ -16,6 +16,11 @@ pub(super) struct ReplayWindow {
     source: Option<(Vec<Bar>, BarClock)>,
     /// The pause last set with `set_feed_paused` before the replay, which its exit sets again.
     feed_paused: bool,
+    /// The live ATR and percentage sizes in Renko, Kagi, Range, Point and Figure order, with
+    /// whether each waited for history, which the exit gives back. `None` for a fixed size, and
+    /// for one armed by its parameters or by new main history during the session, which
+    /// resolves from the restored history instead.
+    pub(super) live_sizes: [Option<(f64, bool)>; 4],
     pub quote: Option<crate::model::Level1Quote>,
     pub session_quote: Option<crate::model::quote::SessionQuote>,
 }
@@ -173,10 +178,12 @@ impl Chart {
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
     /// `set_data` and `update` retain
-    /// host corrections behind the window. `None` exits, restores all retained bars and quotes,
-    /// and restores the feed's previous pause state; a feed that resumes keeps the restored bars
-    /// and depth history as [`Self::set_feed_paused`] describes. Hosts own source data and session
-    /// storage.
+    /// host corrections behind the window. `None` exits, restores all retained bars and quotes
+    /// and the sizes from before the session, and restores the feed's previous pause state; a
+    /// feed that resumes keeps the restored bars and depth history as [`Self::set_feed_paused`]
+    /// describes. Sizes whose parameters were set during the session, and all of them once its
+    /// main history was replaced, resolve from the restored history instead. Hosts own source
+    /// data and session storage.
     /// With a market driver attached this dispatches a seek; call outside egui context locks,
     /// as with [`ReplayDriver::seek`].
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {
@@ -204,6 +211,16 @@ impl Chart {
                         item.revision = crate::model::next_revision();
                     }
                 }
+                // The sizes come back with the bars, as the session found them.
+                let sizes = self.chart_type_params.sizes_mut().into_iter();
+                for ((size, pending), live) in sizes
+                    .zip(&mut self.pending_box_sizes)
+                    .zip(replay.live_sizes)
+                {
+                    if let Some(live) = live {
+                        (*size, *pending) = live;
+                    }
+                }
                 self.quote = replay.quote;
                 self.session_quote = replay.session_quote;
                 self.set_feed_paused(replay.feed_paused);
@@ -227,11 +244,18 @@ impl Chart {
                 .collect();
             bars.insert(SeriesId::MAIN, self.state.data().bars.clone());
             let feed_paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
+            let methods = self.chart_type_params.size_methods();
+            let sizes = self.chart_type_params.sizes_mut().map(|size| *size);
+            let pending = self.pending_box_sizes;
+            let live_sizes = std::array::from_fn(|i| {
+                (methods[i] != crate::model::BoxSizeMethod::Fixed).then_some((sizes[i], pending[i]))
+            });
             self.replay = Some(ReplayWindow {
                 time,
                 bars,
                 source: None,
                 feed_paused,
+                live_sizes,
                 quote: self.quote.take(),
                 session_quote: self.session_quote.take(),
             });
@@ -400,6 +424,10 @@ impl Chart {
         };
         let (bars, rejected) = super::series::clean(bars, &clock);
         replay.bars.insert(id, bars);
+        if id == SeriesId::MAIN {
+            // The exit resolves the sizes from the new history.
+            replay.live_sizes = [None; 4];
+        }
         self.count_replay_rejections(id, rejected);
         // New history resolves the sizes again, as `set_data` does outside replay.
         if id == SeriesId::MAIN {
@@ -834,16 +862,20 @@ mod tests {
 
     /// A session resolves ATR and percentage sizes from the bars before the cursor when it starts,
     /// or once the cursor passes enough bars, and keeps them while the cursor moves, as bars
-    /// streaming in do; applying the parameters again recalculates. ATR(14) of 14 true ranges of
-    /// 2 is 2, and the 15th bar's true range of 16 makes it (13 * 2 + 16) / 14 = 3.
+    /// streaming in do. Parameters set and main history supplied during the session resolve from
+    /// the bars before the cursor. The end gives back the live sizes, or resolves from the
+    /// restored history those set or supplied during the session.
+    /// ATR(14) of 14 true ranges of 2 is 2, a 15th of max(16, 15, 1) = 16 makes it
+    /// (13 * 2 + 16) / 14 = 3 and one of max(30, 29, 1) = 30 makes it (13 * 2 + 30) / 14 = 4; 1%
+    /// of the closes 100, 110 and 120 is 1, 1.1 and 1.2.
     #[test]
     fn replay_steps_keep_history_derived_sizes() {
         use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
-        let mut bars: Vec<_> = (0..14)
-            .map(|i| bar(i, [100.0, 101.0, 99.0, 100.0, 1.0]))
-            .collect();
-        bars.push(bar(14, [100.0, 115.0, 99.0, 100.0, 1.0]));
-        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..14)
+                .map(|i| bar(i, [100.0, 101.0, 99.0, 100.0, 1.0]))
+                .collect(),
+        ));
         chart.set_timeframe(Timeframe::Min1);
         chart.set_chart_type(ChartType::Renko);
         chart.set_chart_type_params(ChartTypeParams {
@@ -851,23 +883,48 @@ mod tests {
                 period: 14,
                 multiplier: 1.0,
             },
+            kagi_size_method: BoxSizeMethod::Percentage(1.0),
             ..Default::default()
         });
-        let size_at = |chart: &mut Chart, cursor: Option<i64>| {
-            chart.set_replay_time(cursor.map(time));
-            chart.show_elements();
-            chart.chart_type_params().renko_brick_size
-        };
-        let steps = [(Some(5), 0.0), (Some(14), 2.0), (Some(15), 2.0)];
-        for (cursor, size) in steps {
-            let got = size_at(&mut chart, cursor);
-            assert!((got - size).abs() < 1e-12, "{cursor:?}: {got}");
+        // The live sizes stay [2, 1] through the streamed bar.
+        chart.update(SeriesId::MAIN, bar(14, [100.0, 115.0, 99.0, 110.0, 1.0]));
+        let mut other: Vec<_> = chart.bars(SeriesId::MAIN).to_vec();
+        other[14] = bar(14, [100.0, 129.0, 99.0, 120.0, 1.0]);
+        #[derive(Debug)]
+        enum Step {
+            At(i64),
+            End,
+            Params,
+            History,
         }
-        chart.set_chart_type_params(chart.chart_type_params().clone());
-        assert!((chart.chart_type_params().renko_brick_size - 3.0).abs() < 1e-12);
-        for (cursor, size) in [(None, 3.0), (Some(14), 2.0)] {
-            let got = size_at(&mut chart, cursor);
-            assert!((got - size).abs() < 1e-12, "{cursor:?}: {got}");
+        use Step::*;
+        for (step, want) in [
+            (At(5), [0.0, 1.0]),
+            (At(14), [2.0, 1.0]),
+            (At(15), [2.0, 1.0]),
+            (End, [2.0, 1.0]),
+            (At(15), [3.0, 1.1]),
+            (Params, [3.0, 1.1]),
+            (End, [3.0, 1.1]),
+            (At(15), [3.0, 1.1]),
+            (History, [4.0, 1.2]),
+            (End, [4.0, 1.2]),
+        ] {
+            match step {
+                At(minute) => chart.set_replay_time(Some(time(minute))),
+                End => chart.set_replay_time(None),
+                Params => chart.set_chart_type_params(chart.chart_type_params().clone()),
+                History => assert!(chart.set_data(SeriesId::MAIN, other.clone())),
+            }
+            chart.show_elements();
+            let params = chart.chart_type_params();
+            let got = [params.renko_brick_size, params.kagi_reversal];
+            assert!(
+                got.iter()
+                    .zip(want)
+                    .all(|(got, want)| (got - want).abs() < 1e-12),
+                "{step:?}: {got:?}"
+            );
         }
     }
 
