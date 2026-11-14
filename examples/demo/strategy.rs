@@ -231,7 +231,7 @@ impl DemoApp {
             self.state.chart_type = kind;
             self.top_toolbar.chart_type_selector.current = kind;
             self.chart.set_chart_type(kind);
-            self.size_price_based_charts();
+            self.size_range_interval();
         }
         if clear {
             self.stop_live_strategy();
