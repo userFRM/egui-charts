@@ -326,10 +326,8 @@ fn footprint(filters: &[String], frames: usize) {
     options.time_scale.min_bar_spacing = 0.0;
     let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
     chart.set_visible_bars(100_000);
-    let config = FootprintConfig {
-        studies: Some(Default::default()),
-        ..Default::default()
-    };
+    let mut config = FootprintConfig::default();
+    config.studies = Some(Default::default());
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             chart.show_footprint(ui, &flow, &config);
