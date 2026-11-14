@@ -529,11 +529,19 @@ enum Tracks {
 /// Relative sizes of one preset's splits, in depth-first order. Each split contains one positive
 /// weight per child, from the top or left. Obtain the shape with [`ChartLayout::sizes`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartLayoutSizing {
     /// The arrangement these weights belong to.
     pub mode: ChartLayoutMode,
     /// Weights of each split; their sum must be finite and need not be one.
     pub weights: Vec<Vec<f32>>,
+}
+
+impl ChartLayoutSizing {
+    /// The `weights` of the splits of `mode`, in the shape [`ChartLayout::sizes`] gives them.
+    pub fn new(mode: ChartLayoutMode, weights: Vec<Vec<f32>>) -> Self {
+        Self { mode, weights }
+    }
 }
 
 #[derive(Default)]
@@ -832,6 +840,7 @@ impl Tracks {
 
 /// Membership for one linked chart field.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ChartLink {
     /// Follow the layout-wide switch and legacy group. No individual marker is shown.
     #[default]
@@ -844,6 +853,7 @@ pub enum ChartLink {
 
 /// Independent symbol and interval memberships, suitable for host serialization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartLinkGroups {
     /// Symbol membership.
     pub symbol: ChartLink,

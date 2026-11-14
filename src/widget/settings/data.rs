@@ -281,6 +281,7 @@ impl Default for MarginsSettings {
 
 /// The character that groups the thousands of the built-in price labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ThousandsSeparator {
     /// Plain digits: `42541.77`.
     Off,
@@ -544,6 +545,7 @@ impl Default for AlertsSettings {
 /// Independent order-flow layers and their appearance. Missing saved fields keep layers off.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct OrderFlowSettings {
     /// Draw sampled resting liquidity behind the price series.
     pub show_heatmap: bool,

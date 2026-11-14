@@ -417,6 +417,7 @@ pub struct NodeSensitivity {
 /// A window that ends at or before its start spans midnight and belongs to the day it ends on.
 /// Clock changes in `zone` move the window with them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomProfileSession {
     /// Wall-clock time each session opens, in `zone`.
     pub start: chrono::NaiveTime,
@@ -426,12 +427,25 @@ pub struct CustomProfileSession {
     pub zone: Option<super::TimezoneId>,
 }
 
+impl CustomProfileSession {
+    /// Sessions from `start` to `end` on the instrument's exchange clock, or in UTC without one:
+    /// assign [`zone`](Self::zone) to read them in another zone.
+    pub fn new(start: chrono::NaiveTime, end: chrono::NaiveTime) -> Self {
+        Self {
+            start,
+            end,
+            zone: None,
+        }
+    }
+}
+
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
 /// Bars outside the chosen hours still join the session before them, so a host that wants
 /// them left out should not supply them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileSession {
     /// The chart's own calendar: its instrument's hours, with extended hours as the chart shows
     /// them, or calendar days in the instrument's zone without hours.
@@ -450,6 +464,7 @@ pub enum ProfileSession {
 ///
 /// Rows are never finer than the feed's own rows, and align to multiples of their height.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileRows {
     /// The rows the feed groups executions into.
     #[default]
@@ -464,6 +479,7 @@ pub enum ProfileRows {
 /// Defaults retain the stacked session histogram, with optional annotations hidden.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct TradeProfileSettings {
     /// Hours that divide the chart into sessions.
     pub session: ProfileSession,
@@ -514,6 +530,7 @@ impl Default for TradeProfileSettings {
 
 /// A row of the per-bar execution statistics table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintStatistic {
     /// Total executed volume, including unknown sides.
     Volume,

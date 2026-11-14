@@ -1052,10 +1052,7 @@ mod tests {
     fn opening_a_saved_layout_again_restores_its_chart_sizes() {
         let mode = ChartLayoutMode::TwoHorizontal;
         let resize = |terminal: &mut Terminal, columns: [f32; 2]| {
-            let sizes = ChartLayoutSizing {
-                mode,
-                weights: vec![vec![1.0], columns.to_vec()],
-            };
+            let sizes = ChartLayoutSizing::new(mode, vec![vec![1.0], columns.to_vec()]);
             terminal.layout.set_sizes(&[sizes], false).unwrap();
             settle(terminal);
         };

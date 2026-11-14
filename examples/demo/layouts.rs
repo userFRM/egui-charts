@@ -971,6 +971,13 @@ mod tests {
     use super::*;
     use egui_charts::widget::{ChartLink, ChartLinkGroups};
 
+    fn links(symbol: ChartLink, interval: ChartLink) -> ChartLinkGroups {
+        let mut groups = ChartLinkGroups::default();
+        groups.symbol = symbol;
+        groups.interval = interval;
+        groups
+    }
+
     #[test]
     fn compact_demo_keeps_hidden_rail_panels_reachable_without_a_single_layout_strip() {
         for width in [393.0, 599.0, 600.0, 1440.0] {
@@ -1126,18 +1133,12 @@ mod tests {
         app.layout.set_active(0);
         app.layout.set_link_groups(
             0,
-            ChartLinkGroups {
-                symbol: ChartLink::Group("🔶".into()),
-                interval: ChartLink::Group("💧".into()),
-            },
+            links(ChartLink::Group("🔶".into()), ChartLink::Group("💧".into())),
             true,
         );
         app.layout.set_link_groups(
             1,
-            ChartLinkGroups {
-                symbol: ChartLink::Unlinked,
-                interval: ChartLink::Group("🍀".into()),
-            },
+            links(ChartLink::Unlinked, ChartLink::Group("🍀".into())),
             true,
         );
         let memberships = app.layout.saved_link_groups();
@@ -1275,21 +1276,15 @@ mod tests {
         {
             app.layout.set_link_groups(
                 slot,
-                ChartLinkGroups {
-                    symbol: ChartLink::Group(symbol.into()),
-                    interval: ChartLink::Group(interval.into()),
-                },
+                links(
+                    ChartLink::Group(symbol.into()),
+                    ChartLink::Group(interval.into()),
+                ),
                 true,
             );
         }
-        app.layout.set_link_groups(
-            2,
-            ChartLinkGroups {
-                symbol: ChartLink::Unlinked,
-                interval: ChartLink::Layout,
-            },
-            true,
-        );
+        app.layout
+            .set_link_groups(2, links(ChartLink::Unlinked, ChartLink::Layout), true);
         let saved_links = app.layout.saved_link_groups();
         let saved = app.capture_layout().unwrap();
         let comparisons = app.capture_comparisons().unwrap();

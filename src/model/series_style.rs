@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 /// The units a series writes, independently of its price scale's transform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SeriesFormat {
     /// Fixed decimal prices.
     #[default]
@@ -21,6 +22,7 @@ pub enum SeriesFormat {
 /// Saved numeric display settings for a bar series. Values and scale modes stay unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct SeriesDisplayFormat {
     /// The units and suffix to display.
     pub kind: SeriesFormat,
@@ -59,6 +61,7 @@ pub enum PriceLineSource {
 /// Negative and non-finite requests are ignored. Manual ranges ignore these margins;
 /// a pane too short to leave room for prices keeps its ordinary fit.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
 pub struct AutoscaleMargins {
     /// Extra space at the top of the plot.
     pub top: f32,
@@ -80,6 +83,7 @@ impl AutoscaleMargins {
 
 /// Prices and extra screen space contributed to one automatically fitted price scale.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct AutoscaleInfo {
     /// The lowest and highest raw prices to include.
     pub price_range: (f64, f64),

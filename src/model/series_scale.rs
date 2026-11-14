@@ -17,7 +17,8 @@ pub enum SeriesScale {
     Separate(u64),
 }
 
-/// The edge of a pane where price axes are displayed.
+/// The edge of a pane where price axes are displayed. The set is closed: a pane has no other edge
+/// for price axes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AxisSide {
     /// Before the plot.
@@ -29,6 +30,7 @@ pub enum AxisSide {
 /// Layout of a pane's axes, independent of their units, ranges and source assignments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PaneAxisOptions {
     /// Override the usual side of every labelled scale. `None` follows scale assignments
     /// and the chart's axis visibility settings, which can still hide the pane's own axis.

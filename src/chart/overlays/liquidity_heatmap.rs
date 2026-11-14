@@ -47,6 +47,7 @@ struct Column {
 /// bid/ask lines or live book profile. Serializable for host chart settings.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LiquidityHeatmapConfig {
     /// Multiplies cell opacity, including order tier marks, saturating at full opacity.
     /// Defaults to 1. Negative values act as zero; non-finite values use the default.

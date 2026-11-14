@@ -152,6 +152,7 @@ impl AlertDelivery {
 /// The source view and study definitions captured when an alert is created. The alert's
 /// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertInputs {
     /// Calendar zone; `None` follows the system's local calendar.
     pub timezone: Option<TimezoneId>,
@@ -215,6 +216,7 @@ impl AlertInputs {
 
 /// The creation symbol's exchange calendar, including an explicitly continuous session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertCalendar {
     /// Symbol whose calendar was captured.
     pub symbol: String,
@@ -226,6 +228,7 @@ pub struct AlertCalendar {
 
 /// Serializable calculation inputs of a study, without computed values or shared stream state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertStudy {
     /// Identifier used by the alert sources and by dependent studies.
     pub id: usize,
@@ -708,6 +711,7 @@ pub enum AlertComparison {
 
 /// Relationship of a value to two inclusive, independently resolved boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertChannelComparison {
     /// Previously outside, currently inside.
     Entering,

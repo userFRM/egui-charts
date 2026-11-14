@@ -82,6 +82,7 @@ pub struct BarsInRange {
 
 /// A valued bar selected by [`Chart::series_last_value`], on its series' price scale.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SeriesLastValue {
     /// The selected bar's close in raw price units.
     pub value: f64,

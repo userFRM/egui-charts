@@ -293,6 +293,7 @@ impl Default for BarsStyle {
 /// The Columns chart's height.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ColumnsStyle {
     /// The price each column reaches. Its colour still compares closes.
     pub price_source: PriceSource,
@@ -325,6 +326,7 @@ impl Default for CandlesStyle {
 /// Independent candle components and scale prices for the Heikin-Ashi chart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct HeikinStyle {
     /// Fill the transformed open-to-close body.
     pub body_visible: bool,
@@ -388,6 +390,7 @@ impl HeikinStyle {
 /// fill, when its close is above its open.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct HollowStyle {
     /// Fill the body of a candle that is not hollow.
     pub body_visible: bool,
@@ -433,6 +436,7 @@ impl Default for HollowStyle {
 /// close is not below the previous close.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct VolumeCandlesStyle {
     /// Fill the body.
     pub body_visible: bool,
@@ -516,6 +520,7 @@ impl Default for VolumeCandlesStyle {
 /// The High-low chart's single bar colour and its price labels.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct HighLowStyle {
     /// Colour of every bar, whatever its direction.
     pub bar_color: Color32,

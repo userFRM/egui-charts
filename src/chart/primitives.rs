@@ -224,6 +224,7 @@ pub enum PrimitivePass {
 /// Within a renderer, return its best object using these same pass and distance rules,
 /// breaking ties in reverse paint order. Object ids are local to the pointer's target.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PrimitiveHit {
     /// Cursor to display while hovering the object.
     pub cursor: CursorIcon,

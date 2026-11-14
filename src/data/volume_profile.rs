@@ -28,6 +28,7 @@ pub struct StudyProfile {
 /// A level of a finished study profile carried right past the profile's bars: from the bar
 /// after its last to the first later bar that trades in the level's row, or on the line for the
 /// value area high, or to the last bar. Prices fall in rows as the profile binned its volume.
+/// Exhaustive, so that a custom study can build it in `studies::Indicator::profile_levels`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProfileLevel {
     /// Chart bars the line spans. It starts at the left edge of the first, which follows the

@@ -967,6 +967,7 @@ impl PositionSizing {
 /// by the host: the library never downloads exchange rates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionReadout {
     /// Keep statistics visible when the drawing is not selected.
     pub persistent: bool,
@@ -1076,6 +1077,7 @@ impl PositionReadout {
 /// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionStyle {
     /// Colour of the entry line, its price tag and the trade's path; `None` draws the lines in a
     /// translucent shade of the theme's secondary text colour and the tag in that colour.
@@ -1124,6 +1126,7 @@ impl PositionStyle {
 
 /// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NoteTextStyle {
     /// Text colour as RGBA.
     pub color: [u8; 4],
@@ -1136,6 +1139,16 @@ pub struct NoteTextStyle {
 }
 
 impl NoteTextStyle {
+    /// Text of `color` at `font_size` points, neither bold nor italic.
+    pub fn new(color: [u8; 4], font_size: f32) -> Self {
+        Self {
+            color,
+            font_size,
+            bold: false,
+            italic: false,
+        }
+    }
+
     /// Whether the font size lies in 1 to 256 points.
     pub fn is_valid(&self) -> bool {
         (1.0..=256.0).contains(&self.font_size)
@@ -1179,6 +1192,7 @@ impl AnnotationMarker {
 
 /// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineMeasurementPosition {
     /// Before the left anchor.
     Left,
@@ -1195,6 +1209,7 @@ pub enum LineMeasurementPosition {
 /// Which part of a line's text sits at which point of the line, reading left to right. A vertical
 /// line reads from bottom to top, so its left end is at the bottom, whichever way its text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextHorizontalAlign {
     /// The text starts at the line's left end.
     Left,
@@ -1208,6 +1223,7 @@ pub enum LineTextHorizontalAlign {
 /// Which edge of a line's text rests on the line. A vertical line takes its text's top to face
 /// left, so [`Self::Top`] reads right of the line and [`Self::Bottom`] left of it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextVerticalAlign {
     /// The text's top edge, so that it reads below the line.
     Top,
@@ -1220,6 +1236,7 @@ pub enum LineTextVerticalAlign {
 
 /// How a vertical line's text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextOrientation {
     /// Along the line, reading from bottom to top.
     #[default]
@@ -1235,6 +1252,7 @@ pub enum LineTextOrientation {
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LineMeasurements {
     /// Keep enabled readouts visible without selecting the line.
     pub persistent: bool,

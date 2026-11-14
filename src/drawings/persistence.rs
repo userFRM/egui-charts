@@ -122,6 +122,7 @@ pub struct StoredDrawing {
 
 /// A study pane identified by its studies rather than by a chart's study ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredPane {
     /// The name of each study in the pane, in legend order, with its input ids and their values
     /// as serialized [`InputValue`](crate::studies::InputValue)s.

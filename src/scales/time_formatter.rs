@@ -17,6 +17,7 @@ use chrono::Datelike;
 
 /// Display time and chart locale for one time-axis tick.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct TickMarkContext<'a> {
     /// Wall-clock fields in the chart's display zone, carried in a UTC value; behind UTC, bars of
     /// a day or longer given to a chart without a feed read in UTC unless they sit at the display
