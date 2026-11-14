@@ -27,12 +27,12 @@ pub use price_formatter::{
 };
 #[cfg(feature = "widget")]
 pub(crate) use price_formatter::{decimals, group_thousands, price_decimals, to_step};
-#[cfg(feature = "widget")]
-pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{
     PriceMap, PriceRange, PriceScale, PriceScaleId, PriceScaleMargins, PriceScaleMode,
     PriceScaleOptions, PriceTransform,
 };
+#[cfg(feature = "widget")]
+pub(crate) use pricescale::{auto_scale_span, fit_span};
 pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
 pub use study_format::StudyFormat;
 pub use time_formatter::{

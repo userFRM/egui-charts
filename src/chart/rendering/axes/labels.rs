@@ -1604,6 +1604,37 @@ mod tests {
         }
     }
 
+    /// The whitespace left of the shortest maturity extrapolates keys below zero, which are
+    /// no maturities: the axis labels none of them.
+    #[test]
+    fn maturity_axis_labels_no_key_below_zero() {
+        use crate::scales::{MaturityScale, key_time};
+        let bars = [3.0, 12.0, 36.0]
+            .iter()
+            .map(|&key| Bar::from_value(key_time(key).unwrap(), 4.0))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_horizontal_scale(Some(std::sync::Arc::new(MaturityScale::default())));
+        let ctx = Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let labels: Vec<String> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.pos.y >= plot.bottom() && text.pos.x < plot.right() => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|label| label == "3Y"), "{labels:?}");
+        assert!(
+            labels.iter().all(|label| !label.starts_with('-')),
+            "{labels:?}"
+        );
+    }
+
     /// Whitespace keys stop at chrono's date limits and stay bounded at a host's tiny minimum
     /// bar spacing, so the chart renders a frame at either limit.
     #[test]

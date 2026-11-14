@@ -58,9 +58,12 @@ For example, a move from 100 to 110 reads +10% or 110 indexed. Prices 100, 200
 and 400 have equal vertical spacing on a logarithmic scale because each step
 doubles the price. **Logarithmic rendering requires strictly positive prices**;
 zero and negative prices have no finite log coordinate. Choose Normal for data
-that can cross zero. A missing, non-finite or zero relative reference falls back
-to ordinary prices. Each series keeps its own first-visible-close reference,
-even when several share a relative scale.
+that can cross zero. A logarithmic scale fits the positive values in view, and
+while every value in view is at or below zero it shows ordinary prices, as
+Normal does, until positive values come back into view. A view without any
+value keeps the units the scale shows. A missing, non-finite or zero relative
+reference falls back to ordinary prices. Each series keeps its own
+first-visible-close reference, even when several share a relative scale.
 
 After changing a mode through
 [`PriceScale::options_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScale.html#method.options_mut),

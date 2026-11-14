@@ -374,16 +374,20 @@ impl ChartState {
                             .len()
                             .checked_add_signed(study.plot_offset(index))
                             .unwrap_or(0);
-                        (study_start..study_end.min(available_end))
+                        let mut values = (study_start..study_end.min(available_end))
                             .filter_map(move |bar| study.plot_value(index, bar))
-                            .chain(std::iter::once(0.0).filter(move |_| {
-                                matches!(
-                                    study.plot_style(index).plot_type,
-                                    crate::studies::PlotType::Histogram
-                                        | crate::studies::PlotType::Columns
-                                        | crate::studies::PlotType::Area
-                                )
-                            }))
+                            .filter(|value| value.is_finite())
+                            .peekable();
+                        // Columns and areas reach down to zero beside a value, never in a view
+                        // without one.
+                        let zero = values.peek().is_some()
+                            && matches!(
+                                study.plot_style(index).plot_type,
+                                crate::studies::PlotType::Histogram
+                                    | crate::studies::PlotType::Columns
+                                    | crate::studies::PlotType::Area
+                            );
+                        values.chain(zero.then_some(0.0))
                     })
                     .chain(
                         study
@@ -428,7 +432,7 @@ impl ChartState {
             });
         let main = main_visible
             .then(|| {
-                let range = main_range.or_else(|| {
+                let range = |transform: PriceTransform| {
                     visible
                         .iter()
                         .flat_map(|bar| [bar.low, bar.high])
@@ -444,7 +448,11 @@ impl ChartState {
                                 (min.min(value), max.max(value))
                             }))
                         })
-                });
+                };
+                // Without a positive value a logarithmic scale fits the prices as they are.
+                let range = main_range
+                    .or_else(|| range(transform))
+                    .or_else(|| range(PriceTransform::default()));
                 match autoscale {
                     Some(provider) => provider.info(visible, range),
                     None => range.map(Into::into),
@@ -452,17 +460,33 @@ impl ChartState {
             })
             .flatten();
         let margins = main.map_or_else(Default::default, |info| info.margins);
+        let mut raw = (f64::INFINITY, f64::NEG_INFINITY);
         let (min, max) = main
             .into_iter()
             .flat_map(|info| [info.price_range.0, info.price_range.1])
             .chain(study_values)
             .chain(prices)
+            .inspect(|value| {
+                if value.is_finite() {
+                    raw = (raw.0.min(*value), raw.1.max(*value));
+                }
+            })
             .map(|value| transform.to_scale(value))
             .chain(series_values)
             .filter(|value| value.is_finite())
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
                 (min.min(value), max.max(value))
             });
+        // No positive value in view: this frame shows the prices as they are. With no value in
+        // view at all, a scale showing prices keeps showing them, as the other scales do.
+        let (transform, min, max) = if transform.mode == PriceScaleMode::Logarithmic
+            && !min.is_finite()
+            && (raw.0.is_finite() || self.price_scale.transform().mode == PriceScaleMode::Normal)
+        {
+            (PriceTransform::default(), raw.0, raw.1)
+        } else {
+            (transform, min, max)
+        };
         self.price_scale.rebase(transform);
         self.price_scale.autoscale(min, max);
         (

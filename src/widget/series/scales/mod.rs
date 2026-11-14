@@ -39,19 +39,30 @@ fn shared_prices(
                 )
         })
         .flat_map(move |line| {
-            let plot = study.plot_style(line);
-            range
+            let mut values = range
                 .clone()
                 .filter_map(move |bar| study.plot_value(line, bar))
                 .filter(|value| value.is_finite())
-                .chain(std::iter::once(0.0).filter(move |_| {
-                    matches!(
-                        plot.plot_type,
-                        PlotType::Histogram | PlotType::Columns | PlotType::Area
-                    )
-                }))
+                .peekable();
+            // Columns and areas reach down to zero beside a value, never in a view without one.
+            let base = values.peek().is_some()
+                && matches!(
+                    study.plot_style(line).plot_type,
+                    PlotType::Histogram | PlotType::Columns | PlotType::Area
+                );
+            values.chain(base.then_some(0.0))
         })
         .chain(fills)
+}
+
+/// `transform` as `scale` fitted it this frame: a logarithmic scale without a positive value
+/// in view shows the prices as they are.
+fn fitted_transform(scale: &PriceScale, transform: PriceTransform) -> PriceTransform {
+    if transform.mode == PriceScaleMode::Logarithmic && scale.transform().mode != transform.mode {
+        PriceTransform::default()
+    } else {
+        transform
+    }
 }
 
 impl Chart {
@@ -995,25 +1006,32 @@ impl Chart {
         let logarithmic = self
             .series_price_scale(item.id)
             .is_some_and(|scale| scale.options().mode == PriceScaleMode::Logarithmic);
-        let base = item
-            .options
-            .columns_base
-            .filter(|_| item.options.chart_type == ChartType::Columns && !bars.is_empty());
-        let default = bars
-            .iter()
-            .flat_map(|bar| item.extremes(bar))
-            .chain(
-                bars.iter()
-                    .flat_map(|bar| [bar.open, bar.close])
-                    .filter(|_| logarithmic && item.options.chart_type.uses_ohlc()),
-            )
-            .chain(base)
-            .filter(|value| value.is_finite() && (!logarithmic || *value > 0.0))
-            .fold(None, |range: Option<(f64, f64)>, value| {
-                Some(range.map_or((value, value), |(min, max)| {
-                    (min.min(value), max.max(value))
-                }))
-            });
+        // The base counts beside a value in view, never over whitespace alone.
+        let base = item.options.columns_base.filter(|_| {
+            item.options.chart_type == ChartType::Columns
+                && bars
+                    .iter()
+                    .flat_map(|bar| item.extremes(bar))
+                    .any(f64::is_finite)
+        });
+        let range = |positive: bool| {
+            bars.iter()
+                .flat_map(|bar| item.extremes(bar))
+                .chain(
+                    bars.iter()
+                        .flat_map(|bar| [bar.open, bar.close])
+                        .filter(|_| logarithmic && item.options.chart_type.uses_ohlc()),
+                )
+                .chain(base)
+                .filter(|value| value.is_finite() && (!positive || *value > 0.0))
+                .fold(None, |range: Option<(f64, f64)>, value| {
+                    Some(range.map_or((value, value), |(min, max)| {
+                        (min.min(value), max.max(value))
+                    }))
+                })
+        };
+        // Without a positive value a logarithmic scale fits the prices as they are.
+        let default = range(logarithmic).or_else(|| range(false).filter(|_| logarithmic));
         match &item.options.style.autoscale {
             Some(provider) => provider.info(bars, default),
             None => default.map(Into::into),
@@ -1072,7 +1090,12 @@ impl Chart {
             let mut margins = AutoscaleMargins::default();
             let mut reference = None;
             let mode = self.pane_price_scale(pane, key).options().mode;
+            // What the regular fit would show, for a logarithmic scale without a positive value.
+            let mut prices = (f64::INFINITY, f64::NEG_INFINITY);
             let mut include = |bounds: &mut (f64, f64), value: f64, transform: PriceTransform| {
+                if value.is_finite() {
+                    prices = (prices.0.min(value), prices.1.max(value));
+                }
                 if mode == PriceScaleMode::Logarithmic && value <= 0.0 {
                     return;
                 }
@@ -1100,10 +1123,13 @@ impl Chart {
                     include(&mut bounds, value, transform);
                 }
             }
-            if bounds.0.is_finite() && mode != PriceScaleMode::Logarithmic {
-                let padding = crate::scales::auto_scale_span(bounds.0, bounds.1) * 0.1;
-                bounds.0 -= padding;
-                bounds.1 += padding;
+            // A tenth of the range in the scale's own units, logarithmic ones included.
+            let pad = |(min, max): (f64, f64), mode| {
+                let padding = crate::scales::fit_span(mode, min, max) * 0.1;
+                (min - padding, max + padding)
+            };
+            if bounds.0.is_finite() {
+                bounds = pad(bounds, mode);
             }
             for (&id, study) in self
                 .study_ids
@@ -1127,8 +1153,14 @@ impl Chart {
                 }
                 let transform = self.shared_study_transform(id, study.as_ref(), key);
                 if mode == PriceScaleMode::Logarithmic {
+                    // Padded as the regular value range below is.
+                    let mut own = (f64::INFINITY, f64::NEG_INFINITY);
                     for value in shared_prices(study.as_ref(), visible.clone()) {
-                        include(&mut bounds, value, transform);
+                        include(&mut own, value, transform);
+                    }
+                    if own.0.is_finite() {
+                        let own = pad(own, mode);
+                        bounds = (bounds.0.min(own.0), bounds.1.max(own.1));
                     }
                 } else if !self.is_custom_data(id)
                     && let Some(range) = crate::widget::IndicatorPane::with_config(
@@ -1147,6 +1179,11 @@ impl Chart {
                     }
                 }
             }
+            if reference.is_none() && mode == PriceScaleMode::Logarithmic && prices.0.is_finite() {
+                // No positive value in view: this frame shows the prices as they are.
+                reference = Some(PriceTransform::default());
+                bounds = pad(prices, PriceScaleMode::Normal);
+            }
             let Some(mut transform) = reference else {
                 continue;
             };
@@ -1155,7 +1192,7 @@ impl Chart {
                 transform.base = 1.0;
             }
             let scale = self.pane_price_scale_mut(pane, key);
-            let manual = (scale.is_manual() && scale.transform().mode == mode)
+            let manual = (scale.is_manual() && scale.transform().mode == transform.mode)
                 .then(|| (scale.range(), scale.bar_ratio()));
             scale.rebase(transform);
             if let Some((range, ratio)) = manual {
@@ -1222,9 +1259,10 @@ impl Chart {
         for key in keys {
             self.ensure_series_scale(key);
         }
+        // Each scale's transform, bounds in its units, pixel margins and bounds in prices.
         let mut values = std::collections::HashMap::<
             SeriesScale,
-            (PriceTransform, f64, f64, AutoscaleMargins),
+            (PriceTransform, f64, f64, AutoscaleMargins, (f64, f64)),
         >::new();
         for item in self.main_pane_series() {
             let transform = self.series_transform(item);
@@ -1234,6 +1272,7 @@ impl Chart {
                 f64::INFINITY,
                 f64::NEG_INFINITY,
                 AutoscaleMargins::default(),
+                (f64::INFINITY, f64::NEG_INFINITY),
             ));
             let markers = self.marker_prices(&item.markers, &[], item.marker_options);
             for value in self
@@ -1246,6 +1285,9 @@ impl Chart {
                 })
                 .chain(markers)
             {
+                if value.is_finite() {
+                    entry.4 = (entry.4.0.min(value), entry.4.1.max(value));
+                }
                 let value = transform.to_scale(value);
                 if value.is_finite() {
                     if !entry.1.is_finite() {
@@ -1279,12 +1321,16 @@ impl Chart {
                 f64::INFINITY,
                 f64::NEG_INFINITY,
                 AutoscaleMargins::default(),
+                (f64::INFINITY, f64::NEG_INFINITY),
             ));
             let primitive_prices = self.primitive_autoscale(id).flat_map(|info| {
                 entry.3.merge(info.margins);
                 [info.price_range.0, info.price_range.1]
             });
             for value in shared_prices(study.as_ref(), start..end).chain(primitive_prices) {
+                if value.is_finite() {
+                    entry.4 = (entry.4.0.min(value), entry.4.1.max(value));
+                }
                 if transform.mode == PriceScaleMode::Logarithmic && value <= 0.0 {
                     continue;
                 }
@@ -1297,7 +1343,16 @@ impl Chart {
         }
         let mut main = Vec::new();
         let mut pixel_margins = std::collections::HashMap::new();
-        for (key, (transform, min, max, margins)) in values {
+        for (key, (mut transform, mut min, mut max, margins, prices)) in values {
+            // No positive value in view: this frame shows the prices as they are. The main
+            // series' scale decides so in its own fit.
+            if !min.is_finite()
+                && transform.mode == PriceScaleMode::Logarithmic
+                && prices.0.is_finite()
+                && key != self.main_series_scale
+            {
+                (transform, min, max) = (PriceTransform::default(), prices.0, prices.1);
+            }
             // The main series also fits its scale, so the frame decides on those margins.
             if margins != AutoscaleMargins::default()
                 && (min.is_finite() || key == self.main_series_scale)
@@ -1361,19 +1416,18 @@ impl Chart {
                     }
                     _ => return None,
                 };
+                let transform = self.shared_study_transform(id, study.as_ref(), key);
                 if pane == self.main_series_pane() {
-                    return Some(self.secondary_scale(key).map(
-                        self.shared_study_transform(id, study.as_ref(), key),
+                    let scale = self.secondary_scale(key);
+                    return Some(scale.map(
+                        fitted_transform(scale, transform),
                         rect.top(),
                         rect.bottom(),
                     ));
                 }
                 let pane = self.pane_layout.panes.iter().find(|item| item.id == pane)?;
-                Some(self.pane_price_scale(pane.id, key).map(
-                    self.shared_study_transform(id, study.as_ref(), key),
-                    0.0,
-                    1.0,
-                ))
+                let scale = self.pane_price_scale(pane.id, key);
+                Some(scale.map(fitted_transform(scale, transform), 0.0, 1.0))
             })
             .collect();
         for (at, map) in maps.into_iter().enumerate() {
@@ -1385,11 +1439,14 @@ impl Chart {
     }
 
     pub(in crate::widget) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
+        let scale = self.series_price_scale(item.id).expect("present series");
         self.series_display_map(
             item.id,
-            self.series_price_scale(item.id)
-                .expect("present series")
-                .map(self.series_transform(item), rect.top(), rect.bottom()),
+            scale.map(
+                fitted_transform(scale, self.series_transform(item)),
+                rect.top(),
+                rect.bottom(),
+            ),
         )
         .with_thousands_sep(self.config.thousands_sep)
     }
