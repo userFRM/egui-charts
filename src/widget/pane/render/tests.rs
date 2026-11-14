@@ -568,6 +568,42 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
     }
 }
 
+/// A study added while a pane is maximized is drawn, also after the maximized price pane became
+/// the only pane, and undo does not maximize a chart left with one pane.
+#[test]
+fn study_added_while_a_pane_is_maximized_is_drawn() {
+    use crate::widget::PaneId;
+    for remove_others in [true, false] {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let macd = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+        let maximized = if remove_others {
+            PaneId::MAIN
+        } else {
+            chart.series_pane(rsi).unwrap()
+        };
+        chart.user_action(|chart| chart.pane_layout.maximized = Some(maximized));
+        if remove_others {
+            for id in [rsi, macd] {
+                chart.user_action(|chart| chart.remove_series(id));
+            }
+        }
+        let added = chart.user_action(|chart| chart.add_indicator(Box::new(RSI::new(7))));
+        for time in [0.0, 0.1] {
+            crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
+        }
+        let pane = chart.series_pane(added).unwrap();
+        assert!(chart.pane_height(pane) > Some(40.0), "{remove_others}");
+        if remove_others {
+            assert!(chart.undo());
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.2, Vec::new());
+            assert_eq!(chart.panes(), [PaneId::MAIN]);
+            assert_eq!(chart.pane_layout.maximized, None);
+        }
+    }
+}
+
 /// The Hide and Remove controls in an added series' legend are one undo step each, and undo
 /// brings the series back with its price formatter and bar limit.
 #[test]

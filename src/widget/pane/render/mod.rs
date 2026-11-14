@@ -124,8 +124,7 @@ impl Chart {
             .enumerate()
             .filter(|(_, pane)| {
                 pane.id == main_pane
-                    || (pane.id == PaneId::MAIN || self.pane_shown(pane))
-                        && maximized.is_none_or(|id| id == pane.id)
+                    || self.pane_drawn(pane) && maximized.is_none_or(|id| id == pane.id)
             })
             .map(|(idx, pane)| (idx, pane.id, false))
             .collect();
