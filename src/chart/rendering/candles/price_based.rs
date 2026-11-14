@@ -291,8 +291,8 @@ pub(crate) struct ExecutionRanges {
 impl ExecutionRanges {
     /// One bar per range bar of the trades before `cutoff` (all of them without one), and whether
     /// older range bars were left out by the bar limit; `trades_revision` identifies `trades`.
-    /// `None` for an invalid range size or without a trade, when the range bars come from the
-    /// chart's OHLC bars.
+    /// `None` for an invalid range size, one that waits for history or without a trade, when the
+    /// range bars come from the chart's OHLC bars.
     pub(crate) fn bars<'a>(
         &mut self,
         params: &ChartTypeParams,
@@ -300,7 +300,9 @@ impl ExecutionRanges {
         trades: impl Iterator<Item = &'a crate::model::Tick>,
         cutoff: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Option<(Arc<[Bar]>, bool)> {
-        if params.invalid(ChartType::Range).is_some() {
+        if params.invalid(ChartType::Range).is_some()
+            || params.bars_needed(ChartType::Range).is_some()
+        {
             *self = Self::default();
             return None;
         }
@@ -388,14 +390,15 @@ pub(crate) fn markers<'a>(
 }
 
 /// One bar per kept element, and whether older elements were left out by the element or work limit.
-/// Time-based types, invalid parameters and empty builds keep the source bars' axes.
+/// Time-based types, invalid parameters, sizes waiting for history and empty builds keep the
+/// source bars' axes.
 pub(crate) fn elements(
     chart_type: ChartType,
     params: &ChartTypeParams,
     bars: &[Bar],
     revision: u64,
 ) -> Option<(Arc<[Bar]>, bool)> {
-    if params.invalid(chart_type).is_some() {
+    if params.invalid(chart_type).is_some() || params.bars_needed(chart_type).is_some() {
         return None;
     }
     let built = match chart_type {
