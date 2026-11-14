@@ -118,12 +118,16 @@ impl RangeBar {
 
 /// What a chart's range bars are built from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RangeBarSource {
     /// The trades the feed supplied, in order, with their timestamps and volume.
     Executions,
     /// The open, high, low and close of the chart's bars: an approximation, used while the chart
     /// holds no trades.
     OhlcApproximation,
+    /// The OHLC approximation of the bars before the one holding the first held trade, followed
+    /// by the range bars of the trades from that trade on.
+    OhlcThenExecutions,
 }
 
 /// Build range bars from trades (exact construction). A trade's size that would make its bar's
@@ -327,6 +331,12 @@ impl RangeBarBuilder {
         curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
         curr_bar.end_time = bar.time;
         curr_bar.tick_cnt += 1;
+    }
+
+    /// Whether [`elements`](PriceBuilder::elements) ends with the range bar in progress.
+    #[cfg(feature = "widget")]
+    pub(crate) fn has_open_bar(&self) -> bool {
+        self.curr_bar.as_ref().is_some_and(|bar| bar.tick_cnt > 0)
     }
 }
 

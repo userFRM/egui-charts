@@ -477,16 +477,10 @@ impl Chart {
 
     /// What a Range chart's bars are built from, or `None` for another chart type. The chart
     /// builds them from the trades the feed supplied, including during replay up to its cutoff,
-    /// and falls back to the OHLC approximation while it holds none.
+    /// after the OHLC approximation of the bars before the one holding the first trade, and
+    /// falls back to the approximation alone while it holds none.
     pub fn range_bar_source(&self) -> Option<crate::model::RangeBarSource> {
-        use crate::model::RangeBarSource::{Executions, OhlcApproximation};
-        (self.chart_type == ChartType::Range).then(|| {
-            if self.execution_ranges.in_use() {
-                Executions
-            } else {
-                OhlcApproximation
-            }
-        })
+        (self.chart_type == ChartType::Range).then(|| self.execution_ranges.source())
     }
 
     /// Sets the parameters of the price-based chart types (Renko, Kagi, Range, Point and Figure,
