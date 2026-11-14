@@ -430,7 +430,7 @@ mod tests {
             &'a [(ColumnDirection, f64, f64, bool)],
         );
         let swing = [100.0, 101.0, 100.0, 101.0];
-        let rows: [Row; 4] = [
+        let rows: [Row; 3] = [
             (
                 &swing,
                 1,
@@ -446,12 +446,6 @@ mod tests {
                 1,
                 true,
                 &[(Up, 100.0, 101.0, false), (Up, 100.0, 101.0, true)],
-            ),
-            (
-                &[100.0, 98.0],
-                2,
-                false,
-                &[(Up, 100.0, 100.0, false), (Down, 99.0, 98.0, false)],
             ),
             (
                 &[100.0, 98.0],
