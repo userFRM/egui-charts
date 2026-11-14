@@ -942,7 +942,10 @@ impl Chart {
         let appended = shown.last().is_some_and(|bar| bar.time > tail);
         // As many slots after the kept one as before: nothing moved, as on most frames.
         let in_place = right_edge.kept.is_some_and(|(time, after)| {
-            shown.len().checked_sub(after + 1).is_some_and(|at| shown[at].time == time)
+            shown
+                .len()
+                .checked_sub(after + 1)
+                .is_some_and(|at| shown[at].time == time)
         });
         if appended && self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();

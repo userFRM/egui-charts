@@ -566,7 +566,10 @@ fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
     chart.scroll_to_position(-30.0, false);
     chart.pop_bars(id, 5);
     frame(&ctx, &mut chart, 1.0, Vec::new());
-    got.push(("added series pop_bars", chart.state.time_scale().right_offset()));
+    got.push((
+        "added series pop_bars",
+        chart.state.time_scale().right_offset(),
+    ));
 
     let mut chart = crate::widget::ChartBuilder::new()
         .with_feed(std::sync::Arc::new(WindowFeed))
@@ -583,7 +586,10 @@ fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
         frame(&ctx, &mut chart, time, Vec::new());
     }
     assert_eq!(chart.bars(SeriesId::MAIN), window(0, 100), "resumed");
-    got.push(("feed pause and resume", chart.state.time_scale().right_offset()));
+    got.push((
+        "feed pause and resume",
+        chart.state.time_scale().right_offset(),
+    ));
 
     assert_eq!(
         got,
