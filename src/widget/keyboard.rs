@@ -814,6 +814,50 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "drawings")]
+    fn press(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// Ctrl+Alt+H hides every drawing unless all are hidden, and then shows them all.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn hide_drawings_key_hides_all_unless_all_are_hidden() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::test_frames::frame;
+        for (hidden, shown) in [
+            ([false, false, false], false),
+            ([false, true, false], false),
+            ([true, true, true], true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            for (id, hidden) in hidden.into_iter().enumerate() {
+                let mut drawing = Drawing::new(id, DrawingToolType::HorizontalLine);
+                drawing.chart_points = vec![ChartPoint::new(30.0, 14.0 + id as f64)];
+                drawing.completed = true;
+                drawing.visible = !hidden;
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let hide = press(Key::H, Modifiers::COMMAND.plus(Modifiers::ALT));
+            frame(&ctx, &mut chart, 1.0, vec![hide]);
+            let visible: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.visible)
+                .collect();
+            assert_eq!(visible, [shown; 3], "{hidden:?}");
+        }
+    }
+
     #[test]
     fn reset_chart_restores_time_and_every_price_scale() {
         use crate::model::SeriesScale;

@@ -529,10 +529,10 @@ impl DrawingManager {
 
     // === Visibility ===
 
-    /// Toggles the visibility of all drawings. If all are visible, hides them
-    /// all; otherwise shows them all.
+    /// Hides every drawing unless all of them are already hidden, in which case shows them all,
+    /// as the Hide drawings toolbar entry does. Does nothing without drawings.
     pub fn toggle_visibility_all(&mut self) {
-        let visible = !self.drawings.iter().all(|drawing| drawing.visible);
+        let visible = self.drawings.iter().all(|drawing| !drawing.visible);
         self.set_visibility_all(visible);
     }
 
