@@ -446,7 +446,7 @@ pub enum ProfileSession {
     Custom(CustomProfileSession),
 }
 
-#[cfg(all(feature = "widget", feature = "studies"))]
+#[cfg(feature = "studies")]
 impl ProfileSession {
     /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else

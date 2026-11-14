@@ -27,11 +27,14 @@ use crate::data::{
     FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, ProfileLevel,
     ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
 };
-use crate::model::{Bar, BarClock, Instrument, ProfileResolution, Timeframe};
+use crate::model::{
+    Bar, BarClock, CustomProfileSession, Instrument, ProfileResolution, ProfileSession, Session,
+    SessionProvider, Timeframe, TimezoneId,
+};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
 };
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, NaiveTime, TimeDelta, Utc};
 use egui::Color32;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -83,6 +86,11 @@ struct ProfileStudy {
     /// Read the interval the instrument suggests while `source` follows the chart.
     feed_source: bool,
     adaptive: bool,
+    /// The Sessions choice: 0 for the exchange trading day, 1 for regular hours, 2 for regular
+    /// and extended hours, 3 for `custom`.
+    sessions: usize,
+    /// The hours of the Custom choice, kept while another choice is selected.
+    custom: CustomProfileSession,
     tick_size: Option<f64>,
     resolutions: Vec<ProfileResolution>,
     /// The finer interval and data start stated before the chart emptied the profile to wait
@@ -91,6 +99,8 @@ struct ProfileStudy {
     /// Chart bars in view, from `set_visible_range`.
     view: Range<usize>,
     days: ExchangeDays,
+    /// The instrument's exchange zone, UTC without one, and trading hours, from `set_instrument`.
+    hours: (TimezoneId, Option<Session>),
     data: Vec<Bar>,
     fine: Vec<Bar>,
     /// Each bar's executions by price, one level per tick. Clones share the chart-fed source.
@@ -231,11 +241,18 @@ impl ProfileStudy {
             source: None,
             feed_source: true,
             adaptive: false,
+            sessions: 0,
+            custom: CustomProfileSession {
+                start: NaiveTime::MIN,
+                end: NaiveTime::MIN,
+                zone: None,
+            },
             tick_size: None,
             resolutions: Vec::new(),
             held: None,
             view: 0..0,
             days: ExchangeDays::default(),
+            hours: (TimezoneId::utc(), None),
             data: Vec::new(),
             fine: Vec::new(),
             flow: OrderFlowInput::footprint(),
@@ -338,6 +355,51 @@ impl ProfileStudy {
                 InputValue::Toggle(self.adaptive),
                 InputKind::Toggle,
             ));
+            inputs.push(StudyInput::new(
+                "sessions",
+                "Sessions",
+                InputValue::Choice(self.sessions),
+                InputKind::Choice(vec![
+                    "Trading day".into(),
+                    "Regular hours".into(),
+                    "Regular and extended hours".into(),
+                    "Custom hours".into(),
+                ]),
+            ));
+            // Study inputs have no time of day, so custom hours take minutes after midnight.
+            let minutes = |time: NaiveTime| (time - NaiveTime::MIN).num_minutes() as usize;
+            for (id, label, time) in [
+                (
+                    "session_start",
+                    "Session start, minutes after midnight",
+                    self.custom.start,
+                ),
+                (
+                    "session_end",
+                    "Session end, minutes after midnight",
+                    self.custom.end,
+                ),
+            ] {
+                inputs.push(
+                    StudyInput::new(
+                        id,
+                        label,
+                        InputValue::Length(minutes(time)),
+                        InputKind::Length(0, 1439),
+                    )
+                    .shown_when("sessions", [3]),
+                );
+            }
+            let zone = self.custom.zone.as_ref().map_or("", TimezoneId::name);
+            inputs.push(
+                StudyInput::new(
+                    "session_zone",
+                    "Session time zone (empty = exchange)",
+                    InputValue::Text(zone.into()),
+                    InputKind::Text,
+                )
+                .shown_when("sessions", [3]),
+            );
         }
         if matches!(self.kind, Kind::Session | Kind::Periodic) {
             inputs.push(StudyInput::new(
@@ -381,6 +443,25 @@ impl ProfileStudy {
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
+            ("sessions", InputValue::Choice(v)) => self.sessions = v,
+            ("session_start", InputValue::Length(v)) => {
+                self.custom.start = NaiveTime::MIN + TimeDelta::minutes(v as i64)
+            }
+            ("session_end", InputValue::Length(v)) => {
+                self.custom.end = NaiveTime::MIN + TimeDelta::minutes(v as i64)
+            }
+            ("session_zone", InputValue::Text(text)) => {
+                self.custom.zone = if text.is_empty() {
+                    None
+                } else {
+                    Some(TimezoneId::named(&text).ok_or_else(|| {
+                        crate::studies::StudyError::InvalidInput {
+                            id: id.into(),
+                            reason: "names no known time zone".into(),
+                        }
+                    })?)
+                }
+            }
             ("start_time", InputValue::Text(text)) => {
                 self.start_time = parse_time(&text, -8e15).map_err(|reason| {
                     crate::studies::StudyError::InvalidInput {
@@ -628,6 +709,23 @@ impl ProfileStudy {
         VolumeProfile::from_executions(&grouped(&bar, ticks), ticks as f64 * tick, tick, complete)
     }
 
+    /// The calendar the Sessions input divides intraday bars by: `None` for the trading day, on
+    /// daily and longer bars, which carry a trading date rather than hours, and for regular or
+    /// extended hours without instrument hours.
+    fn session_clock(&self) -> Option<BarClock> {
+        if self.interval.duration_ms() >= Timeframe::Day1.duration_ms() {
+            return None;
+        }
+        let choice = match self.sessions {
+            1 => ProfileSession::Regular,
+            2 => ProfileSession::Extended,
+            3 => ProfileSession::Custom(self.custom.clone()),
+            _ => return None,
+        };
+        let (zone, hours) = &self.hours;
+        choice.session_clock(&BarClock::new(self.interval), zone, hours.as_ref())
+    }
+
     fn period_ranges(&self, period: AnchorPeriod) -> Vec<Range<usize>> {
         let mut ranges = Vec::new();
         let mut previous = None;
@@ -716,7 +814,22 @@ impl ProfileStudy {
                     Vec::new()
                 }
             }
-            Kind::Session => self.period_ranges(AnchorPeriod::Session),
+            Kind::Session => match self.session_clock() {
+                // A session starts at each bar whose trading date differs from the bar before.
+                Some(clock) => {
+                    let breaks = clock.sessions().session_breaks(data);
+                    let starts: Vec<_> = std::iter::once(0)
+                        .chain(breaks.into_iter().map(|(i, _)| i))
+                        .chain([data.len()])
+                        .collect();
+                    starts
+                        .windows(2)
+                        .filter(|pair| pair[0] < pair[1])
+                        .map(|pair| pair[0]..pair[1])
+                        .collect()
+                }
+                None => self.period_ranges(AnchorPeriod::Session),
+            },
             Kind::Periodic => self.period_ranges(self.period),
             Kind::Auto => {
                 let period = match self.anchor {
@@ -1195,7 +1308,15 @@ macro_rules! profile_study {
                 self.profile.tick_size = instrument
                     .and_then(|i| i.tick_size)
                     .filter(|t| t.is_finite() && *t > 0.0);
-                self.profile.days.set(instrument)
+                let hours = instrument.map_or((TimezoneId::utc(), None), |i| {
+                    let zone = i.time_zone.clone().unwrap_or_else(TimezoneId::utc);
+                    (zone, i.session.clone())
+                });
+                // Sessions of regular or extended hours read what the trading day ignores: the
+                // extended windows, holidays and date-specific hours.
+                let changed = self.profile.hours != hours;
+                self.profile.hours = hours;
+                self.profile.days.set(instrument) || changed
             }
             fn set_visible_range(&mut self, range: Range<usize>) -> bool {
                 self.profile.view = range;
@@ -1257,7 +1378,7 @@ profile_study!(
     VolProfileSession,
     Session,
     "Vol Profile Session",
-    "One volume profile per exchange trading day, including the whole session of visible bars."
+    "One volume profile per exchange trading day or chosen session hours, including the whole session of visible bars."
 );
 profile_study!(
     VolProfilePeriodic,
@@ -2126,7 +2247,8 @@ mod tests {
                     input.id
                 );
             }
-            // Saved UTC times are displayed and accepted back without changing the range.
+            // Saved UTC times, and the session study's empty custom zone, are displayed and
+            // accepted back without changing the range.
             let times: Vec<_> = study
                 .inputs()
                 .into_iter()
@@ -2141,6 +2263,7 @@ mod tests {
                     ("end_time", "2026-03-07 00:00:00"),
                 ],
                 "Vol Profile Anchored" => &[("start_time", "2026-03-07 00:00:00")],
+                "Vol Profile Session" => &[("session_zone", "")],
                 _ => &[],
             };
             assert_eq!(
@@ -2283,6 +2406,146 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].bars, 0..3);
         assert_eq!(got[0].profile.volume(), [30.0, 30.0]);
+    }
+
+    /// Each session starts at the first bar at or after its open: the exchange day's, the
+    /// regular or extended hours', or the custom start's in its own zone or the exchange's, east
+    /// or west of UTC, across a clock change and in an hour it skips. Bars outside the hours join
+    /// the session before them. Daily bars and an instrument without hours keep the trading day.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn session_profiles_start_at_the_chosen_hours() {
+        use crate::model::SessionWindow;
+        use chrono::Weekday::*;
+        let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let week = [Mon, Tue, Wed, Thu, Fri];
+        let exchange = Instrument::new("X")
+            .with_time_zone(new_york.clone())
+            .with_session(
+                Session::new([SessionWindow::new(week, at(9, 30), at(16, 0))])
+                    .with_extended_windows([
+                        SessionWindow::new(week, at(4, 0), at(9, 30)),
+                        SessionWindow::new(week, at(16, 0), at(20, 0)),
+                    ]),
+            );
+        let zoned = Instrument::new("X").with_time_zone(new_york);
+        // Half-hourly bars from Thursday 5 March 2026 to Tuesday 10 March. New York clocks move
+        // from UTC-5 to UTC-4 at 07:00 UTC on Sunday 8 March.
+        let start: DateTime<Utc> = "2026-03-05T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..288)
+            .map(|i| {
+                let time = start + TimeDelta::minutes(30 * i);
+                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0)
+            })
+            .collect();
+        let starts = |study: &VolProfileSession| {
+            let profiles = study.volume_profiles(0..bars.len());
+            let starts: Vec<_> = profiles
+                .iter()
+                .map(|profile| bars[profile.bars.start].time.format("%d %H:%M").to_string())
+                .collect();
+            starts.join(", ")
+        };
+        let calculated = |sessions, custom: Option<(usize, usize, &str)>, instrument| {
+            let mut study = VolProfileSession::new(24);
+            study.set_timeframe(Timeframe::Min30);
+            study.set_instrument(Some(instrument));
+            study
+                .set_input("sessions", InputValue::Choice(sessions))
+                .unwrap();
+            if let Some((open, close, zone)) = custom {
+                study
+                    .set_input("session_start", InputValue::Length(open))
+                    .unwrap();
+                study
+                    .set_input("session_end", InputValue::Length(close))
+                    .unwrap();
+                study
+                    .set_input("session_zone", InputValue::Text(zone.into()))
+                    .unwrap();
+            }
+            study.calculate(&bars);
+            study
+        };
+        let trading_day = "05 00:00, 05 05:00, 06 05:00, 07 05:00, 08 05:00, 09 04:00, 10 04:00";
+        let plus_0530 = "05 00:00, 05 04:00, 06 04:00, 07 04:00, 08 04:00, 09 04:00, 10 04:00";
+        for (sessions, custom, instrument, expected) in [
+            (0, None, &exchange, trading_day),
+            (
+                1,
+                None,
+                &exchange,
+                "05 00:00, 05 14:30, 06 14:30, 09 13:30, 10 13:30",
+            ),
+            (
+                2,
+                None,
+                &exchange,
+                "05 00:00, 05 09:00, 06 09:00, 09 08:00, 10 08:00",
+            ),
+            // 18:00 to 17:00 New York time, every day.
+            (
+                3,
+                Some((1080, 1020, "")),
+                &exchange,
+                "05 00:00, 05 23:00, 06 23:00, 07 23:00, 08 22:00, 09 22:00, 10 22:00",
+            ),
+            (
+                3,
+                Some((1080, 1020, "UTC")),
+                &exchange,
+                "05 00:00, 05 18:00, 06 18:00, 07 18:00, 08 18:00, 09 18:00, 10 18:00",
+            ),
+            // 02:30 does not exist in New York on 8 March, so that session opens at 03:00.
+            (
+                3,
+                Some((150, 960, "")),
+                &exchange,
+                "05 00:00, 05 07:30, 06 07:30, 07 07:30, 08 07:00, 09 06:30, 10 06:30",
+            ),
+            // 08:00 at UTC+9 is 23:00 UTC the day before.
+            (
+                3,
+                Some((480, 900, "+09:00")),
+                &exchange,
+                "05 00:00, 05 23:00, 06 23:00, 07 23:00, 08 23:00, 09 23:00, 10 23:00",
+            ),
+            // 09:30 at UTC+5:30 is 04:00 UTC.
+            (3, Some((570, 960, "+05:30")), &exchange, plus_0530),
+            (1, None, &zoned, trading_day),
+        ] {
+            let study = calculated(sessions, custom, instrument);
+            assert_eq!(starts(&study), expected, "sessions {sessions} {custom:?}");
+        }
+        // A zone no build knows is refused and changes nothing.
+        let mut study = calculated(3, Some((570, 960, "+05:30")), &exchange);
+        assert!(
+            study
+                .set_input("session_zone", InputValue::Text("Mars/Base".into()))
+                .is_err()
+        );
+        assert_eq!(starts(&study), plus_0530);
+        study.calculate(&bars);
+        assert_eq!(starts(&study), plus_0530);
+        // Daily bars carry a trading date rather than hours, so each keeps its own profile.
+        let days: Vec<_> = (0..5)
+            .map(|day| {
+                let time = start + TimeDelta::days(day - 3);
+                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0)
+            })
+            .collect();
+        let mut daily = VolProfileSession::new(24);
+        daily.set_timeframe(Timeframe::Day1);
+        daily.set_instrument(Some(&exchange));
+        daily.set_input("sessions", InputValue::Choice(3)).unwrap();
+        daily.calculate(&days);
+        let ranges: Vec<_> = daily
+            .volume_profiles(0..5)
+            .into_iter()
+            .map(|profile| profile.bars)
+            .collect();
+        assert_eq!(ranges, [0..1, 1..2, 2..3, 3..4, 4..5]);
     }
 }
 
