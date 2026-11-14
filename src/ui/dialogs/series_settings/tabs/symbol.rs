@@ -153,6 +153,12 @@ impl SymbolTab {
                         candles,
                     );
                 }
+                ChartType::Range => {
+                    let style = &mut styles.range;
+                    Self::switch(ui, "Thin bars", &mut style.thin_bars);
+                    Self::switch(ui, "Phantom bars", &mut style.phantom_bars);
+                    Self::candle_colors_section(ui, settings);
+                }
                 _ => Self::candle_colors_section(ui, settings),
             }
         });

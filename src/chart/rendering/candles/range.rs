@@ -3,12 +3,14 @@
 //! Includes: High-Low, Range Bars
 
 use crate::scales::{PriceFormatter, PriceMap};
-use egui::{Color32, FontId, Galley, Painter, Pos2, Rect, Shape};
+use crate::tokens::DESIGN_TOKENS;
+use egui::{Color32, FontId, Galley, Painter, Pos2, Rect, Shape, Stroke, StrokeKind};
 
+use super::bar::render_ohlc_bar;
 use super::volume::render_volume_bars;
 use crate::chart::rendering::axes::tag_decimals;
-use crate::chart::rendering::{RenderContext, StyleColors};
-use crate::model::{Bar, HighLowStyle};
+use crate::chart::rendering::{BarRenderParams, RenderContext, StyleColors};
+use crate::model::{Bar, BarsStyle, HighLowStyle, RangeStyle};
 
 use super::japanese::calc_brick_rect;
 
@@ -142,24 +144,47 @@ fn render_high_low_labels(
     }
 }
 
-/// Range bars at their element slots, each over its whole range from its low to its high.
+/// Range bars at their element slots, each over its whole range from its low to its high:
+/// filled, or as thin OHLC bars under `style`, and outlined where `phantoms` marks a bar that
+/// closed without a trade while `style` draws them so.
 pub(super) fn render_range_bars(
-    painter: &Painter,
+    context: &RenderContext,
     range_bars: &[Bar],
+    phantoms: &[bool],
+    style: &RangeStyle,
     bar_width: f32,
+    wick_width: f32,
     price_scale: &PriceMap,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    colors: &StyleColors,
     x_of: impl Fn(usize) -> f32,
 ) {
+    let thin = BarsStyle {
+        open_visible: true,
+        thin_bars: true,
+        color_by_previous_close: false,
+    };
     for (i, range_bar) in range_bars.iter().enumerate() {
         let x = x_of(i);
-        let color = if range_bar.close > range_bar.open {
-            bullish_color
-        } else {
-            bearish_color
-        };
+        let rising = range_bar.close > range_bar.open;
+        let color = colors.bar_color(rising);
         let rect = calc_brick_rect(x, range_bar.low, range_bar.high, price_scale, bar_width);
-        painter.add(Shape::rect_filled(rect, 0.0, color));
+        if style.phantom_bars && phantoms.get(i) == Some(&true) {
+            let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, color);
+            let outline = Shape::rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+            context.painter.add(outline);
+        } else if style.thin_bars {
+            let params = BarRenderParams::new(x, bar_width, wick_width);
+            render_ohlc_bar(
+                context,
+                range_bar,
+                rising,
+                price_scale,
+                colors,
+                &params,
+                &thin,
+            );
+        } else {
+            context.painter.add(Shape::rect_filled(rect, 0.0, color));
+        }
     }
 }

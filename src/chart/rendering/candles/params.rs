@@ -30,6 +30,10 @@ pub struct CandleDataContext<'a> {
     /// Whether `visible_data` already holds the elements of a price-based chart type, one bar per
     /// element, as the chart builds them. Range bars then draw from it instead of from `full_data`.
     pub shows_elements: bool,
+    /// Range bars: whether each bar of `visible_data` closed without a trade in its range, for
+    /// a chart that draws such bars apart. Empty, or shorter than `visible_data`, draws the bars
+    /// without an entry as bars that traded.
+    pub range_phantoms: &'a [bool],
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
     /// Interval and calendar of the bars, whose sessions the TPO profiles follow.

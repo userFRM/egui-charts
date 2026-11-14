@@ -295,6 +295,8 @@ pub(super) fn range_bars(
 pub(crate) struct ExecutionRanges {
     key: Option<(f64, u64, Option<chrono::DateTime<chrono::Utc>>)>,
     built: Option<(Arc<[Bar]>, bool)>,
+    /// Whether each bar of `built` closed without a trade in its range.
+    phantoms: Vec<bool>,
 }
 
 impl ExecutionRanges {
@@ -321,11 +323,9 @@ impl ExecutionRanges {
             for trade in trades.filter(|t| cutoff.is_none_or(|c| t.ts < c)) {
                 builder.push_tick(trade);
             }
-            let bars: Arc<[Bar]> = builder
-                .elements()
-                .iter()
-                .map(range_bar::RangeBar::to_bar)
-                .collect();
+            let elements = builder.elements();
+            let bars: Arc<[Bar]> = elements.iter().map(range_bar::RangeBar::to_bar).collect();
+            self.phantoms = elements.iter().map(|bar| bar.tick_cnt == 0).collect();
             self.built = (!bars.is_empty()).then(|| {
                 let trimmed = bars.len() >= range_bar::MAX_BARS;
                 (bars, trimmed)
@@ -339,6 +339,26 @@ impl ExecutionRanges {
     pub(crate) fn in_use(&self) -> bool {
         self.built.is_some()
     }
+}
+
+/// Whether each of the `len` range bars the chart shows from `start` on closed without a trade
+/// in its range: those built from `executions` while it holds them, else those approximated from
+/// `full`, for which `params.range_size` must be valid.
+pub(crate) fn range_phantoms(
+    executions: &ExecutionRanges,
+    full: &[Bar],
+    revision: u64,
+    params: &ChartTypeParams,
+    start: usize,
+    len: usize,
+) -> Vec<bool> {
+    if executions.in_use() {
+        let phantoms = executions.phantoms.get(start..start + len);
+        return phantoms.unwrap_or_default().to_vec();
+    }
+    let built = range_bars(full, revision, params);
+    let shown = built.shown(start, len);
+    shown.iter().map(|bar| bar.tick_cnt == 0).collect()
 }
 
 /// The element containing a loaded time. Columns include quiet bars up to the next column's
@@ -745,6 +765,128 @@ mod tests {
             first.top(),
             first.bottom()
         );
+    }
+
+    /// The Range styles reach the painter. With a range of 2, the closes 100, 101 and
+    /// 99 complete a bar from 100 up to 101 and down to 99, which thin bars draw as a stroke from
+    /// 99 to 101 at the wick width with ticks at 100 and 99. With a range of 1, a bar that opens
+    /// at 103.5 after a close at 100 completes the bars 100 to 101, 101 to 102 and 102 to 103 in
+    /// one jump: only the first held a price, so phantom bars outline the second and third. A bar
+    /// that trades from 100 to 103.5 completes them along its path, and none is a gap.
+    #[test]
+    fn range_styles_reach_the_painter() {
+        use crate::model::BarData;
+        use crate::widget::{
+            Chart,
+            test_frames::{frame, shapes},
+        };
+        use egui::{Color32, Shape};
+        let paint = |kind: ChartType, params: ChartTypeParams, source: Vec<Bar>| {
+            let mut chart = Chart::new(BarData::from_bars(source));
+            chart.set_chart_type_params(params);
+            chart.set_chart_type(kind);
+            chart
+                .series_style_mut(crate::widget::SeriesId::MAIN)
+                .unwrap()
+                .price_line_visible = false;
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+            (painted, chart)
+        };
+
+        let mut params = ChartTypeParams {
+            range_size: 2.0,
+            ..Default::default()
+        };
+        params.styles.range.thin_bars = true;
+        let (painted, chart) = paint(
+            ChartType::Range,
+            params,
+            bars(0, &[100.0, 101.0, 99.0], None),
+        );
+        let map = chart.get_chart_mapping();
+        let (x, down) = (map.idx_to_x(0), chart.config().bearish_color);
+        // A slot holds what lies within half the spacing of its centre.
+        let half = (map.idx_to_x(1) - x) / 2.0;
+        let near = |px: f32| (px - x).abs() < half;
+        let wick = chart.config().wick_width;
+        let parts: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment {
+                    points: [a, b],
+                    stroke,
+                } if stroke.color == down && near(a.x) && near(b.x) => {
+                    let part = if a.x == b.x {
+                        "stroke"
+                    } else if a.x < x && b.x == x {
+                        "open tick"
+                    } else if a.x == x && b.x > x {
+                        "close tick"
+                    } else {
+                        "other"
+                    };
+                    Some((part, a.y, b.y, stroke.width == wick))
+                }
+                _ => None,
+            })
+            .collect();
+        let y = |price| map.price_to_y(price);
+        assert_eq!(
+            parts,
+            [
+                ("stroke", y(101.0), y(99.0), true),
+                ("open tick", y(100.0), y(100.0), true),
+                ("close tick", y(99.0), y(99.0), true),
+            ],
+            "thin range bar"
+        );
+        assert!(
+            !painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Rect(r) if r.fill == down)),
+            "a thin range bar has no block"
+        );
+
+        // The same three bars, completed by one bar that trades from 100 up to 103.5.
+        let mut traded = bars(0, &[100.0, 103.5], None);
+        (traded[1].open, traded[1].low) = (100.0, 100.0);
+        for (source, phantom_bars, gap) in [
+            (bars(0, &[100.0, 103.5], None), false, "filled"),
+            (bars(0, &[100.0, 103.5], None), true, "outlined"),
+            (traded, true, "filled"),
+        ] {
+            let mut params = ChartTypeParams::default();
+            params.styles.range.phantom_bars = phantom_bars;
+            let (painted, chart) = paint(ChartType::Range, params, source);
+            let map = chart.get_chart_mapping();
+            let up = chart.config().bullish_color;
+            let drawn: Vec<_> = (0..4)
+                .map(|i| {
+                    let x = map.idx_to_x(i);
+                    painted.iter().find_map(|shape| match shape {
+                        Shape::Rect(r) if (r.rect.center().x - x).abs() < 0.5 => {
+                            Some(if r.fill == up {
+                                "filled"
+                            } else if r.fill == Color32::TRANSPARENT && r.stroke.color == up {
+                                "outlined"
+                            } else {
+                                "other"
+                            })
+                        }
+                        _ => None,
+                    })
+                })
+                .collect();
+            let filled = Some("filled");
+            assert_eq!(
+                drawn,
+                [filled, Some(gap), Some(gap), filled],
+                "phantom bars {phantom_bars}, gaps {gap}"
+            );
+        }
     }
 
     #[test]

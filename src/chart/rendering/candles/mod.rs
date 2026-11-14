@@ -358,12 +358,14 @@ pub fn render_chart_type(
                 built.shown_bars(ctx.start_idx, ctx.visible_data.len())
             };
             range::render_range_bars(
-                painter,
+                ctx.price_ctx,
                 shown,
+                ctx.range_phantoms,
+                &params.type_params.styles.range,
                 params.bar_width(),
+                params.wick_width(),
                 ctx.price_scale,
-                params.bullish_color(),
-                params.bearish_color(),
+                ctx.colors,
                 x_of,
             );
         }
