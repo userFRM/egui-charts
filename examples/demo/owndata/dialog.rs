@@ -496,49 +496,45 @@ impl<'a> Fields<'a> {
     }
 
     /// Draws one row of a slot grid per slot, read on `record`.
-    fn rows(
-        &mut self,
-        ui: &mut egui::Ui,
-        record: Option<&Value>,
-        zone: &TimezoneId,
-        active: &mut Slot,
-    ) {
+    fn rows(&mut self, ui: &mut egui::Ui, record: Option<&Value>, active: &mut Slot) {
         for slot in self.slots() {
             let path = self.path(slot).unwrap_or_default();
             slot_cells(ui, slot, active, &path, false, record);
-            let mut clear = false;
-            ui.horizontal(|ui| {
-                clear = clear_button(ui, !path.is_empty());
-                match slot {
-                    Slot::Time if !path.is_empty() => {
-                        let mut form = TimeForm::of(self.time);
-                        let label = |form: &TimeForm| form.label().to_owned();
-                        if ui.combo_select("time_form", &mut form, TimeForm::ALL, label) {
-                            form.apply(self.time);
-                        }
-                        if let Some(record) = record {
-                            ui.weak(stamp_text(record, self.time, zone));
-                        }
-                    }
-                    Slot::Clock => {
-                        if let TimeSpec::Wall {
-                            clock: Some(clock), ..
-                        } = &mut *self.time
-                        {
-                            let units =
-                                [ClockUnit::Milliseconds, ClockUnit::Seconds, ClockUnit::Text];
-                            let label = |unit: &ClockUnit| clock_label(unit).to_owned();
-                            ui.combo_select("clock_unit", &mut clock.unit, units, label);
-                        }
-                    }
-                    _ => {}
-                }
-            });
-            if clear {
+            if clear_button(ui, !path.is_empty()) {
                 self.clear(slot);
             }
             ui.end_row();
         }
+    }
+
+    /// The form of the mapped time and of its time of day, and the time `record` holds. They
+    /// follow the slot grid, whose rows leave no room for them on a phone.
+    fn forms(&mut self, ui: &mut egui::Ui, record: Option<&Value>, zone: &TimezoneId) {
+        let timed = self.path(Slot::Time).is_some_and(|path| !path.is_empty());
+        let clocked = matches!(self.time, TimeSpec::Wall { clock: Some(_), .. });
+        if !timed && !clocked {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            if timed {
+                let mut form = TimeForm::of(self.time);
+                let label = |form: &TimeForm| form.label().to_owned();
+                if ui.combo_select("time_form", &mut form, TimeForm::ALL, label) {
+                    form.apply(self.time);
+                }
+            }
+            if let TimeSpec::Wall {
+                clock: Some(clock), ..
+            } = &mut *self.time
+            {
+                let units = [ClockUnit::Milliseconds, ClockUnit::Seconds, ClockUnit::Text];
+                let label = |unit: &ClockUnit| clock_label(unit).to_owned();
+                ui.combo_select("clock_unit", &mut clock.unit, units, label);
+            }
+            if timed && let Some(record) = record {
+                ui.weak(stamp_text(record, self.time, zone));
+            }
+        });
     }
 }
 
@@ -1570,7 +1566,8 @@ impl DataSourceDialog {
                 true,
                 test.sample.as_ref(),
             );
-            ui.horizontal(|ui| {
+            // The last cell is as wide as the step leaves it, and wraps on a phone.
+            ui.horizontal_wrapped(|ui| {
                 if clear_button(ui, !history.rows.path.is_empty()) {
                     clear = Some(Slot::Rows);
                 }
@@ -1592,8 +1589,9 @@ impl DataSourceDialog {
                 }
                 ui.end_row();
             }
-            Fields::bar(&mut history.bar).rows(ui, row, &zone, &mut test.slot);
+            Fields::bar(&mut history.bar).rows(ui, row, &mut test.slot);
         });
+        Fields::bar(&mut history.bar).forms(ui, row, &zone);
         match clear {
             Some(Slot::Rows) => history.rows.path.clear(),
             Some(_) => history.rows.layout = Layout::Arrays { header: None },
@@ -2100,8 +2098,9 @@ impl DataSourceDialog {
         if let Some(route) = stream.routes.get_mut(live.route) {
             if let Some(mut fields) = Fields::route(&mut route.kind) {
                 FormGrid::new("route_slots").columns(4).show(ui, |ui| {
-                    fields.rows(ui, record, &zone, &mut live.slot);
+                    fields.rows(ui, record, &mut live.slot);
                 });
+                fields.forms(ui, record, &zone);
             }
             if let Some(record) = record {
                 let clock = BarClock::new(timeframe).with_timezone(zone.clone());
@@ -2730,7 +2729,8 @@ fn condition_rows(ui: &mut egui::Ui, rules: &mut Vec<(String, ConditionRule)>, t
     let mut removed = None;
     for (index, (value, rule)) in rules.iter_mut().enumerate() {
         ui.push_id(("condition", index), |ui| {
-            ui.horizontal(|ui| {
+            // On a phone the rules go on below the value.
+            ui.horizontal_wrapped(|ui| {
                 ui.monospace(value.as_str());
                 let choices = [
                     ConditionRule::PriceAndVolume,
@@ -3284,16 +3284,30 @@ mod tests {
         profile.keys = vec!["key".to_owned()];
         let history = profile.history.as_mut().unwrap();
         history.headers = vec![("Authorization".to_owned(), "Bearer {key}".to_owned())];
-        let route = |value: &str| Route {
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let trades = TradeFields {
+            time: TimeSpec::Instant {
+                field: key("t"),
+                unit: TimeUnit::Milliseconds,
+            },
+            price: key("p"),
+            condition: key("c"),
+            conditions: vec![("@".to_owned(), ConditionRule::PriceAndVolume)],
+            ..TradeFields::default()
+        };
+        let route = |value: &str, kind| Route {
             value: value.to_owned(),
-            kind: RouteKind::Ignore,
+            kind,
         };
         profile.stream = Some(Stream {
             url: "ws://127.0.0.1:9/stream".to_owned(),
             protocols: vec!["json".to_owned()],
             connect: vec![r#"{"action":"subscribe","symbol":"{symbol}"}"#.to_owned()],
             keep_alive: r#"{"action":"ping"}"#.to_owned(),
-            routes: vec![route("status"), route("bar")],
+            routes: vec![
+                route("trade", RouteKind::Trades(trades)),
+                route("status", RouteKind::Ignore),
+            ],
             ..Stream::default()
         });
         let saved = Saved {
@@ -3311,7 +3325,7 @@ mod tests {
         let steps = [
             (Step::Source, "Profile", "New, Import, Export, Delete, Remove, Add interval, Add key"),
             (Step::History, "Use REST history", "Remove, Add header, Test"),
-            (Step::Live, "Use a WebSocket stream", "Remove, Add message, Ignore, Add route, Test"),
+            (Step::Live, "Use a WebSocket stream", "Remove, Ignore, Volume only, Add route, Test"),
         ];
         let checked = [
             accesskit::Role::Label,
