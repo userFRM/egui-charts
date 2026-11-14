@@ -867,14 +867,7 @@ impl Drawing {
                     ],
                 )
             }
-            (
-                T::Pitchfork
-                | T::SchiffPitchfork
-                | T::ModifiedSchiffPitchfork
-                | T::InsidePitchfork
-                | T::Pitchfan,
-                _,
-            ) => self.fork_alert_levels(bar, scale),
+            (tool, _) if super::alert_levels::is_fork(tool) => self.fork_alert_levels(bar, scale),
             (T::Rect, [a, b, ..]) => named(
                 &["Top", "Bottom"],
                 &[a.price.max(b.price), a.price.min(b.price)],

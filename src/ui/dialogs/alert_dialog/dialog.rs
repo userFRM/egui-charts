@@ -12,7 +12,7 @@ use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertRule,
-    AlertSource, NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
+    AlertSource, AlertSourceName, NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
 };
 use crate::services::{Storage, StoreKind};
 use crate::ui_kit::FormGrid;
@@ -28,10 +28,10 @@ pub struct AlertDialog {
     pub is_open: bool,
     /// Staged edits. Cancel never submits them.
     pub alert: Alert,
-    /// Host-provided study outputs and drawings, as stable identifiers and display names. Presets
-    /// compare the names to tell a study they store from another chart's study with the same
-    /// identifier.
-    pub sources: Vec<(AlertSource, String)>,
+    /// Host-provided study outputs and drawings, as stable identifiers and names, which are
+    /// translated when shown. Presets compare the names' English text to tell a study they
+    /// store from another chart's study with the same identifier.
+    pub sources: Vec<(AlertSource, AlertSourceName)>,
     /// Host-provided watchlist identifiers and display names.
     pub watchlists: Vec<(String, String)>,
     /// The zone the expiry date and time are entered in, UTC by default. Set it before
@@ -1043,19 +1043,23 @@ fn rule_preview(
     source: &AlertSource,
     condition: &AlertCondition,
     interval: Timeframe,
-    sources: &[(AlertSource, String)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) -> String {
     let name = |source: &AlertSource| {
-        let label = sources
+        sources
             .iter()
             .find(|(value, _)| value == source)
-            .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| match source {
-                AlertSource::Price => "Price".into(),
-                AlertSource::Volume => "Volume".into(),
-                _ => format!("{source:?}"),
-            });
-        l10n::text(ctx, label)
+            .map(|(_, label)| label.text(ctx))
+            .unwrap_or_else(|| {
+                l10n::text(
+                    ctx,
+                    match source {
+                        AlertSource::Price => "Price".into(),
+                        AlertSource::Volume => "Volume".into(),
+                        _ => format!("{source:?}"),
+                    },
+                )
+            })
     };
     let others: Vec<_> = condition
         .partners()
@@ -1079,24 +1083,26 @@ fn source_picker(
     ui: &mut Ui,
     id: &str,
     source: &mut AlertSource,
-    sources: &[(AlertSource, String)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) {
     let label = sources
         .iter()
         .find(|(value, _)| value == source)
-        .map(|(_, name)| name.clone())
-        .unwrap_or_else(|| format!("{source:?}"));
+        .map_or_else(
+            || l10n::text(ui.ctx(), format!("{source:?}")),
+            |(_, name)| name.text(ui.ctx()),
+        );
     egui::ComboBox::from_id_salt(id)
         .width(ui.available_width().min(200.0))
         .truncate()
-        .selected_text(l10n::text(ui.ctx(), label))
+        .selected_text(label)
         .show_ui(ui, |ui| {
             if !id.starts_with("boundary_") {
                 ui.selectable_value(source, AlertSource::Price, l10n::text(ui.ctx(), "Price"));
                 ui.selectable_value(source, AlertSource::Volume, l10n::text(ui.ctx(), "Volume"));
             }
             for (value, name) in sources {
-                ui.selectable_value(source, value.clone(), l10n::text(ui.ctx(), name));
+                ui.selectable_value(source, value.clone(), name.text(ui.ctx()));
             }
         })
         .response
@@ -1122,7 +1128,7 @@ fn drawing_id(source: &AlertSource) -> Option<&str> {
 fn drawing_channel(
     source: &AlertSource,
     condition: &AlertCondition,
-    sources: &[(AlertSource, String)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) -> Option<AlertCondition> {
     if let AlertCondition::Channel { .. } = condition {
         return Some(condition.clone());
@@ -1158,7 +1164,7 @@ pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
     condition: &mut AlertCondition,
-    sources: &[(AlertSource, String)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) {
     ui.add_enabled_ui(
         !matches!(
@@ -1580,6 +1586,71 @@ mod tests {
         }
     }
 
+    /// Names the chart builds keep their parts through storage, so the source list shows the
+    /// study output, drawing tool and level translated around the study name, drawing number and
+    /// level value, and an alert saved with finished names restores its source and takes the
+    /// chart's parts when edited.
+    #[test]
+    fn chart_built_source_names_reach_the_translator_and_saved_names_restore() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::model::{AlertInputs, Bar, BarData};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let bars = (0..4)
+            .map(|i| {
+                let time = DateTime::from_timestamp(60 * i, 0).unwrap();
+                Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+            })
+            .collect();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+        let mut fork = Drawing::new(7, DrawingToolType::Pitchfork);
+        fork.chart_points = vec![
+            ChartPoint::new(0.0, 100.0),
+            ChartPoint::new(1.0, 200.0),
+            ChartPoint::new(2.0, 50.0),
+        ];
+        // Saved without a config: levels 0, 0.5, 1 and 1.5, all shown.
+        fork.pitchfork = None;
+        fork.completed = true;
+        let line = fork.alert_source(2);
+        chart.drawings_mut().drawings.push(fork);
+
+        let stored = serde_json::to_string(&chart.alert_inputs()).unwrap();
+        let inputs: AlertInputs = serde_json::from_str(&stored).unwrap();
+        let mut fresh = AlertDialog::new();
+        fresh.open("SAMPLE".into(), 100.0);
+        fresh.sources = inputs.sources;
+
+        let mut saved = Alert::new("SAMPLE", AlertCondition::Crossing(100.0));
+        saved.source = line.clone();
+        saved.inputs = Some(Box::new(chart.alert_inputs()));
+        let mut stored = serde_json::to_value(&saved).unwrap();
+        // Alerts saved before names kept their parts hold the finished English text.
+        stored["inputs"]["sources"] =
+            serde_json::json!([[{"Drawing": "7#2"}, "Pitchfork 7: 0.5: first line"]]);
+        let mut saved: Alert = serde_json::from_value(stored).unwrap();
+        chart.prepare_alert(&mut saved);
+        let mut restored = AlertDialog::new();
+        restored.edit(saved);
+        assert_eq!(restored.alert.source, line);
+
+        // Words drop out under `mark_keys` and values stay: MACD's Signal and Histogram, the
+        // median, and the first and second lines at 0.5, of which the restored alert saved one.
+        for dialog in [fresh, restored] {
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(600.0, 900.0))
+                .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+            h.run();
+            h.get_by_label("Source").click();
+            h.run();
+            crate::localization::mark_keys(&h.ctx);
+            h.run();
+            for (label, count) in [("~MACD~~~", 2), ("~~~7~~~", 1), ("~~~7~0.5~", 2)] {
+                assert_eq!(h.query_all_by_label(label).count(), count, "{label}");
+            }
+        }
+    }
+
     #[test]
     fn form_controls_fill_the_dialog_width_for_each_source() {
         for (source, condition) in [
@@ -1647,7 +1718,7 @@ mod tests {
             dialog.alert.frequency = AlertFrequency::OncePerBarClose;
             dialog.sources.push((
                 AlertSource::Drawing("7".into()),
-                "A long drawing name".repeat(4),
+                "A long drawing name".repeat(4).into(),
             ));
             dialog.alert.additional_conditions.push(AlertRule {
                 source: AlertSource::Volume,
@@ -1665,7 +1736,7 @@ mod tests {
             });
             dialog.sources.push((
                 AlertSource::Drawing("7#1".into()),
-                "A long second boundary name".repeat(4),
+                "A long second boundary name".repeat(4).into(),
             ));
             dialog.alert.additional_conditions.push(AlertRule {
                 source: AlertSource::Price,
@@ -2074,7 +2145,7 @@ mod tests {
         assert!(failing.presets.is_empty());
         assert!(failing.error.is_some());
 
-        *store.0.lock().unwrap() = Some(r#"{"version":3,"presets":{}}"#.into());
+        *store.0.lock().unwrap() = Some(r#"{"version":4,"presets":{}}"#.into());
         restored.set_storage(store);
         restored.poll(&ctx);
         assert!(!restored.loaded);
