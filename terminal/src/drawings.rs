@@ -900,7 +900,7 @@ mod tests {
             assert_eq!(drawing.border_color, Some(grey), "{tool:?}");
         }
         // Control: a price label's border starts in the label's own colour, so a pick
-        // recolours it with the line — both when never chosen and from an older save.
+        // recolours it with the line, both when never chosen and from an older save.
         for saved in [false, true] {
             let manager = terminal.chart_mut().drawings_mut();
             manager.tool_defaults.clear();
