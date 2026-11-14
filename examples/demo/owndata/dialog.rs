@@ -3417,7 +3417,8 @@ mod tests {
         let steps = [
             (Step::Source, "Profile", "New, Import, Export, Delete, Remove, Add interval, Add key"),
             (Step::History, "Use REST history", "Remove, Add header, Test"),
-            (Step::Live, "Use a WebSocket stream", "Remove, Ignore, Volume only, Side, Add route, Test"),
+            (Step::Live, "Use a WebSocket stream",
+             "Remove, Ignore, Volume only, Side, Add route, Test"),
         ];
         let checked = [
             accesskit::Role::Label,
