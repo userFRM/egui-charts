@@ -104,7 +104,7 @@ pub fn render_chart_type(
         None => params.type_params.bars_needed(chart_type).map(|count| {
             let loaded = ctx.full_data.iter().filter(|bar| !bar.is_whitespace());
             match count {
-                _ if loaded.count() >= count => text(
+                _ if loaded.take(count).count() >= count => text(
                     egui_ctx,
                     "The size cannot be calculated from the loaded bars",
                 ),
