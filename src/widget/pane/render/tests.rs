@@ -1258,20 +1258,23 @@ fn merged_pane_legends_reserve_their_wrapped_height() {
     }
 }
 
+/// The plot of a study pane pans and zooms the shared time scale beside the price pane as it
+/// does alone, and leaves the prices of the price pane where they are.
 #[test]
 fn collapsed_price_pane_keeps_pointer_navigation_in_the_visible_pane() {
     use crate::widget::PaneId;
     let mut results = Vec::new();
-    for layout in ["maximized", "collapsed"] {
+    for layout in ["ordinary", "maximized", "collapsed"] {
         let ctx = Context::default();
         let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
         let study = chart.add_indicator(Box::new(RSI::new(14)));
         let study_pane = chart.series_pane(study).unwrap();
         crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
-        // Either way the study fills the chart and the price frame has no height.
+        // Maximized or with the price pane collapsed, the study fills the chart and the price
+        // frame has no height.
         if layout == "maximized" {
             chart.pane_layout.maximized = Some(study_pane);
-        } else {
+        } else if layout == "collapsed" {
             for pane in &mut chart.pane_layout.panes {
                 if pane.id == PaneId::MAIN {
                     pane.collapsed = Some(true);
@@ -1283,10 +1286,13 @@ fn collapsed_price_pane_keeps_pointer_navigation_in_the_visible_pane() {
         let pos = chart.get_rendered_indicator_panes()[0].chart_rect.center();
         assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
         let before = chart.state.time_scale().right_offset_precise();
-        drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 0.0));
+        chart.state.price_scale_mut().set_range(90.0, 120.0);
+        drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 20.0));
         let moved = chart.state.time_scale().right_offset_precise() - before;
         // Forty pixels at six pixels per bar move history by 6 2/3 bars.
         assert!((moved + 20.0 / 3.0).abs() < 1e-5, "{layout}: moved {moved}");
+        let prices = chart.state.price_scale().range();
+        assert_eq!((prices.min, prices.max), (90.0, 120.0), "{layout}");
         let time = ctx.input(|input| input.time) + 1.0;
         crate::widget::test_frames::frame(
             &ctx,
@@ -1309,7 +1315,11 @@ fn collapsed_price_pane_keeps_pointer_navigation_in_the_visible_pane() {
             crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
         }
         let spacing = chart.state.time_scale().bar_spacing();
-        assert!(spacing > 6.0, "{layout}: spacing {spacing}");
+        // Twenty wheel points scale the six pixels by e^0.02 = 1.020201, to 6.12 pixels.
+        assert!(
+            (spacing - 6.0 * 1.020_201).abs() < 1e-5,
+            "{layout}: spacing {spacing}"
+        );
         let offset = chart.state.time_scale().right_offset_precise();
         results.push((moved, spacing));
         if layout == "collapsed" {
@@ -1322,6 +1332,7 @@ fn collapsed_price_pane_keeps_pointer_navigation_in_the_visible_pane() {
         }
     }
     assert_eq!(results[0], results[1]);
+    assert_eq!(results[1], results[2]);
 }
 
 #[test]

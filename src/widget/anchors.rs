@@ -495,7 +495,8 @@ mod tests {
                     &coords,
                     &chart.build_time_formatter(),
                     &chart.chart_options.time_scale,
-                    chart.calendar_timezone().as_ref(),
+                    Chart::calendar_zone(chart.label_timezone(|| chart.time_label_seconds()))
+                        .as_ref(),
                     |index| chart.index_to_time(index),
                 );
                 // Key indices are shifted by the slots the keys reach before the first bar.

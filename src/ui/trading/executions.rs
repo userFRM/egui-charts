@@ -195,7 +195,7 @@ pub(super) fn show(
             )
             // Written only while it shows: a mark can hold every fill of the list.
             .on_hover_ui(|ui| {
-                let time = chart.build_time_formatter();
+                let time = chart.time_formatter_in(chart.display_timezone());
                 let decimals = numbers.decimals;
                 let mut lines: Vec<_> = run
                     .iter()

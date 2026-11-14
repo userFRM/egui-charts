@@ -529,10 +529,19 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
 #[test]
 fn long_press_opens_the_axis_menus() {
     use egui::{Shape, TouchDeviceId, TouchId, TouchPhase};
-    for axis in ["price", "pane", "time"] {
+    // The main price axis, a study pane's axis, an added series' axis and the time axis.
+    let key = crate::model::SeriesScale::Separate(1);
+    for axis in ["price", "pane", "series", "time"] {
         let ctx = Context::default();
         let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
         let study = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        if axis == "series" {
+            let series = chart.add_series(crate::widget::SeriesOptions {
+                scale: key,
+                ..Default::default()
+            });
+            chart.set_data(series, chart.state().data().bars.clone());
+        }
         let mut menus = ChartMenus::default();
         let mut now = 0.0;
         let mut frame = |chart: &mut Chart, menus: &mut ChartMenus, wait: f64, events| {
@@ -568,6 +577,10 @@ fn long_press_opens_the_axis_menus() {
                 Pos2::new(plot.right() + 25.0, panel.center().y),
                 Vec2::new(0.0, 40.0),
             ),
+            "series" => (
+                Pos2::new(plot.left() - 10.0, plot.center().y),
+                Vec2::new(0.0, 40.0),
+            ),
             _ => (
                 Pos2::new(plot.center().x, panel.bottom() + 10.0),
                 Vec2::new(40.0, 0.0),
@@ -577,6 +590,11 @@ fn long_press_opens_the_axis_menus() {
             "price" => chart.state().price_scale().is_manual(),
             "pane" => {
                 let axis = crate::widget::PaneScale::Named(crate::model::SeriesScale::Right);
+                chart.pane_scale(pane, axis).unwrap().is_manual()
+            }
+            "series" => {
+                let axis = crate::widget::PaneScale::Named(key);
+                let pane = crate::widget::PaneId::MAIN;
                 chart.pane_scale(pane, axis).unwrap().is_manual()
             }
             _ => chart.get_time_scale_state().0 != chart.chart_options().time_scale.bar_spacing,

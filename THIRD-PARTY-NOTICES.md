@@ -106,4 +106,4 @@ The guide examples under `examples/docs` embed Roboto and the same default fonts
 
 ## Root certificates in the native demo
 
-The native demo's HTTP image loader includes Mozilla's root certificates through `webpki-roots` 1.0.11. This certificate data is licensed under the Community Data License Agreement - Permissive 2.0; the full text is in [`examples/demo/LICENSE-webpki-roots.txt`](examples/demo/LICENSE-webpki-roots.txt).
+The native demo's own-data connections (the REST history and the WebSocket stream of a data source the user configures) include Mozilla's root certificates through `webpki-roots` 1.0.12. This certificate data is licensed under the Community Data License Agreement - Permissive 2.0; the full text is in [`examples/demo/LICENSE-webpki-roots.txt`](examples/demo/LICENSE-webpki-roots.txt).
