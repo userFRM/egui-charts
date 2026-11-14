@@ -507,8 +507,8 @@ impl Chart {
         self.replace_chart_type_params(params, pending);
     }
 
-    /// Sets `params` as the chart settings apply them: a size whose method is unchanged keeps its
-    /// resolved value, or keeps waiting for history, and only a changed method resolves again.
+    /// Sets `params` as settings apply them: a size whose method is unchanged keeps its resolved
+    /// value, or keeps waiting for history, and only a changed method resolves again.
     pub(crate) fn apply_chart_type_params(&mut self, mut params: ChartTypeParams) {
         let mut pending = self.pending_box_sizes;
         let methods = params.size_methods().into_iter();

@@ -772,8 +772,9 @@ impl Chart {
     /// candle colors in that chart type's style instead, a `None` border or wick meaning the
     /// body color, and these colors win over the same colors in `chart_type_params`. A new
     /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
-    /// are in the old mode's units. Call this when the user changes series appearance in a
-    /// settings dialog.
+    /// are in the old mode's units. An ATR or percentage size whose method is unchanged keeps
+    /// its resolved value. Call this when the user changes series appearance in a settings
+    /// dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         let mut params = settings.chart_type_params.clone();
         if let Some(
@@ -805,7 +806,7 @@ impl Chart {
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
-        self.set_chart_type_params(params);
+        self.apply_chart_type_params(params);
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();

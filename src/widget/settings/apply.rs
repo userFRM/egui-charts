@@ -672,7 +672,7 @@ impl ChartSettingsState {
             style.wick_up = colors.wick_up;
             style.wick_down = colors.wick_down;
             if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         } else if self.chart_type == crate::model::ChartType::HollowCandles {
             let mut params = chart.chart_type_params().clone();
@@ -688,7 +688,7 @@ impl ChartSettingsState {
             style.wick_up = colors.wick_up;
             style.wick_down = colors.wick_down;
             if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         } else if self.chart_type == crate::model::ChartType::VolumeCandles {
             let mut params = chart.chart_type_params().clone();
@@ -717,7 +717,7 @@ impl ChartSettingsState {
                 style.wick_down = colors.wick_down;
             }
             if chart.chart_type_params() != &params {
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         } else if self.chart_type != crate::model::ChartType::Bars {
             let candles = CandlesStyle {
@@ -725,11 +725,10 @@ impl ChartSettingsState {
                 wick_visible: self.candle_colors.show_wick,
                 color_by_previous_close: self.candle_colors.color_by_previous_close,
             };
-            // Other chart type parameters re-resolve their box sizes when set, so only a change is set.
             if chart.chart_type_params().styles.candles != candles {
                 let mut params = chart.chart_type_params().clone();
                 params.styles.candles = candles;
-                chart.set_chart_type_params(params);
+                chart.apply_chart_type_params(params);
             }
         }
         Ok(())
@@ -1302,6 +1301,13 @@ mod tests {
         });
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
         assert!(!chart.can_undo());
+        // An edited candle style and an unedited series settings apply keep it too.
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.candle_colors.show_wick = !settings.candle_colors.show_wick;
+        settings.apply_to_chart(&mut chart).unwrap();
+        let series = chart.series_settings();
+        chart.apply_series_settings(&series);
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings
             .chart_type_params
