@@ -1125,11 +1125,7 @@ impl DemoApp {
                 .set_control_visible(control, DemoSymbol::has_hours(spec.symbol));
         }
         self.timeframe_toolbar
-            .set_session(if matches!(spec.exchange, "Crypto" | "Forex") {
-                SessionType::Full24x7
-            } else {
-                SessionType::RTH
-            });
+            .set_session(opening_session(spec.symbol));
         self.sync_depth_history();
     }
 
@@ -1162,23 +1158,12 @@ impl DemoApp {
         if self.chart.replay_driver().is_some() {
             return;
         }
-        self.live.set_view(
+        load_view(
+            &mut self.chart,
+            &self.live,
             self.timeframe_toolbar.state.session_type,
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
-        let cents = self
-            .chart
-            .conversion()
-            .is_some_and(|c| c.starts_with("cents"));
-        self.live.set_price_unit(cents);
-        self.chart.set_conversion(replay::conversion(
-            cents,
-            self.timeframe_toolbar.state.adjust_for_dividends,
-        ));
-        self.chart.reload_feed();
-        self.chart.set_instrument(Some(self.live.instrument()));
-        self.chart
-            .set_extended_hours(self.timeframe_toolbar.state.session_type != SessionType::RTH);
         self.loading_bars = true;
         self.bars = self.live.snapshot(
             self.state.timeframe,
@@ -3531,10 +3516,25 @@ impl DemoApp {
                 {
                     Self::show_pointer_readout(ui, pointer);
                 }
+                let symbols: Vec<_> = self
+                    .extra_charts
+                    .iter()
+                    .map(|c| c.chart.symbol().to_owned())
+                    .collect();
                 let mut charts: Vec<_> =
                     self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
                 charts.insert(self.layout_slot, &mut self.chart);
                 self.layout.show(ui, &mut charts);
+                // A chart that follows a linked symbol change shows the bars it would show had
+                // the symbol been chosen on it.
+                for (extra, symbol) in self.extra_charts.iter_mut().zip(symbols) {
+                    if extra.chart.symbol() != symbol && extra.chart.replay_driver().is_none() {
+                        extra.live.set_symbol(extra.chart.symbol());
+                        let session = opening_session(extra.chart.symbol());
+                        let (_, adjusted) = extra.live.view(false);
+                        load_view(&mut extra.chart, &extra.live, session, adjusted);
+                    }
+                }
                 self.highlight_strategy_trade(ui);
                 let mapping = self.chart.get_chart_mapping();
                 if self.settings_state.alerts.show_alerts && self.own_data.is_none() {
@@ -4433,6 +4433,28 @@ fn size_by_atr(chart: &mut Chart) {
     params.range_size_method = half_atr;
     params.pnf_size_method = half_atr;
     chart.set_chart_type_params(params);
+}
+
+/// The session a symbol opens in: around the clock where its market never closes, otherwise
+/// the regular session.
+fn opening_session(symbol: &str) -> SessionType {
+    if matches!(DemoSymbol::find(symbol).exchange, "Crypto" | "Forex") {
+        SessionType::Full24x7
+    } else {
+        SessionType::RTH
+    }
+}
+
+/// Reloads `chart` from `live` in `session`, with prices adjusted for dividends or not, in the
+/// price unit the chart shows.
+fn load_view(chart: &mut Chart, live: &LiveFeed, session: SessionType, adjusted: bool) {
+    live.set_view(session, adjusted);
+    let cents = chart.conversion().is_some_and(|c| c.starts_with("cents"));
+    live.set_price_unit(cents);
+    chart.set_conversion(replay::conversion(cents, adjusted));
+    chart.reload_feed();
+    chart.set_instrument(Some(live.instrument()));
+    chart.set_extended_hours(session != SessionType::RTH);
 }
 
 /// The first instant of `date` on the chart's time axis. Where a clock change skips midnight
@@ -9615,6 +9637,35 @@ mod tests {
             brick > sample_brick && brick < close / 10.0,
             "{sample_brick} {brick} {close}"
         );
+    }
+
+    /// A chart that follows a linked symbol change loads the symbol in the session its market
+    /// trades, as the active chart does, and both keep the same bars at a linked interval.
+    #[test]
+    fn linked_symbol_change_loads_the_new_symbols_session() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.layout.sync.sync_symbol = true;
+        app.layout.sync.sync_timeframe = true;
+        app.top_toolbar.chart_grid_selector.sync = app.layout.sync.clone();
+        settle(&mut app, &ctx);
+        let span = |chart: &Chart| {
+            let bars = chart.bars(SeriesId::MAIN);
+            let times = bars.first().zip(bars.last()).map(|(a, b)| (a.time, b.time));
+            (chart.symbol().to_owned(), bars.len(), times)
+        };
+        for step in ["MSFT", "one hour"] {
+            if step == "MSFT" {
+                app.switch_symbol("MSFT");
+            } else {
+                app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Hour1));
+            }
+            settle(&mut app, &ctx);
+            assert_eq!(span(&app.extra_charts[0].chart), span(&app.chart), "{step}");
+        }
     }
 
     /// A new session shows the navigation row while the pointer is over the main pane only.
