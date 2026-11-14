@@ -18,12 +18,14 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             ui.add_space(0.0);
             ui.vertical(|ui| {
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.show_price_targets,
-                    "Analyst price targets",
-                    theme.ui.text,
-                );
+                if self.price_targets_offered {
+                    styled_checkbox(
+                        ui,
+                        &mut self.settings.show_price_targets,
+                        "Analyst price targets",
+                        theme.ui.text,
+                    );
+                }
                 let kind = self.settings.chart_type;
                 if kind.is_time_independent()
                     || !kind.uses_ohlc()
