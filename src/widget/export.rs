@@ -63,6 +63,7 @@ impl Default for ImageExportOptions {
 /// bind any user textures referenced by their image sources whose pixels were not supplied in
 /// [`ImageExportOptions::textures`] before drawing.
 #[must_use = "Render the frame and apply its texture deltas, or clear them before dropping"]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct ChartImage {
     /// Exact output dimensions in pixels.

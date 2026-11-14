@@ -202,8 +202,9 @@ impl Chart {
     /// frame. Updates that leave the close unchanged, new bars, whitespace fills and history
     /// mark nothing. `None` removes the markers.
     ///
-    /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
-    pub fn set_change_markers(&mut self, series: SeriesId, options: Option<ChangeMarkers>) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_change_markers(&mut self, series: SeriesId, options: Option<ChangeMarkers>) -> bool {
         let marks = options.map(|options| ChangeMarks {
             options,
             marks: RefCell::default(),
@@ -214,7 +215,10 @@ impl Chart {
             && super::series::holds_bars(series, "set_change_markers")
         {
             self.change_marks = marks;
+        } else {
+            return false;
         }
+        true
     }
 }
 
@@ -633,7 +637,9 @@ mod tests {
                             }
                         }
                     }
-                    "between frames" => chart.update(id, fall()),
+                    "between frames" => {
+                        chart.update(id, fall());
+                    }
                     _ => ctx
                         .run_ui(screen(1.0), |ui| {
                             egui::CentralPanel::default().show(ui, |ui| {

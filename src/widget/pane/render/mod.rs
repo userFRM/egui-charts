@@ -124,8 +124,7 @@ impl Chart {
             .enumerate()
             .filter(|(_, pane)| {
                 pane.id == main_pane
-                    || (pane.id == PaneId::MAIN || self.pane_shown(pane))
-                        && maximized.is_none_or(|id| id == pane.id)
+                    || self.pane_drawn(pane) && maximized.is_none_or(|id| id == pane.id)
             })
             .map(|(idx, pane)| (idx, pane.id, false))
             .collect();
@@ -387,7 +386,10 @@ impl Chart {
         // A host series whose legend asked to remove it, hide it, or open its settings.
         let mut pending_series_action = None;
         let mut pending_pane_collapse = None;
-        let mut pending_pane_maximize = None;
+        // A chart without another pane has nothing to hide behind the price pane.
+        let mut pending_pane_maximize = (self.price_plot_double_click
+            && (maximized.is_some() || panes.len() > 1))
+            .then_some(main_pane);
         let current_selection = self.selection.selected_id();
         // Draws the background, grid, axis and crosshair of a pane without a visible study.
         let frame = CustomIndicator::new("", |_| Vec::new())
@@ -1552,7 +1554,7 @@ impl Chart {
                 }
             }
             if !collapsed {
-                let mut table_rect = plot;
+                let mut table_rect = pane_plot;
                 for id in &members {
                     if let Some(idx) = self.study_ids.iter().position(|study| study == id) {
                         let study = &studies.indicators()[idx];
@@ -1640,7 +1642,10 @@ impl Chart {
         if main_collapsed {
             self.collapsed_price_header(ui, main_rect);
         }
-        self.pane_collapse_shortcut(ui);
+        // On a pane maximized when the frame began, the gesture was the plain double-click.
+        if maximized.is_none() {
+            self.pane_collapse_shortcut(ui);
+        }
 
         ui.advance_cursor_after_rect(available);
         ui.spacing_mut().item_spacing = host_spacing;

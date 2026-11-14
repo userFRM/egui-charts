@@ -20,6 +20,7 @@ use egui::{Color32, FontId, ImageSource, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
 
 /// A host-supplied status mark. Its text and colours carry no built-in market meaning.
+#[derive(Debug)]
 pub struct LegendStatus<'a> {
     /// Short text shown beside the instrument title.
     pub text: &'a str,
@@ -149,6 +150,16 @@ pub struct Legend<'a> {
     /// The colour of the chart background at a point under the legend, which the backdrops take.
     /// The chart sets it; a legend shown on its own has the theme's chart background.
     pub(crate) background: Option<&'a dyn Fn(Pos2) -> Color32>,
+}
+
+impl std::fmt::Debug for Legend<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Legend")
+            .field("symbol", &self.symbol)
+            .field("timeframe", &self.timeframe)
+            .field("bar", &self.bar)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> Legend<'a> {

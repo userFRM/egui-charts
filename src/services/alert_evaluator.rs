@@ -25,6 +25,15 @@ pub struct AlertEvaluator {
     storage: Option<Arc<dyn super::Storage>>,
 }
 
+impl std::fmt::Debug for AlertEvaluator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertEvaluator")
+            .field("runs", &self.runs.len())
+            .field("feeds", &self.feeds.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Subject {
     symbol: String,

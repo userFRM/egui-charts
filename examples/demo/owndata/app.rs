@@ -18,6 +18,8 @@ use super::profile::Profile;
 pub(crate) struct OwnData {
     /// The profile on the chart.
     pub(crate) profile: Profile,
+    /// The feed of the chart, read by time and sales.
+    pub(crate) feed: Arc<MappedFeed>,
     /// Whether the user paused the feed from the menu. The chart has no getter for it.
     pub(crate) paused: bool,
     /// Whether the synthetic feed was paused when own data was entered. Leaving restores it.
@@ -109,8 +111,9 @@ impl DemoApp {
         let timeframe = timeframe.unwrap_or(profile.intervals[0].chart);
         let intervals = profile.intervals.iter().map(|interval| interval.chart);
         let intervals = intervals.collect();
+        let feed = Arc::new(MappedFeed::new(profile.clone(), secrets));
         let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(Arc::new(MappedFeed::new(profile.clone(), secrets)))
+            .with_feed(feed.clone())
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(self.theme.clone())
@@ -130,6 +133,7 @@ impl DemoApp {
             // Dropping the previous chart ends its subscriptions, which closes its socket.
             self.chart = chart;
             own.profile = profile;
+            own.feed = feed;
             own.paused = false;
             own.reported = None;
             own.sizing = true;
@@ -140,6 +144,7 @@ impl DemoApp {
             let search = std::mem::replace(&mut self.symbol_search, SymbolSearchDialog::new());
             self.own_data = Some(OwnData {
                 profile,
+                feed,
                 paused: false,
                 synthetic_paused,
                 reported: None,

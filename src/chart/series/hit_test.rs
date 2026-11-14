@@ -13,6 +13,7 @@ use super::selection::{SeriesHitResult, SeriesId};
 pub const BODY_WIDTH_RATIO: f32 = 0.6;
 
 /// Configuration for series hit testing (tolerance, wick inclusion).
+#[derive(Debug)]
 pub struct HitTestConfig {
     /// Tolerance in pixels for line/wick hits
     pub line_tolerance: f32,

@@ -236,6 +236,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
         Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
         Box::new(TechnicalRatings::new(l(0), l(1), l(2))),
+        Box::new(TechnicalRatings::new(l(0), l(1), l(2)).with_basis(RatingBasis::Oscillators)),
         Box::new(Reversal::new(l(0))),
         Box::new(ElliottWave::new(l(0), l(1), l(2))),
         Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),

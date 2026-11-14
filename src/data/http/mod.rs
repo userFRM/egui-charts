@@ -47,6 +47,14 @@ pub struct HttpDatafeed {
     subscriptions: Mutex<HashMap<SubscriptionId, Arc<AtomicBool>>>,
 }
 
+impl std::fmt::Debug for HttpDatafeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpDatafeed")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
 impl HttpDatafeed {
     /// Connects to the endpoint root at `address`, which may include a path prefix.
     /// A trailing slash is optional. Browser servers must allow the application's origin.
