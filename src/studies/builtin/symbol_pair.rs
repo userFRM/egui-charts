@@ -26,6 +26,11 @@
 //!
 //! Hosts supply the histories of the symbols named by the inputs, as for any other study with
 //! [`Indicator::data_requests`]; no market data service is included.
+//!
+//! # Presentation
+//!
+//! The correlation opens as an area from zero with dashed guides at its bounds, 1 and -1, and at
+//! zero. The ratio and the spread open as lines without guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
@@ -316,6 +321,21 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
         vec![self.color]
     }
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            // The correlation is an area from zero; the ratio and the spread are lines.
+            plot_type: if CORRELATION {
+                crate::studies::PlotType::Area
+            } else {
+                crate::studies::PlotType::Line
+            },
+            visible: true,
+        }
+    }
+
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if let Some(color) = colors.first() {
             self.color = *color;
@@ -325,8 +345,13 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: CORRELATION.then_some((-1.1, 1.1)),
+            // The bounds of a correlation, then zero.
             levels: if CORRELATION {
-                vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")]
+                vec![
+                    (1.0, palette::GRAY, "Upper guide"),
+                    (-1.0, palette::GRAY, "Lower guide"),
+                    (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero"),
+                ]
             } else {
                 Vec::new()
             },
@@ -375,6 +400,25 @@ mod tests {
             .collect()
     }
 
+    /// Recalculates the study from bar `from`, with `other` as the host's series.
+    fn feed(study: &mut dyn Indicator, chart: &[Bar], other: &[Bar], from: usize) {
+        let sources: Vec<_> = study
+            .data_requests()
+            .into_iter()
+            .map(|request| StudyData {
+                request,
+                bars: other,
+                clock: BarClock::new(Timeframe::Day1),
+                instrument: None,
+                timeframe: Timeframe::Day1,
+            })
+            .collect();
+        study.update_data(chart, from, &sources);
+    }
+
+    /// The study's values over the whole history. The same history streamed must give the same
+    /// values: every bar but the last, then a tick that leaves another value in both series on
+    /// the last bar, then the bar corrected to its final values.
     fn run(
         name: &str,
         inputs: &[(&str, InputValue)],
@@ -391,21 +435,31 @@ mod tests {
             study.set_input(id, value.clone()).unwrap();
         }
         let (chart, other) = (bars(chart), bars(other));
-        let sources: Vec<_> = study
-            .data_requests()
-            .into_iter()
-            .map(|request| StudyData {
-                request,
-                bars: &other,
-                clock: BarClock::new(Timeframe::Day1),
-                instrument: None,
-                timeframe: Timeframe::Day1,
-            })
-            .collect();
-        study.update_data(&chart, 0, &sources);
-        (0..chart.len())
-            .map(|at| study.values().value(0, at))
-            .collect()
+        let last = chart.len() - 1;
+        let tick = |bars: &[Bar]| -> Vec<Bar> {
+            bars.iter()
+                .map(|bar| {
+                    if bar.time == chart[last].time {
+                        let value = -2.0 * bar.close - 1.0;
+                        Bar::new(bar.time, value, value, value, value, 1.0)
+                    } else {
+                        bar.clone()
+                    }
+                })
+                .collect()
+        };
+        let values = |study: &dyn Indicator| -> Vec<Option<f64>> {
+            (0..chart.len())
+                .map(|at| study.values().value(0, at))
+                .collect()
+        };
+        let mut streamed = study.clone_box();
+        feed(streamed.as_mut(), &chart[..last], &other, 0);
+        feed(streamed.as_mut(), &tick(&chart), &tick(&other), last);
+        feed(streamed.as_mut(), &chart, &other, last);
+        feed(study.as_mut(), &chart, &other, 0);
+        assert_eq!(values(streamed.as_ref()), values(study.as_ref()), "{name}");
+        values(study.as_ref())
     }
 
     fn near(actual: &[Option<f64>], expected: &[Option<f64>], case: &str) {

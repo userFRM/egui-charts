@@ -98,7 +98,7 @@ impl Chart {
             desired_visible_bars: None,
             last_visible_bars: 0,
             apply_visible_bars_once: false,
-            price_axis_drag: None,
+            scroll_start_spacing: None,
             pending_start_idx: None,
             pending_scroll_time: None,
             scroll_animation: None,
@@ -245,6 +245,7 @@ impl Chart {
             marks: Default::default(),
             marker_options: Default::default(),
             change_marks: None,
+            frame_clock: None,
             price_lines: Vec::new(),
             next_price_line: 0,
             #[cfg(feature = "ui")]
@@ -499,7 +500,34 @@ impl Chart {
     /// clears the zoom history and selection and keeps the right-edge item by time and rank.
     /// A volume candles style read from a document saved before that style existed takes the
     /// defaults; applying the document's chart settings builds it from their body colours.
-    pub fn set_chart_type_params(&mut self, mut params: ChartTypeParams) {
+    pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+        let pending = params
+            .size_methods()
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
+        self.replace_chart_type_params(params, pending);
+    }
+
+    /// Sets `params` as settings apply them: a size whose method is unchanged keeps its resolved
+    /// value, or keeps waiting for history, and only a changed method resolves again.
+    pub(crate) fn apply_chart_type_params(&mut self, mut params: ChartTypeParams) {
+        let mut pending = self.pending_box_sizes;
+        let methods = params.size_methods().into_iter();
+        let current = self.chart_type_params.size_methods();
+        let sizes = params.sizes_mut().into_iter();
+        let kept = self.chart_type_params.sizes_mut();
+        for (((method, current), (size, kept)), pending) in
+            methods.zip(current).zip(sizes.zip(kept)).zip(&mut pending)
+        {
+            if method != current {
+                *pending = method != crate::model::BoxSizeMethod::Fixed;
+            } else if method != crate::model::BoxSizeMethod::Fixed {
+                *size = *kept;
+            }
+        }
+        self.replace_chart_type_params(params, pending);
+    }
+
+    fn replace_chart_type_params(&mut self, mut params: ChartTypeParams, pending: [bool; 4]) {
         if params.styles.volume_candles.is_saved_without_style() {
             params.styles.volume_candles = Default::default();
         }
@@ -510,10 +538,7 @@ impl Chart {
             self.drawings.deselect();
         }
         self.chart_type_params = params;
-        self.pending_box_sizes = self
-            .chart_type_params
-            .size_methods()
-            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
+        self.pending_box_sizes = pending;
         self.chart_type_params
             .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
     }
@@ -529,7 +554,7 @@ impl Chart {
         if visible_bars == 0 {
             self.chart_options.time_scale.bar_spacing
         } else {
-            width / visible_bars as f32
+            (width - 1.0) / visible_bars as f32
         }
     }
 
@@ -1270,9 +1295,10 @@ mod tests {
         }
     }
 
-    /// Both entry points fit 50 slots once and leave the same view at the latest bar.
+    /// Both entry points fit 50 slots once and leave the same view at the latest bar, and the
+    /// time scale reads a set count back, also below one point per bar.
     #[test]
-    fn visible_bars_matches_the_setter_on_initial_frames() {
+    fn visible_bars_matches_the_setter_on_initial_frames_and_reads_back() {
         let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let data = BarData::from_bars(
             (0..600)
@@ -1310,7 +1336,7 @@ mod tests {
                 );
                 assert_eq!(
                     built.state.time_scale().bar_spacing(),
-                    built.get_rendered_price_rect().width() / 50.0
+                    (built.get_rendered_price_rect().width() - 1.0) / 50.0
                 );
                 assert_eq!(built.get_visible_bars(), set.get_visible_bars());
                 assert_eq!(built.get_visible_bars(), 49);
@@ -1321,6 +1347,15 @@ mod tests {
             built.state.time_scale_mut().set_bar_spacing(20.0);
             built.apply_timescale_config(width - 166.0);
             assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
+        }
+        // The time scale reads the count back, also at less than a point per bar.
+        for (width, count) in [(600.0, 1000), (801.0, 800), (740.0, 50)] {
+            let mut chart = Chart::new(data.clone());
+            chart.state.time_scale_mut().set_min_bar_spacing(0.01);
+            chart.set_visible_bars(count);
+            chart.apply_timescale_config(width);
+            let candles = chart.state.time_scale().visible_candles();
+            assert_eq!(candles, count, "width {width}");
         }
     }
 }

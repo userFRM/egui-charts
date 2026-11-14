@@ -317,7 +317,8 @@ impl ChartType {
     }
 
     /// Whether this chart type is time-independent, with one time-scale slot per element.
-    /// Studies, drawings and markers are kept but not drawn, hit or edited on these types.
+    /// Studies, drawings and markers are drawn at the element that contains their time, and
+    /// volume is hidden.
     pub fn is_time_independent(&self) -> bool {
         matches!(
             self,
@@ -536,11 +537,22 @@ pub enum FootprintStatistic {
     Trades,
     /// Total volume divided by execution count; undefined for an empty bar.
     AverageSize,
+    /// Sell volume divided by total volume, in percent.
+    BidPercent,
+    /// Buy volume divided by total volume, in percent.
+    AskPercent,
+    /// The bar's high minus its low.
+    Range,
+    /// The lowest price of the bar's highest-volume row, as the footprint groups its rows.
+    PointOfControl,
+    /// The change of total volume from the previous bar with executions, in percent; the first
+    /// such bar has none.
+    VolumeChange,
 }
 
 impl FootprintStatistic {
     /// All available rows in their display order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 16] = [
         Self::Volume,
         Self::Bid,
         Self::Ask,
@@ -552,6 +564,11 @@ impl FootprintStatistic {
         Self::AskBidRatio,
         Self::Trades,
         Self::AverageSize,
+        Self::BidPercent,
+        Self::AskPercent,
+        Self::Range,
+        Self::PointOfControl,
+        Self::VolumeChange,
     ];
 
     /// Shared table label.
@@ -568,6 +585,11 @@ impl FootprintStatistic {
             Self::AskBidRatio => "Ask/Bid",
             Self::Trades => "Trades",
             Self::AverageSize => "Average size",
+            Self::BidPercent => "Bid %",
+            Self::AskPercent => "Ask %",
+            Self::Range => "Range",
+            Self::PointOfControl => "POC",
+            Self::VolumeChange => "Vol change %",
         }
     }
 }
@@ -594,6 +616,9 @@ pub struct ChartTypeParams {
     pub footprint_color_by: FootprintColor,
     /// Footprint: buy, sell, text and neutral colours. None follows the chart theme.
     pub footprint_colors: [Option<egui::Color32>; 4],
+    /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
+    /// imbalance zones. None follows the buy or sell colour.
+    pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom.
     pub footprint_row_ticks: u32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
@@ -645,6 +670,9 @@ pub struct ChartTypeParams {
     pub footprint_statistics: bool,
     /// Footprint: statistics rows in display order; an empty list hides the table.
     pub footprint_statistics_rows: Vec<FootprintStatistic>,
+    /// Footprint: restart the cumulative delta row at the first bar of each session, rather than
+    /// summing every complete bar.
+    pub footprint_session_cumulative_delta: bool,
     /// Execution-based session profile display settings.
     pub profile: TradeProfileSettings,
     /// Independent line, area and baseline styles, retained across chart type changes.
@@ -732,6 +760,7 @@ impl Default for ChartTypeParams {
             footprint_profile: false,
             footprint_color_by: FootprintColor::VolumeSteps,
             footprint_colors: [None; 4],
+            footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
             footprint_imbalance: true,
             footprint_poc: true,
@@ -760,6 +789,7 @@ impl Default for ChartTypeParams {
                 FootprintStatistic::Delta,
                 FootprintStatistic::DeltaPercent,
             ],
+            footprint_session_cumulative_delta: false,
             profile: TradeProfileSettings::default(),
             styles: super::ChartTypeStyles::default(),
             renko_size_method: super::BoxSizeMethod::Fixed,
@@ -841,24 +871,34 @@ impl ChartTypeParams {
         ]
     }
 
+    /// Sizes in Renko, Kagi, Range, Point and Figure order.
+    #[cfg(feature = "widget")]
+    pub(crate) fn sizes_mut(&mut self) -> [&mut f64; 4] {
+        [
+            &mut self.renko_brick_size,
+            &mut self.kagi_reversal,
+            &mut self.range_size,
+            &mut self.pnf_box_size,
+        ]
+    }
+
     /// Resolve pending sizes only when their history is ready. Each successful calculation is
     /// frozen until explicitly armed again; prepending history and live corrections keep it.
     #[cfg(feature = "widget")]
     pub(crate) fn resolve_sizes(&mut self, bars: &[super::Bar], pending: &mut [bool; 4]) {
         let methods = self.size_methods();
-        let sizes = [
-            &mut self.renko_brick_size,
-            &mut self.kagi_reversal,
-            &mut self.range_size,
-            &mut self.pnf_box_size,
-        ];
-        for ((method, size), pending) in methods.into_iter().zip(sizes).zip(pending) {
+        // Whitespace bars have no price and do not count, as in `BoxSizeMethod::resolve`. This
+        // runs every frame, so it reads only as many bars as a pending size needs.
+        let loaded = bars.iter().filter(|bar| !bar.is_whitespace());
+        for ((method, size), pending) in methods.into_iter().zip(self.sizes_mut()).zip(pending) {
             if !*pending {
                 continue;
             }
             let waiting = match method {
-                super::BoxSizeMethod::Atr { period, .. } => period > bars.len(),
-                super::BoxSizeMethod::Percentage(_) => bars.is_empty(),
+                super::BoxSizeMethod::Atr { period, .. } => {
+                    loaded.clone().take(period).count() < period
+                }
+                super::BoxSizeMethod::Percentage(_) => loaded.clone().next().is_none(),
                 super::BoxSizeMethod::Fixed => false,
             };
             *size = method.resolve(*size, bars).unwrap_or(0.0);
@@ -866,21 +906,30 @@ impl ChartTypeParams {
         }
     }
 
-    /// Why `chart_type` cannot be drawn with these parameters, if it cannot.
+    /// Why `chart_type` cannot be drawn with these parameters, if it cannot. A size derived from
+    /// history is judged by its method, since it is 0 while it waits for history.
     #[cfg(feature = "widget")]
     pub(crate) fn invalid(&self, chart_type: ChartType) -> Option<&'static str> {
-        let usable = |size: f64| size > 0.0 && size.is_finite();
+        use super::BoxSizeMethod::{Atr, Fixed, Percentage};
+        let positive = |n: f64| n > 0.0 && n.is_finite();
+        let usable = |method, size| match method {
+            Fixed => positive(size),
+            Atr { period, multiplier } => period > 0 && positive(multiplier),
+            Percentage(percent) => positive(percent),
+        };
         match chart_type {
-            ChartType::Renko if !usable(self.renko_brick_size) => {
+            ChartType::Renko if !usable(self.renko_size_method, self.renko_brick_size) => {
                 Some("Renko brick size must be a positive number")
             }
-            ChartType::Kagi if !usable(self.kagi_reversal) => {
+            ChartType::Kagi if !usable(self.kagi_size_method, self.kagi_reversal) => {
                 Some("Kagi reversal amount must be a positive number")
             }
-            ChartType::Range if !usable(self.range_size) => {
+            ChartType::Range if !usable(self.range_size_method, self.range_size) => {
                 Some("Range size must be a positive number")
             }
-            ChartType::PointAndFigure if !usable(self.pnf_box_size) || self.pnf_reversal == 0 => {
+            ChartType::PointAndFigure
+                if !usable(self.pnf_size_method, self.pnf_box_size) || self.pnf_reversal == 0 =>
+            {
                 Some(
                     "Point and Figure box size must be a positive number and the reversal at least 1 box",
                 )
@@ -889,6 +938,25 @@ impl ChartTypeParams {
                 Some("Line Break line count must be 1 to 10")
             }
             _ => None,
+        }
+    }
+
+    /// The bars of history the size of `chart_type` needs, while its method derives it from
+    /// history and it is not yet a positive size.
+    #[cfg(feature = "widget")]
+    pub(crate) fn bars_needed(&self, chart_type: ChartType) -> Option<usize> {
+        let (method, size) = match chart_type {
+            ChartType::Renko => (self.renko_size_method, self.renko_brick_size),
+            ChartType::Kagi => (self.kagi_size_method, self.kagi_reversal),
+            ChartType::Range => (self.range_size_method, self.range_size),
+            ChartType::PointAndFigure => (self.pnf_size_method, self.pnf_box_size),
+            _ => return None,
+        };
+        match method {
+            _ if size > 0.0 && size.is_finite() => None,
+            super::BoxSizeMethod::Atr { period, .. } => Some(period),
+            super::BoxSizeMethod::Percentage(_) => Some(1),
+            super::BoxSizeMethod::Fixed => None,
         }
     }
 }
@@ -902,8 +970,11 @@ mod tests {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_value_area": 0.010003969988090037,
-            "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
+            "footprint_statistics": true,
+            "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
+            "footprint_session_cumulative_delta": true,
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
+            "footprint_imbalance_colors": [[200, 30, 220, 255], null],
             "tpo_letters": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
@@ -953,6 +1024,11 @@ mod tests {
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
         );
+        assert_eq!(
+            legacy["footprint_imbalance_colors"],
+            serde_json::json!([null, null])
+        );
+        assert_eq!(legacy["footprint_session_cumulative_delta"], false);
         for field in [
             "footprint_stacked_imbalances",
             "footprint_naked_poc",

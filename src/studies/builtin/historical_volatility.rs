@@ -131,7 +131,7 @@ impl Indicator for HistoricalVolatility {
 
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
-        trading_days: number("Trading days", 0.0, f64::MAX)
+        trading_days: number("Trading days per year", 0.0, f64::MAX)
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {

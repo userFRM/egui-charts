@@ -29,7 +29,7 @@ pub(super) struct State {
     /// The chart settings as last applied. The groups that apply a part of them to their own
     /// components (alerts, trading display, bottom bar) read it.
     pub(super) settings: ChartSettingsState,
-    symbol_search: SymbolSearchDialog,
+    pub(super) symbol_search: SymbolSearchDialog,
     shortcuts: KeyboardShortcutsDialog,
     /// The symbol last entered in the recent symbols of the search.
     recorded: Option<String>,
@@ -245,7 +245,7 @@ impl Terminal {
             }
             StudyContextMenuAction::Copy => {
                 if let Some(text) = self.chart().copy_indicator(id) {
-                    self.ctx().copy_text(text);
+                    self.copy_text(text);
                 }
             }
             StudyContextMenuAction::Settings => {
@@ -640,7 +640,7 @@ mod tests {
         state.watermark.mode = WatermarkMode::Symbol;
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
-        state.margins.right_bars = 17;
+        state.margins.right_bars = 17.0;
         settings(&mut terminal, state.clone());
         let chart = terminal.chart();
         assert_eq!(chart.config().candle_border_width, 0.0);

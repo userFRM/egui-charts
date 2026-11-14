@@ -76,7 +76,8 @@ pub(super) fn render_area(
     }
 }
 
-/// HLC Area: fills high to close and close to low, with the high, low and close lines on top
+/// HLC Area: fills high to close and close to low, with the high, low and close lines on top.
+/// The close line is at the bar closes whatever price source the single-value types plot.
 pub(super) fn render_hlc_area(
     painter: &Painter,
     volume_ctx: &RenderContext,
@@ -89,7 +90,6 @@ pub(super) fn render_hlc_area(
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     style: &HlcAreaStyle,
-    price_source: PriceSource,
 ) {
     if visible_data.is_empty() {
         return;
@@ -102,7 +102,6 @@ pub(super) fn render_hlc_area(
         &coords,
         chart_rect_min_x,
         &idx_to_coord,
-        price_source,
     );
 
     draw_hlc_fill(painter, visible_data, &points, style);
@@ -227,18 +226,14 @@ fn collect_hlc_points(
     coords: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    price_source: PriceSource,
 ) -> Vec<HlcPoint> {
     data.iter()
         .enumerate()
-        .map(|(i, bar)| {
-            let value = price_source.compute(bar.open, bar.high, bar.low, bar.close);
-            HlcPoint {
-                x: idx_to_coord(start_idx + i, chart_rect_min_x),
-                y_high: coords.price_to_y(bar.high),
-                y_low: coords.price_to_y(bar.low),
-                y_close: coords.price_to_y(value),
-            }
+        .map(|(i, bar)| HlcPoint {
+            x: idx_to_coord(start_idx + i, chart_rect_min_x),
+            y_high: coords.price_to_y(bar.high),
+            y_low: coords.price_to_y(bar.low),
+            y_close: coords.price_to_y(bar.close),
         })
         .collect()
 }
@@ -876,9 +871,15 @@ mod tests {
     }
 
     /// Every line and fill paints its own price band of an asymmetric bar from its own setting,
-    /// and each can go without the others.
+    /// and each can go without the others. The close line stays at the closes when the chart's
+    /// price source, which the single-value chart types plot, is another price.
     #[test]
     fn hlc_area_paints_each_line_and_fill_from_its_own_setting() {
+        use super::super::{
+            BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, HeikinAshiCache,
+            TradingColors, VolumeSettings, render_chart_type,
+        };
+        use crate::model::{BarClock, ChartType, ChartTypeStyles, Timeframe};
         use crate::scales::{PriceRange, PriceTransform};
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
         let map = PriceMap::new(
@@ -925,9 +926,16 @@ mod tests {
         let close = (30, 3.0, 40.0);
         let upper_band = (upper, 30.0, 40.0);
         let lower_band = (lower, 40.0, 80.0);
-        for (style, fills, lines) in [
+        for (style, source, fills, lines) in [
             (
                 style.clone(),
+                PriceSource::Close,
+                vec![upper_band, lower_band],
+                vec![high, low, close],
+            ),
+            (
+                style.clone(),
+                PriceSource::High,
                 vec![upper_band, lower_band],
                 vec![high, low, close],
             ),
@@ -936,6 +944,7 @@ mod tests {
                     high_line_visible: false,
                     ..style.clone()
                 },
+                PriceSource::Close,
                 vec![upper_band, lower_band],
                 vec![low, close],
             ),
@@ -944,6 +953,7 @@ mod tests {
                     low_line_visible: false,
                     ..style.clone()
                 },
+                PriceSource::Close,
                 vec![upper_band, lower_band],
                 vec![high, close],
             ),
@@ -952,6 +962,7 @@ mod tests {
                     high_to_close_fill_visible: false,
                     ..style.clone()
                 },
+                PriceSource::Close,
                 vec![lower_band],
                 vec![high, low, close],
             ),
@@ -960,6 +971,7 @@ mod tests {
                     close_to_low_fill_visible: false,
                     ..style.clone()
                 },
+                PriceSource::Close,
                 vec![upper_band],
                 vec![high, low, close],
             ),
@@ -968,27 +980,48 @@ mod tests {
                     close_line: line(30, 0.0),
                     ..style.clone()
                 },
+                PriceSource::Close,
                 vec![upper_band, lower_band],
                 vec![high, low],
             ),
         ] {
+            let type_params = crate::model::ChartTypeParams {
+                styles: ChartTypeStyles {
+                    hlc_area: style,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             let ctx = Context::default();
             let output = ctx.run_ui(RawInput::default(), |_| {
                 let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
                 let context = RenderContext::new(&painter, rect);
-                render_hlc_area(
-                    &painter,
-                    &context,
-                    &bars,
-                    0,
-                    false,
-                    0.0,
-                    &colors,
-                    &map,
-                    0.0,
+                render_chart_type(
+                    ChartType::HlcArea,
+                    &CandleDataContext {
+                        price_ctx: &context,
+                        volume_ctx: &context,
+                        price_scale: &map,
+                        colors: &colors,
+                        visible_data: &bars,
+                        full_data: &bars,
+                        revision: 0,
+                        heikin_ashi: &HeikinAshiCache::default(),
+                        shows_elements: false,
+                        start_idx: 0,
+                        clock: &BarClock::new(Timeframe::Min1),
+                        tick_size: None,
+                        price_formatter: None,
+                    },
+                    &ChartTypeParams::new(
+                        BarDimensions::new(1.0, 1.0),
+                        VolumeSettings::new(false, 0.0),
+                        &type_params,
+                        TradingColors::new(colors.bullish, colors.bearish),
+                        CoordMapping::new(0.0),
+                        source,
+                    ),
                     |i, _| 10.0 + i as f32 * 50.0,
-                    &style,
-                    PriceSource::Close,
                 );
             });
             let mut painted_fills = Vec::new();
@@ -1016,8 +1049,8 @@ mod tests {
                 }
             }
             output.drop_without_applying_deltas();
-            assert_eq!(painted_fills, fills);
-            assert_eq!(painted_lines, lines);
+            assert_eq!(painted_fills, fills, "{source:?}");
+            assert_eq!(painted_lines, lines, "{source:?}");
         }
     }
 }

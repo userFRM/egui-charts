@@ -1830,7 +1830,7 @@ mod tests {
             assert!(
                 chart
                     .drawings()
-                    .axis_tags(main, Color32::WHITE)
+                    .axis_tags(main, Color32::WHITE, &[], 0)
                     .any(|tag| matches!(
                         tag,
                         crate::drawings::manager::DrawingAxisTag::Time { x: tag_x, .. } if tag_x == x

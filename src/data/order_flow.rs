@@ -826,7 +826,7 @@ impl OrderFlowInput {
         self.clear();
         let lost = trades.lost_until();
         let tick_size = self.state().tick_size;
-        let chart_run = || Self::chart_run(clock, tick_size, trades, history, None);
+        let chart_run = || Self::chart_run(clock, tick_size, trades, history, None, None);
         if footprint {
             // Without the original live anchor, wait for allocations from the sink.
             if trade_based && lost.is_some() {
@@ -909,8 +909,11 @@ impl OrderFlowInput {
     /// history bars, which the chart did not fold from them. At the first instant, as the page
     /// stamps it, where the store left a live execution to a page, the page may hold executions
     /// the stream never sent, so the live ones the store kept apart count in place of the page's
-    /// executions of that instant. Returns the parts and the grouping after them, or `None`
-    /// unless they rebuild every bar through the newest.
+    /// executions of that instant. `before` is the open of a bar the chart dropped when the sink
+    /// opened the chart's oldest bar a nanosecond after it: the run then opens the oldest bar
+    /// after it, and the copies count from `anchor` though no chart bar is at or before it.
+    /// Returns the parts and the grouping after them, or `None` unless they rebuild every bar
+    /// through the newest.
     #[cfg(feature = "widget")]
     fn chart_run<'a>(
         clock: &BarClock,
@@ -918,6 +921,7 @@ impl OrderFlowInput {
         trades: &'a super::trades::Trades,
         history: &[crate::model::Bar],
         anchor: Option<DateTime<Utc>>,
+        before: Option<DateTime<Utc>>,
     ) -> Option<ChartRun<'a>> {
         let timeframe = clock.timeframe().filter(|tf| tf.is_trade_based())?;
         let lost = trades.lost_until();
@@ -928,7 +932,8 @@ impl OrderFlowInput {
             let chained = (bars.windows(2).rev())
                 .take_while(|pair| pair[1].time - pair[0].time == TimeDelta::nanoseconds(1))
                 .count();
-            Some(bars[..bars.len() - chained].last()?.time)
+            (bars[..bars.len() - chained].last().map(|bar| bar.time))
+                .or(anchor.filter(|_| before.is_some()))
         });
         let live = trades
             .live()
@@ -941,7 +946,7 @@ impl OrderFlowInput {
             .chain(live)
             .collect();
         held.sort_by_key(|trade| trade.ts);
-        super::footprint::live_run(timeframe, tick_size, &held, history)
+        super::footprint::live_run(timeframe, tick_size, &held, history, before)
     }
 
     /// Applies a chart replay cutoff, exclusive, or removes it with `None`. Readers then stop at
@@ -971,17 +976,33 @@ impl OrderFlowInput {
                 let tick_size = state.tick_size;
                 let mut part = State::new(state.source);
                 part.tick_size = tick_size;
+                // A row a nanosecond before the chart's oldest bar is a bar the chart dropped and
+                // the sink opened the oldest one right after it, so a fill at one instant may run
+                // from that bar into the oldest one.
+                let before = (history.first())
+                    .and_then(|first| first.time.checked_sub_signed(TimeDelta::nanoseconds(1)))
+                    .filter(|before| {
+                        state.bars.contains_key(before)
+                            || (state.footprint.as_ref())
+                                .is_some_and(|flow| flow.bars().contains_key(before))
+                    });
                 // The sink allocated the oldest bar this source holds and every bar after it, so
                 // a page's copies count from there, or from the chart's oldest bar once the chart
-                // no longer holds that one, or from the oldest live execution's bar when the page
-                // lacks one of them.
+                // no longer holds that one and does not continue such a fill, or from the oldest
+                // live execution's bar when the page lacks one of them.
                 let anchor = (state.footprint.as_ref())
                     .and_then(|flow| flow.bars().keys().next())
                     .or(state.bars.keys().next())
                     .zip(history.first())
-                    .map(|(anchor, first)| first.time.max(*anchor));
-                let run = Self::chart_run(clock, tick_size, trades, history, anchor)
-                    .or_else(|| Self::chart_run(clock, tick_size, trades, history, None));
+                    .map(|(anchor, first)| {
+                        if before.is_some() {
+                            *anchor
+                        } else {
+                            first.time.max(*anchor)
+                        }
+                    });
+                let run = Self::chart_run(clock, tick_size, trades, history, anchor, before)
+                    .or_else(|| Self::chart_run(clock, tick_size, trades, history, None, None));
                 let parts = run.map_or_else(
                     || {
                         // Executions that do not match the chart's bars are grouped from the

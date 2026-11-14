@@ -258,6 +258,9 @@ fn price_labels_and_lines_are_independent_on_either_axis() {
 /// Line tags use the anchor, stay clear of the last price and follow this frame's drag.
 /// Bar 51 is 1,700,000,000 + 51 * 86,400 = Jan 4, 2024 at 22:13:20 UTC;
 /// bar 61 is ten days later. Yellow's contrast with white is 1.22, so its text is black.
+/// An anchored VWAP tags its latest value only while it tracks it, at its own precision: the
+/// typical prices of bars 98 and 99 are 320 / 3 and 340 / 3, so from bar 98 it is 110 and from
+/// bar 99 it is 113.33.
 #[cfg(feature = "drawings")]
 #[test]
 fn line_drawings_tag_their_price_and_time_on_the_axes() {
@@ -278,6 +281,8 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
         (9, T::CrossLine, 81.0, 103.59, [9, 9, 9, 255]),
         (10, T::HorizontalRay, 1000.0, 114.71, [200, 0, 0, 255]),
         (11, T::HorizontalLine, 90.0, 120.0, [140, 70, 20, 255]),
+        (12, T::AnchoredVWAP, 98.0, 110.0, [0, 150, 136, 255]),
+        (13, T::AnchoredVWAP, 99.0, 113.0, [0, 150, 136, 255]),
     ] {
         let mut drawing = Drawing::with_color(id, tool, color);
         drawing.chart_points = vec![ChartPoint::new(bar, price)];
@@ -286,6 +291,13 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
             8 => drawing.time_axis_label = false,
             6 => drawing.visible = false,
             7 => drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]),
+            12 => {
+                drawing.vwap = Some(crate::drawings::VwapConfig {
+                    track_price: true,
+                    precision: Some(4),
+                    ..Default::default()
+                })
+            }
             _ => {}
         }
         chart.drawings_mut().drawings.push(drawing);
@@ -309,6 +321,8 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
         ("118.13", false),
         ("103.59", false),
         ("114.71", false),
+        ("110.0000", true),
+        ("113.33", false),
     ] {
         assert_eq!(price_texts.contains(&label), shown, "price {label}");
     }
@@ -988,7 +1002,7 @@ fn views_past_the_bars_keep_the_chart_readable() {
             self.formatter.as_ref().format_crosshair(time, bar_seconds)
         }
     }
-    for (left, right) in [(2427.0, 3854.0), (28131.0, 29558.0)] {
+    for (left, right) in [(2427.0, 3852.0), (28131.0, 29556.0)] {
         let mut control = None;
         for count in [1000, 1001] {
             let start = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
@@ -1047,56 +1061,97 @@ fn views_past_the_bars_keep_the_chart_readable() {
     }
 }
 
+/// Startup label measurements keep the configured zoom of an unlocked chart, and a later one
+/// keeps the visible range: the slots the plot spans and both edges, also in a locked chart,
+/// which must not scale a second time from the old width, and at the fixed left edge's stop,
+/// which must not clamp against the old width.
 #[test]
 fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
     use crate::model::Instrument;
-    let ctx = egui::Context::default();
-    let mut chart = chart(&[100.0], &[110.0]);
-    chart.config.show_volume = false;
-    chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
-    let initial_view = chart.get_time_scale_state();
-    let input = || egui::RawInput {
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-        ..Default::default()
-    };
-    ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(Rect::ZERO),
+    for (lock, fix_left) in [(false, false), (true, false), (false, true), (true, true)] {
+        let row = format!("lock {lock}, fix_left_edge {fix_left}");
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        let mut options = chart.chart_options().clone();
+        options.time_scale.bar_spacing = 20.0;
+        options.time_scale.lock_visible_time_range_on_resize = lock;
+        options.time_scale.fix_left_edge = fix_left;
+        chart.set_chart_options(options);
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
+        let initial_view = chart.get_time_scale_state();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
             ..Default::default()
-        },
-        |ui| {
+        };
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::ZERO),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        let mut passes = 0;
+        ctx.run_ui(input(), |ui| {
             chart.show(ui);
-        },
-    )
-    .drop_without_applying_deltas();
-    let mut passes = 0;
-    ctx.run_ui(input(), |ui| {
-        chart.show(ui);
-        passes += 1;
-        if ui.ctx().current_pass_index() == 0 {
-            // Metadata arriving during startup can widen labels on the discarded pass.
-            chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(6)));
-            ui.ctx().request_discard("instrument metadata arrived");
+            passes += 1;
+            if ui.ctx().current_pass_index() == 0 {
+                // Metadata arriving during startup can widen labels on the discarded pass.
+                chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(6)));
+                ui.ctx().request_discard("instrument metadata arrived");
+            }
+        })
+        .drop_without_applying_deltas();
+        assert!(passes > 1, "{row}");
+        // A locked chart treats the startup measurement as a resize and keeps its slots.
+        if !lock {
+            assert_eq!(chart.get_time_scale_state(), initial_view, "{row}");
         }
-    })
-    .drop_without_applying_deltas();
-    assert!(passes > 1);
-    assert_eq!(chart.get_time_scale_state(), initial_view);
 
-    ctx.run_ui(input(), |ui| {
-        chart.show(ui);
-    })
-    .drop_without_applying_deltas();
-    let width = chart.get_rendered_price_rect().width();
-    let spacing = chart.state.time_scale().bar_spacing();
-    chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
-    ctx.run_ui(input(), |ui| {
-        chart.show(ui);
-    })
-    .drop_without_applying_deltas();
-    let new_width = chart.get_rendered_price_rect().width();
-    assert!(new_width < width, "later labels must widen the axis");
-    assert!((new_width / chart.state.time_scale().bar_spacing() - width / spacing).abs() < 1e-4);
+        let settle = |chart: &mut crate::widget::Chart| {
+            ctx.run_ui(input(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        settle(&mut chart);
+        if fix_left {
+            chart.scroll_to_position(-1000.0, false);
+            settle(&mut chart);
+        }
+        let width = chart.get_rendered_price_rect().width();
+        let spacing = chart.state.time_scale().bar_spacing();
+        let range = chart.state.time_scale().visible_logical_range();
+        if fix_left {
+            assert_eq!(
+                range.left, 0.0,
+                "{row}: the view starts at the left edge's stop"
+            );
+        }
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let new_width = chart.get_rendered_price_rect().width();
+        assert!(new_width < width, "{row}: later labels must widen the axis");
+        // The plot spans `width - 1` pixels of slots, so both edges stay on the same times.
+        let slots = |width: f32, spacing: f32| f64::from(width - 1.0) / f64::from(spacing);
+        let new_spacing = chart.state.time_scale().bar_spacing();
+        assert!(
+            (slots(new_width, new_spacing) - slots(width, spacing)).abs() < 1e-4,
+            "{row}: spacing {spacing} to {new_spacing}"
+        );
+        let new_range = chart.state.time_scale().visible_logical_range();
+        assert!(
+            (new_range.left - range.left).abs() < 1e-3
+                && (new_range.right - range.right).abs() < 1e-3,
+            "{row}: {range:?} to {new_range:?}"
+        );
+    }
 }
 
 /// Extra columns share at most half of a narrow widget on either edge. Four 70-point columns

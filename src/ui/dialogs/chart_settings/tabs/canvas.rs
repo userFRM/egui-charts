@@ -7,9 +7,10 @@ use crate::model::LineStyle;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::ColorPicker;
+use crate::ui_kit::color_picker::keep_opacity;
+use crate::ui_kit::{ColorPicker, ColorPickerState};
 use crate::widget::settings::{BackgroundType, ButtonVisibility, GridLinesMode, WatermarkMode};
-use egui::Ui;
+use egui::{Color32, Ui};
 
 impl SettingsDialog {
     pub(in super::super) fn draw_canvas_tab(&mut self, ui: &mut Ui, theme: &Theme) {
@@ -44,38 +45,29 @@ impl SettingsDialog {
                     // Color swatch(es)
                     match dialog.settings.chart_basic_styles.background_type {
                         BackgroundType::Solid => {
-                            if let Some(color) = ColorPicker::new(
+                            pick_color(
+                                ui,
                                 &mut dialog.color_picker_states.background,
                                 "bg_color",
-                            )
-                            .show(ui)
-                            .inner
-                            {
-                                dialog.settings.chart_basic_styles.background_color = color;
-                            }
+                                &mut dialog.settings.chart_basic_styles.background_color,
+                            );
                         }
                         _ => {
-                            if let Some(color) = ColorPicker::new(
+                            pick_color(
+                                ui,
                                 &mut dialog.color_picker_states.background_gradient_top,
                                 "bg_grad_top",
-                            )
-                            .show(ui)
-                            .inner
-                            {
-                                dialog.settings.chart_basic_styles.background_gradient_top = color;
-                            }
-                            if let Some(color) = ColorPicker::new(
+                                &mut dialog.settings.chart_basic_styles.background_gradient_top,
+                            );
+                            pick_color(
+                                ui,
                                 &mut dialog.color_picker_states.background_gradient_bottom,
                                 "bg_grad_bot",
-                            )
-                            .show(ui)
-                            .inner
-                            {
-                                dialog
+                                &mut dialog
                                     .settings
                                     .chart_basic_styles
-                                    .background_gradient_bottom = color;
-                            }
+                                    .background_gradient_bottom,
+                            );
                         }
                     }
                 });
@@ -105,35 +97,34 @@ impl SettingsDialog {
                         GridLinesMode::Horizontal | GridLinesMode::Both
                     ) {
                         ui.add_space(ui.active_theme().spacing.lg);
-                        if let Some(color) =
-                            ColorPicker::new(&mut dialog.color_picker_states.grid_h, "grid_h")
-                                .show(ui)
-                                .inner
-                        {
-                            dialog.settings.grid_lines.horizontal_color = color;
-                        }
+                        pick_color(
+                            ui,
+                            &mut dialog.color_picker_states.grid_h,
+                            "grid_h",
+                            &mut dialog.settings.grid_lines.horizontal_color,
+                        );
                     }
                     if matches!(
                         dialog.settings.grid_lines.mode,
                         GridLinesMode::Vertical | GridLinesMode::Both
-                    ) && let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.grid_v, "grid_v")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.grid_lines.vertical_color = color;
+                    ) {
+                        pick_color(
+                            ui,
+                            &mut dialog.color_picker_states.grid_v,
+                            "grid_v",
+                            &mut dialog.settings.grid_lines.vertical_color,
+                        );
                     }
                 });
 
                 // Crosshair
                 self.draw_setting_row_with_controls(ui, "Crosshair", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.crosshair, "crosshair")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.crosshair.color = color;
-                    }
+                    pick_color(
+                        ui,
+                        &mut dialog.color_picker_states.crosshair,
+                        "crosshair",
+                        &mut dialog.settings.crosshair.color,
+                    );
 
                     ui.add_space(ui.active_theme().spacing.lg);
 
@@ -197,13 +188,12 @@ impl SettingsDialog {
 
                     ui.add_space(ui.active_theme().spacing.lg);
 
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.watermark, "watermark")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.watermark.color = color;
-                    }
+                    pick_color(
+                        ui,
+                        &mut dialog.color_picker_states.watermark,
+                        "watermark",
+                        &mut dialog.settings.watermark.color,
+                    );
                 });
 
                 ui.add_space(ui.active_theme().spacing.xxl);
@@ -212,25 +202,21 @@ impl SettingsDialog {
                 self.draw_section_header(ui, "SCALES APPEARANCE", theme);
 
                 self.draw_setting_row_with_controls(ui, "Text", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.scales_text, "scales_text")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.scales_appearance.text_color = color;
-                    }
+                    pick_color(
+                        ui,
+                        &mut dialog.color_picker_states.scales_text,
+                        "scales_text",
+                        &mut dialog.settings.scales_appearance.text_color,
+                    );
                 });
 
                 self.draw_setting_row_with_controls(ui, "Lines", theme, |ui, dialog| {
-                    if let Some(color) = ColorPicker::new(
+                    pick_color(
+                        ui,
                         &mut dialog.color_picker_states.scales_lines,
                         "scales_lines",
-                    )
-                    .show(ui)
-                    .inner
-                    {
-                        dialog.settings.scales_appearance.lines_color = color;
-                    }
+                        &mut dialog.settings.scales_appearance.lines_color,
+                    );
                 });
 
                 self.draw_setting_row_with_controls(ui, "Font size", theme, |ui, dialog| {
@@ -250,6 +236,33 @@ impl SettingsDialog {
                             }
                         },
                     );
+                    // The families installed in the context, and the chosen one when it is not
+                    // among them: the axes draw it proportional until the host installs it.
+                    let mut families = ui.ctx().fonts(|fonts| fonts.families());
+                    let family = &mut dialog.settings.scales_appearance.font_family;
+                    let chosen = family
+                        .clone()
+                        .or_else(|| dialog.opened_font_family.clone())
+                        .unwrap_or_default();
+                    if !families.contains(&chosen) {
+                        families.push(chosen.clone());
+                    }
+                    styled_dropdown(
+                        ui,
+                        "scales_font_family",
+                        DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
+                        theme.ui.text,
+                        &chosen.to_string(),
+                        |ui| {
+                            for option in families {
+                                let name = l10n::text(ui.ctx(), option.to_string());
+                                if ui.selectable_label(option == chosen, name).clicked() {
+                                    *family = Some(option);
+                                }
+                            }
+                        },
+                    )
+                    .accessible_name(l10n::text(ui.ctx(), "Font family"));
                 });
 
                 ui.add_space(ui.active_theme().spacing.xxl);
@@ -294,7 +307,7 @@ impl SettingsDialog {
                             &mut dialog.margin_right_str,
                             DESIGN_TOKENS.sizing.settings_dialog.input_width_margin,
                         );
-                        if let Ok(v) = dialog.margin_right_str.parse::<u32>() {
+                        if let Ok(v) = dialog.margin_right_str.parse::<f32>() {
                             dialog.settings.margins.right_bars = v;
                         }
                     },
@@ -344,6 +357,18 @@ impl SettingsDialog {
                 });
             });
         });
+    }
+}
+
+/// Shows the colour well of `state` and assigns a pick to `color`. Palette swatches are opaque,
+/// so a swatch keeps the opacity the well shows unless the Custom editor set it.
+fn pick_color(ui: &mut Ui, state: &mut ColorPickerState, id: &str, color: &mut Color32) {
+    // The well's colour, not `color`, which may be the placeholder that follows the theme.
+    let current = state.sel_color;
+    let custom = state.custom_mode;
+    if let Some(picked) = ColorPicker::new(state, id).show(ui).inner {
+        *color = keep_opacity(picked, current, custom || state.custom_mode);
+        state.sel_color = *color;
     }
 }
 

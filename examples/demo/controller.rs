@@ -31,6 +31,8 @@ use layouts::{DemoChart, LayoutTab};
 mod comparison;
 #[path = "marks.rs"]
 mod marks;
+#[path = "owndata/mod.rs"]
+mod owndata;
 #[path = "replay.rs"]
 mod replay;
 #[path = "storage.rs"]
@@ -101,6 +103,7 @@ use egui_charts::ui::widget_bar::{
     WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
+use egui_charts::ui_kit::EmptyState;
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use egui_charts::widget::settings::ChartSettingsState;
 use egui_charts::widget::{ChartLayoutMode, LayoutCopy, SeriesId};
@@ -148,8 +151,12 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         })
         .collect();
     // An anchor or session choice identifies the study, which names its price only once edited.
+    // Flags, which the caption leaves out, can precede that choice.
     let anchored = matches!(
-        inputs.first().map(|input| &input.kind),
+        inputs
+            .iter()
+            .map(|input| &input.kind)
+            .find(|kind| !matches!(kind, InputKind::Toggle)),
         Some(InputKind::Choice(_))
     );
     let edited = inputs
@@ -534,6 +541,10 @@ pub struct DemoApp {
     api_samples: bool,
     annotation_editor: bool,
     annotation_series: SeriesId,
+    /// Set while the chart shows a visitor's own data.
+    own_data: Option<owndata::app::OwnData>,
+    /// The Data source dialog.
+    data_source: owndata::dialog::DataSourceDialog,
 }
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
@@ -727,6 +738,11 @@ impl DemoApp {
             comparisons: Vec::new(),
             spreads: Vec::new(),
             settings: egui_charts::services::SettingsStore::new(storage.clone()),
+            own_data: None,
+            data_source: owndata::dialog::DataSourceDialog::new(
+                storage.clone(),
+                cc.storage.is_some(),
+            ),
             storage,
             workspace_recovery: storage::WorkspaceRecovery::default(),
             grid_edits: 0,
@@ -1021,6 +1037,19 @@ impl DemoApp {
     // --- data helpers ------------------------------------------------------
 
     fn switch_timeframe(&mut self, tf: Timeframe) {
+        if let Some(own) = &self.own_data {
+            if own.profile.service_interval(tf).is_none() {
+                self.toasts
+                    .error(format!("The data source has no interval {tf}"));
+                return;
+            }
+            self.copied_drawing = None;
+            self.state.timeframe = tf;
+            self.chart.set_timeframe(tf);
+            self.timeframe_toolbar.state.timeframe = tf;
+            self.refresh_interval_control();
+            return;
+        }
         self.copied_drawing = None;
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
@@ -1037,6 +1066,21 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
+        if let Some(own) = &self.own_data {
+            // The profile lists what the visitor chose to offer. Nothing else reaches the service.
+            if !own.profile.symbols.iter().any(|listed| listed == symbol) {
+                self.toasts
+                    .error(format!("{symbol} is not a symbol of this data source"));
+                return;
+            }
+            if symbol != self.chart.symbol() {
+                self.user_action(|app| {
+                    app.chart.set_symbol(symbol);
+                    app.sync_symbol();
+                });
+            }
+            return;
+        }
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
             .find(|row| row.symbol == symbol)
@@ -1059,6 +1103,10 @@ impl DemoApp {
 
     fn sync_symbol(&mut self) {
         self.copied_drawing = None;
+        if self.own_data.is_some() {
+            self.state.symbol = self.chart.symbol().to_owned();
+            return;
+        }
         let spec = DemoSymbol::find(self.chart.symbol());
         self.live.set_symbol(spec.symbol);
         self.time_and_sales.clear();
@@ -1106,6 +1154,9 @@ impl DemoApp {
     }
 
     fn apply_session(&mut self) {
+        if self.own_data.is_some() {
+            return;
+        }
         // Recorded prices and metadata already have their final session and price basis.
         if self.chart.replay_driver().is_some() {
             return;
@@ -1147,6 +1198,9 @@ impl DemoApp {
     // --- alerts ------------------------------------------------------------
 
     fn open_alert(&mut self, price: Option<f64>) {
+        if self.synthetic_only("Alerts") {
+            return;
+        }
         self.list_alert_sources();
         let price = price
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
@@ -1174,6 +1228,9 @@ impl DemoApp {
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
+        if self.synthetic_only("Alerts") {
+            return;
+        }
         let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
         alert.timeframe = Some(self.state.timeframe);
         self.chart.prepare_alert(&mut alert);
@@ -1181,6 +1238,9 @@ impl DemoApp {
     }
 
     fn monitor_alerts(&mut self, ctx: &egui::Context) {
+        if self.own_data.is_some() {
+            return;
+        }
         let now = chrono::Utc::now();
         let paused = if self.replay.is_some() {
             self.live_was_paused
@@ -1255,8 +1315,13 @@ impl DemoApp {
         if let Some(id) = self.quick_search.show(ctx) {
             self.execute_search_command(ctx, &id);
         }
+        // The metrics of the study dialog are those of the synthetic feed.
+        let metrics: Option<Arc<dyn egui_charts::data::Datafeed>> = match self.own_data {
+            Some(_) => None,
+            None => Some(self.live.clone()),
+        };
         self.indicator_dialog
-            .set_metric_source(Some(self.live.clone()), self.chart.symbol());
+            .set_metric_source(metrics, self.chart.symbol());
         // Indicators: add the study the dialog created.
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
@@ -1310,7 +1375,16 @@ impl DemoApp {
         }
         self.show_layout_copy_prompt(ctx);
 
-        let symbols = DemoSymbol::symbols();
+        // On own data the search offers the symbols of the profile and no others.
+        let symbols = match &self.own_data {
+            Some(own) => own
+                .profile
+                .symbols
+                .iter()
+                .map(|symbol| egui_charts::model::Instrument::new(symbol.as_str()))
+                .collect(),
+            None => DemoSymbol::symbols(),
+        };
         self.sync_comparisons();
         let action = self.compare_dialog.show(ctx, &symbols);
         self.handle_comparison(action);
@@ -1390,6 +1464,7 @@ impl DemoApp {
             DatePickerAction::Cancel | DatePickerAction::None => {}
             _ => {}
         }
+        self.show_data_source(ctx);
     }
 
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
@@ -1596,7 +1671,9 @@ impl DemoApp {
     fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
         let from_dialog = save_path.is_some();
         let path = save_path.unwrap_or_else(|| {
-            let filename = format!("{}_export.{extension}", self.state.symbol);
+            // A symbol of a visitor's own data must not carry a path into the file name.
+            let stem = owndata::store::file_stem(&self.state.symbol);
+            let filename = format!("{stem}_export.{extension}");
             #[cfg(not(target_arch = "wasm32"))]
             return std::env::temp_dir().join(filename);
             #[cfg(target_arch = "wasm32")]
@@ -1862,6 +1939,9 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn sync_depth_history(&mut self) {
+        if self.own_data.is_some() {
+            return;
+        }
         // Replay hides the live history, which must survive for its exit.
         if self.chart.replay_time().is_some()
             || !ChartSettingsState::from_chart(&self.chart)
@@ -1905,7 +1985,10 @@ impl DemoApp {
                 let mut heatmap_enabled = order_flow.show_heatmap;
                 let mut largest_profile =
                     order_flow.order_book.profile == BookProfile::LargestOrder;
-                let mut paused = self.live.paused();
+                let mut paused = self
+                    .own_data
+                    .as_ref()
+                    .map_or(self.live.paused(), |own| own.paused);
                 let mut study_permission = None;
                 let mut toolbar = std::mem::take(&mut self.top_toolbar);
                 let state = self.state.clone();
@@ -2036,12 +2119,15 @@ impl DemoApp {
                             }
                         });
                     ui.separator();
-                    menu_toggle(
-                        ui,
-                        "Liquidity heatmap",
-                        &icons::LIQUIDITY_HEATMAP,
-                        &mut heatmap_enabled,
-                    );
+                    // The mapped feed of own data has no depth to draw.
+                    ui.add_enabled_ui(self.own_data.is_none(), |ui| {
+                        menu_toggle(
+                            ui,
+                            "Liquidity heatmap",
+                            &icons::LIQUIDITY_HEATMAP,
+                            &mut heatmap_enabled,
+                        );
+                    });
                     ui.add_enabled_ui(heatmap_enabled || order_flow.show_order_book, |ui| {
                         menu_toggle(
                             ui,
@@ -2052,8 +2138,17 @@ impl DemoApp {
                     });
                     ui.separator();
                     ui.add_enabled_ui(self.replay.is_none(), |ui| {
-                        menu_toggle(ui, "Pause synthetic feed", &icons::MEDIA_PAUSE, &mut paused);
+                        let label = if self.own_data.is_some() {
+                            "Pause data feed"
+                        } else {
+                            "Pause synthetic feed"
+                        };
+                        menu_toggle(ui, label, &icons::MEDIA_PAUSE, &mut paused);
                     });
+                    if menu_item(ui, "Data source", &icons::DATABASE, None).clicked() {
+                        self.data_source.open();
+                        ui.close();
+                    }
                     ui.separator();
                     if menu_item(ui, "Order flow", &icons::CHART_VOLUME_FOOTPRINT, None).clicked() {
                         panel_action = Some(SidePanel::OrderFlow);
@@ -2109,7 +2204,15 @@ impl DemoApp {
                 if show_help {
                     self.keyboard_shortcuts.toggle();
                 }
-                self.live.set_paused(paused);
+                if let Some(own) = &mut self.own_data {
+                    // Pausing the chart ends its subscription, which closes the socket.
+                    if own.paused != paused {
+                        own.paused = paused;
+                        self.chart.set_feed_paused(paused);
+                    }
+                } else {
+                    self.live.set_paused(paused);
+                }
                 if heatmap_enabled != order_flow.show_heatmap {
                     self.chart.user_action(|chart| {
                         chart.set_liquidity_heatmap(heatmap_enabled);
@@ -2190,6 +2293,11 @@ impl DemoApp {
                 self.sync_chart_history();
                 return;
             }
+            // The theme is the interface's, on every chart: switching it is no chart's edit.
+            TopToolbarAction::ThemeToggle => {
+                self.toggle_theme(ctx);
+                return;
+            }
             _ => {}
         }
 
@@ -2207,7 +2315,12 @@ impl DemoApp {
             TopToolbarAction::OpenSymbolSearch => self
                 .symbol_search
                 .open_with_selected_query(self.chart.symbol().to_owned()),
-            TopToolbarAction::OpenCompare => self.compare_dialog.open(),
+            TopToolbarAction::OpenCompare => {
+                if self.synthetic_only("Compare") {
+                    return;
+                }
+                self.compare_dialog.open();
+            }
             TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
             TopToolbarAction::OpenIndicators => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
@@ -2256,9 +2369,8 @@ impl DemoApp {
                     self.load_study_template(&template);
                 }
             }
-            // Light/dark toggle is a real, cheap visual change.
-            TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
             TopToolbarAction::Layout(_)
+            | TopToolbarAction::ThemeToggle
             | TopToolbarAction::Save
             | TopToolbarAction::ToggleTrading
             | TopToolbarAction::Host(_)
@@ -2625,6 +2737,25 @@ impl DemoApp {
                 }),
             )
             .show(ui, |ui| match which {
+                SidePanel::Alerts
+                | SidePanel::Watchlist
+                | SidePanel::TimeAndSales
+                | SidePanel::OrderFlow
+                | SidePanel::Highlights
+                | SidePanel::Screener
+                | SidePanel::Hotlists
+                | SidePanel::MarketHeatmap
+                | SidePanel::Calendar
+                | SidePanel::News
+                    if self.own_data.is_some() =>
+                {
+                    EmptyState::new("Synthetic data only")
+                        .description(
+                            "This panel shows the demo's synthetic market. Open Data source in \
+                             the menu to switch back.",
+                        )
+                        .show(ui);
+                }
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
@@ -2869,6 +3000,9 @@ impl DemoApp {
     /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
     /// and sales the executions of the live feed and reports matching filters as notifications.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
+        if self.own_data.is_some() {
+            return;
+        }
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
         // demo must be able to go idle instead of repainting for a market that stands still.
         let now = self.live.now();
@@ -2986,6 +3120,10 @@ impl DemoApp {
 
     /// Shows `symbol` on the chart when the demo has data for it.
     fn open_catalog_symbol(&mut self, symbol: &str) {
+        if self.own_data.is_some() {
+            self.switch_symbol(symbol);
+            return;
+        }
         if DemoSymbol::catalog()
             .iter()
             .any(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
@@ -3237,11 +3375,13 @@ impl DemoApp {
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
-                self.explain_history_limit(range);
+                if self.own_data.is_none() {
+                    self.explain_history_limit(range);
+                }
                 let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
                 let width = self.chart.get_rendered_price_rect().width();
                 // Include the latest slot in the scale's exclusive data range.
-                let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+                let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
                 self.chart.disable_tracking_mode();
                 self.chart.apply_synced_time_scale(spacing, 0.5);
                 if self.layout.sync.sync_date_range
@@ -3311,7 +3451,17 @@ impl DemoApp {
                 .resizable(false)
                 .open(&mut open)
                 .show(ctx, |ui| {
-                    for label in ["UTC", "America/New_York"] {
+                    // On own data the zone of the profile is offered too, to return to it.
+                    let own_zone = self
+                        .own_data
+                        .as_ref()
+                        .map(|own| own.profile.time_zone.name().to_owned());
+                    let labels = ["UTC", "America/New_York"].into_iter().chain(
+                        own_zone
+                            .as_deref()
+                            .filter(|zone| !matches!(*zone, "UTC" | "America/New_York")),
+                    );
+                    for label in labels {
                         if ui
                             .selectable_label(self.timeframe_toolbar.state.timezone == label, label)
                             .clicked()
@@ -3375,7 +3525,7 @@ impl DemoApp {
                 self.layout.show(ui, &mut charts);
                 self.highlight_strategy_trade(ui);
                 let mapping = self.chart.get_chart_mapping();
-                if self.settings_state.alerts.show_alerts {
+                if self.settings_state.alerts.show_alerts && self.own_data.is_none() {
                     let decimals = self
                         .chart
                         .instrument()
@@ -3414,7 +3564,7 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if self.replay.is_some()
+                if (self.replay.is_some() || self.own_data.is_some())
                     && let Some(bar) = self
                         .chart
                         .bars(SeriesId::MAIN)
@@ -3503,6 +3653,7 @@ impl DemoApp {
         let mut replay_click = None;
         let mut open_settings = false;
         let mut drawing_settings = None;
+        let mut size = false;
         for event in self.chart.drain_events() {
             match event {
                 egui_charts::widget::ChartEvent::ImageRequested(request) => {
@@ -3541,9 +3692,27 @@ impl DemoApp {
                 | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
                     self.last_chart_click = None;
                     self.pointer_readout = None;
+                    if let Some(own) = &mut self.own_data {
+                        own.sizing = true;
+                    }
+                }
+                // The first bars of a symbol or interval of own data size the price-based
+                // chart types, as the end of a synthetic load does.
+                egui_charts::widget::ChartEvent::DataLoaded {
+                    series: SeriesId::MAIN,
+                    bars,
+                } if bars > 0 => {
+                    if let Some(own) = &mut self.own_data
+                        && std::mem::take(&mut own.sizing)
+                    {
+                        size = true;
+                    }
                 }
                 _ => {}
             }
+        }
+        if size {
+            self.size_price_based_charts();
         }
         if let Some(index) = replay_click.and_then(|pos| self.replay_start_bar(pos)) {
             let time = self.chart.state().shown()[index].time;
@@ -3646,6 +3815,9 @@ impl DemoApp {
     ) {
         match action {
             StudyContextMenuAction::AddAlert(mut alert) => {
+                if self.synthetic_only("Alerts") {
+                    return;
+                }
                 self.chart.prepare_alert(&mut alert);
                 self.alerts.save(*alert);
             }
@@ -3696,6 +3868,9 @@ impl DemoApp {
             }
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::AddToWatchlist { list, symbol } => {
+                if self.synthetic_only("Watchlists") {
+                    return;
+                }
                 if !self.watchlist.add_symbol_to(list, &symbol) {
                     self.notify(format!("{symbol} is already in that watchlist"));
                 }
@@ -3933,6 +4108,7 @@ impl DemoApp {
             || self.date_picker.is_open
             || self.replay_start.is_open
             || self.replay_selecting
+            || self.data_source.is_open()
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
@@ -3968,7 +4144,9 @@ impl DemoApp {
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
                     A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
-                    A::OpenLayout => self.open_layout = true,
+                    A::OpenLayout => self.handle_layout_action(
+                        egui_charts::ui::top_toolbar::LayoutAction::OpenLayout,
+                    ),
                     A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
                     A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
                         let session =
@@ -6003,6 +6181,43 @@ mod tests {
         }
     }
 
+    /// Switching the theme, from the toolbar or by a search command, is no chart's undo step:
+    /// the Undo after it brings back the grid hidden and the axis text recoloured before it and
+    /// leaves both charts on the new theme's colours.
+    #[test]
+    fn switching_the_theme_is_no_undo_step_of_a_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        settle(&mut app, &ctx);
+        for by_command in [false, true] {
+            // The theme replaces an edited colour, which must not make the switch a step either.
+            app.chart.user_action(|chart| {
+                chart.config_mut().show_grid = false;
+                chart.config_mut().text_color = egui::Color32::BLUE;
+            });
+            let dark = app.theme.dark;
+            if by_command {
+                let command = if dark {
+                    "appearance:light"
+                } else {
+                    "appearance:dark"
+                };
+                app.execute_search_command(&ctx, command);
+            } else {
+                app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+            }
+            assert_ne!(app.theme.dark, dark, "by command {by_command}");
+            app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+            assert!(app.chart.config().show_grid, "by command {by_command}");
+            for chart in [&app.chart, &app.extra_charts[0].chart] {
+                assert!(!chart.can_undo(), "by command {by_command}");
+                assert_eq!(chart.config().background_color, app.theme.chart.bg);
+                assert_eq!(chart.config().text_color, app.theme.chart.axis_text);
+            }
+        }
+    }
+
     #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         // Repeated construction used to overflow this stack before checking the saved theme.
@@ -7734,7 +7949,7 @@ mod tests {
         state.grid_lines.vertical_color = egui::Color32::BLUE;
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
-        state.margins.right_bars = 17;
+        state.margins.right_bars = 17.0;
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
@@ -9231,7 +9446,7 @@ mod tests {
                         let (shown_start, shown_end) = app.chart.state().visible_range();
                         assert_eq!(shown_end, end, "{range:?}");
                         assert!(shown_start.abs_diff(start) <= 1, "{range:?}");
-                        let expected = app.chart.get_rendered_price_rect().width()
+                        let expected = (app.chart.get_rendered_price_rect().width() - 1.0)
                             / ((end - start) as f32 + 0.5);
                         assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
                         assert_eq!(app.replay.is_some(), replay);

@@ -7,6 +7,9 @@ use egui::{Context, Event, KeyboardShortcut};
 ///
 /// Remove a binding to disable it, or replace its key or action to rebind it.
 /// The first binding wins if several actions use the same key combination.
+/// A binding on a punctuation key also runs when the press differs from it only by Shift and
+/// types that key's character, as some layouts need, unless another binding names that exact
+/// combination.
 #[derive(Clone, Debug)]
 pub struct ShortcutMap {
     /// Key combinations and their actions, in precedence order.
@@ -47,7 +50,36 @@ impl ShortcutMap {
             })
     }
 
-    /// Consume the first bound key press, leaving other input for its owner.
+    /// The binding a key press that typed `typed` runs. Layouts differ in which punctuation
+    /// needs Shift, so a key named by a punctuation character matches with Shift ignored when no
+    /// binding names the exact modifiers and the press typed that character or nothing.
+    fn binding(
+        &self,
+        key: egui::Key,
+        modifiers: egui::Modifiers,
+        typed: Option<&str>,
+    ) -> Option<(KeyboardShortcut, KeyboardAction)> {
+        let find = |ignore_shift: bool| {
+            let held = |modifiers: egui::Modifiers| egui::Modifiers {
+                shift: modifiers.shift && !ignore_shift,
+                ..modifiers
+            };
+            self.bindings.iter().copied().find(|(shortcut, _)| {
+                key == shortcut.logical_key
+                    && held(modifiers).matches_exact(held(shortcut.modifiers))
+            })
+        };
+        find(false).or_else(|| {
+            typed_char(key)
+                .filter(|c| !c.is_alphanumeric())
+                // Shift+Period typing `>` on a US layout is not the period.
+                .filter(|_| typed.is_none_or(|text| egui::Key::from_name(text) == Some(key)))
+                .and_then(|_| find(true))
+        })
+    }
+
+    /// Consume the first bound key press with the text it typed, leaving other input for its
+    /// owner.
     pub(crate) fn consume(
         &self,
         ctx: &Context,
@@ -55,45 +87,51 @@ impl ShortcutMap {
         accepts: impl Fn(KeyboardAction, KeyboardShortcut) -> bool,
     ) -> Option<(KeyboardAction, Event)> {
         ctx.input_mut(|input| {
+            let pairs = typed_pairs(&input.events);
+            let bound = |index: usize| {
+                let (key, modifiers) = match &input.events[index] {
+                    Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => (*key, *modifiers),
+                    Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
+                    Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
+                    _ => return None,
+                };
+                let typed = pairs[index].and_then(|text| match &input.events[text] {
+                    Event::Text(text) => Some(text.as_str()),
+                    _ => None,
+                });
+                let (shortcut, action) = self.binding(key, modifiers, typed)?;
+                accepts(action, shortcut).then_some(action)
+            };
             let (index, action) = input
                 .events
                 .iter()
                 .enumerate()
-                .take_while(|(_, event)| {
-                    !stop_at_text || !matches!(event, Event::Text(text) if starts_entry(text))
+                .take_while(|(index, event)| {
+                    // Typed text ends the search, unless the bound key that typed it follows.
+                    !stop_at_text
+                        || !matches!(event, Event::Text(text) if starts_entry(text))
+                        || (pairs[*index] == Some(index + 1) && bound(index + 1).is_some())
                 })
-                .find_map(|(index, event)| {
-                    let (key, modifiers) = match event {
-                        Event::Key {
-                            key,
-                            pressed: true,
-                            modifiers,
-                            ..
-                        } => (*key, *modifiers),
-                        Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
-                        Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
-                        _ => return None,
-                    };
-                    let (shortcut, action) = self.bindings.iter().find(|(shortcut, _)| {
-                        let matches = modifiers.matches_exact(shortcut.modifiers)
-                            || (matches!(key, egui::Key::Plus | egui::Key::Questionmark)
-                                && modifiers.matches_logically(shortcut.modifiers)
-                                && modifiers.alt == shortcut.modifiers.alt);
-                        key == shortcut.logical_key && matches
-                    })?;
-                    accepts(*action, *shortcut).then_some((index, *action))
-                })?;
-            let event = input.events.remove(index);
-            if let Event::Key { key, .. } = &event {
-                let symbol = key.symbol_or_name();
-                if symbol.len() == 1
-                    && input
-                        .events
-                        .get(index)
-                        .is_some_and(|next| matches!(next, Event::Text(text) if text.eq_ignore_ascii_case(symbol)))
-                {
-                    input.events.remove(index);
-                }
+                .find_map(|(index, _)| Some((index, bound(index)?)))?;
+            let mut event = input.events.remove(index);
+            // The press ran a binding, so its text is dropped whatever character it carries.
+            if let Some(text) = pairs[index] {
+                input.events.remove(text.min(index));
+            }
+            // A browser reports the paste key and then the clipboard text: one paste, with it.
+            if action == KeyboardAction::PasteDrawing
+                && matches!(event, Event::Key { .. })
+                && let Some(paste) = input
+                    .events
+                    .iter()
+                    .position(|event| matches!(event, Event::Paste(_)))
+            {
+                event = input.events.remove(paste);
             }
             Some((action, event))
         })
@@ -128,6 +166,42 @@ fn starts_entry(text: &str) -> bool {
     text.chars()
         .next()
         .is_some_and(|c| !c.is_control() && !c.is_whitespace())
+}
+
+/// The character naming a letter, digit or punctuation key, the keys whose press types text.
+fn typed_char(key: egui::Key) -> Option<char> {
+    let mut symbol = key.symbol_or_name().chars();
+    let c = symbol.next()?;
+    // The arrows are named by a glyph and type nothing; the minus key by the minus sign.
+    (symbol.next().is_none() && (c.is_ascii() || key == egui::Key::Minus)).then_some(c)
+}
+
+/// For each event, the index of the other half of its key press: the text a key typed, or the
+/// key that typed a text.
+///
+/// The two are adjacent, the key first on the desktop and the text first in a browser. A
+/// press types at most one text and none with Ctrl or Command held, so a text belongs to the
+/// press before it unless that press already has its text, and otherwise to the press after.
+fn typed_pairs(events: &[Event]) -> Vec<Option<usize>> {
+    let types = |event: &Event| {
+        matches!(event, Event::Key { key, pressed: true, modifiers, .. }
+            if typed_char(*key).is_some() && !modifiers.ctrl && !modifiers.command)
+    };
+    let mut pairs = vec![None; events.len()];
+    for (text, event) in events.iter().enumerate() {
+        if !matches!(event, Event::Text(_)) {
+            continue;
+        }
+        let key = [text.checked_sub(1), Some(text + 1)]
+            .into_iter()
+            .flatten()
+            .find(|&key| pairs.get(key) == Some(&None) && types(&events[key]));
+        if let Some(key) = key {
+            pairs[text] = Some(key);
+            pairs[key] = Some(text);
+        }
+    }
+    pairs
 }
 
 /// A shortcut that needs the host's dialogs, layout or clipboard.
@@ -382,10 +456,7 @@ impl super::Chart {
                             input.events.remove(index);
                             return Some(key);
                         }
-                        if self.keyboard.map.bindings.iter().any(|(shortcut, _)| {
-                            shortcut.logical_key == *key
-                                && modifiers.matches_exact(shortcut.modifiers)
-                        }) {
+                        if self.keyboard.map.binding(*key, *modifiers, None).is_some() {
                             return None;
                         }
                     }
@@ -468,6 +539,7 @@ impl super::Chart {
             A::PanLeft | A::PanRight | A::PanLeftFast | A::PanRightFast => {
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
                 let amount = if matches!(action, A::PanLeftFast | A::PanRightFast) {
                     self.state
                         .time_scale()
@@ -477,17 +549,19 @@ impl super::Chart {
                 } else {
                     self.chart_options.keyboard.pan_amount
                 };
+                // Left shows earlier bars, as the Scroll left button does.
                 self.state.time_scale_mut().scroll_bars(
                     if matches!(action, A::PanLeft | A::PanLeftFast) {
-                        -amount
-                    } else {
                         amount
+                    } else {
+                        -amount
                     },
                 );
             }
             A::ZoomIn | A::ZoomOut | A::PageUp | A::PageDown => {
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
                 let step = self.chart_options.keyboard.zoom_step;
                 let delta = match action {
                     A::ZoomIn => step,
@@ -820,18 +894,52 @@ mod tests {
     fn navigation_and_panel_keys_follow_the_shared_action_map() {
         use KeyboardAction as A;
         let alt_shift = Modifiers::ALT.plus(Modifiers::SHIFT);
-        for (key, modifiers, expected) in [
-            (Key::ArrowLeft, Modifiers::NONE, Some(A::PanLeft)),
-            (Key::ArrowLeft, Modifiers::ALT, None),
-            (Key::ArrowRight, Modifiers::COMMAND, Some(A::PanRightFast)),
-            (Key::ArrowUp, Modifiers::COMMAND, Some(A::ZoomIn)),
-            (Key::ArrowLeft, alt_shift, Some(A::ScrollToFirstBar)),
-            (Key::Home, Modifiers::NONE, Some(A::ScrollToFirstBar)),
-            (Key::ArrowRight, alt_shift, Some(A::ScrollToRealTime)),
-            (Key::End, Modifiers::NONE, Some(A::ScrollToRealTime)),
-            (Key::Period, Modifiers::NONE, Some(A::OpenLayout)),
-            (Key::D, Modifiers::ALT, Some(A::OpenDataWindow)),
-            (Key::E, alt_shift, Some(A::ToggleSession)),
+        // The third field is the text the press types and whether it arrives before the key,
+        // as a browser reports it, or after it, as the desktop does.
+        for (key, modifiers, typed, expected) in [
+            (Key::ArrowLeft, Modifiers::NONE, None, Some(A::PanLeft)),
+            (Key::ArrowRight, Modifiers::NONE, None, Some(A::PanRight)),
+            (Key::ArrowLeft, Modifiers::ALT, None, None),
+            (
+                Key::ArrowLeft,
+                Modifiers::COMMAND,
+                None,
+                Some(A::PanLeftFast),
+            ),
+            (
+                Key::ArrowRight,
+                Modifiers::COMMAND,
+                None,
+                Some(A::PanRightFast),
+            ),
+            (Key::ArrowUp, Modifiers::COMMAND, None, Some(A::ZoomIn)),
+            (Key::ArrowLeft, alt_shift, None, Some(A::ScrollToFirstBar)),
+            (Key::Home, Modifiers::NONE, None, Some(A::ScrollToFirstBar)),
+            (Key::ArrowRight, alt_shift, None, Some(A::ScrollToRealTime)),
+            (Key::End, Modifiers::NONE, None, Some(A::ScrollToRealTime)),
+            (Key::Period, Modifiers::NONE, None, Some(A::OpenLayout)),
+            (
+                Key::Period,
+                Modifiers::SHIFT,
+                Some((".", false)),
+                Some(A::OpenLayout),
+            ),
+            (
+                Key::Slash,
+                Modifiers::SHIFT,
+                Some(("/", false)),
+                Some(A::OpenIndicatorSearch),
+            ),
+            // The key typed another character, so it is not the period.
+            (Key::Period, Modifiers::SHIFT, Some((">", false)), None),
+            (Key::D, Modifiers::ALT, None, Some(A::OpenDataWindow)),
+            (
+                Key::D,
+                Modifiers::ALT,
+                Some(("d", true)),
+                Some(A::OpenDataWindow),
+            ),
+            (Key::E, alt_shift, None, Some(A::ToggleSession)),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -861,13 +969,17 @@ mod tests {
                         )),
                         time: Some(time),
                         events: if pass == 2 {
-                            vec![Event::Key {
+                            let mut events = vec![Event::Key {
                                 key,
                                 modifiers,
                                 physical_key: None,
                                 pressed: true,
                                 repeat: false,
-                            }]
+                            }];
+                            if let Some((text, first)) = typed {
+                                events.insert(usize::from(!first), Event::Text(text.into()));
+                            }
+                            events
                         } else {
                             vec![]
                         },
@@ -886,18 +998,31 @@ mod tests {
             let offset = chart.state.time_scale().right_offset();
             let spacing = chart.state.time_scale().bar_spacing();
             match expected {
-                Some(A::PanLeft) => assert_eq!(offset, before_offset + 1.0),
-                Some(A::PanRightFast) => assert_eq!(offset, before_offset - page),
+                // Left lowers the index of the first visible bar and Right raises it.
+                Some(A::PanLeft) => assert_eq!(offset, before_offset - 1.0),
+                Some(A::PanRight) => assert_eq!(offset, before_offset + 1.0),
+                Some(A::PanLeftFast) => assert_eq!(offset, before_offset - page),
+                Some(A::PanRightFast) => assert_eq!(offset, before_offset + page),
                 Some(A::ZoomIn) => assert!(spacing > before_spacing),
                 Some(A::ScrollToFirstBar) => {
                     let left = chart.visible_logical_range().unwrap().left;
                     assert!(left.abs() < 1e-3, "{key:?}: left edge at bar {left}");
                 }
                 Some(A::ScrollToRealTime) => assert_eq!(offset, latest, "{key:?}"),
-                Some(action) => {
-                    assert_eq!(requests, vec![ShortcutRequest::Action(action)], "{key:?}")
+                Some(action) => assert_eq!(
+                    requests,
+                    vec![ShortcutRequest::Action(action)],
+                    "{key:?} typing {typed:?}"
+                ),
+                None => {
+                    assert_eq!(offset, before_offset);
+                    assert!(
+                        !requests
+                            .iter()
+                            .any(|request| matches!(request, ShortcutRequest::Action(_))),
+                        "{key:?} typing {typed:?}: {requests:?}"
+                    );
                 }
-                None => assert_eq!(offset, before_offset),
             }
             if expected != Some(A::ZoomIn) {
                 assert_eq!(spacing, before_spacing, "{key:?} keeps the zoom");
@@ -970,29 +1095,83 @@ mod tests {
             KeyboardShortcut::new(Modifiers::NONE, Key::F),
             KeyboardAction::FitContent,
         ));
-        ctx.run_ui(
-            RawInput {
-                events: vec![
+        // A press that ran a binding types nothing, whatever character its text carries.
+        for (key, modifiers, text) in [
+            (Key::F, Modifiers::NONE, "f"),
+            (Key::L, Modifiers::ALT, "¬"),
+            (Key::Minus, Modifiers::NONE, "-"),
+        ] {
+            ctx.run_ui(
+                RawInput {
+                    events: vec![
+                        Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        },
+                        Event::Text(text.into()),
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            assert!(
+                chart.take_shortcut_requests().is_empty(),
+                "{key:?} is bound and must not also open symbol search"
+            );
+            assert!(
+                !ctx.input(|input| input.events.contains(&Event::Text(text.into()))),
+                "{key:?} leaves no text for a host dialog"
+            );
+        }
+        assert_eq!(
+            chart.state.price_scale().options().mode,
+            PriceScaleMode::Normal,
+            "Alt+L switched the logarithmic scale back"
+        );
+    }
+
+    /// The desktop reports a paste as the paste event alone, a browser as the key press and
+    /// then the paste event: either way the host gets one request carrying the text.
+    #[test]
+    fn a_paste_reported_with_its_key_press_is_one_request_with_the_text() {
+        for with_key in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut events = vec![Event::Paste("clip".into())];
+            if with_key {
+                events.insert(
+                    0,
                     Event::Key {
-                        key: Key::F,
+                        key: Key::V,
                         physical_key: None,
                         pressed: true,
                         repeat: false,
-                        modifiers: Modifiers::NONE,
+                        modifiers: Modifiers::COMMAND,
                     },
-                    Event::Text("f".into()),
-                ],
-                ..Default::default()
-            },
-            |ui| {
-                chart.show(ui);
-            },
-        )
-        .drop_without_applying_deltas();
-        assert!(
-            chart.take_shortcut_requests().is_empty(),
-            "a bound character must not also open symbol search"
-        );
+                );
+            }
+            ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.take_shortcut_requests(),
+                vec![ShortcutRequest::PasteDrawing("clip".into())],
+                "key press reported: {with_key}"
+            );
+        }
     }
 
     #[test]

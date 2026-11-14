@@ -244,7 +244,7 @@ impl IndicatorPane {
             if count == 0 {
                 return;
             }
-            let spacing = rect.width() / count as f32;
+            let spacing = (rect.width() - 1.0) / count as f32;
             let coords = IndicatorCoordParams::new(
                 spacing,
                 0.0,
@@ -267,7 +267,7 @@ impl IndicatorPane {
         if count == 0 {
             return;
         }
-        let spacing = rect.width() / count as f32;
+        let spacing = (rect.width() - 1.0) / count as f32;
         let coords = IndicatorCoordParams::new(
             spacing,
             0.0,
@@ -342,7 +342,9 @@ impl IndicatorPane {
             },
             |axis| axis.right(),
         );
-        let text_color = painter.ctx().active_theme().chart.axis_text;
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| painter.ctx().active_theme().chart.axis_text);
         let map = self
             .price_map
             .unwrap_or_else(|| {
@@ -586,14 +588,13 @@ impl IndicatorPane {
             rect.left() + theme.spacing.sm,
             rect.top() + self.legend_offset + theme.spacing.sm.min(rect.height() / 2.0),
         );
+        let backdrop = Rect::from_min_size(pos, galley.size())
+            .expand(2.0)
+            .intersect(rect);
         painter.rect_filled(
-            Rect::from_min_size(pos, galley.size())
-                .expand(2.0)
-                .intersect(rect),
+            backdrop,
             0.0,
-            theme
-                .chart
-                .bg
+            self.background_at(painter.ctx(), backdrop.center())
                 .gamma_multiply(self.legend_backdrop.clamp(0.0, 1.0)),
         );
         painter.galley(pos, galley, text_color);
@@ -611,7 +612,10 @@ impl IndicatorPane {
             indicator,
             text_color,
             theme.ui.text_muted,
-            theme.chart.bg,
+            self.background_at(
+                painter.ctx(),
+                rect.min + egui::vec2(0.0, self.legend_offset),
+            ),
             theme.text.ohlc,
         );
         let controls_width = crate::chart::rendering::controls_width(indicator);
@@ -1190,6 +1194,8 @@ mod tests {
                                 rect,
                                 &Default::default(),
                                 None,
+                                egui::Color32::WHITE,
+                                &|_| egui::Color32::BLACK,
                             );
                         } else {
                             crate::chart::rendering::axes::render_study_tags(
