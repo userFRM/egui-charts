@@ -96,131 +96,19 @@ impl Chart {
                     Sense::click_and_drag(),
                 )
                 .on_hover_cursor(egui::CursorIcon::ResizeVertical);
-            if response.dragged()
-                && self.chart_options.handle_scale.enabled
-                && self
-                    .chart_options
-                    .handle_scale
-                    .axis_pressed_mouse_move
-                    .price
-            {
-                let anchor_y = ui
-                    .input(|input| input.pointer.press_origin())
-                    .map_or(rect.center().y, |pos| pos.y);
-                let scale = self.pane_price_scale_mut(pane_id, key);
-                let map = scale.map(scale.transform(), rect.top(), rect.bottom());
-                let anchor = map.transform().to_scale(map.y_to_price(anchor_y));
-                scale.zoom(
-                    (f64::from(response.drag_delta().y) / f64::from(rect.height())).exp(),
-                    anchor,
-                );
-                ui.ctx().request_repaint();
-            }
-            if response.double_clicked()
-                && !self.pane_collapse_click(ui.ctx())
-                && self.chart_options.handle_scale.enabled
-                && self
-                    .chart_options
-                    .handle_scale
-                    .axis_double_click_reset
-                    .price
-            {
+            let gestures = self.price_axis_gestures(ui, &response, Rect::EVERYTHING);
+            if gestures.reset {
                 self.user_action(|chart| chart.pane_price_scale_mut(pane_id, key).reset());
                 ui.ctx().request_repaint();
             }
-            response.context_menu(|ui| {
-                self.user_action(|chart| {
-                    let scale = chart.pane_price_scale_mut(pane_id, key);
-                    if ui
-                        .selectable_label(!scale.is_manual(), l10n::text(ui.ctx(), "Auto scale"))
-                        .clicked()
-                    {
-                        scale.reset();
-                        ui.close();
-                    }
-                    ui.separator();
-                    use crate::scales::PriceScaleMode;
-                    for mode in [
-                        PriceScaleMode::Normal,
-                        PriceScaleMode::Logarithmic,
-                        PriceScaleMode::Percentage,
-                        PriceScaleMode::IndexedTo100,
-                    ] {
-                        if ui
-                            .selectable_label(
-                                scale.options().mode == mode,
-                                l10n::text(ui.ctx(), mode.to_string()),
-                            )
-                            .clicked()
-                        {
-                            scale.options_mut().mode = mode;
-                            scale.reset();
-                            ui.close();
-                        }
-                    }
-                    ui.separator();
-                    if ui
-                        .checkbox(
-                            &mut scale.options_mut().invert_scale,
-                            l10n::text(ui.ctx(), "Invert scale"),
-                        )
-                        .changed()
-                    {
-                        ui.close();
-                    }
-                    ui.separator();
-                    let options = chart.pane_axis_options(pane_id).expect("present pane");
-                    for (label, side) in [
-                        ("Axes on left", crate::model::AxisSide::Left),
-                        ("Axes on right", crate::model::AxisSide::Right),
-                    ] {
-                        if ui
-                            .selectable_label(
-                                options.side == Some(side),
-                                l10n::text(ui.ctx(), label),
-                            )
-                            .clicked()
-                        {
-                            chart.set_pane_axis_options(
-                                pane_id,
-                                crate::model::PaneAxisOptions {
-                                    side: (options.side != Some(side)).then_some(side),
-                                    ..options
-                                },
-                            );
-                            ui.close();
-                        }
-                    }
-                    ui.menu_button(l10n::text(ui.ctx(), "Join price scales"), |ui| {
-                        for (label, side) in [
-                            ("At left edge", crate::model::AxisSide::Left),
-                            ("At right edge", crate::model::AxisSide::Right),
-                        ] {
-                            if ui
-                                .selectable_label(false, l10n::text(ui.ctx(), label))
-                                .clicked()
-                            {
-                                chart.merge_pane_scales(pane_id, side);
-                                ui.close();
-                            }
-                        }
-                    });
-                    let mut hide_unused = options.hide_unused;
-                    if ui
-                        .checkbox(&mut hide_unused, l10n::text(ui.ctx(), "Hide unused axes"))
-                        .changed()
-                    {
-                        chart.set_pane_axis_options(
-                            pane_id,
-                            crate::model::PaneAxisOptions {
-                                hide_unused,
-                                ..options
-                            },
-                        );
-                        ui.close();
-                    }
-                });
-            });
+            // The pane is already painted: show the zoomed scale on the next frame.
+            if gestures.zoom(
+                self.pane_price_scale_mut(pane_id, key),
+                rect.top(),
+                rect.bottom(),
+            ) {
+                ui.ctx().request_repaint();
+            }
         }
     }
 

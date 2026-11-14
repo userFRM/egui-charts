@@ -59,6 +59,8 @@ use egui::{Pos2, Rect, Vec2};
 pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
+#[cfg(feature = "ui")]
+pub(crate) use readout::SeriesFingerprint;
 use std::collections::BTreeMap;
 
 // Re-export from logic layer
@@ -259,8 +261,8 @@ pub struct Chart {
     pub(crate) scroll_start_offset: Option<f64>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
-    /// Price-axis drag this frame: anchor y where the drag began, and the y movement (UI state only)
-    pub(crate) price_axis_drag: Option<(f32, f32)>,
+    /// Bar spacing when a time-axis drag began or was last rebased (UI state only)
+    pub(crate) scroll_start_spacing: Option<f32>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.
@@ -464,6 +466,9 @@ pub struct Chart {
     marker_options: crate::model::MarkerOptions,
     /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
     change_marks: Option<change_marks::ChangeMarks>,
+    /// Clock of the last frame that showed the chart, which dates change marks recorded while no
+    /// frame shows it.
+    frame_clock: Option<change_marks::FrameClock>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
     /// The number of price line handles issued.

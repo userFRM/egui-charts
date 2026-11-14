@@ -441,7 +441,7 @@ fn badge_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerS
         (text, colors.fill, colors.border.color)
     } else {
         let colors = shown.price_label_colors();
-        // A label saved without a border colour shows its fill, which is what it draws there.
+        // A label without a border shows its fill, which is what it draws there.
         let border = if colors.border.is_empty() {
             colors.fill
         } else {

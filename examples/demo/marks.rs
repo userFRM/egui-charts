@@ -22,6 +22,9 @@ impl DemoApp {
     /// fill and a stop marked at their prices, marks of the live changes of the close, signal bar
     /// marks, a watermark of the symbol and its company and the demo level at the recent high.
     pub(super) fn annotate(&mut self) {
+        if self.own_data.is_some() {
+            return;
+        }
         let samples = self.api_samples;
         self.refresh_strategy_signals();
         self.chart.set_mark_source(Some(Arc::new(DemoMarks {

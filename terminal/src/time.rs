@@ -14,7 +14,7 @@ use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, DateRange, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
-use egui_charts::ui::top_toolbar::TopToolbarAction;
+use egui_charts::ui::top_toolbar::{ChartTypePreferences, TimeframePreferences, TopToolbarAction};
 use egui_charts::ui_kit::dialog::DialogFooter;
 use egui_charts::ui_kit::modal::Modal;
 use egui_charts::widget::{SeriesId, ShortcutRequest, VisibleTimeRange};
@@ -137,12 +137,24 @@ impl Terminal {
 
     pub(super) fn time_settings(&mut self, settings: &mut UserSettings, direction: Direction) {
         let selector = &mut self.top_toolbar.timeframe_selector;
+        let chart_types = &mut self.top_toolbar.chart_type_selector;
         match direction {
-            Direction::Save => settings.interval_favorites = selector.preferences().favorites,
+            Direction::Save => {
+                let preferences = selector.preferences();
+                settings.interval_favorites = preferences.favorites;
+                settings.custom_intervals = preferences.custom_timeframes;
+                settings.hidden_intervals = preferences.hidden_timeframes;
+                settings.chart_type_favorites = chart_types.preferences().favorites;
+            }
             Direction::Load => {
-                let mut preferences = selector.preferences();
-                preferences.favorites = settings.interval_favorites.clone();
-                selector.set_preferences(preferences);
+                selector.set_preferences(TimeframePreferences {
+                    favorites: settings.interval_favorites.clone(),
+                    custom_timeframes: settings.custom_intervals.clone(),
+                    hidden_timeframes: settings.hidden_intervals.clone(),
+                });
+                chart_types.set_preferences(ChartTypePreferences {
+                    favorites: settings.chart_type_favorites.clone(),
+                });
             }
         }
     }
@@ -192,7 +204,7 @@ impl Terminal {
         let visible = visible_bars_for_range(range, chart.bars(SeriesId::MAIN));
         let width = chart.get_rendered_price_rect().width();
         // Include the latest slot in the scale's exclusive data range.
-        let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+        let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
         chart.disable_tracking_mode();
         chart.apply_synced_time_scale(spacing, 0.5);
         if self.layout.sync.sync_date_range
@@ -521,7 +533,7 @@ fn session_text(session: &Session, zone: Option<&TimezoneId>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{SIZE, TestFeed, click, frame, key};
+    use super::super::test_support::{MemoryStorage, SIZE, TestFeed, click, frame, key};
     use super::*;
     use egui::{Event, Key, Modifiers, vec2};
     use egui_charts::data::Datafeed;
@@ -536,6 +548,65 @@ mod tests {
             frame(&mut terminal, SIZE, vec![]);
         }
         terminal
+    }
+
+    /// Guards that custom, hidden and starred intervals and starred chart types are saved with
+    /// the settings and restored on the next start, and that a save from before the interval and
+    /// chart type lists existed still restores its starred intervals.
+    #[test]
+    fn interval_and_chart_type_preferences_survive_a_restart() {
+        let storage = Arc::new(MemoryStorage::default());
+        let start = || {
+            let mut terminal = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage.clone());
+            frame(&mut terminal, SIZE, vec![]);
+            terminal
+        };
+        let custom = "7min".parse().unwrap();
+        let intervals = TimeframePreferences {
+            favorites: vec![Timeframe::Min5, custom],
+            custom_timeframes: vec![custom],
+            hidden_timeframes: vec![Timeframe::Min1],
+        };
+        let chart_types = ChartTypePreferences {
+            favorites: vec![ChartType::Bars],
+        };
+        let mut first = start();
+        first
+            .top_toolbar
+            .timeframe_selector
+            .set_preferences(intervals.clone());
+        first
+            .top_toolbar
+            .chart_type_selector
+            .set_preferences(chart_types.clone());
+        assert!(first.flush_storage());
+        drop(first);
+
+        let mut restored = start();
+        assert_eq!(
+            restored.top_toolbar.timeframe_selector.preferences(),
+            intervals
+        );
+        assert_eq!(
+            restored.top_toolbar.chart_type_selector.preferences(),
+            chart_types
+        );
+        let mut older =
+            UserSettings::from_json(r#"{"version":1,"interval_favorites":["Min5"]}"#).unwrap();
+        restored.time_settings(&mut older, Direction::Load);
+        assert_eq!(
+            restored.top_toolbar.timeframe_selector.preferences(),
+            TimeframePreferences {
+                favorites: vec![Timeframe::Min5],
+                ..TimeframePreferences::default()
+            }
+        );
+        assert_eq!(
+            restored.top_toolbar.chart_type_selector.preferences(),
+            ChartTypePreferences::default()
+        );
     }
 
     /// The bottom bar follows the chart's adjustment choice and the feed's capability,
@@ -729,7 +800,7 @@ mod tests {
                     "{range:?} {shown_start} {shown_end} {start} {end}"
                 );
                 let expected =
-                    chart.get_rendered_price_rect().width() / ((end - start) as f32 + 0.5);
+                    (chart.get_rendered_price_rect().width() - 1.0) / ((end - start) as f32 + 0.5);
                 assert!((chart.get_time_scale_state().0 - expected).abs() < 0.001);
             }
             terminal.charts.push(

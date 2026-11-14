@@ -94,8 +94,15 @@ are specific to `Candles`; they are not universal transform settings.
 
 Renko, Kagi, Line Break, Point and Figure, and Range have one time-scale slot per
 displayed element. Chart indices on those types count elements, not source bars.
-Studies, drawings, markers and added price series remain stored but are hidden;
-studies continue updating. Volume is also hidden. Returning to a time-based type
-shows these overlays again. These five types cannot be added series:
+Studies, drawings and markers are drawn at the element that contains their time:
+an element covers the interval up to its completion, and a Point and Figure column
+also covers the quiet bars up to the next column. A time before the loaded
+elements or outside the source history has no slot, so nothing is drawn for it.
+Studies are calculated from the element values and keep updating. Added price
+series are drawn too: each bar is placed by its time on the element axis, at the
+slot of an element with the same completion time, between two slots in proportion
+to the time between those completions, and past either end at that end's spacing.
+Volume is hidden on these types. Returning to a time-based type restores the
+time axis of the source bars. These five types cannot be added series:
 [`SeriesOptions::chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.chart_type)
 converts them to `Line`. See [all added-series restrictions](../chart-types.mdx#added-series-restrictions).
