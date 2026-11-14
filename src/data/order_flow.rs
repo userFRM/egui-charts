@@ -910,11 +910,15 @@ impl OrderFlowInput {
     /// the first instant, as the page stamps it, where the store left a live execution to a page,
     /// the page may hold executions the stream never sent, so the live ones the store kept apart
     /// count in place of the page's executions of that instant. They are live executions too:
-    /// when the chart holds a bar at or before the oldest of them, that bar is rebuilt as well.
-    /// `before` is the open of a bar the chart dropped when the sink opened the chart's oldest bar
-    /// a nanosecond after it: the run then opens the oldest bar after it, and the copies count
-    /// from `anchor` though no chart bar is at or before it. Returns the parts and the grouping
-    /// after them, or `None` unless they rebuild every bar through the newest.
+    /// when the chart holds a bar at or before the oldest of them, the run starts at that bar,
+    /// unless the executions from there fail to rebuild the chart's bars or, from a bar that
+    /// opens at the oldest of them, leave part of their volume to an older bar. A paged execution
+    /// the sink never allocated, such as one the stream sent late, does either, and the run then
+    /// starts as it would without them. `before` is the open of a bar the chart dropped when the
+    /// sink opened the chart's oldest bar a nanosecond after it: the run then opens the oldest bar
+    /// after it, and the copies count from `anchor` though no chart bar is at or before it. Returns
+    /// the parts and the grouping after them, or `None` unless they rebuild every bar through the
+    /// newest.
     #[cfg(feature = "widget")]
     fn chart_run<'a>(
         clock: &BarClock,
@@ -928,34 +932,44 @@ impl OrderFlowInput {
         let lost = trades.lost_until();
         let paged = trades.iter().count() - trades.live().count();
         let (unheld_at, unheld) = trades.unheld_live().unzip();
+        let streamed = (trades.live().map(|trade| trade.ts)).chain(anchor).min();
         // The live executions the store kept apart are the stream's too, so the oldest of them
         // opens a bar the sink allocated, unless the chart starts after it.
         let kept_from = (unheld.and_then(|kept| kept.first()))
             .map(|trade| trade.ts)
-            .filter(|at| history.first().is_some_and(|bar| bar.time <= *at));
-        let oldest = (trades.live().map(|trade| trade.ts))
-            .chain(anchor)
-            .chain(kept_from)
-            .min();
-        let from = oldest.filter(|_| lost.is_none()).and_then(|oldest| {
-            let bars = &history[..history.partition_point(|bar| bar.time <= oldest)];
-            let chained = (bars.windows(2).rev())
-                .take_while(|pair| pair[1].time - pair[0].time == TimeDelta::nanoseconds(1))
-                .count();
-            (bars[..bars.len() - chained].last().map(|bar| bar.time))
-                .or(anchor.filter(|_| before.is_some()))
-        });
-        let live = trades
-            .live()
-            .filter(|trade| lost.is_none_or(|lost| trade.ts > lost));
-        let mut held: Vec<_> = (trades.iter().take(paged))
-            .filter(|trade| Some(trade.ts) != unheld_at)
-            .chain(unheld.into_iter().flatten())
-            .filter(|trade| from.is_some_and(|from| trade.ts >= from))
-            .chain(live)
-            .collect();
-        held.sort_by_key(|trade| trade.ts);
-        super::footprint::live_run(timeframe, tick_size, &held, history, before)
+            .filter(|at| history.first().is_some_and(|bar| bar.time <= *at))
+            .filter(|at| streamed.is_none_or(|oldest| *at < oldest));
+        let run = |oldest: Option<DateTime<Utc>>| {
+            let from = oldest.filter(|_| lost.is_none()).and_then(|oldest| {
+                let bars = &history[..history.partition_point(|bar| bar.time <= oldest)];
+                let chained = (bars.windows(2).rev())
+                    .take_while(|pair| pair[1].time - pair[0].time == TimeDelta::nanoseconds(1))
+                    .count();
+                (bars[..bars.len() - chained].last().map(|bar| bar.time))
+                    .or(anchor.filter(|_| before.is_some()))
+            });
+            let live = trades
+                .live()
+                .filter(|trade| lost.is_none_or(|lost| trade.ts > lost));
+            let mut held: Vec<_> = (trades.iter().take(paged))
+                .filter(|trade| Some(trade.ts) != unheld_at)
+                .chain(unheld.into_iter().flatten())
+                .filter(|trade| from.is_some_and(|from| trade.ts >= from))
+                .chain(live)
+                .collect();
+            held.sort_by_key(|trade| trade.ts);
+            let grouped = super::footprint::live_run(timeframe, tick_size, &held, history, before)?;
+            // Whether the run holds all of the held volume, none of it left to older bars.
+            let parted: f64 = grouped.0.iter().map(|part| part.2).sum();
+            let total: f64 = held.iter().map(|trade| trade.size).sum();
+            Some((grouped, from, total - parted <= 1e-9 * total))
+        };
+        // From a bar that opens at the oldest kept execution, every held one is an execution the
+        // sink allocated there or later, so none of them belongs to an older bar.
+        (kept_from.and_then(|kept| run(Some(kept))))
+            .filter(|(_, from, whole)| *whole || *from != kept_from)
+            .or_else(|| run(streamed))
+            .map(|(grouped, ..)| grouped)
     }
 
     /// Applies a chart replay cutoff, exclusive, or removes it with `None`. Readers then stop at
