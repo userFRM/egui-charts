@@ -3012,7 +3012,13 @@ mod tests {
         // The same with a third chart that leaves, comes back or comes to the symbol in that
         // frame, or that came meanwhile and moves its copy in that frame.
         type Third = fn(&mut ChartLayout, &mut [Chart; 3]);
-        type ThirdRow = (&'static str, [&'static str; 3], Third, [Vec<f64>; 3], [Vec<f64>; 3]);
+        type ThirdRow = (
+            &'static str,
+            [&'static str; 3],
+            Third,
+            [Vec<f64>; 3],
+            [Vec<f64>; 3],
+        );
         let rows: [ThirdRow; 4] = [
             (
                 "deleted and moved as both left",
@@ -3987,7 +3993,11 @@ mod tests {
         charts[1].user_action(|chart| draw(chart, 104.0));
         frames(&mut layout, &mut charts);
         frames(&mut window, &mut elsewhere);
-        assert_eq!(prices(&elsewhere), [vec![104.0]], "read from the shared storage");
+        assert_eq!(
+            prices(&elsewhere),
+            [vec![104.0]],
+            "read from the shared storage"
+        );
         elsewhere[0].user_action(|chart| move_first(chart, 95.0));
         frames(&mut window, &mut elsewhere);
         frames(&mut layout, &mut charts);
