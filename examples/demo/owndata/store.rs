@@ -71,7 +71,10 @@ pub(crate) fn import(text: &str) -> Result<Profile, String> {
 /// The ready profiles, in the order the profile list shows them: public sources that need no key.
 /// They ship with the demo and are never saved, so a later version of the demo updates them.
 pub(crate) fn ready() -> Vec<Profile> {
-    const FILES: [&str; 1] = [include_str!("ready/binance-spot.json")];
+    const FILES: [&str; 2] = [
+        include_str!("ready/binance-spot.json"),
+        include_str!("ready/coinbase-exchange.json"),
+    ];
     // The tests read every shipped file through the feed, so a file that does not read fails
     // there.
     FILES.iter().filter_map(|file| import(file).ok()).collect()

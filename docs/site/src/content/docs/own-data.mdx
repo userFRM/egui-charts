@@ -49,6 +49,23 @@ The spot market data Binance publishes for everyone:
   and sales, the footprint and the order-flow studies with its side: Binance's `m` is `true`
   when the buyer was the maker, a sell, and `false` for a buy.
 
+### Coinbase Exchange (public)
+
+The market data Coinbase Exchange publishes for everyone:
+
+- **Symbols.** BTC-USD, ETH-USD, SOL-USD, BTC-EUR and ETH-EUR, with a price step of 0.01.
+- **Intervals.** 1m, 5m, 15m, 1h, 6h and 1d, the six Coinbase serves. The interval menu lists
+  6h once *Custom interval…* adds it.
+- **History.** `https://api.exchange.coinbase.com/products/{symbol}/candles`, up to 300 bars a
+  request, back to the first bar Coinbase holds for the symbol. Coinbase lists the newest bar
+  first and counts both ends of the range; the demo sorts the bars and drops the one at the end
+  of the range, which the chart already holds.
+- **Live data.** One connection to `wss://ws-feed.exchange.coinbase.com` subscribes to the
+  symbol's `matches` channel. Each match continues the bar in progress and reaches time and
+  sales, the footprint and the order-flow studies with its side. Coinbase's `side` is the side
+  of the resting order, so a `sell` match is a buy and a `buy` match is a sell. The
+  `last_match` Coinbase sends first happened before the subscription and is left out.
+
 A ready profile is read-only. *Connect* uses it as the demo ships it and stores no copy, so a
 later version of the demo updates it. To start a profile of your own from it, give it another
 name and *Save*. Where Binance refuses your region, the dialog and the chart show its answer as
