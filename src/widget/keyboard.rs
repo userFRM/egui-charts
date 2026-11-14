@@ -858,7 +858,8 @@ mod tests {
         }
     }
 
-    /// Drawings hidden by Ctrl+Alt+H are deselected, so Delete and the arrows leave them alone.
+    /// Drawings hidden by Ctrl+Alt+H or by undoing a show are deselected, so Delete and the
+    /// arrows leave them alone.
     #[cfg(feature = "drawings")]
     #[test]
     fn hidden_drawings_ignore_delete_and_arrow_keys() {
@@ -888,6 +889,12 @@ mod tests {
         assert_eq!(drawings.len(), 1);
         assert!(drawings[0].visible);
         assert_eq!(drawings[0].chart_points, drawing.chart_points);
+        // Undoing the show hides the drawing again and deselects it too.
+        chart.drawings_mut().select(7);
+        assert!(chart.undo());
+        let delete = press(Key::Delete, Modifiers::NONE);
+        frame(&ctx, &mut chart, 5.0, vec![delete]);
+        assert_eq!(chart.drawings().drawings.len(), 1);
     }
 
     #[test]
