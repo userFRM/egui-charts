@@ -978,9 +978,12 @@ impl Chart {
             let kept = clock.bar_open(time);
             let shown = self.state.shown();
             let now = shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= kept);
-            let time_scale = self.state.time_scale_mut();
             let moved = now as f64 - after as f64;
-            time_scale.set_right_offset(time_scale.right_offset_precise() - moved);
+            // From the offset before the change: the new bar count has clamped the uncorrected
+            // one, and at a fixed left edge that moves the view by up to the bars removed.
+            self.state
+                .time_scale_mut()
+                .set_right_offset(right_edge.offset - moved);
         }
         self.stop_at_oldest_bar(right_edge);
     }
@@ -1000,6 +1003,7 @@ impl Chart {
         };
         ViewEdge {
             right,
+            offset: scale.right_offset_precise(),
             first: shown.first().map(|bar| bar.time),
             kept: shown.get(at).map(|bar| (bar.time, last - at)),
         }
@@ -1037,6 +1041,7 @@ impl Chart {
 /// The viewport, oldest loaded key and kept slot before bars change.
 pub(super) struct ViewEdge {
     right: f64,
+    offset: f64,
     first: Option<DateTime<Utc>>,
     /// The time of the bar in the slot the view keeps in place and the number of bars after it,
     /// on an ordinal scale; `None` without bars.

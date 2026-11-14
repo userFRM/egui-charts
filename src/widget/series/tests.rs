@@ -497,7 +497,9 @@ fn removed_whitespace_tail_keeps_the_view() {
 /// after the edge: 11:09 stays at index 69 of 101, an offset of -31. Popping 31 bars removes
 /// 11:09 as well, and 11:08, the last bar left at index 68, takes its place at an offset of 0.
 /// At -1.5 the view is near the live edge and keeps its offset when the last bar goes. Emptying
-/// the series and filling it again keeps the offset of -30.
+/// the series and filling it again keeps the offset of -30. At 20 px a bar with a fixed left
+/// edge, a view scrolled back as far as the edge allows has the first bar at its left edge, and
+/// popping five bars raises its offset by five, so the first bar stays there.
 #[test]
 fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
     struct WindowFeed;
@@ -591,6 +593,25 @@ fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
         chart.state.time_scale().right_offset(),
     ));
 
+    let options = crate::config::ChartOptions {
+        time_scale: crate::config::TimeScaleOptions {
+            bar_spacing: 20.0,
+            fix_left_edge: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut chart = Chart::new(BarData::from_bars(window(0, 100))).with_chart_options(options);
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    chart.scroll_to_position(-100.0, false);
+    let stopped = chart.state.time_scale().right_offset_precise();
+    chart.pop_bars(SeriesId::MAIN, 5);
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    got.push((
+        "pop_bars at a fixed left edge",
+        (chart.state.time_scale().right_offset_precise() - stopped) as f32,
+    ));
+
     assert_eq!(
         got,
         [
@@ -605,6 +626,7 @@ fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
             ("emptied and filled again", -30.0),
             ("added series pop_bars", -25.0),
             ("feed pause and resume", -30.0),
+            ("pop_bars at a fixed left edge", 5.0),
         ]
     );
 }
