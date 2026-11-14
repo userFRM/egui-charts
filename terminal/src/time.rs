@@ -222,10 +222,7 @@ impl Terminal {
         else {
             return;
         };
-        self.apply_span(VisibleTimeRange {
-            from,
-            to: next - Duration::seconds(1),
-        });
+        self.apply_span(VisibleTimeRange::new(from, next - Duration::seconds(1)));
     }
 
     fn apply_span(&mut self, span: VisibleTimeRange) {

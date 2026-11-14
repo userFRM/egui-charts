@@ -40,6 +40,7 @@ pub enum BackgroundStyle {
 /// When the chart shows a group of buttons: its navigation buttons in the main pane, or the
 /// maximize and menu buttons of its panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
@@ -78,6 +79,7 @@ fn pixel_conflation_threshold() -> Option<f32> {
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PriceAxisOptions {
     /// Allow value tags to overlap instead of moving them to free vertical slots.
     pub allow_label_overlap: bool,

@@ -17,6 +17,7 @@ pub trait Marks: MaybeSend + 'static {
 
 /// The chart view for which a host supplies annotations and events.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MarksRequest {
     /// Current instrument key.
     pub symbol: String,
@@ -30,6 +31,7 @@ pub struct MarksRequest {
 
 /// One complete answer for a visible range. Empty vectors clear the source's marks.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct MarksPage {
     /// Bar annotations, including their optional hover text.
     pub bar_marks: Vec<Marker>,

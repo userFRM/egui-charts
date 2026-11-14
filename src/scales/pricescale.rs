@@ -186,6 +186,7 @@ pub struct PriceScaleOptions {
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct PriceTransform {
     /// Scale mode
     pub mode: PriceScaleMode,

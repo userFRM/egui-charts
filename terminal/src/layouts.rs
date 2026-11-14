@@ -508,11 +508,9 @@ impl Terminal {
             .saved_sizes()
             .into_iter()
             .find(|sizes| sizes.mode == mode);
-        Ok(SavedLayout {
-            mode,
-            charts,
-            sizing,
-        })
+        let mut layout = SavedLayout::new(mode, charts);
+        layout.sizing = sizing;
+        Ok(layout)
     }
 
     /// Saves the layout on show under its tab's name.
@@ -809,13 +807,10 @@ mod tests {
         settle(&mut terminal);
         terminal.chart_mut().set_study_limit(Some(3));
         terminal.chart_mut().set_main_series_visible(false);
-        terminal
-            .chart_mut()
-            .set_event_visibility(egui_charts::model::EventVisibility {
-                show_earnings: true,
-                show_economic_events: true,
-                ..Default::default()
-            });
+        let mut visibility = egui_charts::model::EventVisibility::default();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        terminal.chart_mut().set_event_visibility(visibility);
         let mut hidden = ToolAvailability::default();
         hidden.visible = false;
         hidden.enabled = false;

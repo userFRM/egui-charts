@@ -5,6 +5,7 @@
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
+#[non_exhaustive]
 pub enum SeriesScale {
     /// The pane's right axis.
     #[default]

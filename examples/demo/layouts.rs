@@ -653,11 +653,7 @@ impl DemoApp {
             .collect::<Result<_, _>>()
             .map_err(|error| format!("Could not save the layout: {error}"))?;
         // The demo keeps the chart sizes in the layout's groups document.
-        Ok(SavedLayout {
-            mode,
-            charts,
-            sizing: None,
-        })
+        Ok(SavedLayout::new(mode, charts))
     }
 
     pub(super) fn capture_comparisons(
@@ -790,10 +786,8 @@ impl DemoApp {
                 }
             }
             // The demo restores its comparisons and spreads itself, with their feeds.
-            let snapshot = egui_charts::widget::ChartSnapshot {
-                series: None,
-                ..snapshot.clone()
-            };
+            let mut snapshot = snapshot.clone();
+            snapshot.series = None;
             let restored = self
                 .chart_in_slot(slot)
                 .map(|chart| chart.restore(&snapshot));
@@ -1253,12 +1247,10 @@ mod tests {
             .registry
             .set_availability(egui_charts::drawings::DrawingToolType::TrendLine, hidden);
         app.chart.set_main_series_visible(false);
-        app.chart
-            .set_event_visibility(egui_charts::model::EventVisibility {
-                show_earnings: true,
-                show_economic_events: true,
-                ..Default::default()
-            });
+        let mut visibility = egui_charts::model::EventVisibility::default();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        app.chart.set_event_visibility(visibility);
         app.handle_comparison(super::super::CompareAction::AddSymbol(
             "AAPL".into(),
             Default::default(),

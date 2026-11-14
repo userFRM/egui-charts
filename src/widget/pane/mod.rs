@@ -64,6 +64,7 @@ fn upgraded_study(
 /// Behaviour and colours of the separators between panes, set with
 /// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PaneOptions {
     /// Dragging a separator resizes the panes on either side of it, and a double click returns
     /// both to their default stretch factors. `true` by default.
@@ -105,7 +106,8 @@ impl Default for PaneLayout {
 }
 
 /// A change of a study's place in the draw order of its pane, where each item is drawn over the
-/// ones before it. In the main pane the price series is one of the items.
+/// ones before it. In the main pane the price series is one of the items. The set is closed: an
+/// item moves one step or all the way, to the front or to the back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisualOrder {
     /// Draw over every other item of the pane.

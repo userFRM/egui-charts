@@ -14,6 +14,7 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
 
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
     pub level: i64,

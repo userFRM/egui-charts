@@ -37,6 +37,7 @@ impl EventKind {
 
 /// An event supplied by the host, which owns its data and any external service.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TimeScaleEvent {
     /// Stable host identity, returned by the chart when the badge is clicked.
     pub id: String,
@@ -50,9 +51,28 @@ pub struct TimeScaleEvent {
     pub details: String,
 }
 
+impl TimeScaleEvent {
+    /// An event with a headline and no details: assign [`details`](Self::details) to add them.
+    pub fn new(
+        id: impl Into<String>,
+        time: DateTime<Utc>,
+        kind: EventKind,
+        title: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            time,
+            kind,
+            title: title.into(),
+            details: String::new(),
+        }
+    }
+}
+
 /// Visibility of each time-axis event category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct EventVisibility {
     /// Show dividend events.
     pub show_dividends: bool,

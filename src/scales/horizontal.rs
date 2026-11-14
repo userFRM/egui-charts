@@ -138,6 +138,7 @@ impl<K: Ord + Send + Sync> HorizontalScale for CustomHorizontalScale<K> {
 
 /// Where the tick marks of a horizontal axis are laid out.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct TickMarkLayout {
     /// Plot width in points.
     pub width: f32,
@@ -256,9 +257,17 @@ pub fn time_key(time: DateTime<Utc>) -> f64 {
 /// and 1, then half prices, and draws the roundest kind shown in bold. Labels and the crosshair
 /// show `precision` decimals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PriceHorizontalScale {
     /// Decimals of the labels.
     pub precision: usize,
+}
+
+impl PriceHorizontalScale {
+    /// A scale whose labels and crosshair show `precision` decimals.
+    pub fn new(precision: usize) -> Self {
+        Self { precision }
+    }
 }
 
 impl Default for PriceHorizontalScale {
@@ -311,6 +320,7 @@ impl HorizontalScale for PriceHorizontalScale {
 /// Actual maturity samples are spaced linearly by month. [`Self::whitespace`] remains available
 /// for hosts that also need explicit empty samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MaturityScale {
     /// Months between neighbouring slots.
     pub base_resolution: u32,

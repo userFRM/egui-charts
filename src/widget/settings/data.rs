@@ -480,6 +480,7 @@ impl Default for TradingSettings {
 
 /// Which trading events raise a notification: the levels of the toasts they use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum TradingNotifications {
     /// Fills, partial fills, rejections and refused orders.
     #[default]

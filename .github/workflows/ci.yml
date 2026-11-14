@@ -671,6 +671,9 @@ jobs:
           if ! grep -q 'fn add_synced_drawing.*-> Result' performance-base/src/drawings/manager/edit.rs; then
             sed -i 's/\.expect("bench drawings are valid")//' performance-base/benches/frame_time.rs
           fi
+          if ! grep -q 'impl TimeScaleEvent {' performance-base/src/model/time_scale_event.rs; then
+            sed -z -E -i 's/TimeScaleEvent::new\(\s*index\.to_string\(\),\s*time,\s*EventKind::News,\s*"Headline",?\s*\)/TimeScaleEvent { id: index.to_string(), time, kind: EventKind::News, title: "Headline".into(), details: String::new() }/' performance-base/benches/frame_time.rs
+          fi
       # The head's target already holds the dependencies, so only the base library and bench build.
       - name: Build the base workload
         if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'

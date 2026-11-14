@@ -38,4 +38,4 @@ The unused colour token fields below have been removed. Study defaults now come 
 | `DESIGN_TOKENS.semantic.indicators` | `sma`, `bb_upper`, `bb_middle`, `bb_lower`, `rsi`, `macd_line`, `macd_signal`, `vwap` |
 | `DESIGN_TOKENS.semantic.extended` | `bg_active`, `text_secondary`, `text_muted`, `accent_hover`, `accent_active`, `success_light`, `success_dark`, `success_darker`, `error_dark`, `error_darker`, `warning`, `info_light`, `deep_purple`, `cyan`, `teal`, `indigo`, `pink`, `brown`, `deep_orange` |
 
-When constructing `TextSizes` explicitly, add `micro`, `marker` and `dialog_title`, or use `..Default::default()`. Theme serialisation remains compatible with missing fields. The constants in `styles::typography` and the token spacing/radius defaults remain available for engine code and existing hosts; runtime UI rendering reads the applied scales.
+To change text roles, assign them on a theme's `text` or on `TextSizes::default()`. Theme serialisation remains compatible with missing fields. The constants in `styles::typography` and the token spacing/radius defaults remain available for engine code and existing hosts; runtime UI rendering reads the applied scales.

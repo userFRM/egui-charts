@@ -65,6 +65,7 @@ impl Default for Theme {
 /// Colours of the UI chrome.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct UiColors {
     /// Panels, toolbars and inputs.
     pub panel_bg: Color32,
@@ -155,6 +156,7 @@ impl Default for UiColors {
 /// Colours of the chart surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct ChartColors {
     /// Plot background.
     pub bg: Color32,
@@ -220,6 +222,7 @@ impl ChartColors {
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
+#[non_exhaustive]
 pub struct TextSizes {
     /// Small badges.
     pub micro: f32,
@@ -305,6 +308,7 @@ impl TextSizes {
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
+#[non_exhaustive]
 pub struct Spacing {
     /// Extra small, in egui logical points.
     pub xs: f32,
@@ -343,6 +347,7 @@ impl Default for Spacing {
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
+#[non_exhaustive]
 pub struct Radii {
     /// Extra small, in egui logical points.
     pub xs: f32,

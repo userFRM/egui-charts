@@ -81,6 +81,7 @@ pub struct Bar {
 /// colours that apply to it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct BarColors {
     /// The body of a candle; an OHLC bar, a column or a line's marker; or the line from this bar
     /// to the next on line, step line and area charts, and each line on HLC area charts.

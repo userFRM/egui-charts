@@ -69,6 +69,7 @@ pub enum MarkerPos {
 
 /// Where a series' markers are painted among the other content of the price pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum MarkerZOrder {
     /// With their series: over it, under the series added after it and under the studies.
     #[default]
@@ -81,6 +82,7 @@ pub enum MarkerZOrder {
 
 /// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MarkerOptions {
     /// Whether visible price-relative markers widen the autoscaled range to fit their shapes
     /// and text at the configured size, when the pane has enough height. Pane-edge positions
@@ -229,6 +231,7 @@ impl Marker {
 /// Colours and lifetime of the marks that show where the close of a series rose or fell
 /// between live updates; see `Chart::set_change_markers`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct ChangeMarkers {
     /// Colour of a rise.
     pub up_color: Color32,
@@ -320,6 +323,7 @@ impl LineStyle {
 
 /// A horizontal line at a price on a series' scale, with an optional title and a price axis label.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PriceLine {
     /// Price in the series' units.
     pub price: f64,

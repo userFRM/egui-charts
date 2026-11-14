@@ -153,14 +153,27 @@ type BarTimes = (
     Vec<DateTime<Utc>>,
 );
 
+/// The part of a [`MarksRequest`] the demo answers.
+struct View {
+    symbol: String,
+    timeframe: Timeframe,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+}
+
 impl Marks for DemoMarks {
     fn marks(&self, request: MarksRequest, reply: Reply<MarksPage>) {
-        reply.send(Ok(self.annotations(&request)));
+        reply.send(Ok(self.annotations(&View {
+            symbol: request.symbol,
+            timeframe: request.timeframe,
+            from: request.from,
+            to: request.to,
+        })));
     }
 }
 
 impl DemoMarks {
-    fn annotations(&self, request: &MarksRequest) -> MarksPage {
+    fn annotations(&self, request: &View) -> MarksPage {
         let mut page = MarksPage::default();
         let Some(spec) = DemoSymbol::catalog()
             .iter()
@@ -229,13 +242,14 @@ impl DemoMarks {
                 4 => EventKind::News,
                 _ => EventKind::Idea,
             };
-            page.events.push(TimeScaleEvent {
-                id: format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
+            let mut event = TimeScaleEvent::new(
+                format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
                 time,
                 kind,
-                title: format!("Synthetic {} event", kind.label()),
-                details: "Demonstration data supplied by the host.".into(),
-            });
+                format!("Synthetic {} event", kind.label()),
+            );
+            event.details = "Demonstration data supplied by the host.".into();
+            page.events.push(event);
             if kind == EventKind::News
                 && let Some(notifications) = &self.notifications
             {
@@ -269,7 +283,7 @@ mod tests {
             notifications: None,
             times: Default::default(),
         };
-        let mut request = MarksRequest {
+        let mut request = View {
             symbol: "SAMPLE".into(),
             timeframe: Timeframe::Min1,
             from: now - TimeDelta::hours(2),

@@ -203,6 +203,7 @@ pub trait PanePrimitive: Send {
 /// [`draw_background`](Primitive::draw_background) runs in attachment order before any
 /// [`draw`](Primitive::draw).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum PrimitivePass {
     /// Behind the series and studies of the pane, above its background, grid and sessions.
     Below,
@@ -392,6 +393,7 @@ impl PrimitiveView<'_> {
 /// are clipped to the axis and paint above automatic tags without reserving an overlap slot.
 /// Later fixed tags paint above earlier ones. Hidden series and hidden axes omit their tags.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PriceAxisLabel {
     /// Price at the centre of the tag, on the scale of the primitive's series.
     pub price: f64,
@@ -428,6 +430,7 @@ impl PriceAxisLabel {
 /// and are clipped to the axis instead. Both cover ordinary time marks; fixed tags paint
 /// above automatic primitive tags, with later fixed tags on top. Hidden series omit their tags.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TimeAxisLabel {
     /// Time at the centre of the tag.
     pub time: DateTime<Utc>,

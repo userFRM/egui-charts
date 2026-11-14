@@ -66,6 +66,7 @@ pub enum MismatchDirection {
 /// [`Chart::bars_in_logical_range`], or the points of a custom series, from
 /// [`Chart::custom_points_in_logical_range`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BarsInRange {
     /// Indices into [`Chart::bars`] or [`Chart::custom_points`] of the items inside the range,
     /// empty when none is.

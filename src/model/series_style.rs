@@ -154,6 +154,7 @@ impl PartialEq for AutoscaleProvider {
 /// `chart::render_alert_levels` (requires `widget`) with these `labels` and `color`,
 /// and draws none while `visible` is unset.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SeriesAlerts {
     /// Draw the series' alert levels.
     pub visible: bool,
@@ -180,6 +181,7 @@ impl Default for SeriesAlerts {
 /// series' labels and price lines.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct SeriesStyle {
     /// Raw-value display for ticks, tags, legends and readouts. `None` retains instrument or
     /// scale formatting. Explicit series formatters take precedence, followed by the chart's

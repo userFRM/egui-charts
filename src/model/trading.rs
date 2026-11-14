@@ -109,7 +109,8 @@ impl OrderType {
     }
 }
 
-/// The role of an exit order attached to the net position in its symbol.
+/// The role of an exit order attached to the net position in its symbol. The set is closed: an
+/// attached exit either takes profit or stops a loss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositionBracket {
     /// A profit-taking limit exit.

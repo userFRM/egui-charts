@@ -74,6 +74,7 @@ pub enum CalendarKind {
 
 /// How much an economic event is expected to move the market.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum Importance {
     /// Low importance.
     Low,
@@ -217,6 +218,7 @@ impl ScreenerUniverse {
 
 /// How a screener filter compares a column's value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ScreenerOp {
     /// Greater than the filter's value.
     Above,
@@ -226,6 +228,7 @@ pub enum ScreenerOp {
 
 /// One condition every row must meet.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScreenerFilter {
     /// The [`ScreenerColumn::id`] compared.
     pub column: String,

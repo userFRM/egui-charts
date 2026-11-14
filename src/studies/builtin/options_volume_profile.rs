@@ -137,7 +137,7 @@ impl OptionsVolumeProfile {
     /// use egui_charts::data::OptionsVolumeQuery;
     /// use egui_charts::studies::OptionsVolumeProfile;
     /// let expiry = chrono::NaiveDate::from_ymd_opt(2026, 12, 18).unwrap();
-    /// let query = OptionsVolumeQuery { symbol: "SAMPLE".into(), expiries: expiry..=expiry };
+    /// let query = OptionsVolumeQuery::new("SAMPLE", expiry..=expiry);
     /// let profile = OptionsVolumeProfile::new(&Feed, query, 5.0, || {}).unwrap();
     /// ```
     pub fn new(

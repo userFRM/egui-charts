@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-/// One price-row profile placed over a half-open span of chart bars.
+/// One price-row profile placed over a half-open span of chart bars. Exhaustive, so that a custom
+/// study can build it in `studies::Indicator::volume_profiles`.
 #[derive(Clone, Debug)]
 pub struct StudyProfile {
     /// Full source span for bar profiles, including offscreen bars in fixed periods,
@@ -60,6 +61,7 @@ pub enum ProfileLevelKind {
 
 /// Volume shown in each price row of a profile built from bars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileDisplay {
     /// Total volume, with the point of control and value area highlighted.
     #[default]
@@ -210,6 +212,7 @@ impl Default for VolumeProfileConfig {
 
 /// Where a [`VolumeProfile`]'s volumes come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProfileSource {
     /// Bar volume spread over each bar's high-low range, split by candle direction, from the
     /// chart's bars or from finer bars where they cover the chart bars.

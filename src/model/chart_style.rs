@@ -8,6 +8,7 @@ use std::cell::Cell;
 
 /// How a series line connects its points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineType {
     /// Straight segments between points.
     #[default]
@@ -19,6 +20,7 @@ pub enum LineType {
 /// When the Line, Step line, Line with markers, Area and Baseline charts pulse a circle at the
 /// last price.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LastPriceAnimation {
     /// No animation.
     #[default]
@@ -32,6 +34,7 @@ pub enum LastPriceAnimation {
 /// A series line, with width in logical points.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LinePlotStyle {
     /// Line colour.
     pub color: Color32,
@@ -58,6 +61,7 @@ impl Default for LinePlotStyle {
 /// The Area chart's line and vertical fill stops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AreaStyle {
     /// Line drawn along the edge of the fill.
     pub line: LinePlotStyle,
@@ -92,6 +96,7 @@ impl Default for AreaStyle {
 /// The Baseline chart's independent colours and vertical fills on either side of its base.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct BaselineStyle {
     /// Line above the base in price units, also on an inverted scale.
     pub above: LinePlotStyle,
@@ -137,6 +142,7 @@ impl Default for BaselineStyle {
 /// points with straight segments like the fills, whatever their `line_type`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct HlcAreaStyle {
     /// Draw the line through the highs.
     pub high_line_visible: bool,
@@ -269,6 +275,7 @@ impl Default for HlcAreaStyle {
 /// The Bars chart's OHLC ticks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct BarsStyle {
     /// Draw the open tick on the left of each bar.
     pub open_visible: bool,
@@ -303,6 +310,7 @@ pub struct ColumnsStyle {
 /// border width is above zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct CandlesStyle {
     /// Fill each candle's body between its open and close.
     pub body_visible: bool,
@@ -561,6 +569,7 @@ impl HighLowStyle {
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct KagiStyle {
     /// Width of the thick lines of an uptrend.
     pub thick_width: f32,
@@ -582,6 +591,7 @@ impl Default for KagiStyle {
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ChartTypeStyles {
     /// Line chart.
     pub line: LinePlotStyle,

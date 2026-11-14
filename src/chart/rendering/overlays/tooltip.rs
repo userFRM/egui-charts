@@ -24,6 +24,7 @@ use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
 /// renderer's instrument precision and built-in formatting. Prices use instrument units;
 /// percentages use percentage points, so `5.0` means 5%.
 #[derive(Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ValueFormatters<'a> {
     /// OHLC prices and absolute changes.
     pub price: Option<&'a dyn PriceFormatter>,
@@ -41,6 +42,7 @@ impl std::fmt::Debug for ValueFormatters<'_> {
 
 /// One visible study plot's value at the selected bar. Missing or warming-up values stay absent.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StudyValue {
     /// Host-formatted text, when supplied by the chart. `None` uses the units and precision.
     pub formatted: Option<String>,

@@ -563,6 +563,7 @@ pub enum AlertCondition {
 
 /// A host-resolved value on a bar. Identifiers remain meaningful to the host across sessions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertSource {
     /// The symbol's closing or latest price.
     #[default]
@@ -696,6 +697,7 @@ impl Eq for AlertSourceName {}
 
 /// Comparison of two outputs. Crossings require a strict previous side and include equality now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertComparison {
     /// Cross in either direction.
     Crossing,
@@ -736,11 +738,19 @@ impl std::fmt::Display for AlertChannelComparison {
 
 /// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertRule {
     /// The value to test.
     pub source: AlertSource,
     /// The required relationship.
     pub condition: AlertCondition,
+}
+
+impl AlertRule {
+    /// The rule that `source` meets `condition`.
+    pub fn new(source: AlertSource, condition: AlertCondition) -> Self {
+        Self { source, condition }
+    }
 }
 
 impl AlertSource {
@@ -884,6 +894,7 @@ impl Alert {
 /// windows, both read on the clock of `timezone`, so a daylight-saving change moves the windows
 /// with the local clock.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationSchedule {
     /// The zone whose weekday and clock decide.
     pub timezone: TimezoneId,
@@ -898,6 +909,7 @@ pub struct NotificationSchedule {
 /// window whose `end` equals `start` covers the 24 hours from `start`, ending at `start` of the
 /// next day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationWindow {
     /// First clock time inside the window.
     pub start: NaiveTime,
@@ -905,7 +917,24 @@ pub struct NotificationWindow {
     pub end: NaiveTime,
 }
 
+impl NotificationWindow {
+    /// The window from `start` up to but excluding `end`.
+    pub fn new(start: NaiveTime, end: NaiveTime) -> Self {
+        Self { start, end }
+    }
+}
+
 impl NotificationSchedule {
+    /// Delivery on `days` inside `windows`, both read on the clock of `timezone`;
+    /// [`is_valid`](Self::is_valid) asks for at least one of each.
+    pub fn new(timezone: TimezoneId, days: Vec<Weekday>, windows: Vec<NotificationWindow>) -> Self {
+        Self {
+            timezone,
+            days,
+            windows,
+        }
+    }
+
     /// Whether at least one weekday and one window are selected.
     pub fn is_valid(&self) -> bool {
         !self.days.is_empty() && !self.windows.is_empty()

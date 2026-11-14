@@ -352,6 +352,7 @@ impl fmt::Display for ChartType {
 
 /// Numbers shown in a footprint column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintMode {
     /// Sell volume on the left, buy volume on the right.
     BidAsk,
@@ -377,6 +378,7 @@ pub enum FootprintMode {
 
 /// What determines a footprint cell's colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintColor {
     /// Volume relative to the largest row of this bar.
     Volume,
@@ -402,6 +404,7 @@ pub enum FootprintColor {
 /// The default compares each price row with its immediate neighbours, which is the most
 /// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NodeSensitivity {
     /// Rows on each side of a row that are averaged with it before comparing; zero compares
     /// the rows as traded. Untraded rows count as zero volume.
@@ -613,6 +616,7 @@ impl FootprintStatistic {
 
 /// Where the Baseline chart draws its base line.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BaselineLevel {
     /// A price.
     Price(f64),
