@@ -49,7 +49,7 @@ The Symbol tab's **Analyst price targets** setting, or [`Chart::set_price_target
 
 A symbol change clears the targets and ignores its old replies. [`reload_price_targets`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.reload_price_targets) requests updated estimates; [`take_price_targets_error`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.take_price_targets_error) reports errors other than unsupported data. Hiding targets retains their answer. Price-based charts do not draw projections.
 
-The demo's quick search has **Toggle API samples** for host signals and **Show analyst price targets** for SAMPLE's daily projection. Its synthetic feed implements these contracts on native and browser builds.
+The demo's quick search has **Toggle all sample overlays** for host signals and **Analyst price targets** for SAMPLE's daily projection. On another symbol, a price-based chart type or a hidden price series it says why and leaves the chart unchanged. Its synthetic feed implements these contracts on native and browser builds.
 
 ## Company financials
 
