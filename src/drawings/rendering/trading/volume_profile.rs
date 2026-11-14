@@ -3,8 +3,9 @@
 use crate::data::{StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
+use crate::drawings::domain::{VwapBandMode, VwapConfig, VwapPlotType};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
-use crate::model::{Bar, ProfileResolution, Timeframe};
+use crate::model::{Bar, PriceSource, ProfileResolution, Timeframe};
 use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::painting::volume_profile::ProfileStyle;
 use crate::styles::stroke;
@@ -23,7 +24,8 @@ type ProfileCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>)>;
 type FinerCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>, SpanFingerprint, usize)>;
 
 thread_local! {
-    static VWAP_CHECKPOINTS: RefCell<SpanCache<Vec<VwapSums>>> =
+    /// Checkpoints by the price they average.
+    static VWAP_CHECKPOINTS: RefCell<SpanCache<Vec<VwapSums>, PriceSource>> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
     /// Profiles by their number of rows.
     static PROFILES: RefCell<ProfileCache> =
@@ -34,9 +36,10 @@ thread_local! {
 }
 
 impl Drawing {
-    /// Renders the anchored VWAP from the anchor bar to the last bar at the drawing's width,
-    /// with the enabled bands of its [`VwapConfig`](crate::drawings::VwapConfig) in their colours,
-    /// the first one filled at 5%.
+    /// Renders the anchored VWAP from the anchor bar to the last bar as its
+    /// [`VwapConfig`](crate::drawings::VwapConfig) sets: the background, the first band's fill,
+    /// the enabled bands in their colours, the line at the drawing's colour and width, and the
+    /// latest value across the pane.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(anchor_at) = self.chart_points.first() else {
             return;
@@ -61,50 +64,96 @@ impl Drawing {
             return;
         }
 
-        // The checkpoints only cover whole blocks before the last bar, so the
-        // forming bar's updates reuse them.
-        let covered = (bars.len() - 1) / VWAP_CHECKPOINT * VWAP_CHECKPOINT;
-        let checkpoints = VWAP_CHECKPOINTS.with_borrow_mut(|cache| {
-            cache.get((), first, &bars[..covered], view.revision, vwap_checkpoints)
-        });
-        // The VWAP, then the upper and lower line of every enabled band, in standard deviations
-        // from it.
         let config = self.vwap.unwrap_or_default();
+        let checkpoints = cached_checkpoints(config.source, first, bars, view.revision);
+        // The VWAP, then the upper and lower line of every enabled band, in band units from it.
         let mut offsets = vec![0.0];
         let mut colors = Vec::new();
         for band in config.bands.iter().filter(|b| b.enabled) {
             offsets.extend([band.multiplier(), -band.multiplier()]);
-            let [r, g, b, a] = band.color;
-            colors.extend([Color32::from_rgba_unmultiplied(r, g, b, a); 2]);
+            colors.extend([rgba(band.color); 2]);
         }
         let mut lines = vec![Vec::with_capacity(to - from); offsets.len()];
-        for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, from..to)) {
-            let Some((vwap, sigma)) = value else { continue };
+        for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, &config, from..to)) {
+            let Some((vwap, unit)) = value else { continue };
             let x = (view.bar_to_x)((first + i) as f32);
             for (line, k) in lines.iter_mut().zip(&offsets) {
-                line.push(Pos2::new(x, (view.price_to_y)(vwap + k * sigma)));
+                line.push(Pos2::new(x, (view.price_to_y)(vwap + k * unit)));
             }
         }
         if lines[0].is_empty() {
             return;
         }
 
-        if config.bands[0].enabled {
+        let line_color = self.color32();
+        if config.background.visible {
+            let color = config.background.color.map_or(line_color, rgba);
+            let anchor = (view.bar_to_x)(first as f32);
+            let last = (view.bar_to_x)((first + bars.len() - 1) as f32);
+            painter.rect_filled(
+                egui::Rect::from_x_y_ranges(anchor..=last, clip.y_range()),
+                0.0,
+                color.gamma_multiply(config.background.opacity()),
+            );
+        }
+        if config.bands[0].enabled && config.band_fill.visible {
+            let color = config.band_fill.color.map_or(colors[0], rgba);
             super::super::fibonacci::paint_band(
                 painter,
                 &lines[1],
                 &lines[2],
-                colors[0].gamma_multiply(0.05),
+                color.gamma_multiply(config.band_fill.opacity()),
             );
         }
         let vwap_line = lines.remove(0);
         for (line, color) in lines.into_iter().zip(colors) {
             painter.add(Shape::line(line, Stroke::new(stroke::HAIRLINE, color)));
         }
-        painter.add(Shape::line(
+        if !config.show_line {
+            return;
+        }
+        paint_vwap_line(
+            painter,
             vwap_line,
-            Stroke::new(self.stroke_width, self.color32()),
-        ));
+            config.plot_type,
+            Stroke::new(self.stroke_width, line_color),
+            (view.price_to_y)(0.0),
+            step,
+        );
+        let last = bars.len() - 1;
+        if config.track_price
+            && let Some(Some((vwap, _))) =
+                anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()
+        {
+            let y = (view.price_to_y)(vwap);
+            if clip.y_range().contains(y) {
+                crate::painting::dashed_line::draw_dashed_line(
+                    painter,
+                    Pos2::new(clip.left(), y),
+                    Pos2::new(clip.right(), y),
+                    Stroke::new(1.0, line_color),
+                    1.0,
+                    3.0,
+                );
+            }
+        }
+    }
+
+    /// The anchored VWAP at the last of `bars`, the pane's bars at `revision`, when its latest
+    /// value is tracked; `None` for other drawings, before volume trades or with the line hidden.
+    pub(crate) fn anchored_vwap_last(&self, bars: &[Bar], revision: u64) -> Option<f64> {
+        if self.tool_type != DrawingToolType::AnchoredVWAP {
+            return None;
+        }
+        let config = self.vwap.unwrap_or_default();
+        if !(config.track_price && config.show_line) {
+            return None;
+        }
+        let (first, bars) = bars_between(bars, self.chart_points.first()?.bar_idx, f32::INFINITY)?;
+        let checkpoints = cached_checkpoints(config.source, first, bars, revision);
+        let last = bars.len() - 1;
+        let value = anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()??;
+        Some(value.0)
     }
 
     /// Whether a visible profile drawing reads the chart's executions and finer bars.
@@ -205,9 +254,10 @@ impl Drawing {
         if self.tool_type == DrawingToolType::AnchoredVWAP {
             let anchor = self.chart_points.first()?.bar_idx;
             let (first, bars) = bars_between(view.bars, anchor, f32::INFINITY)?;
+            let source = self.vwap.unwrap_or_default().source;
             let mut sums = VwapSums::default();
             let (i, (vwap, _)) = bars.iter().enumerate().find_map(|(i, bar)| {
-                sums.add(bar);
+                sums.add(bar, source);
                 sums.value().map(|value| (i, value))
             })?;
             let x = (view.bar_to_x)((first + i) as f32);
@@ -303,7 +353,7 @@ impl Drawing {
     }
 }
 
-/// Running sums of volume, typical price times volume, and squared typical
+/// Running sums of volume, source price times volume, and squared source
 /// price times volume.
 #[derive(Clone, Copy, Default)]
 struct VwapSums {
@@ -313,8 +363,8 @@ struct VwapSums {
 }
 
 impl VwapSums {
-    fn add(&mut self, bar: &Bar) {
-        let price = bar.typical_price();
+    fn add(&mut self, bar: &Bar, source: PriceSource) {
+        let price = source.compute(bar.open, bar.high, bar.low, bar.close);
         self.volume += bar.volume;
         self.price_volume += price * bar.volume;
         self.square_volume += price * price * bar.volume;
@@ -334,32 +384,127 @@ impl VwapSums {
 /// The running sums at the start of the span and after every block of
 /// `VWAP_CHECKPOINT` bars of `prefix`, the span's leading whole blocks, so the
 /// VWAP at any bar takes fewer than `VWAP_CHECKPOINT` further additions.
-fn vwap_checkpoints(prefix: &[Bar]) -> Vec<VwapSums> {
+fn vwap_checkpoints(prefix: &[Bar], source: PriceSource) -> Vec<VwapSums> {
     let mut sums = VwapSums::default();
     let mut checkpoints = vec![sums];
     for block in prefix.chunks(VWAP_CHECKPOINT) {
-        block.iter().for_each(|bar| sums.add(bar));
+        block.iter().for_each(|bar| sums.add(bar, source));
         checkpoints.push(sums);
     }
     checkpoints
 }
 
-/// VWAP from the first bar of the span, with its standard deviation, at each
-/// bar of the non-empty `range`, resuming from the checkpoint before it.
+/// The checkpoints of the span of `bars` that starts at bar `first`, averaging `source`. They
+/// only cover whole blocks before the last bar, so the forming bar's updates reuse them.
+fn cached_checkpoints(
+    source: PriceSource,
+    first: usize,
+    bars: &[Bar],
+    revision: u64,
+) -> Rc<Vec<VwapSums>> {
+    let covered = (bars.len() - 1) / VWAP_CHECKPOINT * VWAP_CHECKPOINT;
+    VWAP_CHECKPOINTS.with_borrow_mut(|cache| {
+        cache.get(source, first, &bars[..covered], revision, |prefix| {
+            vwap_checkpoints(prefix, source)
+        })
+    })
+}
+
+/// VWAP of `config`'s source from the first bar of the span, with its band unit, at each bar of
+/// the non-empty `range`, resuming from the checkpoint before it.
 fn anchored_vwap<'a>(
     bars: &'a [Bar],
     checkpoints: &[VwapSums],
+    config: &VwapConfig,
     range: Range<usize>,
 ) -> impl Iterator<Item = Option<(f64, f64)>> + 'a {
+    let (source, mode) = (config.source, config.band_mode);
     let checkpoint = range.start / VWAP_CHECKPOINT;
     let mut sums = checkpoints[checkpoint];
     bars[checkpoint * VWAP_CHECKPOINT..range.start]
         .iter()
-        .for_each(|bar| sums.add(bar));
+        .for_each(|bar| sums.add(bar, source));
     bars[range].iter().map(move |bar| {
-        sums.add(bar);
-        sums.value()
+        sums.add(bar, source);
+        let (vwap, sigma) = sums.value()?;
+        Some(match mode {
+            VwapBandMode::Deviation => (vwap, sigma),
+            VwapBandMode::Percentage => (vwap, vwap.abs() / 100.0),
+        })
     })
+}
+
+/// Draws the VWAP at `points` as `plot` in `stroke`, the plots that start from price zero from
+/// `zero`, at bars `pitch` apart. The area fills in the stroke's colour, as a study's area does.
+fn paint_vwap_line(
+    painter: &egui::Painter,
+    points: Vec<Pos2>,
+    plot: VwapPlotType,
+    stroke: Stroke,
+    zero: f32,
+    pitch: f32,
+) {
+    let clip = painter.clip_rect();
+    // Zero is usually far off the pane: plots from it start at the pane's edge.
+    let zero = if zero.is_finite() {
+        zero.clamp(clip.top(), clip.bottom())
+    } else {
+        clip.bottom()
+    };
+    let color = stroke.color;
+    match plot {
+        VwapPlotType::Line => {
+            painter.add(Shape::line(points, stroke));
+        }
+        VwapPlotType::StepLine => {
+            let mut steps = Vec::with_capacity(points.len() * 2);
+            for (i, &point) in points.iter().enumerate() {
+                if i > 0 {
+                    steps.push(Pos2::new(point.x, points[i - 1].y));
+                }
+                steps.push(point);
+            }
+            painter.add(Shape::line(steps, stroke));
+        }
+        VwapPlotType::Histogram | VwapPlotType::Columns => {
+            let half = if plot == VwapPlotType::Columns {
+                pitch * 0.4
+            } else {
+                stroke.width * 0.5
+            };
+            for point in points {
+                painter.rect_filled(
+                    egui::Rect::from_two_pos(
+                        Pos2::new(point.x - half, zero),
+                        Pos2::new(point.x + half, point.y),
+                    ),
+                    0.0,
+                    color,
+                );
+            }
+        }
+        VwapPlotType::Area => {
+            let base: Vec<_> = points.iter().map(|p| Pos2::new(p.x, zero)).collect();
+            super::super::fibonacci::paint_band(painter, &points, &base, color);
+        }
+        VwapPlotType::Circles => {
+            for point in points {
+                painter.circle_filled(point, stroke.width, color);
+            }
+        }
+        VwapPlotType::Crosses => {
+            let arm = stroke.width + 1.0;
+            for point in points {
+                for delta in [egui::vec2(arm, 0.0), egui::vec2(0.0, arm)] {
+                    painter.line_segment([point - delta, point + delta], Stroke::new(1.0, color));
+                }
+            }
+        }
+    }
+}
+
+fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
+    Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
 /// Profile of `bars`, the span that starts at bar `first`, with `rows` rows.
@@ -460,9 +605,11 @@ mod tests {
     }
 
     /// The line keeps the drawing's width and only the enabled bands are drawn, band 1 filled.
+    /// The line, its plot, the fill, the background and the latest-value line each follow their
+    /// own setting.
     #[test]
     fn anchored_vwap_draws_its_line_and_enabled_bands_only() {
-        use crate::drawings::{ChartPoint, VwapBand, VwapConfig};
+        use crate::drawings::{VwapBand, VwapConfig, VwapFill};
         // From bar 1: V = 1, 2, 8; PV = 10, 22, 88; P²V = 100, 244, 970.
         // VWAP = 10, 11, 11; deviation = 0, 1, 0.5.
         let bars: Vec<_> = [(50.0, 0.0), (10.0, 1.0), (12.0, 1.0), (11.0, 6.0)]
@@ -486,6 +633,7 @@ mod tests {
         other_bands.bands[2].color = teal_band;
         let mut no_bands = VwapConfig::default();
         no_bands.bands[0].enabled = false;
+        let render = |anchor, width, config| render_vwap(&bars, anchor, width, config);
         for (name, anchor, config, width, fill, expected) in [
             (
                 "default",
@@ -523,39 +671,10 @@ mod tests {
             ),
             ("past last bar", 4.0, None, 1.0, false, vec![]),
         ] {
-            let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
-            drawing.color = [41, 98, 255, 255];
-            drawing.stroke_width = width;
-            drawing.vwap = config;
-            drawing.chart_points = vec![ChartPoint::new(anchor, 50.0)];
-            let view = ChartView {
-                instrument: None,
-                price_formatter: None,
-                time_formatter: None,
-                bar_seconds: 0,
-                bars: &bars,
-                revision: 0,
-                bar_to_x: &|b| 100.0 + 10.0 * b,
-                price_to_y: &|p| ((20.0 - p) * 10.0) as f32,
-                y_to_price: &|y| 20.0 - f64::from(y) / 10.0,
-                time_axis: true,
-                executions: None,
-                timeframe: None,
-                finer: &[],
-            };
-            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                let painter = egui::Painter::new(
-                    ui.ctx().clone(),
-                    egui::LayerId::background(),
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
-                );
-                drawing.render_anchored_vwap(&painter, &view);
-            });
-            let shapes = std::mem::take(&mut output.shapes);
-            output.drop_without_applying_deltas();
+            let shapes = render(anchor, width, config);
             assert_eq!(shapes.len(), expected.len() + usize::from(fill), "{name}");
             if fill {
-                let Shape::Mesh(mesh) = &shapes[0].shape else {
+                let Shape::Mesh(mesh) = &shapes[0] else {
                     panic!("{name}: band fill")
                 };
                 assert!(
@@ -566,7 +685,7 @@ mod tests {
                 );
             }
             for (shape, (ys, color, width)) in shapes[usize::from(fill)..].iter().zip(expected) {
-                let Shape::Path(line) = &shape.shape else {
+                let Shape::Path(line) = shape else {
                     panic!("{name}: unexpected shape")
                 };
                 assert_eq!(line.stroke, Stroke::new(width, color).into(), "{name}");
@@ -578,12 +697,132 @@ mod tests {
                 assert_eq!(line.points, points, "{name}");
             }
         }
+
+        let edited = |edit: fn(&mut VwapConfig)| {
+            let mut config = VwapConfig::default();
+            edit(&mut config);
+            render(0.0, 1.0, Some(config))
+        };
+        let strokes = |shapes: &[Shape]| -> Vec<Color32> {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(line) => match line.stroke.color {
+                        egui::epaint::ColorMode::Solid(color) => Some(color),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        };
+        // Hidden line: the fill and band 1 stay.
+        let shapes = edited(|c| c.show_line = false);
+        assert!(matches!(shapes[0], Shape::Mesh(_)));
+        assert_eq!(strokes(&shapes), [green, green]);
+        assert_eq!(shapes.len(), 3);
+        // Columns: one column per value, from price zero up to the VWAP.
+        let shapes = edited(|c| c.plot_type = crate::drawings::VwapPlotType::Columns);
+        assert_eq!(strokes(&shapes), [green, green]);
+        let columns: Vec<_> = shapes[3..]
+            .iter()
+            .map(|shape| match shape {
+                Shape::Rect(rect) if rect.fill == blue => (rect.rect.center().x, rect.rect.top()),
+                other => panic!("column: {other:?}"),
+            })
+            .collect();
+        assert_eq!(columns, [(110.0, 100.0), (120.0, 90.0), (130.0, 90.0)]);
+        // Fill off: no mesh under the band.
+        let shapes = edited(|c| c.band_fill.visible = false);
+        assert_eq!(strokes(&shapes), [green, green, blue]);
+        assert_eq!(shapes.len(), 3);
+        // Fill in its own colour and opacity.
+        let shapes =
+            edited(|c| c.band_fill = VwapFill::new(true, Some([200, 0, 0, 255]), 0.5).unwrap());
+        let Shape::Mesh(mesh) = &shapes[0] else {
+            panic!("band fill")
+        };
+        let red = Color32::from_rgb(200, 0, 0).gamma_multiply(0.5);
+        assert!(mesh.vertices.iter().all(|v| v.color == red));
+        // Background: green at 5% from the anchor bar to the last bar, full height, under the
+        // fill.
+        let shapes = edited(|c| c.background.visible = true);
+        let Shape::Rect(wash) = &shapes[0] else {
+            panic!("background")
+        };
+        assert_eq!(
+            (wash.rect, wash.fill),
+            (
+                Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(130.0, 600.0)),
+                green.gamma_multiply(0.05)
+            )
+        );
+        assert!(matches!(shapes[1], Shape::Mesh(_)));
+        assert_eq!(shapes.len(), 5);
+        // Latest value: a dotted line in the line colour across the pane at VWAP 11, y = 90.
+        let shapes = edited(|c| c.track_price = true);
+        assert_eq!(shapes.len(), 5);
+        let Shape::Mesh(dashes) = &shapes[4] else {
+            panic!("price line")
+        };
+        assert!(
+            dashes
+                .vertices
+                .iter()
+                .all(|v| (v.pos.y - 90.0).abs() <= 1.0)
+        );
+        let xs = dashes.vertices.iter().map(|v| v.pos.x);
+        assert!(xs.clone().fold(f32::MAX, f32::min) < 5.0);
+        assert!(xs.fold(f32::MIN, f32::max) > 795.0);
+    }
+
+    /// Paints an anchored VWAP of a blue drawing over `bars` from `anchor`, 10 px a bar from
+    /// x = 100 and 10 px a price from 20 at the top of an 800 by 600 pane.
+    fn render_vwap(
+        bars: &[Bar],
+        anchor: f32,
+        width: f32,
+        config: Option<crate::drawings::VwapConfig>,
+    ) -> Vec<Shape> {
+        let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+        drawing.color = [41, 98, 255, 255];
+        drawing.stroke_width = width;
+        drawing.vwap = config;
+        drawing.chart_points = vec![crate::drawings::ChartPoint::new(anchor, 50.0)];
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars,
+            revision: 0,
+            bar_to_x: &|b| 100.0 + 10.0 * b,
+            price_to_y: &|p| ((20.0 - p) * 10.0) as f32,
+            y_to_price: &|y| 20.0 - f64::from(y) / 10.0,
+            time_axis: true,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            let painter = egui::Painter::new(
+                ui.ctx().clone(),
+                egui::LayerId::background(),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
+            );
+            drawing.render_anchored_vwap(&painter, &view);
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        shapes.into_iter().map(|shape| shape.shape).collect()
     }
 
     /// Reference: VWAP of (h + l + c) / 3 from bar 1, and the standard
-    /// deviation from its definition, sqrt(sum v (tp - vwap)^2 / sum v).
+    /// deviation from its definition, sqrt(sum v (tp - vwap)^2 / sum v). Every source and band
+    /// unit follows the same definition from the bar's own prices, and each source gives its own
+    /// VWAP on bars whose open, high, low and close differ.
     #[test]
     fn anchored_vwap_matches_reference() {
+        use crate::drawings::{VwapBandMode, VwapConfig};
         let want = [
             (11.666666666666664, 0.0),
             (11.595238095238095, 0.08247860988423196),
@@ -593,7 +832,14 @@ mod tests {
             (12.78395061728395, 0.8112060000493586),
         ];
         let bars = &sample_bars()[1..];
-        let got: Vec<_> = anchored_vwap(bars, &vwap_checkpoints(&[]), 0..bars.len()).collect();
+        let typical = VwapConfig::default();
+        let got: Vec<_> = anchored_vwap(
+            bars,
+            &vwap_checkpoints(&[], typical.source),
+            &typical,
+            0..bars.len(),
+        )
+        .collect();
         assert_eq!(got.len(), want.len());
         for (got, (vwap, sigma)) in got.into_iter().zip(want) {
             let (got_vwap, got_sigma) = got.unwrap();
@@ -607,45 +853,73 @@ mod tests {
 
         // Windows that start inside a block or on a block boundary resume
         // from a checkpoint: compare with the definition over a series three
-        // blocks long, the forming bar in the third block.
+        // blocks long, the forming bar in the third block, for every source
+        // and unit. The checkpoints of one source are never reused for another.
         let long: Vec<Bar> = (0..3 * VWAP_CHECKPOINT)
             .map(|i| {
                 let close = 100.0 + (i * 37 % 101) as f64 / 10.0;
                 let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
                 let volume = (1 + i % 7) as f64;
-                Bar::new(time, close, close + 1.0, close - 1.5, close, volume)
+                Bar::new(time, close - 0.4, close + 1.0, close - 1.5, close, volume)
             })
             .collect();
-        let checkpoints = vwap_checkpoints(&long[..2 * VWAP_CHECKPOINT]);
-        for window in [
-            VWAP_CHECKPOINT + 5..VWAP_CHECKPOINT + 9,
-            2 * VWAP_CHECKPOINT..2 * VWAP_CHECKPOINT + 4,
-        ] {
-            let got = anchored_vwap(&long, &checkpoints, window.clone());
-            for (i, got) in window.zip(got) {
-                let prefix = &long[..=i];
-                let volume: f64 = prefix.iter().map(|b| b.volume).sum();
-                let vwap = prefix
-                    .iter()
-                    .map(|b| b.typical_price() * b.volume)
-                    .sum::<f64>()
-                    / volume;
-                let variance = prefix
-                    .iter()
-                    .map(|b| b.volume * (b.typical_price() - vwap).powi(2))
-                    .sum::<f64>()
-                    / volume;
-                let (got_vwap, got_sigma) = got.unwrap();
-                assert!(
-                    (got_vwap - vwap).abs() < 1e-9,
-                    "bar {i}: vwap {got_vwap}, want {vwap}"
-                );
-                assert!(
-                    (got_sigma - variance.sqrt()).abs() < 1e-6,
-                    "bar {i}: sigma {got_sigma}, want {}",
-                    variance.sqrt()
-                );
+        type Source = (PriceSource, fn(&Bar) -> f64);
+        let sources: [Source; 7] = [
+            (PriceSource::Open, |b| b.open),
+            (PriceSource::High, |b| b.high),
+            (PriceSource::Low, |b| b.low),
+            (PriceSource::Close, |b| b.close),
+            (PriceSource::HL2, |b| (b.high + b.low) / 2.0),
+            (PriceSource::HLC3, |b| (b.high + b.low + b.close) / 3.0),
+            (PriceSource::OHLC4, |b| {
+                (b.open + b.high + b.low + b.close) / 4.0
+            }),
+        ];
+        let mut finals = Vec::new();
+        for (source, price) in sources {
+            for mode in [VwapBandMode::Deviation, VwapBandMode::Percentage] {
+                let config = VwapConfig {
+                    source,
+                    band_mode: mode,
+                    ..VwapConfig::default()
+                };
+                let checkpoints = cached_checkpoints(source, 0, &long, 0);
+                for window in [
+                    0..4,
+                    VWAP_CHECKPOINT + 5..VWAP_CHECKPOINT + 9,
+                    2 * VWAP_CHECKPOINT..2 * VWAP_CHECKPOINT + 4,
+                    long.len() - 1..long.len(),
+                ] {
+                    let got = anchored_vwap(&long, &checkpoints, &config, window.clone());
+                    for (i, got) in window.zip(got) {
+                        let prefix = &long[..=i];
+                        let volume: f64 = prefix.iter().map(|b| b.volume).sum();
+                        let vwap = prefix.iter().map(|b| price(b) * b.volume).sum::<f64>() / volume;
+                        let unit = match mode {
+                            VwapBandMode::Deviation => (prefix
+                                .iter()
+                                .map(|b| b.volume * (price(b) - vwap).powi(2))
+                                .sum::<f64>()
+                                / volume)
+                                .sqrt(),
+                            VwapBandMode::Percentage => vwap / 100.0,
+                        };
+                        let (got_vwap, got_unit) = got.unwrap();
+                        let row = format!("{source:?} {mode:?} bar {i}");
+                        assert!((got_vwap - vwap).abs() < 1e-9, "{row}: {got_vwap} {vwap}");
+                        assert!((got_unit - unit).abs() < 1e-6, "{row}: {got_unit} {unit}");
+                        if i == long.len() - 1 && mode == VwapBandMode::Deviation {
+                            finals.push(got_vwap);
+                        }
+                    }
+                }
             }
+        }
+        for (i, a) in finals.iter().enumerate() {
+            assert!(
+                finals[i + 1..].iter().all(|b| (a - b).abs() > 1e-3),
+                "{finals:?}"
+            );
         }
     }
 

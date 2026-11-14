@@ -96,36 +96,17 @@ impl Chart {
                     Sense::click_and_drag(),
                 )
                 .on_hover_cursor(egui::CursorIcon::ResizeVertical);
-            if response.dragged()
-                && self.chart_options.handle_scale.enabled
-                && self
-                    .chart_options
-                    .handle_scale
-                    .axis_pressed_mouse_move
-                    .price
-            {
-                let anchor_y = ui
-                    .input(|input| input.pointer.press_origin())
-                    .map_or(rect.center().y, |pos| pos.y);
-                let scale = self.pane_price_scale_mut(pane_id, key);
-                let map = scale.map(scale.transform(), rect.top(), rect.bottom());
-                let anchor = map.transform().to_scale(map.y_to_price(anchor_y));
-                scale.zoom(
-                    (f64::from(response.drag_delta().y) / f64::from(rect.height())).exp(),
-                    anchor,
-                );
+            let gestures = self.price_axis_gestures(ui, &response, Rect::EVERYTHING);
+            if gestures.reset {
+                self.user_action(|chart| chart.pane_price_scale_mut(pane_id, key).reset());
                 ui.ctx().request_repaint();
             }
-            if response.double_clicked()
-                && !self.pane_collapse_click(ui.ctx())
-                && self.chart_options.handle_scale.enabled
-                && self
-                    .chart_options
-                    .handle_scale
-                    .axis_double_click_reset
-                    .price
-            {
-                self.user_action(|chart| chart.pane_price_scale_mut(pane_id, key).reset());
+            // The pane is already painted: show the zoomed scale on the next frame.
+            if gestures.zoom(
+                self.pane_price_scale_mut(pane_id, key),
+                rect.top(),
+                rect.bottom(),
+            ) {
                 ui.ctx().request_repaint();
             }
         }

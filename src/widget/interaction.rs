@@ -467,9 +467,9 @@ mod tests {
                     let expected = if !enabled {
                         0.0
                     } else if key == Some(Key::ArrowLeft) {
-                        -chart.chart_options.keyboard.pan_amount
-                    } else {
                         chart.chart_options.keyboard.pan_amount
+                    } else {
+                        -chart.chart_options.keyboard.pan_amount
                     };
                     assert_eq!(
                         chart.state.time_scale().right_offset(),

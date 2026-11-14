@@ -68,6 +68,8 @@ pub struct SettingsDialog {
     sound_preview: Option<(String, f32)>,
     /// Heatmap, book, individual orders and bubbles offered by the host.
     order_flow_layers: [bool; 4],
+    /// The axis font family the dialog was opened with, shown while the settings hold none.
+    opened_font_family: Option<egui::FontFamily>,
 }
 
 #[derive(Clone, Default)]
@@ -176,6 +178,7 @@ impl SettingsDialog {
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
+            opened_font_family: None,
         }
     }
 
@@ -236,6 +239,7 @@ impl SettingsDialog {
         self.template_menu_open = false;
         self.save_name = None;
         self.sound_preview = None;
+        self.opened_font_family = settings.scales_appearance.font_family.clone();
         self.settings = settings;
         self.active_tab = SettingsTab::Symbol;
         self.update_color_pickers_from_settings();
@@ -447,7 +451,7 @@ impl SettingsDialog {
             .or_else(|| {
                 (self.margin_top_str.parse::<f32>().is_err()
                     || self.margin_bottom_str.parse::<f32>().is_err()
-                    || self.margin_right_str.parse::<u32>().is_err())
+                    || self.margin_right_str.parse::<f32>().is_err())
                 .then(|| "Enter valid margins".to_owned())
             });
         let (ok, cancel) = DialogFooter::new("Ok")
@@ -732,10 +736,38 @@ impl SettingsDialog {
                     .clone()
                     .or_else(|| self.settings.chart_type_params.clone());
                 let source = template.price_source.or(self.settings.price_source);
+                // Choices a template saved before they existed lacks stay as the dialog shows
+                // them. Its font family stays unset: that keeps the chart's, and tells
+                // `apply_to_chart` that the template holds the whole bars of a right margin.
+                let scales = &self.settings.scales_and_lines;
+                let line_source = template
+                    .scales_and_lines
+                    .price_line_source
+                    .or(scales.price_line_source);
+                let separator = template
+                    .scales_and_lines
+                    .thousands_sep
+                    .or(scales.thousands_sep);
+                let session_breaks = template
+                    .show_session_breaks
+                    .or(self.settings.show_session_breaks);
+                // The whole bars of the margin shown are an unedited margin, which stays as shown.
+                let shown = self.settings.margins.right_bars;
+                let right_bars = if template.scales_appearance.font_family.is_none()
+                    && template.margins.right_bars == shown.trunc()
+                {
+                    shown
+                } else {
+                    template.margins.right_bars
+                };
                 self.settings = template.clone();
                 self.settings.chart_type = kind;
                 self.settings.chart_type_params = params;
                 self.settings.price_source = source;
+                self.settings.scales_and_lines.price_line_source = line_source;
+                self.settings.scales_and_lines.thousands_sep = separator;
+                self.settings.show_session_breaks = session_breaks;
+                self.settings.margins.right_bars = right_bars;
                 // A template saved before volume candles had a style shows what they drew, which
                 // Ok then applies with any edits made before it.
                 if kind == crate::model::ChartType::VolumeCandles
@@ -804,8 +836,14 @@ impl SettingsDialog {
                 chart_type: self.settings.chart_type,
                 chart_type_params: Some(Default::default()),
                 price_source: Some(Default::default()),
+                show_session_breaks: Some(false),
                 ..Default::default()
             };
+            // What a new chart holds, where the default settings hold no choice.
+            self.settings.scales_appearance.font_family = Some(Default::default());
+            self.settings.scales_and_lines.price_line_source = Some(Default::default());
+            self.settings.scales_and_lines.thousands_sep =
+                Some(crate::widget::settings::ThousandsSeparator::Comma);
             let palette = crate::config::ChartConfig::default().with_theme(theme);
             // The default styles of the chart types hold the dark preset's candle colours.
             let params = self.settings.chart_type_params.get_or_insert_default();
@@ -1942,6 +1980,267 @@ mod tests {
             let style = &chart.chart_type_params().styles.volume_candles;
             assert!(style.border_visible, "{entry}");
             assert_eq!([style.border_up, style.wick_down], [up, down], "{entry}");
+        }
+    }
+
+    /// Clicks the texts `labels` name one after the other in a 1440 by 900 window, as opening a
+    /// dropdown, picking an entry and pressing Ok do, and returns the action of the last click.
+    fn click_through(dialog: &mut SettingsDialog, labels: &[&str]) -> SettingsAction {
+        fn center(shape: &egui::Shape, label: &str) -> Option<Pos2> {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| center(shape, label)),
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            }
+        }
+        let ctx = Context::default();
+        let theme = Theme::light();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut frame = |events, label: &str| {
+            let mut action = SettingsAction::None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = dialog.show(ui.ctx(), &theme),
+            );
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|shape| center(&shape.shape, label));
+            output.drop_without_applying_deltas();
+            (action, pos)
+        };
+        let mut action = SettingsAction::None;
+        for label in labels {
+            frame(vec![], label);
+            let pos = frame(vec![], label).1.expect(label);
+            frame(vec![egui::Event::PointerMoved(pos)], label);
+            for pressed in [true, false] {
+                action = frame(
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    }],
+                    label,
+                )
+                .0;
+            }
+        }
+        action
+    }
+
+    /// Choosing a family next to the font size draws the labels of the price, study and time
+    /// axes in it.
+    #[test]
+    fn axis_font_family_is_chosen_in_the_dialog() {
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use egui::FontFamily;
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let mut dialog = SettingsDialog::new();
+        dialog.open(ChartSettingsState::from_chart(&chart));
+        dialog.active_tab = SettingsTab::Canvas;
+        let action = click_through(&mut dialog, &["Proportional", "Monospace", "Ok"]);
+        let SettingsAction::Apply(settings) = action else {
+            panic!("Ok must apply the settings");
+        };
+        settings.apply_to_chart(&mut chart).unwrap();
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
+        let plot = chart.get_rendered_price_rect();
+        let panes = chart.get_rendered_indicator_panes();
+        let pane = panes[0].chart_rect;
+        // The time axis lies below every pane.
+        let panes_bottom = panes.iter().fold(plot.bottom(), |bottom, pane| {
+            bottom.max(pane.panel_rect.bottom())
+        });
+        let mut families = [Vec::new(), Vec::new(), Vec::new()];
+        for shape in &painted {
+            let egui::Shape::Text(text) = shape else {
+                continue;
+            };
+            let axis = if text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y) {
+                0
+            } else if text.pos.x >= pane.right() && pane.y_range().contains(text.pos.y) {
+                1
+            } else if text.pos.y >= panes_bottom && text.pos.x < plot.right() {
+                2
+            } else {
+                continue;
+            };
+            let sections = &text.galley.job.sections;
+            families[axis].extend(
+                sections
+                    .iter()
+                    .map(|section| &section.format.font_id.family),
+            );
+        }
+        for (axis, families) in ["price", "study", "time"].iter().zip(&families) {
+            assert!(
+                !families.is_empty() && families.iter().all(|f| **f == FontFamily::Monospace),
+                "{axis} axis: {families:?}"
+            );
+        }
+    }
+
+    /// Choosing a thousands separator on the Scales and lines tab groups the digits of the last
+    /// price tag with it, or leaves them plain.
+    #[test]
+    fn thousands_separator_is_chosen_in_the_dialog() {
+        use crate::widget::test_frames::{chart, frame, shapes};
+        let ctx = Context::default();
+        let mut chart = chart(&[42_500.0], &[42_541.77]);
+        chart.config_mut().show_volume = false;
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("SAMPLE").with_tick_size(0.01),
+        ));
+        for (step, (labels, last)) in [
+            (["Comma", "Space", "Ok"], "42 541.77"),
+            (["Space", "None", "Ok"], "42541.77"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let time = step as f64;
+            frame(&ctx, &mut chart, time, Vec::new());
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            dialog.active_tab = SettingsTab::ScalesAndLines;
+            let SettingsAction::Apply(settings) = click_through(&mut dialog, &labels) else {
+                panic!("Ok must apply the settings");
+            };
+            settings.apply_to_chart(&mut chart).unwrap();
+            frame(&ctx, &mut chart, time + 0.1, Vec::new());
+            let painted = shapes(&ctx, &mut chart, time + 0.2, Vec::new());
+            let plot = chart.get_rendered_price_rect();
+            let axis: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) if text.pos.x > plot.right() => {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(axis.contains(&last), "{last}: {axis:?}");
+        }
+    }
+
+    /// A template saved before the right margin could hold part of a bar, and before the font
+    /// family, the thousands separator, session breaks and the bar of the last price could be
+    /// chosen, holds the whole bars of a margin and none of those choices. Loaded on a chart
+    /// with a margin in bars or in pixels, it shows what it can of the chart's and Ok keeps the
+    /// chart's margin and choices.
+    #[test]
+    fn old_templates_keep_the_right_margin_and_the_choices_they_lack() {
+        use crate::model::PriceLineSource;
+        use crate::widget::{SeriesId, settings::ThousandsSeparator, test_frames::chart};
+        use egui::FontFamily;
+        // The margin of a new chart, and 60 pixels at the default bar spacing of 6 points; the
+        // margin row after loading the template.
+        for (pixels, row) in [(None, 2.5), (Some(60.0), 2.0)] {
+            let mut saved =
+                serde_json::to_value(ChartSettingsState::from_chart(&chart(&[100.0], &[110.0])))
+                    .unwrap();
+            saved["margins"] = serde_json::from_str(
+                r#"{"top_percent":10.0,"bottom_percent":10.0,"right_bars":2}"#,
+            )
+            .unwrap();
+            for (group, choice) in [
+                ("", "show_session_breaks"),
+                ("/scales_and_lines", "price_line_source"),
+                ("/scales_and_lines", "thousands_sep"),
+                ("/scales_appearance", "font_family"),
+            ] {
+                let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
+                group.remove(choice).expect(choice);
+            }
+            let mut options = crate::config::ChartOptions::default();
+            options.time_scale.right_offset_pixels = pixels;
+            let mut chart = chart(&[100.0], &[110.0]).with_chart_options(options);
+            chart.config_mut().axis_font_family = FontFamily::Monospace;
+            chart.config_mut().thousands_sep = Some('\'');
+            chart.config_mut().show_session_breaks = true;
+            let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
+            style.price_line_source = PriceLineSource::LastVisible;
+            let margin = chart.chart_options().time_scale.clone();
+            let mut dialog = SettingsDialog::new();
+            dialog
+                .templates
+                .save("Old", serde_json::from_value(saved).unwrap())
+                .unwrap();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            let ctx = Context::default();
+            let mut item = None;
+            for step in 0..4 {
+                let events = match (step, item) {
+                    (2, Some(pos)) | (3, Some(pos)) => vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed: step == 2,
+                            button: egui::PointerButton::Primary,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    _ => vec![],
+                };
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        dialog.draw_template_item(
+                            ui,
+                            &Theme::light(),
+                            "Old".into(),
+                            SettingsAction::None,
+                        );
+                    },
+                );
+                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                }));
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(dialog.template_name, "Old", "{pixels:?}");
+            let shown = dialog.settings();
+            assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
+            assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
+            assert_eq!(
+                (
+                    shown.show_session_breaks,
+                    shown.scales_and_lines.price_line_source,
+                    shown.scales_and_lines.thousands_sep,
+                ),
+                (
+                    Some(true),
+                    Some(PriceLineSource::LastVisible),
+                    Some(ThousandsSeparator::Apostrophe),
+                ),
+                "{pixels:?}"
+            );
+            dialog.settings().apply_to_chart(&mut chart).unwrap();
+            assert_eq!(chart.chart_options().time_scale, margin, "{pixels:?}");
+            let config = chart.config();
+            assert_eq!(config.axis_font_family, FontFamily::Monospace);
+            assert_eq!(config.thousands_sep, Some('\''));
+            assert!(config.show_session_breaks);
+            let style = chart.series_style(SeriesId::MAIN).unwrap();
+            assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
         }
     }
 }

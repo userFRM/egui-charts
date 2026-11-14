@@ -236,6 +236,33 @@ impl SettingsDialog {
                             }
                         },
                     );
+                    // The families installed in the context, and the chosen one when it is not
+                    // among them: the axes draw it proportional until the host installs it.
+                    let mut families = ui.ctx().fonts(|fonts| fonts.families());
+                    let family = &mut dialog.settings.scales_appearance.font_family;
+                    let chosen = family
+                        .clone()
+                        .or_else(|| dialog.opened_font_family.clone())
+                        .unwrap_or_default();
+                    if !families.contains(&chosen) {
+                        families.push(chosen.clone());
+                    }
+                    styled_dropdown(
+                        ui,
+                        "scales_font_family",
+                        DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
+                        theme.ui.text,
+                        &chosen.to_string(),
+                        |ui| {
+                            for option in families {
+                                let name = l10n::text(ui.ctx(), option.to_string());
+                                if ui.selectable_label(option == chosen, name).clicked() {
+                                    *family = Some(option);
+                                }
+                            }
+                        },
+                    )
+                    .accessible_name(l10n::text(ui.ctx(), "Font family"));
                 });
 
                 ui.add_space(ui.active_theme().spacing.xxl);
@@ -280,7 +307,7 @@ impl SettingsDialog {
                             &mut dialog.margin_right_str,
                             DESIGN_TOKENS.sizing.settings_dialog.input_width_margin,
                         );
-                        if let Ok(v) = dialog.margin_right_str.parse::<u32>() {
+                        if let Ok(v) = dialog.margin_right_str.parse::<f32>() {
                             dialog.settings.margins.right_bars = v;
                         }
                     },

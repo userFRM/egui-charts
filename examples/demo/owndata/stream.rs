@@ -648,6 +648,10 @@ pub(crate) mod tests {
                 retry_in: Duration::from_secs(1),
             },
         );
+        // The keep-alive leaves on time although nothing arrives after the trades, so the close
+        // that answers it comes long before the ten seconds a read waits during the handshake.
+        let answered = events[3].0 - events[0].0;
+        assert!(answered < Duration::from_secs(5), "{answered:?}");
         assert_eq!(events[4].1, StreamEvent::Open { again: true });
         let StreamEvent::Closed { reason, retry_in } = &events[5].1 else {
             panic!("{:?}", events[5].1);

@@ -96,7 +96,28 @@ pub fn render_chart_type(
     let price_rect = ctx.price_ctx.rect;
     let painter = ctx.price_ctx.painter;
 
-    if let Some(message) = params.type_params.invalid(chart_type) {
+    use crate::localization::{format_text, text};
+    let egui_ctx = painter.ctx();
+    let message = match params.type_params.invalid(chart_type) {
+        Some(reason) => Some(text(egui_ctx, reason)),
+        // A size derived from history waits for it, or the loaded bars give it no positive value.
+        None => params.type_params.bars_needed(chart_type).map(|count| {
+            let loaded = ctx.full_data.iter().filter(|bar| !bar.is_whitespace());
+            match count {
+                _ if loaded.take(count).count() >= count => text(
+                    egui_ctx,
+                    "The size cannot be calculated from the loaded bars",
+                ),
+                1 => text(egui_ctx, "Waiting for 1 bar of history to size the chart"),
+                _ => format_text(
+                    egui_ctx,
+                    "Waiting for {count} bars of history to size the chart",
+                    &[("count", count.to_string())],
+                ),
+            }
+        }),
+    };
+    if let Some(message) = message {
         painter.text(
             price_rect.center(),
             egui::Align2::CENTER_CENTER,

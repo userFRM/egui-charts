@@ -236,6 +236,8 @@ impl Chart {
                 session_quote: self.session_quote.take(),
             });
             self.set_feed_paused(true);
+            // The session resolves its sizes from the bars before the cursor.
+            self.arm_box_sizes();
         }
         self.apply_replay_window();
         self.replay_order_flow(previous.map_or(time, |previous| previous.min(time)));
@@ -385,9 +387,10 @@ impl Chart {
                 partial.into_iter().map(|bar| (bar, Origin::Live)).collect(),
             );
         }
-        let replay = self.replay.take();
+        // A step keeps the sizes resolved for the session, as bars streaming in do.
+        let (replay, pending) = (self.replay.take(), self.pending_box_sizes);
         self.replace_main_data(visible);
-        self.replay = replay;
+        (self.replay, self.pending_box_sizes) = (replay, pending);
     }
 
     pub(super) fn replay_set_data(&mut self, id: SeriesId, bars: Vec<Bar>) {
@@ -398,7 +401,17 @@ impl Chart {
         let (bars, rejected) = super::series::clean(bars, &clock);
         replay.bars.insert(id, bars);
         self.count_replay_rejections(id, rejected);
+        // New history resolves the sizes again, as `set_data` does outside replay.
+        if id == SeriesId::MAIN {
+            self.arm_box_sizes();
+        }
         self.apply_replay_window();
+    }
+
+    /// Resolves the sizes derived from history again, from the bars before the cursor.
+    fn arm_box_sizes(&mut self) {
+        self.pending_box_sizes = (self.chart_type_params.size_methods())
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
     }
 
     /// Merges `bar` into the retained bars of `id`; returns whether they changed.
@@ -817,6 +830,45 @@ mod tests {
             chart.indicators().next().unwrap().1.values().line(0)[1],
             10.5
         );
+    }
+
+    /// A session resolves ATR and percentage sizes from the bars before the cursor when it starts,
+    /// or once the cursor passes enough bars, and keeps them while the cursor moves, as bars
+    /// streaming in do; applying the parameters again recalculates. ATR(14) of 14 true ranges of
+    /// 2 is 2, and the 15th bar's true range of 16 makes it (13 * 2 + 16) / 14 = 3.
+    #[test]
+    fn replay_steps_keep_history_derived_sizes() {
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
+        let mut bars: Vec<_> = (0..14)
+            .map(|i| bar(i, [100.0, 101.0, 99.0, 100.0, 1.0]))
+            .collect();
+        bars.push(bar(14, [100.0, 115.0, 99.0, 100.0, 1.0]));
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Atr {
+                period: 14,
+                multiplier: 1.0,
+            },
+            ..Default::default()
+        });
+        let size_at = |chart: &mut Chart, cursor: Option<i64>| {
+            chart.set_replay_time(cursor.map(time));
+            chart.show_elements();
+            chart.chart_type_params().renko_brick_size
+        };
+        let steps = [(Some(5), 0.0), (Some(14), 2.0), (Some(15), 2.0)];
+        for (cursor, size) in steps {
+            let got = size_at(&mut chart, cursor);
+            assert!((got - size).abs() < 1e-12, "{cursor:?}: {got}");
+        }
+        chart.set_chart_type_params(chart.chart_type_params().clone());
+        assert!((chart.chart_type_params().renko_brick_size - 3.0).abs() < 1e-12);
+        for (cursor, size) in [(None, 3.0), (Some(14), 2.0)] {
+            let got = size_at(&mut chart, cursor);
+            assert!((got - size).abs() < 1e-12, "{cursor:?}: {got}");
+        }
     }
 
     /// Bar replay over recorded trades: one-trade bars build the unfinished chart bar from the

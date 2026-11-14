@@ -3,8 +3,10 @@
 use super::super::SettingsDialog;
 use super::{price_line_dropdown, styled_checkbox, styled_dropdown, trading_option};
 use crate::localization as l10n;
+use crate::model::PriceLineSource;
 use crate::theme::Theme;
 use crate::ui_kit::ColorPicker;
+use crate::widget::settings::ThousandsSeparator;
 use egui::Ui;
 
 impl SettingsDialog {
@@ -38,6 +40,39 @@ impl SettingsDialog {
                         },
                     );
                 });
+                self.draw_setting_row_with_controls(
+                    ui,
+                    "Thousands separator",
+                    theme,
+                    |ui, dialog| {
+                        use ThousandsSeparator::{Apostrophe, Comma, Off, Other, Space};
+                        let separator = &mut dialog.settings.scales_and_lines.thousands_sep;
+                        let name = |separator| match separator {
+                            Off => "None".to_owned(),
+                            Comma => "Comma".to_owned(),
+                            Space => "Space".to_owned(),
+                            Apostrophe => "Apostrophe".to_owned(),
+                            Other(character) => format!("Other ({character})"),
+                        };
+                        // A separator the host set stays listed while it is the chart's.
+                        let host = separator.filter(|separator| matches!(separator, Other(_)));
+                        styled_dropdown(
+                            ui,
+                            "thousands_separator",
+                            150.0,
+                            theme.ui.text,
+                            &name(separator.unwrap_or(Comma)),
+                            |ui| {
+                                for option in
+                                    [Off, Comma, Space, Apostrophe].into_iter().chain(host)
+                                {
+                                    let label = l10n::text(ui.ctx(), name(option));
+                                    ui.selectable_value(separator, Some(option), label);
+                                }
+                            },
+                        );
+                    },
+                );
                 self.draw_setting_row_with_controls(ui, "Pane axes", theme, |ui, dialog| {
                     use crate::model::AxisSide;
                     let side = &mut dialog.settings.scales_and_lines.axis_layout.side;
@@ -129,6 +164,33 @@ impl SettingsDialog {
                         &mut dialog.settings.scales_and_lines.show_price_line,
                     );
                 });
+                self.draw_setting_row_with_controls(
+                    ui,
+                    "Last price follows",
+                    theme,
+                    |ui, dialog| {
+                        let source = &mut dialog.settings.scales_and_lines.price_line_source;
+                        let name = |source| match source {
+                            PriceLineSource::LastBar => "Newest bar",
+                            PriceLineSource::LastVisible => "Newest bar in view",
+                        };
+                        styled_dropdown(
+                            ui,
+                            "last_price_source",
+                            180.0,
+                            theme.ui.text,
+                            name(source.unwrap_or_default()),
+                            |ui| {
+                                for option in
+                                    [PriceLineSource::LastBar, PriceLineSource::LastVisible]
+                                {
+                                    let label = l10n::text(ui.ctx(), name(option));
+                                    ui.selectable_value(source, Some(option), label);
+                                }
+                            },
+                        );
+                    },
+                );
                 self.draw_setting_row_with_controls(ui, "Symbol color", theme, |ui, dialog| {
                     if let Some(color) = ColorPicker::new(
                         &mut dialog.color_picker_states.symbol_value,

@@ -396,6 +396,12 @@ impl Terminal {
                     {
                         drawing.fill_color = saved.fill_color;
                     }
+                    if own
+                        .border_color
+                        .is_some_and(|border| border[..3] != own.color[..3])
+                    {
+                        drawing.border_color = saved.border_color;
+                    }
                     if let (Some(own_levels), Some(before), Some(after)) =
                         (&own.pitchfork, &saved.pitchfork, &mut drawing.pitchfork)
                     {
@@ -859,6 +865,66 @@ mod tests {
             for (level, own) in drawing.pitchfork.unwrap().levels.iter().zip(&own.levels) {
                 assert_eq!(level.color, own.color, "level {}", own.value);
             }
+        }
+    }
+
+    /// A toolbar pick keeps a text box's grey border, while a price label's border still
+    /// follows its line.
+    #[test]
+    fn toolbar_colours_keep_the_text_box_border() {
+        let mut terminal = ready();
+        let grey = [112, 112, 112, 255];
+        let red = [242, 54, 69, 255];
+        // A grey pick first makes the saved default's line the border's grey; the next pick
+        // must not recolour the border with the line.
+        for tool in [DrawingToolType::TextLabel, DrawingToolType::AnchoredText] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.options.default_color = None;
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(grey));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            assert_eq!(drawing.border_color, Some(grey), "{tool:?}");
+        }
+        // The same under a grey host colour: one pick recolours the line, not the border.
+        for tool in [DrawingToolType::TextLabel, DrawingToolType::AnchoredText] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.options.default_color = Some(grey);
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            assert_eq!(drawing.border_color, Some(grey), "{tool:?}");
+        }
+        // Control: a price label's border starts in the label's own colour, so a pick
+        // recolours it with the line, both when never chosen and from an older save.
+        for saved in [false, true] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.options.default_color = None;
+            manager.set_active_tool(Some(DrawingToolType::PriceLabel));
+            if saved {
+                let mut defaults = manager.new_drawing(0, DrawingToolType::PriceLabel);
+                defaults.border_color = Some(defaults.color);
+                manager.tool_defaults.insert(
+                    DrawingToolType::PriceLabel,
+                    DrawingTemplate::from_drawing(&defaults),
+                );
+            }
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal
+                .chart()
+                .drawings()
+                .new_drawing(1, DrawingToolType::PriceLabel);
+            assert_eq!(drawing.color, red, "saved={saved}");
+            assert_eq!(
+                drawing.border_color,
+                if saved { Some(red) } else { None },
+                "saved={saved}"
+            );
         }
     }
 

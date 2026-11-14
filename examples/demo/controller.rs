@@ -2293,6 +2293,11 @@ impl DemoApp {
                 self.sync_chart_history();
                 return;
             }
+            // The theme is the interface's, on every chart: switching it is no chart's edit.
+            TopToolbarAction::ThemeToggle => {
+                self.toggle_theme(ctx);
+                return;
+            }
             _ => {}
         }
 
@@ -2364,9 +2369,8 @@ impl DemoApp {
                     self.load_study_template(&template);
                 }
             }
-            // Light/dark toggle is a real, cheap visual change.
-            TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
             TopToolbarAction::Layout(_)
+            | TopToolbarAction::ThemeToggle
             | TopToolbarAction::Save
             | TopToolbarAction::ToggleTrading
             | TopToolbarAction::Host(_)
@@ -6177,6 +6181,43 @@ mod tests {
         }
     }
 
+    /// Switching the theme, from the toolbar or by a search command, is no chart's undo step:
+    /// the Undo after it brings back the grid hidden and the axis text recoloured before it and
+    /// leaves both charts on the new theme's colours.
+    #[test]
+    fn switching_the_theme_is_no_undo_step_of_a_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        settle(&mut app, &ctx);
+        for by_command in [false, true] {
+            // The theme replaces an edited colour, which must not make the switch a step either.
+            app.chart.user_action(|chart| {
+                chart.config_mut().show_grid = false;
+                chart.config_mut().text_color = egui::Color32::BLUE;
+            });
+            let dark = app.theme.dark;
+            if by_command {
+                let command = if dark {
+                    "appearance:light"
+                } else {
+                    "appearance:dark"
+                };
+                app.execute_search_command(&ctx, command);
+            } else {
+                app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+            }
+            assert_ne!(app.theme.dark, dark, "by command {by_command}");
+            app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+            assert!(app.chart.config().show_grid, "by command {by_command}");
+            for chart in [&app.chart, &app.extra_charts[0].chart] {
+                assert!(!chart.can_undo(), "by command {by_command}");
+                assert_eq!(chart.config().background_color, app.theme.chart.bg);
+                assert_eq!(chart.config().text_color, app.theme.chart.axis_text);
+            }
+        }
+    }
+
     #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         // Repeated construction used to overflow this stack before checking the saved theme.
@@ -7908,7 +7949,7 @@ mod tests {
         state.grid_lines.vertical_color = egui::Color32::BLUE;
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
-        state.margins.right_bars = 17;
+        state.margins.right_bars = 17.0;
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
