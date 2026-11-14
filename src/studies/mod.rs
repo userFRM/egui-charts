@@ -59,7 +59,7 @@ pub use settings::{
     ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
     StudyIntervalRange, StudySettings, StudySettingsSnapshot,
 };
-pub use table::{StudyCell, StudyTable};
+pub use table::{StudyCell, StudyTable, TablePosition, TableTextSize};
 mod values;
 pub use values::IndicatorValues;
 #[cfg(all(test, feature = "studies"))]

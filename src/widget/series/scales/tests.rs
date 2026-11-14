@@ -1811,6 +1811,8 @@ fn magnet_snaps_to_study_values_on_their_own_scale() {
 /// occupies 80% of the pane; a lone zero-crossing bar instead starts at ln(5).
 #[test]
 fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
+    use crate::studies::{CustomIndicator, IndicatorValue, PlotType, StudyScale};
+    use crate::widget::PaneScale;
     for secondary in [false, true] {
         for count in [1, 2] {
             let mut input = bars(&[10.0, 15.0]);
@@ -1848,6 +1850,306 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
                 let y = map.price_to_y(price);
                 let (top, bottom) = map.extent();
                 assert!((top..=bottom).contains(&y), "{price}: {y}");
+            }
+        }
+    }
+    // Without a positive price in view the scale shows the regular axis, a spread from -20 to
+    // -10 or bars at zero, until positive prices come into view.
+    for secondary in [false, true] {
+        for (low, high) in [(-20.0, -10.0), (0.0, 0.0)] {
+            let mut input = bars(&[high, low]);
+            for bar in &mut input {
+                bar.low = low;
+                bar.high = high;
+            }
+            let fit = |mode| {
+                let mut chart = Chart::new(BarData::from_bars(input.clone()));
+                let id = if secondary {
+                    let id = chart.add_series(SeriesOptions {
+                        chart_type: ChartType::Candles,
+                        scale: SeriesScale::Left,
+                        ..Default::default()
+                    });
+                    chart.set_data(id, input.clone());
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+                frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+                (chart, id)
+            };
+            let axis = |chart: &Chart, id| {
+                let map = chart.series_price_map(id).unwrap();
+                let labels: Vec<_> = map.marks().into_iter().map(|mark| mark.label).collect();
+                (map.range(), labels)
+            };
+            let (mut chart, id) = fit(PriceScaleMode::Logarithmic);
+            let regular = axis(&fit(PriceScaleMode::Normal).0, id);
+            assert_eq!(
+                axis(&chart, id),
+                regular,
+                "secondary={secondary}, {low}..{high}"
+            );
+            chart.set_data(id, bars(&[10.0, 15.0]));
+            frame(&egui::Context::default(), &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.transform().mode, PriceScaleMode::Logarithmic);
+            let span = (15.0_f64.ln() - 10.0_f64.ln()) / 0.8;
+            assert!((map.range().max - (15.0_f64.ln() + span * 0.1)).abs() < 1e-10);
+        }
+    }
+    // A range scaled by hand keeps its prices while the scale shows prices for want of a
+    // positive value, on the main scale, beside it and in a pane of its own, also while no bar
+    // is in view. One scaled by hand to prices at or below zero leaves nothing to keep when
+    // positive prices return, so the scale fits them again.
+    for place in ["main", "left", "pane"] {
+        let mut input = bars(&[100.0; 20]);
+        for (at, bar) in input.iter_mut().enumerate() {
+            let (low, high) = if at < 10 {
+                (50.0, 150.0)
+            } else {
+                (-20.0, -10.0)
+            };
+            (bar.open, bar.high, bar.low, bar.close) = (high, high, low, low);
+        }
+        let mut chart = Chart::new(BarData::from_bars(input.clone()));
+        let id = if place == "main" {
+            SeriesId::MAIN
+        } else {
+            let id = chart.add_series(SeriesOptions {
+                chart_type: ChartType::Candles,
+                scale: if place == "left" {
+                    SeriesScale::Left
+                } else {
+                    SeriesScale::Right
+                },
+                ..Default::default()
+            });
+            chart.set_data(id, input);
+            if place == "pane" {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            id
+        };
+        chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Logarithmic;
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut view = |chart: &mut Chart, first: f32| {
+            assert!(
+                chart
+                    .set_visible_logical_range(crate::model::LogicalRange::new(first, first + 9.0))
+            );
+            time += 0.1;
+            frame(&ctx, chart, time, vec![]);
+            chart.series_price_map(id).unwrap()
+        };
+        let near = |range: crate::scales::PriceRange, (min, max): (f64, f64)| {
+            (range.min - min).abs() < 1e-9 && (range.max - max).abs() < 1e-9
+        };
+        view(&mut chart, 0.0);
+        let logarithmic = (50.0_f64.ln(), 150.0_f64.ln());
+        chart
+            .series_price_scale_mut(id)
+            .unwrap()
+            .set_range(logarithmic.0, logarithmic.1);
+        let map = view(&mut chart, 10.0);
+        assert_eq!(map.transform().mode, PriceScaleMode::Normal, "{place}");
+        assert!(
+            near(map.range(), (50.0, 150.0)),
+            "{place}: {:?}",
+            map.range()
+        );
+        let map = view(&mut chart, 0.0);
+        assert_eq!(map.transform().mode, PriceScaleMode::Logarithmic, "{place}");
+        assert!(near(map.range(), logarithmic), "{place}: {:?}", map.range());
+
+        view(&mut chart, 10.0);
+        chart
+            .series_price_scale_mut(id)
+            .unwrap()
+            .set_range(-25.0, -5.0);
+        let map = view(&mut chart, 30.0);
+        assert_eq!(map.transform().mode, PriceScaleMode::Normal, "{place}");
+        let range = map.range();
+        assert!(near(range, (-25.0, -5.0)), "{place}: {range:?}");
+        let range = view(&mut chart, 0.0).range();
+        assert!(
+            range.min.is_finite() && range.max.is_finite() && range.min < range.max,
+            "{place}: {range:?}"
+        );
+        assert!(
+            !chart.series_price_scale_mut(id).unwrap().is_manual(),
+            "{place}"
+        );
+    }
+    // The main series without a positive value in view joins a logarithmic scale scaled by
+    // hand to 50..150, which keeps those prices.
+    let mut chart = Chart::new(BarData::from_bars(bars(&[-15.0; 10])));
+    let id = chart.add_series(SeriesOptions {
+        scale: SeriesScale::Left,
+        ..Default::default()
+    });
+    chart.set_data(id, bars(&[50.0, 150.0]));
+    chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Logarithmic;
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let logarithmic = (50.0_f64.ln(), 150.0_f64.ln());
+    chart
+        .series_price_scale_mut(id)
+        .unwrap()
+        .set_range(logarithmic.0, logarithmic.1);
+    assert!(chart.set_series_scale(SeriesId::MAIN, SeriesScale::Left));
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    let range = chart.series_price_map(id).unwrap().range();
+    assert!(
+        (range.min - logarithmic.0).abs() < 1e-9 && (range.max - logarithmic.1).abs() < 1e-9,
+        "join: {range:?}"
+    );
+    // Columns reach down to zero only beside a value in view. A study drawing them keeps the
+    // units and range of its scale in a view without bars, in a pane of its own, beside the main
+    // scale and on it, in both modes; the regular mode fits that zero beside the values.
+    for (place, scale) in [
+        ("pane", None),
+        ("left", Some(StudyScale::Shared(SeriesScale::Left))),
+        ("main", Some(StudyScale::Main)),
+    ] {
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            let mut study = CustomIndicator::new("Columns", |bars| {
+                (0..bars.len())
+                    .map(|at| IndicatorValue::Single(100.0 + 10.0 * at as f64))
+                    .collect()
+            })
+            .with_overlay(scale.is_some())
+            .with_plot_types(vec![PlotType::Histogram]);
+            if let Some(scale) = scale {
+                study = study.with_scale(scale);
+            }
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 10])));
+            let id = chart.add_indicator(Box::new(study));
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let pane = chart.series_pane(id).unwrap();
+            let axis = PaneScale::Named(match scale {
+                Some(StudyScale::Shared(key)) => key,
+                _ => SeriesScale::Right,
+            });
+            chart.pane_scale_mut(pane, axis).unwrap().options_mut().mode = mode;
+            let view = |chart: &mut Chart, first: f32, time: f64| {
+                let range = crate::model::LogicalRange::new(first, first + 9.0);
+                assert!(chart.set_visible_logical_range(range));
+                frame(&ctx, chart, time, vec![]);
+                let scale = chart.pane_scale(pane, axis).unwrap();
+                (scale.transform().mode, scale.range())
+            };
+            let fitted = view(&mut chart, 0.0, 0.1);
+            assert_eq!(fitted.0, mode, "{place}");
+            assert!(
+                mode == PriceScaleMode::Logarithmic || fitted.1.min < 0.0,
+                "{place}: {fitted:?}"
+            );
+            assert_eq!(view(&mut chart, 30.0, 0.2), fitted, "{place}, {mode:?}");
+        }
+    }
+    // A host's columns base counts only beside a value of its series in view: over whitespace
+    // bars alone the scale keeps its units and range, beside the main scale and in a pane of
+    // its own.
+    for place in ["left", "pane"] {
+        for mode in [PriceScaleMode::Logarithmic, PriceScaleMode::Normal] {
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 10])));
+            let id = chart.add_series(SeriesOptions {
+                chart_type: ChartType::Columns,
+                columns_base: Some(0.0),
+                scale: if place == "left" {
+                    SeriesScale::Left
+                } else {
+                    SeriesScale::Right
+                },
+                ..Default::default()
+            });
+            if place == "pane" {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            let mut data = bars(&[10.0, 20.0, 30.0, 40.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            for bar in &mut data[5..] {
+                *bar = Bar::whitespace(bar.time);
+            }
+            chart.set_data(id, data);
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+            let view = |chart: &mut Chart, first: f32, last: f32, time: f64| {
+                let range = crate::model::LogicalRange::new(first, last);
+                assert!(chart.set_visible_logical_range(range));
+                frame(&ctx, chart, time, vec![]);
+                let scale = chart.series_price_scale(id).unwrap();
+                (scale.transform().mode, scale.range())
+            };
+            let fitted = view(&mut chart, 0.0, 4.0, 0.1);
+            assert_eq!(fitted.0, mode, "{place}");
+            assert_eq!(view(&mut chart, 6.0, 9.0, 0.2), fitted, "{place}, {mode:?}");
+        }
+    }
+}
+
+/// A scale other than the main one keeps a tenth of its data's range free above and below
+/// the data, a twelfth of the pane, in logarithmic units as in prices: a series from 50 to
+/// 150 in a pane of its own and a study pane from 10 to 990.1. A series flat at 1.01 shows
+/// the same prices in both modes.
+#[test]
+fn secondary_scales_keep_their_margin_in_logarithmic_mode() {
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    use crate::widget::PaneScale;
+    for (study, low, high) in [
+        (false, 50.0, 150.0),
+        (true, 10.0, 990.1),
+        (false, 1.01, 1.01),
+    ] {
+        let mut regular = None;
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 100.0])));
+            let id = if study {
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("Study", move |_| {
+                        vec![IndicatorValue::Single(low), IndicatorValue::Single(high)]
+                    })
+                    .with_overlay(false),
+                ))
+            } else {
+                let id = chart.add_series(SeriesOptions::default());
+                chart.set_data(id, bars(&[low, high]));
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            };
+            let pane = chart.series_pane(id).unwrap();
+            let axis = PaneScale::Named(SeriesScale::Right);
+            chart.pane_scale_mut(pane, axis).unwrap().options_mut().mode = mode;
+            frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+            let scale = chart.pane_scale(pane, axis).unwrap();
+            let (transform, range) = (scale.transform(), scale.range());
+            assert_eq!(transform.mode, mode);
+            let prices = (transform.to_price(range.min), transform.to_price(range.max));
+            if low == high {
+                let regular = *regular.get_or_insert(prices);
+                assert!(
+                    (prices.0 / regular.0 - 1.0).abs() < 1e-5
+                        && (prices.1 / regular.1 - 1.0).abs() < 1e-5,
+                    "{mode:?}: {prices:?}, regular {regular:?}"
+                );
+                continue;
+            }
+            let span = range.max - range.min;
+            for free in [
+                range.max - transform.to_scale(high),
+                transform.to_scale(low) - range.min,
+            ] {
+                assert!(
+                    (free / span - 1.0 / 12.0).abs() < 1e-9,
+                    "study={study}, {mode:?}: {range:?}"
+                );
             }
         }
     }
@@ -2444,8 +2746,9 @@ fn autoscale_contributions_reserve_pixels_per_pane_and_scale() {
                     let plot_height = bottom - top;
                     let transform = map.transform();
                     let (low, high) = (transform.to_scale(100.0), transform.to_scale(last));
-                    // Secondary bar panes already pad their raw span by 10% on each side.
-                    let padding = if placement == "added" && mode != PriceScaleMode::Logarithmic {
+                    // Secondary bar panes already pad their span by 10% on each side, in
+                    // logarithmic units too.
+                    let padding = if placement == "added" {
                         (high - low) * 0.1
                     } else {
                         0.0
@@ -2546,8 +2849,9 @@ fn autoscale_contributions_reserve_pixels_per_pane_and_scale() {
                 assert!(!chart.series_price_scale(target).unwrap().is_manual());
                 let transform = chart.series_price_map(target).unwrap().transform();
                 let (low, high) = (transform.to_scale(100.0), transform.to_scale(200.0));
-                // Secondary bar panes already pad their raw span by 10% on each side.
-                let padding = if placement == "added" && mode != PriceScaleMode::Logarithmic {
+                // Secondary bar panes already pad their span by 10% on each side, in
+                // logarithmic units too.
+                let padding = if placement == "added" {
                     (high - low) * 0.1
                 } else {
                     0.0
@@ -4767,7 +5071,12 @@ fn study_without_values_in_view_adds_nothing_to_its_scale() {
                         PriceScaleMode::Normal => (999.0, 1011.0),
                         PriceScaleMode::Percentage => (-0.1, 1.1),
                         PriceScaleMode::IndexedTo100 => (99.9, 101.1),
-                        PriceScaleMode::Logarithmic => (1000_f64.ln(), 1010_f64.ln()),
+                        // A tenth of the span of 1000 to 1010 in logarithmic units, as above.
+                        PriceScaleMode::Logarithmic => {
+                            let (low, high) = (1000_f64.ln(), 1010_f64.ln());
+                            let padding = (high - low) * 0.1;
+                            (low - padding, high + padding)
+                        }
                     },
                 };
                 let height = f64::from(map.extent().1 - map.extent().0);

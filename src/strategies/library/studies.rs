@@ -116,6 +116,10 @@ impl Strategy for StudyStrategy {
         let mut inputs = Vec::new();
         for (index, study) in self.studies.iter().enumerate() {
             for mut input in study.inputs() {
+                // A strategy draws no study table, so its look and rows are not inputs here.
+                if matches!(self.rule, Rule::Rating) && input.id.starts_with("table_") {
+                    continue;
+                }
                 if matches!(self.rule, Rule::TwoAverages) {
                     let prefix = if index == 0 { "fast" } else { "slow" };
                     input.id = format!("{prefix}.{}", input.id);
