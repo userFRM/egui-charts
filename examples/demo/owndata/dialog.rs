@@ -3382,6 +3382,9 @@ mod tests {
             price: key("p"),
             condition: key("c"),
             conditions: vec![("@".to_owned(), ConditionRule::PriceAndVolume)],
+            side: key("m"),
+            buy: "B".to_owned(),
+            sell: "S".to_owned(),
             ..TradeFields::default()
         };
         let route = |value: &str, kind| Route {
@@ -3414,7 +3417,7 @@ mod tests {
         let steps = [
             (Step::Source, "Profile", "New, Import, Export, Delete, Remove, Add interval, Add key"),
             (Step::History, "Use REST history", "Remove, Add header, Test"),
-            (Step::Live, "Use a WebSocket stream", "Remove, Ignore, Volume only, Add route, Test"),
+            (Step::Live, "Use a WebSocket stream", "Remove, Ignore, Volume only, Side, Add route, Test"),
         ];
         let checked = [
             accesskit::Role::Label,
