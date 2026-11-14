@@ -10492,7 +10492,7 @@ mod tests {
         for (name, expected) in [
             ("RSI", "14 close SMA 14"),
             ("VWAP", "Session 1"),
-            ("Vol Profile Session", "24 70 Up / down"),
+            ("Vol Profile Session", "24 70 Up / down Trading day"),
             ("Time Weighted Average Price", "Session"),
             ("Trend Strength Index", "14 close"),
             ("Higher Interval Candles", "1D"),
