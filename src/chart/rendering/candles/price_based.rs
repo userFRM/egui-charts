@@ -288,8 +288,9 @@ pub(crate) struct ExecutionRanges {
     key: Option<(f64, u64, Option<chrono::DateTime<chrono::Utc>>)>,
     /// The range bars of the held trades, and the time of the first one.
     executions: Option<(Vec<Bar>, chrono::DateTime<chrono::Utc>)>,
-    /// The approximation of the bars before the one holding the first held trade.
-    approximated: Option<Rc<Built<RangeBarBuilder>>>,
+    /// The approximated range bars before the bar holding the first held trade, as the cache built
+    /// them: a new build gives a new `Arc`. Held instead of the build, whose `Rc` is not `Send`.
+    approximated: Option<Arc<[Bar]>>,
     built: Option<(Arc<[Bar]>, bool)>,
     /// Whether `built` starts with approximated range bars.
     mixed: bool,
@@ -343,7 +344,7 @@ impl ExecutionRanges {
         let approximated =
             (before > 0).then(|| range_bars(&history[..before], history_revision, params));
         let unchanged = match (&approximated, &self.approximated) {
-            (Some(new), Some(old)) => Rc::ptr_eq(new, old),
+            (Some(new), Some(old)) => Arc::ptr_eq(&new.bars, old),
             (new, old) => new.is_none() && old.is_none(),
         };
         if self.built.is_none() || !unchanged {
@@ -362,7 +363,7 @@ impl ExecutionRanges {
                 .collect();
             self.built = Some((bars, late_start || all >= range_bar::MAX_BARS));
             self.mixed = closed.len() > skipped;
-            self.approximated = approximated;
+            self.approximated = approximated.map(|built| built.bars.clone());
         }
         self.built.clone()
     }

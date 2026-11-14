@@ -1352,4 +1352,12 @@ mod tests {
             assert_eq!(candles, count, "width {width}");
         }
     }
+
+    /// A host can move a chart to another thread or share it behind `Arc<Mutex<Chart>>`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn charts_are_send() {
+        fn needs_send<T: Send>() {}
+        needs_send::<Chart>();
+    }
 }
