@@ -407,13 +407,15 @@ impl<'a> Fields<'a> {
         }
     }
 
-    /// Maps `slot` to the node at `path`, whose value is `value`.
+    /// Maps `slot` to the node at `path`, whose value is `value`. The form of a time or a time
+    /// of day is the one its value reads in.
     fn assign(&mut self, slot: Slot, path: FieldPath, value: &Value) {
         match slot {
             Slot::Time => *self.time = time::guess(path, value),
             Slot::Clock => {
                 if let TimeSpec::Wall { clock, .. } = &mut *self.time {
-                    let unit = clock.take().map(|clock| clock.unit).unwrap_or_default();
+                    let held = clock.take().map(|clock| clock.unit).unwrap_or_default();
+                    let unit = time::clock_unit(value, held);
                     *clock = Some(Clock { field: path, unit });
                 }
             }
@@ -3339,6 +3341,57 @@ mod tests {
             }
         }
         assert!(outside.is_empty(), "past the step:\n{}", outside.join("\n"));
+    }
+
+    /// A click on a time-of-day field picks the form its value reads in, so the preview reads
+    /// the bar without a choice by hand. A value that no form reads keeps the form held.
+    #[test]
+    fn a_time_of_day_is_read_in_the_form_its_value_has() {
+        use ClockUnit as C;
+        use serde_json::json;
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let at = |text: &str| Some(Stamp::At(text.parse().unwrap()));
+        // The value of the clicked field, the form held before, the form picked and the time
+        // of the record {"d": 20261111, "c": value} in UTC. 09:30:00 is second 34,200 and
+        // millisecond 34,200,000 of the day. 86,400 seconds is a whole day, past the last
+        // second of one, so 86,400 is read as milliseconds: 1 minute and 26.4 seconds.
+        #[rustfmt::skip]
+        let rows = [
+            (json!("09:30:00"), None, C::Text, at("2026-11-11T09:30:00Z")),
+            (json!("09:30"), Some(C::Milliseconds), C::Text, at("2026-11-11T09:30:00Z")),
+            (json!(34200), Some(C::Text), C::Seconds, at("2026-11-11T09:30:00Z")),
+            (json!("34200"), None, C::Seconds, at("2026-11-11T09:30:00Z")),
+            (json!(34200000), Some(C::Text), C::Milliseconds, at("2026-11-11T09:30:00Z")),
+            (json!(86400), None, C::Milliseconds, at("2026-11-11T00:01:26.400Z")),
+            (json!(-1), Some(C::Text), C::Text, None),
+            (json!("soon"), Some(C::Seconds), C::Seconds, None),
+            (json!(null), None, C::Milliseconds, None),
+        ];
+        for (value, held, unit, expected) in rows {
+            let clock = held.map(|unit| Clock {
+                field: key("c"),
+                unit,
+            });
+            let mut bar = BarFields {
+                time: TimeSpec::Wall {
+                    date: key("d"),
+                    format: DateFormat::Compact,
+                    clock,
+                },
+                ..BarFields::default()
+            };
+            Fields::bar(&mut bar).assign(Slot::Clock, key("c"), &value);
+            let TimeSpec::Wall {
+                clock: Some(clock), ..
+            } = &bar.time
+            else {
+                panic!("{value}: no time of day");
+            };
+            assert_eq!(clock.unit, unit, "{value}");
+            let record = json!({"d": 20261111, "c": value});
+            let read = time::stamp(&record, &bar.time, &TimezoneId::utc());
+            assert_eq!(read, expected, "{value}");
+        }
     }
 
     /// The life of a key: an exported file does not hold it, an import connects once it is
