@@ -1301,7 +1301,7 @@ mod tests {
     /// The state read from a chart applies back without changing its configuration, so pressing
     /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
     /// left as shown while the one it fell back to changes keeps what it showed. A size resolved
-    /// from history keeps its value until its method is edited.
+    /// from history keeps its value until its method is edited, also through undo and redo.
     #[test]
     fn unedited_settings_apply_records_no_undo() {
         let bars = || {
@@ -1368,21 +1368,28 @@ mod tests {
         });
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
         assert!(!chart.can_undo());
-        // An edited candle style and an unedited series settings apply keep it too.
+        // An edited candle style, its undo and redo, and an unedited series settings apply keep
+        // it too.
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings.candle_colors.show_wick = !settings.candle_colors.show_wick;
-        settings.apply_to_chart(&mut chart).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        assert!(chart.undo());
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        assert!(chart.redo());
         let series = chart.series_settings();
         chart.apply_series_settings(&series);
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        // Undoing the edited period gives ATR(14) a size from the 15 bars loaded now.
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings
             .chart_type_params
             .as_mut()
             .unwrap()
             .kagi_size_method = atr(15);
-        settings.apply_to_chart(&mut chart).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
         assert!((chart.chart_type_params().kagi_reversal - 44.0 / 15.0).abs() < 1e-12);
+        assert!(chart.undo());
+        assert!((chart.chart_type_params().kagi_reversal - 3.0).abs() < 1e-12);
     }
 
     /// A size that waits for more history than is loaded is not invalid: the chart names the

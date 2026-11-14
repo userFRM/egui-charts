@@ -125,6 +125,6 @@ impl TpoMenu {
                 .retain(|r| r.end() < range.start() || r.start() > range.end());
             params.tpo_composites.push(range.clone());
         }
-        chart.set_chart_type_params(params);
+        chart.apply_chart_type_params(params);
     }
 }
