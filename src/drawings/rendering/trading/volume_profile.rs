@@ -103,10 +103,10 @@ impl Drawing {
         let line_color = self.color32();
         if config.background.visible {
             let color = config.background.color.map_or(line_color, rgba);
-            let anchor = (view.bar_to_x)(first as f32);
-            let last = (view.bar_to_x)((first + bars.len() - 1) as f32);
+            let left = (view.bar_to_x)(first as f32 - 0.5);
+            let right = (view.bar_to_x)((first + bars.len() - 1) as f32 + 0.5);
             painter.rect_filled(
-                egui::Rect::from_x_y_ranges(anchor..=last, clip.y_range()),
+                egui::Rect::from_x_y_ranges(left..=right, clip.y_range()),
                 0.0,
                 color.gamma_multiply(config.background.opacity()),
             );
@@ -739,8 +739,8 @@ mod tests {
         };
         let red = Color32::from_rgb(200, 0, 0).gamma_multiply(0.5);
         assert!(mesh.vertices.iter().all(|v| v.color == red));
-        // Background: green at 5% from the anchor bar to the last bar, full height, under the
-        // fill.
+        // Background: green at 5% from half a bar before the anchor bar to half a bar after the
+        // last bar, full height, under the fill.
         let shapes = edited(|c| c.background.visible = true);
         let Shape::Rect(wash) = &shapes[0] else {
             panic!("background")
@@ -748,12 +748,22 @@ mod tests {
         assert_eq!(
             (wash.rect, wash.fill),
             (
-                Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(130.0, 600.0)),
+                Rect::from_min_max(Pos2::new(95.0, 0.0), Pos2::new(135.0, 600.0)),
                 green.gamma_multiply(0.05)
             )
         );
         assert!(matches!(shapes[1], Shape::Mesh(_)));
         assert_eq!(shapes.len(), 5);
+        // Anchored on the last bar: one bar wide, centred on it.
+        let mut config = VwapConfig::default();
+        config.background.visible = true;
+        let Shape::Rect(wash) = &render(3.0, 1.0, Some(config))[0] else {
+            panic!("background on the last bar")
+        };
+        assert_eq!(
+            wash.rect,
+            Rect::from_min_max(Pos2::new(125.0, 0.0), Pos2::new(135.0, 600.0))
+        );
         // Latest value: a dotted line in the line colour across the pane at VWAP 11, y = 90.
         let shapes = edited(|c| c.track_price = true);
         assert_eq!(shapes.len(), 5);
