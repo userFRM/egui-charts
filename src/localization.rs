@@ -68,6 +68,7 @@ pub fn format_text(ctx: &Context, english: &str, values: &[(&str, impl AsRef<str
 
 /// [`format_text`] for a context retained from the last frame, with the English text before
 /// the first frame.
+#[cfg(feature = "drawings")]
 pub(crate) fn format_text_or_english(
     ctx: Option<&Context>,
     english: &str,
