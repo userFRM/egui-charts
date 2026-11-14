@@ -30,7 +30,9 @@ pub use candle::render_candle;
 use crate::theme::ThemeExt;
 pub use heikin_ashi::HeikinAshiCache;
 pub(crate) use heikin_ashi::rising as heikin_rising;
-pub(crate) use helpers::{brick_border, prev_close};
+#[cfg(feature = "ui")]
+pub(crate) use helpers::brick_border;
+pub(crate) use helpers::prev_close;
 pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
