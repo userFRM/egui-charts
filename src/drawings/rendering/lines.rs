@@ -524,7 +524,8 @@ impl Drawing {
         let height = rect.height();
         let width = rect.width();
         let [width_label, height_label] =
-            <[String; 2]>::try_from(self.size_labels(price_formatter)).unwrap_or_default();
+            <[String; 2]>::try_from(self.size_labels(painter.ctx(), price_formatter))
+                .unwrap_or_default();
         let chart = painter.ctx().active_theme().chart;
         let label_bg = chart.bg_axis;
 

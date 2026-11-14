@@ -622,17 +622,17 @@ mod tests {
     impl Signals for HostSignals {
         fn subscribe(&self, symbol: &str, timeframe: Timeframe, events: Events<SignalEvent>) {
             use egui_charts::model::{Signal, SignalId, SignalShape};
-            events.push(SignalEvent::Upsert(Signal {
-                id: SignalId("host".into()),
-                shape: SignalShape::Marker {
+            let mut signal = Signal::new(
+                SignalId("host".into()),
+                SignalShape::Marker {
                     time: feed_end() - TimeDelta::milliseconds(timeframe.duration_ms()) * 250,
                     price: Some(if symbol == "BTCUSD" { 61_000.0 } else { 180.0 }),
                     direction: egui_charts::model::Direction::Neutral,
                 },
-                category: "Host".into(),
-                label: Some("Host analytics".into()),
-                tooltip: None,
-            }));
+                "Host",
+            );
+            signal.label = Some("Host analytics".into());
+            events.push(SignalEvent::Upsert(signal));
         }
     }
 

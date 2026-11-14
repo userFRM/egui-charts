@@ -69,6 +69,7 @@ pub struct IndicatorFill {
 
 /// Width, optional direction colours and optional bottom fill of an overlay line.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct IndicatorLineStyle {
     /// Stroke width in logical pixels.
     pub width: f32,
@@ -93,6 +94,7 @@ impl Default for IndicatorLineStyle {
 
 /// Default layout and reference levels supplied by a study for its separate pane.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct StudyPane {
     /// Preferred initial height in logical pixels; `None` shares the available space.
     pub height: Option<f32>,
@@ -429,7 +431,7 @@ pub trait Indicator: Send {
         let _ = timeframe;
     }
 
-    /// Source bar calendar, including the chart's selected timezone and session anchor.
+    /// Source bar calendar, including the zone that dates the chart's bars and its session anchor.
     /// Returns whether cached values must be recalculated. Direct callers default to UTC.
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         let _ = clock;

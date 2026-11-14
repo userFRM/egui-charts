@@ -317,6 +317,7 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
         indicator: &dyn Indicator,
+        last_in_view: Option<usize>,
         axis: Option<crate::scales::PriceScaleId>,
         crosshair_tag: Option<Rect>,
     ) -> f32 {
@@ -371,6 +372,7 @@ impl IndicatorPane {
                     label_rect,
                     &map,
                     indicator,
+                    last_in_view,
                     axis_edge,
                     &mut tags,
                     &self.axis_options,
@@ -381,6 +383,7 @@ impl IndicatorPane {
                     label_rect,
                     &map,
                     indicator,
+                    last_in_view,
                     axis_edge,
                     &mut tags,
                     None,
@@ -400,9 +403,9 @@ impl IndicatorPane {
                 self.price_formatter.as_deref(),
             )
         };
-        for tag in tags.iter().chain(&self.fixed_axis_tags).flatten() {
-            width = width.max(tag.width() + 5.0 + 6.0);
-        }
+        width = width.max(crate::chart::rendering::axes::axis_tags_width(
+            tags.iter().chain(&self.fixed_axis_tags),
+        ));
         self.axis_tags = tags.clone();
         tags.extend(self.fixed_axis_tags.iter().copied());
         if !self.draw_axis {
@@ -1009,6 +1012,7 @@ mod tests {
                         0.0,
                         3_000_000.0,
                         studies[0].as_ref(),
+                        Some(usize::MAX),
                         Some(crate::scales::PriceScaleId::Right),
                         None,
                     );
@@ -1203,6 +1207,7 @@ mod tests {
                                 rect,
                                 &map,
                                 &study,
+                                Some(usize::MAX),
                                 450.0,
                                 &mut Vec::new(),
                                 None,

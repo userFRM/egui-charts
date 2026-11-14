@@ -161,7 +161,7 @@ struct ChainState {
 
 /// A feed's destination for complete chain snapshots. Cheap to clone.
 /// Only the latest accepted rows and error are retained; updates never queue.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OptionChainSink(Weak<Snapshot<ChainState>>);
 
 impl OptionChainSink {
@@ -230,6 +230,12 @@ impl OptionChainSink {
 /// Clones share the subscription; dropping the last handle makes its sink inactive.
 #[derive(Clone)]
 pub struct OptionChain(Arc<Snapshot<ChainState>>);
+
+impl std::fmt::Debug for OptionChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OptionChain").finish_non_exhaustive()
+    }
+}
 
 impl OptionChain {
     /// Subscribe through `feed`, outside egui closures, and wake the host on each snapshot or
@@ -534,7 +540,7 @@ struct ExposureState {
 
 /// A feed's destination for complete exposure snapshots. Cheap to clone.
 /// Updates replace the latest snapshot without queuing or adding to computed gamma.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OptionExposureSink(Weak<Snapshot<ExposureState>>);
 
 impl OptionExposureSink {
@@ -595,6 +601,13 @@ impl OptionExposureSink {
 /// dropping the last handle makes its sink inactive.
 #[derive(Clone)]
 pub struct OptionExposureHandle(Arc<Snapshot<ExposureState>>);
+
+impl std::fmt::Debug for OptionExposureHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OptionExposureHandle")
+            .finish_non_exhaustive()
+    }
+}
 
 impl OptionExposureHandle {
     /// Subscribe outside egui closures, waking the host on every snapshot or error.

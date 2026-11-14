@@ -18,14 +18,16 @@ use super::profile::Profile;
 pub(crate) struct OwnData {
     /// The profile on the chart.
     pub(crate) profile: Profile,
+    /// The feed of the chart, read by time and sales.
+    pub(crate) feed: Arc<MappedFeed>,
     /// Whether the user paused the feed from the menu. The chart has no getter for it.
     pub(crate) paused: bool,
     /// Whether the synthetic feed was paused when own data was entered. Leaving restores it.
     pub(crate) synthetic_paused: bool,
     /// The feed error shown last, so that a standing error is notified once.
     pub(crate) reported: Option<String>,
-    /// True from a symbol or interval change until its first bars arrive. The price-based
-    /// chart types are then sized from those bars.
+    /// True from a symbol or interval change until its first bars arrive. A range interval
+    /// then takes its size in ticks of the instrument.
     pub(crate) sizing: bool,
     /// The symbol search of the synthetic session, set aside while own data is on.
     pub(crate) search: SymbolSearchDialog,
@@ -109,8 +111,9 @@ impl DemoApp {
         let timeframe = timeframe.unwrap_or(profile.intervals[0].chart);
         let intervals = profile.intervals.iter().map(|interval| interval.chart);
         let intervals = intervals.collect();
+        let feed = Arc::new(MappedFeed::new(profile.clone(), secrets));
         let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(Arc::new(MappedFeed::new(profile.clone(), secrets)))
+            .with_feed(feed.clone())
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(self.theme.clone())
@@ -120,6 +123,7 @@ impl DemoApp {
             .with_visible_candles(0)
             .build();
         self.formatting.apply(&mut chart);
+        super::super::size_by_atr(&mut chart);
         chart.set_event_visibility(self.chart.event_visibility().clone());
         chart.drawings_mut().tool_defaults = self.chart.drawings().tool_defaults.clone();
         // Bars are dated in the profile's zone, so the chart starts in it.
@@ -129,6 +133,7 @@ impl DemoApp {
             // Dropping the previous chart ends its subscriptions, which closes its socket.
             self.chart = chart;
             own.profile = profile;
+            own.feed = feed;
             own.paused = false;
             own.reported = None;
             own.sizing = true;
@@ -139,6 +144,7 @@ impl DemoApp {
             let search = std::mem::replace(&mut self.symbol_search, SymbolSearchDialog::new());
             self.own_data = Some(OwnData {
                 profile,
+                feed,
                 paused: false,
                 synthetic_paused,
                 reported: None,

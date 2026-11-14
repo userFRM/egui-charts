@@ -12,6 +12,7 @@ const MAX_RECORD: usize = 16 * 1024 * 1024;
 /// little-endian numbers, optional-id flags and UTF-8 symbols. Version 2 retains resting order
 /// participant and placement metadata. No runtime or filesystem policy
 /// is imposed; a host can use a buffered file on native targets or bytes in a browser.
+#[derive(Debug)]
 pub struct RecordingWriter<W: Write> {
     writer: W,
 }
@@ -149,6 +150,7 @@ impl<W: Write> RecordingWriter<W> {
 /// Reads version 1 or 2 binary events, including order placement and participant metadata in
 /// version 2. Limits allocation to 16 MiB per record, rejects unknown
 /// versions, malformed values and truncated records, and distinguishes clean EOF from truncation.
+#[derive(Debug)]
 pub struct RecordingReader<R: Read> {
     reader: R,
     order_metadata: bool,

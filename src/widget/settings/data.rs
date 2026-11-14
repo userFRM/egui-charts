@@ -13,6 +13,7 @@ use egui::Color32;
 /// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct CandleColorConfig {
     /// Colour plain candles by their close against the previous close instead of their open.
     /// Bars, volume candles and Heikin Ashi keep their rule in `ChartSettingsState::chart_type_params`.
@@ -65,6 +66,7 @@ impl Default for CandleColorConfig {
 /// Status line display options. Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct StatusLineOptions {
     /// Whether the legend shows the symbol's logo before the title, or its initial on a neutral
     /// disc without one.
@@ -405,6 +407,7 @@ impl Default for ScalesAndLinesSettings {
 /// Saved settings without a field take its default, unless the field says otherwise.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct TradingSettings {
     /// Buy and Sell place a market order of the order quantity at once instead of opening the
     /// order ticket.
@@ -503,6 +506,7 @@ impl TradingNotifications {
 /// Alerts tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AlertsSettings {
     /// Ask the host to play a local sound when an alert fires.
     pub play_sound: bool,
@@ -557,6 +561,7 @@ pub struct OrderFlowSettings {
 
 /// Serializable display settings shared by the chart and its settings dialog.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 // The trait impls below wrap the derived ones.
 #[serde(remote = "Self")]
 pub struct ChartSettingsState {

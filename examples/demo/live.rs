@@ -38,6 +38,9 @@ const CHURN_PER_TRADE: usize = 6;
 /// The instrument whose feed sends individual orders instead of aggregate depth.
 pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 
+/// The only demo symbol whose feed answers analyst price targets.
+pub(super) const TARGETS_SYMBOL: &str = "SAMPLE";
+
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(
     Mutex<Simulation>,
@@ -1424,17 +1427,18 @@ fn push_snapshot(sub: &Subscription, market: &Market, orders: Option<&Orders>, t
 }
 
 fn live_signal(time: DateTime<Utc>, price: f64) -> Signal {
-    Signal {
-        id: SignalId("live".into()),
-        shape: SignalShape::Marker {
+    let mut signal = Signal::new(
+        SignalId("live".into()),
+        SignalShape::Marker {
             time,
             price: Some(price),
             direction: Direction::Neutral,
         },
-        category: "Live analytics".into(),
-        label: Some("Host tick".into()),
-        tooltip: Some("Synthetic analytics updated by the demo host.".into()),
-    }
+        "Live analytics",
+    );
+    signal.label = Some("Host tick".into());
+    signal.tooltip = Some("Synthetic analytics updated by the demo host.".into());
+    signal
 }
 
 impl Signals for LiveFeed {
@@ -1447,28 +1451,30 @@ impl Signals for LiveFeed {
         if let Some(last) = bars.last() {
             events.push(SignalEvent::Upsert(live_signal(last.time, last.close)));
             let first = &bars[bars.len().saturating_sub(20)];
-            events.push(SignalEvent::Upsert(Signal {
-                id: SignalId("zone".into()),
-                shape: SignalShape::Zone {
+            let mut signal = Signal::new(
+                SignalId("zone".into()),
+                SignalShape::Zone {
                     from: first.time,
                     to: Some(last.time),
                     low: first.low,
                     high: first.high,
                 },
-                category: "Zones".into(),
-                label: Some("Host zone".into()),
-                tooltip: Some("A price zone supplied by the demo host.".into()),
-            }));
-            events.push(SignalEvent::Upsert(Signal {
-                id: SignalId("level".into()),
-                shape: SignalShape::Level {
+                "Zones",
+            );
+            signal.label = Some("Host zone".into());
+            signal.tooltip = Some("A price zone supplied by the demo host.".into());
+            events.push(SignalEvent::Upsert(signal));
+            let mut signal = Signal::new(
+                SignalId("level".into()),
+                SignalShape::Level {
                     price: first.high,
                     from: Some(first.time),
                 },
-                category: "Levels".into(),
-                label: Some("Host level".into()),
-                tooltip: Some("A level supplied by the demo host.".into()),
-            }));
+                "Levels",
+            );
+            signal.label = Some("Host level".into());
+            signal.tooltip = Some("A level supplied by the demo host.".into());
+            events.push(SignalEvent::Upsert(signal));
         }
         self.state().signals.push(events);
     }
@@ -1548,7 +1554,7 @@ impl Datafeed for LiveFeed {
     }
 
     fn price_targets(&self, symbol: &str, reply: Reply<egui_charts::data::PriceTargets>) {
-        if symbol != "SAMPLE" {
+        if symbol != TARGETS_SYMBOL {
             reply.send(Err(FeedError::NotSupported));
             return;
         }

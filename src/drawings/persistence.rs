@@ -49,6 +49,7 @@ use std::fmt;
 /// these values are independent of chart pan/zoom and of the loaded history,
 /// making them suitable for long-term storage and cross-device synchronization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredCoord {
     /// Timestamp in Unix epoch milliseconds.
     pub ts_ms: i64,
@@ -97,6 +98,7 @@ fn is_zero(value: &u32) -> bool {
 /// type and every setting. Convert between the two with [`drawing_to_stored`]
 /// and [`stored_to_drawing`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredDrawing {
     /// Unique identifier (string for backend compatibility).
     pub id: String,
@@ -212,6 +214,9 @@ impl StoredDrawing {
         if !d.position_style.is_valid() {
             return Some("position_style".into());
         }
+        if !d.marker.is_valid() {
+            return Some("marker".into());
+        }
         let sizing = d.position_sizing;
         if [
             sizing.point_value,
@@ -317,6 +322,7 @@ impl StoredDrawing {
 /// It is read only through [`Self::from_json`], which checks the version,
 /// migrates older files and loads each drawing on its own.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct DrawingStorage {
     /// Format version, [`Self::CURRENT_VERSION`] once loaded
     pub version: u32,
@@ -332,6 +338,7 @@ pub struct DrawingStorage {
 
 /// Storage metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StorageMetadata {
     /// When the storage was created
     pub created_at: i64,
@@ -764,6 +771,7 @@ impl DrawingStorage {
 
 /// Why [`DrawingStorage::to_json`] did not save.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SaveError {
     /// A drawing holds NaN or an infinity, which JSON cannot store, or a size or pitchfork
     /// level out of the range drawings are drawn at, and loading skips it.
@@ -846,6 +854,7 @@ impl std::error::Error for SaveError {
 /// A drawing [`DrawingStorage::from_json`] left out because it could not be
 /// read or its id was already taken.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SkippedDrawing {
     /// The position of the entry in the file's list of drawings, counted from 0.
     pub index: usize,
@@ -1373,6 +1382,12 @@ mod tests {
             bold: true,
             italic: true,
         });
+        d.marker = crate::drawings::AnnotationMarker {
+            show_text: false,
+            glyph: "🚀".into(),
+            show_glyph: true,
+            glyph_color: Some([21, 22, 23, 24]),
+        };
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1662,6 +1677,13 @@ mod tests {
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
             want.note_text_style = None;
+            // Earlier files show a pin's text and carry no glyph on a signpost.
+            want.marker = crate::drawings::AnnotationMarker {
+                show_text: true,
+                glyph: "🙂".into(),
+                show_glyph: false,
+                glyph_color: None,
+            };
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2645,7 +2667,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 38] = [
+        let cases: [(Spoil, &str); 39] = [
             (
                 |s| {
                     first(s)
@@ -2700,6 +2722,7 @@ mod tests {
                 |s| first(s).drawing.position_style.font_size = f32::NAN,
                 "invalid position_style",
             ),
+            (|s| first(s).drawing.marker.glyph.clear(), "invalid marker"),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
                 "invalid position_sizing",

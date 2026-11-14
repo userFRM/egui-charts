@@ -47,12 +47,17 @@ impl SettingsDialog {
                     |ui, dialog| {
                         use ThousandsSeparator::{Apostrophe, Comma, Off, Other, Space};
                         let separator = &mut dialog.settings.scales_and_lines.thousands_sep;
+                        let ctx = ui.ctx().clone();
                         let name = |separator| match separator {
                             Off => "None".to_owned(),
                             Comma => "Comma".to_owned(),
                             Space => "Space".to_owned(),
                             Apostrophe => "Apostrophe".to_owned(),
-                            Other(character) => format!("Other ({character})"),
+                            Other(character) => l10n::format_text(
+                                &ctx,
+                                "Other ({character})",
+                                &[("character", character.to_string())],
+                            ),
                         };
                         // A separator the host set stays listed while it is the chart's.
                         let host = separator.filter(|separator| matches!(separator, Other(_)));

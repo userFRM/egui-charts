@@ -180,7 +180,8 @@ pub trait Datafeed: MaybeSend + 'static {
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>);
 
     /// Starts pushing live updates into `subscription.sink` until `unsubscribe`. The default does
-    /// nothing, which gives a history-only chart.
+    /// nothing, which gives a history-only chart. See [`trades`](Self::trades) for the feed's
+    /// obligation when joining the latest trade reply to this stream.
     fn subscribe(&self, subscription: Subscription) {
         let _ = subscription;
     }
@@ -209,7 +210,22 @@ pub trait Datafeed: MaybeSend + 'static {
     /// Up to `request.count` trades of the range `[request.since, request.before)`, the newest
     /// ones when there are more, so order flow survives a reload and follows the view back in
     /// time. The default answers [`FeedError::NotSupported`].
+    ///
+    /// For a latest request (`before` is `None`) made for a subscription, the feed must return a
+    /// page that joins the start of that subscription's stream without an unreported gap, including
+    /// pre-stream executions at the first live timestamp. A cache that may lag the stream is not
+    /// sufficient on its own.
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Prepared execution rows for the time-based volume footprint chart. OHLC still comes
+    /// from [`history`](Self::history); both replies must use the same request context.
+    /// Held and live trades at or after [`FootprintPage::complete_before`] continue the page.
+    /// Prepared rows survive raw-trade eviction; a changed request context or feed reset clears them.
+    /// The default answers [`FeedError::NotSupported`] and keeps the trade-based loading path.
+    fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
     }
@@ -545,6 +561,84 @@ impl HistoryPage {
     }
 }
 
+/// A request for prepared execution rows on the chart's time and price grid.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FootprintRequest {
+    /// Instrument identifier used by the host.
+    pub symbol: String,
+    /// Time-based bar interval requested from the feed.
+    pub timeframe: Timeframe,
+    /// The same calendar boundaries as [`HistoryRequest::clock`].
+    pub clock: BarClock,
+    /// Positive finite instrument tick size.
+    pub tick_size: f64,
+    /// Instrument ticks per price row. The chart requests one and groups rows for display.
+    pub ticks_per_row: u32,
+    /// Only bars opening strictly before this instant; `None` requests the latest page.
+    pub before: Option<DateTime<Utc>>,
+    /// Only bars opening at or after this instant; see [`HistoryRequest::since`].
+    pub since: Option<DateTime<Utc>>,
+    /// Maximum bars wanted, the newest ones in the requested range. A page exceeding this
+    /// count is rejected as [`FeedError::InvalidData`], not truncated.
+    pub count: usize,
+    /// Include extended hours, with the same meaning as [`HistoryRequest::extended_hours`].
+    pub extended_hours: bool,
+    /// Use the same adjustment as [`HistoryRequest::adjusted`].
+    pub adjusted: bool,
+    /// Requested price currency or unit; see [`HistoryRequest::conversion`].
+    pub conversion: Option<String>,
+}
+
+/// Prepared footprint history, validated as [`Footprint::from_bars`] before it is displayed.
+///
+/// The page covers every execution from its first bar's open to `complete_before`, exclusive.
+/// Missing bars in that range had no executions. Do not span a gap in the host's recording.
+/// Supply matching OHLC through [`Datafeed::history`]. Individual trades remain available
+/// through [`Datafeed::trades`] for consumers such as the tape and volume bubbles.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FootprintPage {
+    /// Unique, clock-aligned bars on the requested grid, in any order, within the requested
+    /// `[since, before)` range. Unknown-side volume stays separate from bid and ask.
+    pub bars: Vec<FootprintBar>,
+    /// Exclusive execution cutoff, later than every supplied bar's open. Every eligible trade
+    /// before this instant is included, and none at this instant is. Held or live trades at
+    /// or after it continue the page; trade IDs do not order or define this boundary.
+    /// If a snapshot ends partway through one timestamp, exclude that entire instant.
+    /// An older page with bars or a continuation must end at [`FootprintRequest::before`].
+    /// An empty continuation certifies that nothing traded from `continue_before` to that
+    /// boundary, so the next page can end at its own requested boundary without a gap.
+    pub complete_before: DateTime<Utc>,
+    /// Nothing exists before the oldest returned bar, or the requested boundary for an empty page.
+    pub end_of_history: bool,
+    /// An empty page may continue before this instant instead of ending history, as in
+    /// [`HistoryPage::continue_before`]. Ignored when the page has bars.
+    pub continue_before: Option<DateTime<Utc>>,
+}
+
+impl FootprintPage {
+    /// A page containing every execution before `complete_before`, from its first bar on.
+    pub fn new(
+        bars: Vec<FootprintBar>,
+        complete_before: DateTime<Utc>,
+        end_of_history: bool,
+    ) -> Self {
+        Self {
+            bars,
+            complete_before,
+            end_of_history,
+            continue_before: None,
+        }
+    }
+
+    /// Sets [`continue_before`](Self::continue_before) for an empty page.
+    pub fn with_continue_before(mut self, before: DateTime<Utc>) -> Self {
+        self.continue_before = Some(before);
+        self
+    }
+}
+
 /// A request for one page of trades.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -717,6 +811,7 @@ impl SymbolDetails {
 }
 
 /// A live subscription: push its updates into `sink` until [`Datafeed::unsubscribe`] gets `id`.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Subscription {
     /// Identifier passed back to the feed when unsubscribing.

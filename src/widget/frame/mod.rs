@@ -625,7 +625,7 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let is_drawing_interaction = false;
+        let (is_drawing_interaction, drawing_gesture) = (false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -636,10 +636,12 @@ impl Chart {
                 self.drawings.end_selection_area();
             }
         }
+        // A Ctrl or Command press on empty space arms a selection area, which only a drag starts.
+        #[cfg(feature = "drawings")]
+        let box_selection = self.drawings.box_selection_input(ui);
         // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
-        let is_drawing_interaction = self.drawings.box_selection_input(ui)
-            || self.drawings.active_tool.is_some()
+        let drawing_gesture = self.drawings.active_tool.is_some()
             || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
@@ -657,6 +659,8 @@ impl Chart {
                                 .any(|d| d.id == id && !d.locked)
                         })
                 });
+        #[cfg(feature = "drawings")]
+        let is_drawing_interaction = box_selection || drawing_gesture;
         let show_price_button =
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
@@ -1211,7 +1215,7 @@ impl Chart {
             // The summary below the lowest ladder bar is drawn whole or not at all; bars left to
             // candles keep the range candles fit.
             let room = |flow: &Footprint, config: &FootprintConfig| {
-                if flow.complete_from().is_some() && drawn_as_cells(config) {
+                if flow.complete_bars(..).next().is_some() && drawn_as_cells(config) {
                     crate::chart::overlays::summary_room(config)
                 } else {
                     0.0
@@ -1756,7 +1760,11 @@ impl Chart {
                     || crate::chart::overlays::footprint_column_width(bar_spacing, config).is_some()
             })
             .map(|(flow, config)| {
-                let first = flow.complete_from();
+                let first = if session_profiles {
+                    flow.complete_from()
+                } else {
+                    flow.complete_bars(..).next().map(|bar| bar.time)
+                };
                 let candles = first.map_or(visible_data.len(), |first| {
                     visible_data.partition_point(|bar| bar.time < first)
                 });
@@ -2205,7 +2213,7 @@ impl Chart {
                 paint_series(&data, params, merged.as_ref().map(|(merged, _)| merged));
                 if let Some((flow, config, candles)) = executions {
                     let has_cells = |bar: &crate::model::Bar| {
-                        session_profiles || flow.bar_at(bar.time).is_some()
+                        session_profiles || flow.complete_bar_at(bar.time).is_some()
                     };
                     let mut first = start_idx + candles;
                     // A bar nothing traded in shows its candle among the cells.
@@ -2849,6 +2857,7 @@ impl Chart {
                 ));
         }
         if show_price_axis && study_axis.show_study_values {
+            let last_in_view = rendering::axes::last_bar_in_view(&coords);
             for study in studies
                 .indicators()
                 .iter()
@@ -2877,6 +2886,7 @@ impl Chart {
                             price_rect,
                             &mapping.price,
                             study.as_ref(),
+                            last_in_view,
                             axis_edge,
                             &mut tags,
                             &study_axis,
@@ -2894,6 +2904,7 @@ impl Chart {
                     price_rect,
                     &price_map,
                     study.as_ref(),
+                    last_in_view,
                     axis_edge,
                     &mut tags,
                     price_formatter.as_deref(),
@@ -3928,9 +3939,11 @@ impl Chart {
             self.measured_axis_width += 26.0;
         }
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
-        for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
-            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
-        }
+        self.measured_axis_width = self
+            .measured_axis_width
+            .max(rendering::axes::axis_tags_width(
+                tags.iter().skip(usize::from(has_currency)),
+            ));
 
         if show_price_axis && has_currency {
             let currency = self
@@ -4040,6 +4053,14 @@ impl Chart {
         if let Some(id) = overlay_remove {
             self.user_action(|chart| chart.remove_series(id));
         }
+        // The pane layout reads it to maximize or restore the price pane.
+        self.price_plot_double_click = response.double_clicked()
+            && !drawing_gesture
+            && !eraser_mode
+            && self.host_events.target.is_none()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|pos| chart_rect.contains(pos) && pos.y > legend_bottom);
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
         shown
