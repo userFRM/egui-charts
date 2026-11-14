@@ -622,10 +622,10 @@ pub struct ChartTypeParams {
     /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
     /// `footprint_row_atr` use it only until the chart holds a complete bar.
     pub footprint_row_ticks: u32,
-    /// Footprint: size rows from Wilder's average true range of the bars the chart holds, not
-    /// the bars in view, so panning and zooming keep them. A row is a fifth of the average, in
-    /// whole instrument ticks and at least one. The newest bar, which may still be forming, is
-    /// left out.
+    /// Footprint: size rows from the average true range of the last `footprint_row_atr_length`
+    /// complete bars the chart holds, not the bars in view, so panning, zooming and loading
+    /// older history keep them. A row is a fifth of the average, in whole instrument ticks and
+    /// at least one. The newest bar, which may still be forming, is left out.
     pub footprint_row_atr: bool,
     /// Footprint: length of the average true range that sizes rows, 1 to 200; with fewer
     /// complete bars the average takes as many as there are.
@@ -918,25 +918,29 @@ impl ChartTypeParams {
     }
 
     /// Instrument ticks per footprint row on `bars` with instrument ticks of `tick`: from the
-    /// average true range of their complete bars when `footprint_row_atr` chooses it and there
-    /// is one, otherwise `footprint_row_ticks`.
+    /// average true range of their last complete bars when `footprint_row_atr` chooses it and
+    /// there is one, otherwise `footprint_row_ticks`.
     #[cfg(feature = "widget")]
     pub(crate) fn footprint_row_size(&self, bars: &[super::Bar], tick: f64) -> u32 {
         if !self.footprint_row_atr {
             return self.footprint_row_ticks;
         }
-        let newest = bars.iter().rposition(|bar| !bar.is_whitespace());
-        let complete = &bars[..newest.unwrap_or(0)];
-        // Whitespace bars have no range, and `BoxSizeMethod::resolve` skips them too.
-        let count = complete.iter().filter(|bar| !bar.is_whitespace()).count();
-        // shortcut: smooths the whole history on every frame, cache it per bar close if long
-        // histories show in frame times.
+        // The newest bar may still be forming. Of the bars before it only the last `length`
+        // count, so older history that a pan loads leaves the rows as they are. Whitespace bars
+        // have no range, and `BoxSizeMethod::resolve` skips them too.
+        let length = self.footprint_row_atr_length.clamp(1, 200) as usize;
+        let mut loaded = (0..bars.len())
+            .rev()
+            .filter(|&at| !bars[at].is_whitespace());
+        let newest = loaded.next().unwrap_or(0);
+        let complete = loaded.take(length);
+        let first = complete.clone().last().unwrap_or(newest);
         let average = super::BoxSizeMethod::Atr {
-            period: (self.footprint_row_atr_length.clamp(1, 200) as usize).min(count),
+            period: complete.count(),
             multiplier: 0.2,
         };
         average
-            .resolve(0.0, complete)
+            .resolve(0.0, &bars[first..newest])
             .map(|size| size / tick)
             .filter(|ticks| ticks.is_finite())
             .map_or(self.footprint_row_ticks, |ticks| {
@@ -1089,6 +1093,45 @@ mod tests {
         ] {
             assert_eq!(legacy["profile"][field], false);
         }
+    }
+
+    /// Rows from the average true range take the last `footprint_row_atr_length` complete bars,
+    /// so older bars that a pan loads leave them as they are. Every bar closes at 100 with its
+    /// range centred on it, so its true range is its own range. At length 3 the three bars of
+    /// 10 before the newest, whose 50 may still be forming, average 10, and a fifth of that is 2
+    /// ticks, also with bars of 100 loaded before them. With no complete bar the ticks per row
+    /// apply.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn footprint_rows_average_the_last_complete_bars() {
+        use crate::model::Bar;
+        use chrono::{Duration, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2024, 3, 5, 9, 30, 0).unwrap();
+        let bar = |minute, range: f64| {
+            let (time, half) = (start + Duration::minutes(minute), range / 2.0);
+            Bar::new(time, 100.0, 100.0 + half, 100.0 - half, 100.0, 1.0)
+        };
+        let recent = [
+            bar(3, 10.0),
+            bar(4, 10.0),
+            bar(5, 10.0),
+            Bar::whitespace(start + Duration::minutes(6)),
+            bar(7, 10.0),
+            bar(8, 50.0),
+        ];
+        let paged: Vec<_> = (0..3)
+            .map(|minute| bar(minute, 100.0))
+            .chain(recent.clone())
+            .collect();
+        let params = ChartTypeParams {
+            footprint_row_ticks: 4,
+            footprint_row_atr: true,
+            footprint_row_atr_length: 3,
+            ..Default::default()
+        };
+        let rows = [&recent[..], &paged[..], &recent[5..]]
+            .map(|bars| params.footprint_row_size(bars, 1.0));
+        assert_eq!(rows, [2, 2, 4], "recent, older loaded, only the newest");
     }
 
     /// A zone chosen from the session zone list is listed once when the list is opened again,

@@ -1212,7 +1212,8 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
 /// forming. Their true ranges are 103 - 98 = 5, then max(102 - 97, |102 - 100|, |97 - 100|) = 5,
 /// then max(124 - 114, |124 - 99|, |114 - 99|) = 25 from the close of 99 below the gap. Length
 /// 14 averages the three bars there are: 35 / 3 = 11.67, a fifth is 2.33, so rows of 2 ticks.
-/// Length 2 seeds with (5 + 5) / 2 = 5 and smooths to 5 + (25 - 5) / 2 = 15, so rows of 3.
+/// Length 2 averages the last two, the older by its own range of 5: (5 + 25) / 2 = 15, a fifth
+/// is 3, so rows of 3.
 #[cfg(feature = "ui")]
 #[test]
 fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
