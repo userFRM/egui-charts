@@ -209,9 +209,10 @@ impl FeedLink {
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
     /// open before the live executions, held ones or those the store kept apart at the first
-    /// instant a page covers, or without them before the oldest pushed bar the history lacks or
-    /// holds with other values, and that they rebuild ([`Footprint::push_history`]). With
-    /// `before`, includes only executions strictly before that replay cutoff.
+    /// instant a page covers while the chart holds a bar at or before the oldest of them, or
+    /// without them before the oldest pushed bar the history lacks or holds with other values,
+    /// and that they rebuild ([`Footprint::push_history`]). With `before`, includes only
+    /// executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
