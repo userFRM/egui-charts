@@ -1141,6 +1141,7 @@ impl NoteTextStyle {
 /// shows a pin's text and leaves a signpost's glyph off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AnnotationMarker {
     /// Whether a pin shows its text in a popup while it is selected or under the pointer.
     pub show_text: bool,
