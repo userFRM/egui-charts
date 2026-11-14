@@ -1097,4 +1097,109 @@ mod tests {
             .collect();
         assert!(failures.is_empty(), "{failures:#?}");
     }
+
+    /// The newest close adds no element and lies beyond the elements in view, further than the
+    /// scale margins of a tenth of the pane reach: the fit holds the last price line and its
+    /// label all the same.
+    #[test]
+    fn last_price_line_stays_in_view_on_price_based_charts() {
+        use crate::model::{BarData, LineStyle};
+        use crate::widget::test_frames::{frame, shapes};
+        use crate::widget::{Chart, SeriesId};
+        use egui::{Color32, Shape};
+        // (chart type, parameters, first open, closes, label of the newest close)
+        type Row<'a> = (ChartType, ChartTypeParams, Option<f64>, &'a [f64], &'a str);
+        // Lines of 10 from 100 to 340, then 241: above 240, the low of the last ten lines. Any
+        // close that adds no line lies within those, so this chart is read with fewer in view.
+        let stairs = Vec::from_iter((1..=24).map(|i| 100.0 + 10.0 * f64::from(i)).chain([241.0]));
+        let rows: [Row; 4] = [
+            // Bricks of 1 from 100 to 103, fitted up to 103.375.
+            (
+                ChartType::Renko,
+                ChartTypeParams::default(),
+                None,
+                &[100.0, 101.2, 102.4, 103.1, 103.4],
+                "103.40",
+            ),
+            // One line from 100 to 102, fitted down to 99.75; 97.5 is short of a reversal of 5.
+            (
+                ChartType::Kagi,
+                ChartTypeParams {
+                    kagi_reversal: 5.0,
+                    ..Default::default()
+                },
+                None,
+                &[100.0, 102.0, 97.5],
+                "97.50",
+            ),
+            (
+                ChartType::LineBreak,
+                ChartTypeParams {
+                    line_break_count: 10,
+                    ..Default::default()
+                },
+                Some(100.0),
+                &stairs,
+                "241.00",
+            ),
+            // One column of boxes of 1 from 100 to 102, fitted up to 102.25.
+            (
+                ChartType::PointAndFigure,
+                ChartTypeParams::default(),
+                None,
+                &[100.0, 102.0, 102.9],
+                "102.90",
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (kind, params, first_open, closes, label) in rows {
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(BarData::from_bars(bars(0, closes, first_open)));
+            chart.set_chart_type_params(params);
+            chart.set_chart_type(kind);
+            let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
+            style.price_line_color = Some(Color32::GOLD);
+            style.price_line_style = LineStyle::Solid;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            // About five slots across the plot, the newest element one slot from its right edge.
+            chart.apply_synced_time_scale(150.0, 1.0);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let y = chart
+                .get_chart_mapping()
+                .price_to_y(closes[closes.len() - 1]);
+            if !painted.iter().any(|shape| {
+                matches!(shape,
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == Color32::GOLD
+                            && (points[0].y - y).abs() < 0.1
+                            && plot.y_range().contains(y)
+                )
+            }) {
+                let view = chart.state.visible_range();
+                failures.push(format!(
+                    "{kind:?}: no last price line at y {y}, {view:?} in view"
+                ));
+            }
+            let tag = painted.iter().find_map(|shape| match shape {
+                Shape::Rect(rect)
+                    if rect.fill == Color32::GOLD && rect.rect.center().x > plot.right() =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            });
+            if !tag.is_some_and(|tag| {
+                painted.iter().any(|shape| {
+                    matches!(shape,
+                        Shape::Text(text) if text.galley.text() == label && tag.contains(text.pos)
+                    )
+                })
+            }) {
+                failures.push(format!("{kind:?}: no last price label {label}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 }

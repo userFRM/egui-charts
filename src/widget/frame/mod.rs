@@ -1138,6 +1138,17 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
+        // The newest close of a price-based chart can lie beyond its newest element. While that
+        // element is in view, the price its last price line shows is fitted with it, so that the
+        // line and its label are drawn. The newest element in view is among the fitted bars.
+        let last_price = (!time_based
+            && self.main_series_visible
+            && self.main_series_style.price_line_source == crate::model::PriceLineSource::LastBar
+            && start_idx < end_idx
+            && end_idx == self.state.shown().len())
+        .then(|| crate::model::last_with_value(&self.state.data().bars))
+        .flatten()
+        .map(|bar| bar.close);
         let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin
             && !self.state.data().is_empty())
         .then(|| {
@@ -1177,6 +1188,7 @@ impl Chart {
                 .into_iter()
                 .chain(primitive_prices)
                 .chain(target_prices)
+                .chain(last_price)
                 .chain(footprint_prices.into_iter().flatten())
                 .chain(profile_prices),
             series_values,
@@ -2026,6 +2038,7 @@ impl Chart {
             if study.is_volume()
                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                 && self.main_series_visible
+                && self.chart_type.supports_volume()
                 && !self.state.data().is_empty()
             {
                 let rect = super::volume::overlay_rect(price_rect, &self.config);
@@ -2819,6 +2832,10 @@ impl Chart {
                 .filter(|(idx, _)| study_indices.contains(idx))
                 .map(|(_, study)| study)
             {
+                // A chart type that hides volume tags no volume value.
+                if study.is_volume() && !self.chart_type.supports_volume() {
+                    continue;
+                }
                 if study.is_volume()
                     && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                 {
@@ -3675,8 +3692,10 @@ impl Chart {
                             .study_rows_at(start_idx + local_idx)
                             .into_iter()
                             .filter(|(id, _)| {
-                                !tooltip_options.on_long_press
-                                    || tooltip_options.show_volume_details
+                                // A chart type that hides volume lists no volume rows.
+                                (self.chart_type.supports_volume()
+                                    && (!tooltip_options.on_long_press
+                                        || tooltip_options.show_volume_details))
                                     || self
                                         .study_ids
                                         .iter()
