@@ -1204,7 +1204,7 @@ impl Chart {
             // The summary below the lowest ladder bar is drawn whole or not at all; bars left to
             // candles keep the range candles fit.
             let room = |flow: &Footprint, config: &FootprintConfig| {
-                if flow.complete_from().is_some() && drawn_as_cells(config) {
+                if flow.complete_bars(..).next().is_some() && drawn_as_cells(config) {
                     crate::chart::overlays::summary_room(config)
                 } else {
                     0.0
@@ -1746,7 +1746,11 @@ impl Chart {
                     || crate::chart::overlays::footprint_column_width(bar_spacing, config).is_some()
             })
             .map(|(flow, config)| {
-                let first = flow.complete_from();
+                let first = if session_profiles {
+                    flow.complete_from()
+                } else {
+                    flow.complete_bars(..).next().map(|bar| bar.time)
+                };
                 let candles = first.map_or(visible_data.len(), |first| {
                     visible_data.partition_point(|bar| bar.time < first)
                 });
@@ -2195,7 +2199,7 @@ impl Chart {
                 paint_series(&data, params, merged.as_ref().map(|(merged, _)| merged));
                 if let Some((flow, config, candles)) = executions {
                     let has_cells = |bar: &crate::model::Bar| {
-                        session_profiles || flow.bar_at(bar.time).is_some()
+                        session_profiles || flow.complete_bar_at(bar.time).is_some()
                     };
                     let mut first = start_idx + candles;
                     // A bar nothing traded in shows its candle among the cells.
