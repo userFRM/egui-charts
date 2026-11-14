@@ -51,6 +51,7 @@ pub enum AlertPanelAction {
 
 /// The property the alert list is ordered by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertSortKey {
     /// Arrival order, as the host pushed the alerts.
     Arrival,
@@ -72,6 +73,7 @@ pub enum AlertSortKey {
 /// Saved presentation of the manager. Every optional field starts visible.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AlertListOptions {
     /// Property to order by; creation time by default.
     pub sort: AlertSortKey,
@@ -121,6 +123,7 @@ struct PresentationRestore {
 
 /// One trigger the host reported, retained even after the alert is removed.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AlertTrigger {
     /// Host alert identifier.
     pub id: AlertId,

@@ -907,11 +907,10 @@ impl DemoApp {
         toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
-        self.indicator_dialog.set_preferences(
-            egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorPreferences {
-                favorites: settings.indicator_favorites.into_iter().collect(),
-            },
-        );
+        let mut preferences =
+            egui_charts::ui::dialogs::indicator_dialog::IndicatorPreferences::default();
+        preferences.favorites = settings.indicator_favorites.into_iter().collect();
+        self.indicator_dialog.set_preferences(preferences);
         self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);

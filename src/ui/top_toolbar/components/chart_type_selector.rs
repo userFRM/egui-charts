@@ -111,6 +111,7 @@ pub enum ChartTypeAction {
 /// Host-owned chart type settings. Save with the user's settings and restore with
 /// [`ChartTypeSelector::set_preferences`]. The selector owns no storage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartTypePreferences {
     /// Pinned chart types in menu order.
     #[serde(default)]

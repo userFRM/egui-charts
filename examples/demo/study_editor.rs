@@ -161,11 +161,13 @@ impl DemoApp {
                     self.sample_study.editor.apply_result(Ok(()));
                 }
                 Err(message) => {
-                    self.sample_study.editor.set_diagnostics(vec![Diagnostic {
-                        severity: Severity::Error,
-                        message: message.clone(),
-                        span: 0..text.len(),
-                    }]);
+                    self.sample_study
+                        .editor
+                        .set_diagnostics(vec![Diagnostic::new(
+                            Severity::Error,
+                            message.clone(),
+                            0..text.len(),
+                        )]);
                     self.sample_study.editor.apply_result(Err(message));
                 }
             },

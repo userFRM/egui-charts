@@ -21,6 +21,7 @@ const ROW_HEIGHT: f32 = 20.0;
 
 /// A size filter of the time and sales panel.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TradeSizeFilter {
     /// Smallest matching size, inclusive.
     pub min_size: f64,
@@ -28,8 +29,19 @@ pub struct TradeSizeFilter {
     pub sound: bool,
 }
 
+impl TradeSizeFilter {
+    /// Trades of at least `min_size`, reported without a sound.
+    pub fn new(min_size: f64) -> Self {
+        Self {
+            min_size,
+            sound: false,
+        }
+    }
+}
+
 /// Formatting of the time and sales panel.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct TimeAndSalesConfig {
     /// Decimals of prices, as `Instrument::price_decimals`. `None` chooses them from each price.
     pub price_decimals: Option<u8>,

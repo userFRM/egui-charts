@@ -743,17 +743,17 @@ pub(super) fn heatmap_universes() -> Vec<egui_charts::ui::widget_bar::MarketHeat
             .filter(|spec| {
                 !stocks_only || !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic")
             })
-            .map(|spec| MarketHeatmapEntry {
-                symbol: spec.symbol.into(),
-                group: match spec.symbol {
+            .map(|spec| {
+                let group = match spec.symbol {
                     "AAPL" | "MSFT" | "NVDA" => "Technology",
                     "TSLA" => "Consumer",
                     _ => spec.exchange,
-                }
-                .into(),
-                values: [("weight", (spec.seed % 4 + 1) as f64)]
-                    .map(|(id, value)| (id.to_owned(), value))
-                    .into(),
+                };
+                let mut entry = MarketHeatmapEntry::new(spec.symbol, group);
+                entry
+                    .values
+                    .insert("weight".to_owned(), (spec.seed % 4 + 1) as f64);
+                entry
             })
             .collect()
     };

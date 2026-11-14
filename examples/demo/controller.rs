@@ -336,12 +336,9 @@ impl SidePanel {
 
 /// A products launcher entry.
 fn product(id: &str, icon: egui_charts::icons::Icon, title: &str, description: &str) -> Product {
-    Product {
-        id: id.into(),
-        icon,
-        title: title.into(),
-        description: description.into(),
-    }
+    let mut product = Product::new(id, icon, title);
+    product.description = description.into();
+    product
 }
 
 /// Export formats the demo can perform, with browser downloads on the web.
@@ -543,18 +540,18 @@ pub struct DemoApp {
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
     [
-        WidgetBarWidget {
-            id: 4,
-            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
-            tooltip: "Time and sales".into(),
-            section: WidgetBarSection::Bottom,
-        },
-        WidgetBarWidget {
-            id: 2,
-            icon: egui_charts::icons::icons::TEXT,
-            tooltip: "Session notes".into(),
-            section: WidgetBarSection::Bottom,
-        },
+        WidgetBarWidget::new(
+            4,
+            egui_charts::icons::icons::SETTINGS_EVENTS,
+            "Time and sales",
+            WidgetBarSection::Bottom,
+        ),
+        WidgetBarWidget::new(
+            2,
+            egui_charts::icons::icons::TEXT,
+            "Session notes",
+            WidgetBarSection::Bottom,
+        ),
     ]
 }
 
@@ -841,10 +838,11 @@ impl DemoApp {
             calendar: CalendarPanel::new(),
             screener: ScreenerPanel::new(feeds::screener_sets()),
             hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
-            market_heatmap: egui_charts::ui::widget_bar::MarketHeatmapPanel {
-                universes: feeds::heatmap_universes(),
-                metrics: feeds::heatmap_metrics(),
-                ..Default::default()
+            market_heatmap: {
+                let mut panel = egui_charts::ui::widget_bar::MarketHeatmapPanel::default();
+                panel.universes = feeds::heatmap_universes();
+                panel.metrics = feeds::heatmap_metrics();
+                panel
             },
             notifications: NotificationsPanel::new(),
             notification_host,

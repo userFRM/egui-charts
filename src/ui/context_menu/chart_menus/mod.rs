@@ -15,6 +15,7 @@ use egui::{Context, Id};
 
 /// The original click retained while a host menu action is being chosen.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct HostMenuContext {
     /// Background, series, study or drawing that was clicked, including its screen position.
     pub target: RightClickTarget,

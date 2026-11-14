@@ -19,6 +19,7 @@ use crate::scales::{decimals, to_step};
 
 /// How a take-profit or stop-loss distance is entered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BracketMode {
     /// The exit price itself.
     #[default]
@@ -47,6 +48,7 @@ impl BracketMode {
 
 /// A take-profit or stop-loss as entered in the ticket.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Bracket {
     /// How [`value`](Self::value) is read.
     pub mode: BracketMode,
@@ -55,6 +57,11 @@ pub struct Bracket {
 }
 
 impl Bracket {
+    /// A bracket of `value`, read as `mode` says.
+    pub fn new(mode: BracketMode, value: f64) -> Self {
+        Self { mode, value }
+    }
+
     /// The direction from the entry to the exit: up for a take profit (`profit`) of a buy and a
     /// stop loss of a sell, down for the other two.
     fn sign(side: OrderSide, profit: bool) -> f64 {
@@ -109,6 +116,7 @@ impl Bracket {
 /// A named quantity and brackets the ticket applies in one step. Hosts persist
 /// [`Trading::presets`](super::Trading::presets) themselves.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OrderPreset {
     /// Shown in the ticket's preset list.
     pub name: String,
@@ -118,6 +126,18 @@ pub struct OrderPreset {
     pub take_profit: Option<Bracket>,
     /// The stop loss, if the preset sets one.
     pub stop_loss: Option<Bracket>,
+}
+
+impl OrderPreset {
+    /// A preset of `quantity` without a take profit or a stop loss.
+    pub fn new(name: impl Into<String>, quantity: f64) -> Self {
+        Self {
+            name: name.into(),
+            quantity,
+            take_profit: None,
+            stop_loss: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

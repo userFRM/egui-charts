@@ -30,6 +30,7 @@ pub enum IdeaKind {
 
 /// An entry of the host's feed.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Idea {
     /// The host's identifier of the entry.
     pub id: String,
@@ -51,8 +52,33 @@ pub struct Idea {
     pub attachment: Option<String>,
 }
 
+impl Idea {
+    /// An entry without a title, instrument, interval or attachment: set them as known. A short
+    /// post keeps the empty title.
+    pub fn new(
+        id: impl Into<String>,
+        kind: IdeaKind,
+        body: impl Into<String>,
+        author: impl Into<String>,
+        time: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            kind,
+            title: String::new(),
+            body: body.into(),
+            author: author.into(),
+            time,
+            symbol: String::new(),
+            interval: String::new(),
+            attachment: None,
+        }
+    }
+}
+
 /// One page of the host's feed.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub struct IdeaPage {
     /// The entries, newest first.
     pub items: Vec<Idea>,
@@ -62,6 +88,7 @@ pub struct IdeaPage {
 
 /// What the user is composing. It stays in the panel until a publish succeeds.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IdeaDraft {
     /// The title.
     pub title: String,
