@@ -1602,18 +1602,28 @@ impl DemoApp {
         });
     }
 
+    /// Shows the days `start` to `end`, both included, as the active chart's time axis counts
+    /// them.
     fn set_date_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
+        let Some((from, next)) = day_start(&self.chart, start)
+            .zip(end.succ_opt().and_then(|next| day_start(&self.chart, next)))
+        else {
+            return;
+        };
         let range = egui_charts::widget::VisibleTimeRange {
-            from: start.and_hms_opt(0, 0, 0).unwrap().and_utc(),
-            to: end.and_hms_opt(23, 59, 59).unwrap().and_utc(),
+            from,
+            to: next - chrono::TimeDelta::seconds(1),
         };
         let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
         charts.insert(self.layout_slot, &mut self.chart);
         self.layout.apply_date_range(&mut charts, range);
     }
 
+    /// Scrolls to the first bar of `date` on the chart's time axis.
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
-        let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let Some(start) = day_start(&self.chart, date) else {
+            return;
+        };
         let target = self
             .bars
             .iter()
@@ -4413,6 +4423,35 @@ fn size_by_atr(chart: &mut Chart) {
     params.range_size_method = half_atr;
     params.pnf_size_method = half_atr;
     chart.set_chart_type_params(params);
+}
+
+/// The first instant of `date` on the chart's time axis. Where a clock change skips midnight
+/// the day starts at the first time that exists, and a repeated midnight counts the first time.
+fn day_start(chart: &Chart, date: chrono::NaiveDate) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone;
+    use egui_charts::config::TimezoneMode;
+    let zone = match &chart.chart_options().time_scale.timezone {
+        TimezoneMode::Local => None,
+        // An instrument with a zone of its own is shown in it.
+        TimezoneMode::Exchange(fallback) => Some(
+            chart
+                .instrument()
+                .and_then(|instrument| instrument.time_zone.clone())
+                .unwrap_or_else(|| fallback.clone()),
+        ),
+        zone => Some(zone.to_tz().unwrap_or_default()),
+    };
+    let midnight = date.and_time(chrono::NaiveTime::MIN);
+    (0..=24 * 60 * 60).find_map(|second| {
+        let time = midnight.checked_add_signed(chrono::TimeDelta::seconds(second))?;
+        Some(match &zone {
+            Some(zone) => zone.from_local_datetime(&time).earliest()?.to_utc(),
+            None => chrono::Local
+                .from_local_datetime(&time)
+                .earliest()?
+                .to_utc(),
+        })
+    })
 }
 
 fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str) {
@@ -9547,6 +9586,37 @@ mod tests {
             brick > sample_brick && brick < close / 10.0,
             "{sample_brick} {brick} {close}"
         );
+    }
+
+    /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind
+    /// UTC in November, so its 10 November starts at 05:00 UTC, and the days 9 and 10 November
+    /// run from 05:00 UTC on the 9th to 05:00 UTC on the 11th.
+    #[test]
+    fn date_picker_days_follow_the_chart_time_zone() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, "2026-11-12T15:00:00Z".parse().unwrap(), true);
+        settle(&mut app, &ctx);
+        apply_timezone(
+            &mut app.chart,
+            &mut app.timeframe_toolbar,
+            "America/New_York",
+        );
+        let day = |day| chrono::NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+        let near = |time: chrono::DateTime<chrono::Utc>, expected: &str| {
+            let expected: chrono::DateTime<chrono::Utc> = expected.parse().unwrap();
+            (time - expected).abs() <= chrono::TimeDelta::minutes(5)
+        };
+        app.go_to_date(day(10));
+        settle(&mut app, &ctx);
+        let span = app.chart.visible_time_range().unwrap();
+        let centre = span.from + (span.to - span.from) / 2;
+        assert!(near(centre, "2026-11-10T05:00:00Z"), "{span:?}");
+        app.set_date_range(day(9), day(10));
+        settle(&mut app, &ctx);
+        let span = app.chart.visible_time_range().unwrap();
+        assert!(near(span.from, "2026-11-09T05:00:00Z"), "{span:?}");
+        assert!(near(span.to, "2026-11-11T05:00:00Z"), "{span:?}");
     }
 
     /// Selecting seconds must rebuild the same executions, including the current partial minute.
