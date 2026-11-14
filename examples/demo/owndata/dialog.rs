@@ -49,6 +49,32 @@ const LARGEST_FILE: u64 = 1 << 20;
 /// What the dialog says about `Connect` while own data is on.
 const RECONNECTS: &str =
     "Connect reconnects with this profile. Studies and drawings on the chart are not kept.";
+/// The first-visit sentence. The web build runs in a browser, the native build on the device.
+const CHOICE: &str = if cfg!(target_arch = "wasm32") {
+    "This demo runs on synthetic data. You can also chart your own REST history and WebSocket \
+     stream, mapped here in your browser."
+} else {
+    "This demo runs on synthetic data. You can also chart your own REST history and WebSocket \
+     stream, mapped here on this device."
+};
+/// The choice that keeps the key values.
+const KEEP: &str = if cfg!(target_arch = "wasm32") {
+    "Keep keys in this browser"
+} else {
+    "Keep keys on this device"
+};
+/// Where a kept key is stored.
+const KEPT: &str = if cfg!(target_arch = "wasm32") {
+    "Kept as plain text in this browser's storage for this site."
+} else {
+    "Kept as plain text in the demo's settings file on this device."
+};
+/// Why a key of the stream travels elsewhere than in a header.
+const NO_HEADERS: &str = if cfg!(target_arch = "wasm32") {
+    "A browser sends no headers when it opens a WebSocket."
+} else {
+    "The stream sends no headers when it opens."
+};
 
 /// What the dialog asks the application to do.
 pub(crate) enum Outcome {
@@ -138,7 +164,7 @@ struct Draft {
     profile: Profile,
     /// The value of each key, in the order of `profile.keys`.
     values: Vec<String>,
-    /// The choice `Keep keys in this browser`.
+    /// Whether the key values are kept: the box [`KEEP`].
     keep: bool,
     /// The name of the saved profile the draft was loaded from. `None` for a new or an
     /// imported one.
@@ -792,10 +818,7 @@ impl DataSourceDialog {
 
     /// The first-visit choice.
     fn choice(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            "This demo runs on synthetic data. You can also chart your own REST history and \
-             WebSocket stream, mapped here in your browser.",
-        );
+        ui.label(CHOICE);
         let footer = DialogFooter::new("Connect my own data").secondary("Use synthetic data");
         let (own, synthetic) = footer.show(ui);
         ui.weak("You can change this later under Data source in the menu.");
@@ -1135,10 +1158,10 @@ impl DataSourceDialog {
         );
         keys.show(ui, |_| {});
         key_rows(ui, &mut draft.profile.keys, &mut draft.values);
-        let keep = egui::Checkbox::new(&mut draft.keep, "Keep keys in this browser");
+        let keep = egui::Checkbox::new(&mut draft.keep, KEEP);
         ui.add_enabled(self.can_save, keep);
         if draft.keep {
-            ui.weak("Kept as plain text in this browser's storage for this site.");
+            ui.weak(KEPT);
         }
         ui.weak("Keys are sent only to the endpoints of this profile and are never exported.");
 
@@ -1628,7 +1651,7 @@ impl DataSourceDialog {
             ui.add(field.desired_width(f32::INFINITY));
         });
         ui.hint_label(format!(
-            "A browser sends no headers when it opens a WebSocket. Write {{name}} in the URL, \
+            "{NO_HEADERS} Write {{name}} in the URL, \
              in a subprotocol or in a connect message to send the key of that name there. \
              Placeholders: {{symbol}}, {{interval}}{keys}. A key typed here instead of as \
              {{name}} is saved and exported with the profile."
@@ -3485,7 +3508,7 @@ mod tests {
         assert!(dialog.startup().is_none() && dialog.is_open());
         // Kept by choice, the key is stored, and the start after that connects by itself.
         enter(&ctx, &mut dialog, "key value", SECRET);
-        click(&ctx, &mut dialog, "Keep keys in this browser");
+        click(&ctx, &mut dialog, "Keep keys on this device");
         let connected = click(&ctx, &mut dialog, "Connect");
         assert!(matches!(connected, Some(Outcome::Connect { .. })));
         assert!(stored(&fresh).contains(SECRET));
@@ -3497,7 +3520,7 @@ mod tests {
         assert!(!dialog.is_open());
         // The box cleared and the profile saved, the key is forgotten.
         dialog.open();
-        click(&ctx, &mut dialog, "Keep keys in this browser");
+        click(&ctx, &mut dialog, "Keep keys on this device");
         click(&ctx, &mut dialog, "Save");
         assert!(!stored(&fresh).contains(SECRET));
     }
