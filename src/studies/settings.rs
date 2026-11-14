@@ -2574,8 +2574,7 @@ mod tests {
     #[test]
     fn default_settings_match_settings_saved_without_the_newer_fields() {
         let saved: StudySettings =
-            serde_json::from_str(r#"{"plots":[],"precision":null,"hidden_intervals":[]}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"plots":[],"precision":null,"hidden_intervals":[]}"#).unwrap();
         assert_eq!(StudySettings::default(), saved);
     }
 }
