@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 /// The `line_count` parameter (typically 3) controls how many prior lines
 /// must be exceeded for a reversal to register.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LineBreakConfig {
     /// Number of lines to look back for reversal
     pub line_count: usize,

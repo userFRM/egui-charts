@@ -24,6 +24,7 @@ impl TemplatesButton {
         ui: &mut Ui,
         templates: &[DrawingTemplate],
     ) -> Option<DrawingToolbarAction> {
+        let ctx = ui.ctx().clone();
         let mut builder = SubmenuBuilder::new(ui).add_text_item_with_action(
             "Save as template…",
             "Save current drawing properties as a reusable template",
@@ -40,13 +41,21 @@ impl TemplatesButton {
         for template in templates {
             let template_id = template.id.clone();
             let name = if template.is_default {
-                format!("{} (default)", template.name)
+                l10n::format_text(
+                    &ctx,
+                    "{name} (default)",
+                    &[("name", template.name.as_str())],
+                )
             } else {
                 template.name.clone()
             };
-            let tooltip = format!(
-                "Load template: {} ({})",
-                template.name, template.drawing_type
+            let tooltip = l10n::format_text(
+                &ctx,
+                "Load template: {name} ({tool})",
+                &[
+                    ("name", template.name.as_str()),
+                    ("tool", template.drawing_type.as_str()),
+                ],
             );
 
             builder = builder.add_text_item_with_action(&name, &tooltip, move || {

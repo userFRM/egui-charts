@@ -103,6 +103,17 @@ pub struct PanePrimitiveView<'a> {
     mapping: &'a ChartMapping,
 }
 
+impl std::fmt::Debug for PanePrimitiveView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PanePrimitiveView")
+            .field("pane", &self.pane)
+            .field("rect", &self.rect)
+            .field("visible", &self.visible)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> PanePrimitiveView<'a> {
     pub(crate) fn new(pane: PaneId, view: &'a PrimitiveView<'_>) -> Self {
         Self {
@@ -309,6 +320,17 @@ pub struct PrimitiveView<'a> {
     /// The indices of `bars` in view.
     pub visible: Range<usize>,
     pub(crate) custom: Option<CustomView<'a>>,
+}
+
+impl std::fmt::Debug for PrimitiveView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrimitiveView")
+            .field("series", &self.series)
+            .field("mapping", &self.mapping)
+            .field("visible", &self.visible)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PrimitiveView<'_> {

@@ -10,6 +10,7 @@ pub const MAX_GHOST_CANDLES: usize = 1000;
 /// Older saved `spacing` and `wick` settings are ignored and use these defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct GhostFeedConfig {
     /// Target average high-low range in ticks, before widening to contain the body and path.
     /// Must be positive and finite.
@@ -31,6 +32,7 @@ impl Default for GhostFeedConfig {
 /// One projected candle, with its body following the noisy path and wicks widened to the
 /// configured range when the body and intervening anchors fit inside it.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct GhostCandle {
     /// Bar index where the candle opens.
     pub bar_idx: f32,

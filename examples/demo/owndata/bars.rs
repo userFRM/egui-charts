@@ -1,7 +1,7 @@
 //! Bars from history rows, from stream records and from trades.
 
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, Utc};
-use egui_charts::model::{Bar, BarClock, Timeframe, TimezoneId};
+use egui_charts::model::{Bar, BarClock, OrderSide, Timeframe, TimezoneId};
 use serde_json::Value;
 
 use super::profile::{BarFields, ConditionRule, FieldPath, Segment, TradeFields, at, number, text};
@@ -126,6 +126,9 @@ pub(crate) struct Trade {
     /// What its conditions let it change. With several conditions the strictest rule applies:
     /// `Ignore` before `VolumeOnly` before `PriceAndVolume`.
     pub(crate) rule: ConditionRule,
+    /// The side of its aggressor: `None` when the route maps no side or the value is neither of
+    /// the two it names.
+    pub(crate) side: Option<OrderSide>,
 }
 
 /// The trade in `record`. `None` when its time is missing, unreadable or a date without a time
@@ -160,11 +163,24 @@ pub(crate) fn read_trade(
     };
     let rules = conditions(record, fields);
     let rule = rules.iter().map(rule).max_by_key(strictness);
+    // An empty value names no side, also for a field that holds empty text.
+    let named = |listed: &String, value: &String| !listed.is_empty() && listed == value;
+    let side = field(record, &fields.side).and_then(text);
+    let side = side.and_then(|value| {
+        if named(&fields.buy, &value) {
+            Some(OrderSide::Buy)
+        } else if named(&fields.sell, &value) {
+            Some(OrderSide::Sell)
+        } else {
+            None
+        }
+    });
     Ok(Trade {
         time,
         price,
         size,
         rule: rule.unwrap_or_default(),
+        side,
     })
 }
 
@@ -221,6 +237,21 @@ impl Aggregator {
             priced: !bar.is_whitespace(),
             bar,
         });
+    }
+
+    /// Continues from `bar`, a bar the stream's bars route sent. The service counted the trades
+    /// of its slot up to the moment it sent it, so the trades after it continue it. A bar of a
+    /// slot older than the one being built is left out: that slot is closed.
+    pub(crate) fn follow(&mut self, bar: &Bar) {
+        let slot = self.clock.bar_open(bar.time);
+        if self
+            .building
+            .as_ref()
+            .is_some_and(|building| slot < building.slot)
+        {
+            return;
+        }
+        self.start(Some(bar.clone()));
     }
 
     /// Folds `trade` in and returns the bar to push, in its state after the trade. `None` when
@@ -314,6 +345,7 @@ mod tests {
             size: key("s"),
             condition: key("c"),
             conditions: vec![("T".to_owned(), VolumeOnly), ("X".to_owned(), Ignore)],
+            ..TradeFields::default()
         };
         let utc = TimezoneId::utc();
         // 14:30:00 UTC on 11 November 2026 in milliseconds. A row gives its time as an offset.
@@ -446,7 +478,40 @@ mod tests {
             price: 100.5,
             size: 0.0,
             rule: PriceAndVolume,
+            side: None,
         };
         assert_eq!(trade(&texts, &fields, &utc), Some(read));
+        // The side, read as text: `false` marks a buy and `true` a sell, as a field "the buyer
+        // made the market" does. Anything else, or no field, is unknown.
+        let sided = TradeFields {
+            side: key("m"),
+            buy: "false".to_owned(),
+            sell: "true".to_owned(),
+            ..fields.clone()
+        };
+        use egui_charts::model::OrderSide::{Buy, Sell};
+        let side = |record: &Value, fields: &TradeFields| {
+            trade(record, fields, &utc).map(|trade| trade.side)
+        };
+        for (value, read) in [
+            (json!(false), Some(Buy)),
+            (json!(true), Some(Sell)),
+            (json!("true"), Some(Sell)),
+            (json!("x"), None),
+            (json!(null), None),
+            (json!([true]), None),
+        ] {
+            let record = json!({"t": T, "p": 100.0, "s": 1.0, "m": value});
+            assert_eq!(side(&record, &sided), Some(read), "{record}");
+        }
+        let unsided = json!({"t": T, "p": 100.0, "s": 1.0});
+        assert_eq!(side(&unsided, &sided), Some(None));
+        // An empty value marks nothing, also for a field that holds empty text.
+        let half = TradeFields {
+            buy: String::new(),
+            ..sided.clone()
+        };
+        let empty = json!({"t": T, "p": 100.0, "s": 1.0, "m": ""});
+        assert_eq!(side(&empty, &half), Some(None));
     }
 }

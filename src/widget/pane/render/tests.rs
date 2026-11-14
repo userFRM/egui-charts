@@ -404,6 +404,31 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
         let main = chart.get_rendered_price_rect();
         let before = chart.get_rendered_indicator_panes().to_vec();
         let separator = Pos2::new(main.center().x, before[1].panel_rect.top() - 0.5);
+        // Past the 40 point minimum the separator waits at it until the pointer comes back.
+        let [upper, lower] = [0, 1].map(|at| before[at].panel_rect.height());
+        pointer(&ctx, &mut chart, separator, None);
+        pointer(&ctx, &mut chart, separator, Some(true));
+        for (moved, expected) in [
+            (400.0, lower - 40.0),
+            (300.0, lower - 40.0),
+            (-25.0, -25.0),
+            (0.0, 0.0),
+        ] {
+            for _ in 0..2 {
+                pointer(&ctx, &mut chart, separator + egui::vec2(0.0, moved), None);
+            }
+            let panes = chart.get_rendered_indicator_panes();
+            assert!(
+                (panes[0].panel_rect.height() - upper - expected).abs() < 0.1,
+                "{moved}"
+            );
+            assert!(
+                (panes[1].panel_rect.height() - lower + expected).abs() < 0.1,
+                "{moved}"
+            );
+            assert_eq!(chart.get_rendered_price_rect(), main);
+        }
+        pointer(&ctx, &mut chart, separator, Some(false));
         drag(
             &ctx,
             &mut chart,
@@ -446,6 +471,56 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
                 if maximized { 1 } else { 2 }
             );
             assert_eq!(chart.take_indicator_settings_request(), None);
+        }
+        // The price pane takes the gesture on its plot, away from its series, axis and status line.
+        let mapping = chart.get_chart_mapping();
+        let empty = Pos2::new(main.left() + 20.0, main.center().y);
+        assert!(mapping.idx_to_x(0) > empty.x + 10.0);
+        for (at, toggles) in [
+            (empty, true),
+            (
+                Pos2::new(mapping.idx_to_x(70), mapping.price_to_y(107.0)),
+                false,
+            ),
+            (Pos2::new(main.right() + 20.0, main.center().y), false),
+            (main.left_top() + egui::vec2(20.0, 12.0), false),
+        ] {
+            for maximized in [true, false] {
+                for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                    pointer(&ctx, &mut chart, at, pressed);
+                }
+                let shown = chart.get_rendered_indicator_panes().len();
+                assert_eq!(shown, if toggles && maximized { 0 } else { 2 }, "{at:?}");
+                assert_eq!(
+                    chart.get_rendered_price_rect().height() > 500.0,
+                    toggles && maximized
+                );
+            }
+        }
+        // Each toggle of the price pane is one undo step.
+        assert!(chart.undo());
+        assert_eq!(chart.pane_layout.maximized, Some(chart.main_series_pane()));
+        assert!(chart.redo());
+        // A double-click that finishes a drawing only finishes it.
+        #[cfg(feature = "drawings")]
+        {
+            use crate::drawings::DrawingToolType;
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::Path));
+            click(&ctx, &mut chart, empty - egui::vec2(0.0, 40.0));
+            for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                pointer(&ctx, &mut chart, empty, pressed);
+            }
+            assert_eq!(chart.get_rendered_indicator_panes().len(), 2);
+            assert!(
+                chart
+                    .drawings_mut()
+                    .drawings
+                    .iter()
+                    .any(|drawing| drawing.completed)
+            );
+            chart.drawings_mut().set_active_tool(None);
         }
         let separator = Pos2::new(main.center().x, resized[0].panel_rect.top() - 0.5);
         drag(
@@ -514,6 +589,42 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
                 if maximized { 1 } else { 2 },
                 "the layout menu must leave pane maximize and restore reachable"
             );
+        }
+    }
+}
+
+/// A study added while a pane is maximized is drawn, also after the maximized price pane became
+/// the only pane, and undo does not maximize a chart left with one pane.
+#[test]
+fn study_added_while_a_pane_is_maximized_is_drawn() {
+    use crate::widget::PaneId;
+    for remove_others in [true, false] {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let macd = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+        let maximized = if remove_others {
+            PaneId::MAIN
+        } else {
+            chart.series_pane(rsi).unwrap()
+        };
+        chart.user_action(|chart| chart.pane_layout.maximized = Some(maximized));
+        if remove_others {
+            for id in [rsi, macd] {
+                chart.user_action(|chart| chart.remove_series(id));
+            }
+        }
+        let added = chart.user_action(|chart| chart.add_indicator(Box::new(RSI::new(7))));
+        for time in [0.0, 0.1] {
+            crate::widget::test_frames::frame(&ctx, &mut chart, time, Vec::new());
+        }
+        let pane = chart.series_pane(added).unwrap();
+        assert!(chart.pane_height(pane) > Some(40.0), "{remove_others}");
+        if remove_others {
+            assert!(chart.undo());
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.2, Vec::new());
+            assert_eq!(chart.panes(), [PaneId::MAIN]);
+            assert_eq!(chart.pane_layout.maximized, None);
         }
     }
 }
@@ -1474,4 +1585,24 @@ fn custom_background_reaches_study_panes() {
             assert!(stale.is_empty(), "theme background at {stale:?}");
         }
     }
+}
+
+/// A study in its own pane draws its table in that pane, not over the price pane.
+#[test]
+fn study_tables_sit_in_their_own_pane() {
+    let ctx = Context::default();
+    let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+    chart.set_size(Some(Vec2::new(800.0, 600.0)));
+    chart.add_indicator(Box::new(crate::studies::TechnicalRatings::default()));
+    crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+    let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+    let heading = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.text() == "Coverage" => Some(text.pos),
+            _ => None,
+        })
+        .expect("table painted");
+    let pane = chart.get_rendered_indicator_panes()[0].chart_rect;
+    assert!(pane.contains(heading), "{heading:?} outside {pane:?}");
 }

@@ -67,7 +67,7 @@ pub struct MetricPage {
 
 /// A live metric stream, stopped through [`super::Datafeed::unsubscribe`].
 /// Push with [`Sink::push_metric`]; timestamps are retained without price-bar aggregation.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MetricSubscription {
     /// Identifier used to unsubscribe this metric stream.
     pub id: SubscriptionId,

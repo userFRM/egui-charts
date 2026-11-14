@@ -324,6 +324,17 @@ pub struct StrategyContext<'a> {
     order_delay: u32,
 }
 
+impl std::fmt::Debug for StrategyContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StrategyContext")
+            .field("bars", &self.bars.len())
+            .field("position", &self.position)
+            .field("price", &self.price)
+            .field("equity", &self.equity)
+            .finish_non_exhaustive()
+    }
+}
+
 impl StrategyContext<'_> {
     /// Chart bars through this decision, oldest first. Live tick decisions include the forming
     /// bar. Historical tick decisions and their fill callbacks include a candle containing only

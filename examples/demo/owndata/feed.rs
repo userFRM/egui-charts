@@ -1,6 +1,6 @@
 //! The mapped feed: a profile served to the chart through the library's `Datafeed` trait.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeDelta, Utc};
@@ -8,12 +8,12 @@ use egui_charts::data::{
     Datafeed, FeedCapabilities, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Sink,
     Subscription, SubscriptionId,
 };
-use egui_charts::model::{Bar, BarClock, Instrument, Timeframe, TimezoneId};
+use egui_charts::model::{Bar, BarClock, Instrument, Tick, Timeframe, TimezoneId};
 use serde_json::Value;
 
 use super::bars::{self, Aggregator, DAY_MS};
 use super::http::{self, Request};
-use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url};
+use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url, stream_values};
 use super::stream::{Routed, Session, StreamEvent};
 use super::{Failure, Secrets, conceal, endpoint, shape, time};
 
@@ -39,6 +39,11 @@ struct State {
     joins: Vec<(Key, Join)>,
     /// The run of empty windows of each symbol and interval.
     runs: HashMap<(String, Timeframe), Run>,
+    /// How many subscriptions have been made, which gives each its number.
+    subscribed: u64,
+    /// The trades fed to the charts that time and sales has not taken yet, oldest first, each
+    /// with the number of the subscription that fed it, at most [`TAPE`].
+    tape: VecDeque<(u64, Tick)>,
 }
 
 /// The bars that belong together: those of one symbol and interval on one clock. The clock is
@@ -74,6 +79,8 @@ struct Run {
 struct Live {
     sink: Sink,
     key: Key,
+    /// Its number in the order the subscriptions were made.
+    serial: u64,
     /// The address of the stream without its query, for errors and log lines.
     endpoint: String,
     aggregator: Aggregator,
@@ -131,6 +138,10 @@ struct Kept {
 /// A run of empty windows ends history with this many windows.
 const LONGEST_RUN: u32 = 64;
 
+/// The most trades the feed keeps for time and sales between two frames, as many as the panel
+/// lists.
+const TAPE: usize = 10_000;
+
 /// A run of empty windows also ends history with the first window that starts more than this
 /// many days before the end of the run's first window.
 const FARTHEST_RUN_DAYS: i64 = 366;
@@ -147,6 +158,30 @@ impl MappedFeed {
             }),
         }
     }
+
+    /// The trades fed to the chart of `symbol` and `timeframe` since the last call, oldest
+    /// first, at most the latest 10,000, for time and sales. A study that reads the chart's
+    /// symbol, on the chart's interval or another, has a subscription of its own that receives
+    /// the same trades again, so only those of the first subscription of `symbol` and
+    /// `timeframe` still held are listed. Trades left from before a change of symbol or
+    /// interval are dropped.
+    // shortcut: the first subscription stands for the chart's, which the feed cannot tell from
+    // a study's on the same interval, so while their sockets differ, as when one reconnects,
+    // time and sales follows the first; take the chart's own once the Datafeed names it.
+    pub(crate) fn drain_tape(&self, symbol: &str, timeframe: Option<Timeframe>) -> Vec<Tick> {
+        let (tape, first) = {
+            let mut state = self.shared.state();
+            let first = state
+                .subscriptions
+                .values()
+                .filter(|live| live.key.symbol == symbol && Some(live.key.timeframe) == timeframe)
+                .map(|live| live.serial)
+                .min();
+            (std::mem::take(&mut state.tape), first)
+        };
+        let listed = tape.into_iter().filter(|(by, _)| Some(*by) == first);
+        listed.map(|(_, tick)| tick).collect()
+    }
 }
 
 impl Datafeed for MappedFeed {
@@ -158,9 +193,13 @@ impl Datafeed for MappedFeed {
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         // Any symbol resolves. One the service does not know fails there, with its status.
         let timeframes = self.shared.profile.intervals.iter().map(|row| row.chart);
-        reply.send(Ok(
-            Instrument::new(symbol).with_supported_timeframes(timeframes)
-        ));
+        let instrument = Instrument::new(symbol).with_supported_timeframes(timeframes);
+        // The footprint and the volume profiles group trades by the price step.
+        let instrument = match self.shared.profile.tick_size {
+            Some(step) => instrument.with_tick_size(step),
+            None => instrument,
+        };
+        reply.send(Ok(instrument));
     }
 
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -229,11 +268,7 @@ impl Datafeed for MappedFeed {
             return;
         };
         sink.set_status(FeedStatus::Connecting);
-        let mut values = vec![
-            ("symbol".to_owned(), symbol.clone()),
-            ("interval".to_owned(), interval.to_owned()),
-        ];
-        values.extend(shared.secrets.iter().cloned());
+        let values = stream_values(&symbol, interval, &shared.secrets);
         let filled: Vec<(&str, &str)> = values
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -251,9 +286,11 @@ impl Datafeed for MappedFeed {
             if join.in_flight == 0 {
                 aggregator.start(join.newest.clone());
             }
+            state.subscribed += 1;
             let live = Live {
                 sink,
                 key,
+                serial: state.subscribed,
                 endpoint,
                 aggregator,
                 pushed: None,
@@ -384,6 +421,7 @@ impl Shared {
         let reading = read(
             &response,
             history,
+            &ask.symbol,
             zone,
             &ask.clock,
             ask.timeframe,
@@ -470,8 +508,11 @@ impl Shared {
                                         // is not the newest bar known.
                                         if !bars::ahead(clock, *timeframe, slot, now) {
                                             live.pushed = live.pushed.max(Some(slot));
+                                            // The trades that follow continue the service's
+                                            // own bar.
+                                            live.aggregator.follow(&bar);
                                         }
-                                        pushes.push(bar);
+                                        pushes.push((None, bar));
                                     }
                                     None => unread = unread.or(Some((&route.value, "time"))),
                                 }
@@ -479,7 +520,12 @@ impl Shared {
                             RouteKind::Trades(fields) => {
                                 match bars::read_trade(&record, fields, zone) {
                                     Ok(trade) if folding => {
-                                        pushes.extend(live.aggregator.add(&trade, now));
+                                        if let Some(bar) = live.aggregator.add(&trade, now) {
+                                            let (time, price) = (trade.time, trade.price);
+                                            let tick =
+                                                Tick::new(time, price, trade.size, trade.side);
+                                            pushes.push((Some(tick), bar));
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(part) => unread = unread.or(Some((&route.value, part))),
@@ -497,9 +543,19 @@ impl Shared {
                             live.endpoint
                         );
                     }
-                    live.sink.clone()
+                    let (sink, serial) = (live.sink.clone(), live.serial);
+                    let fed = pushes.iter().filter_map(|(tick, _)| tick.clone());
+                    state.tape.extend(fed.map(|tick| (serial, tick)));
+                    let over = state.tape.len().saturating_sub(TAPE);
+                    state.tape.drain(..over);
+                    sink
                 };
-                for bar in pushes {
+                // A trade goes before its bar: the bar, which already holds the trade, replaces
+                // what the chart folds the trade into, so its volume is counted once.
+                for (tick, bar) in pushes {
+                    if let Some(tick) = tick {
+                        sink.push_tick(tick);
+                    }
                     sink.push_bar(bar);
                 }
             }
@@ -770,8 +826,10 @@ fn request_for(
     secrets: &Secrets,
 ) -> Request {
     let limit = window.limit.to_string();
+    let lower = symbol.to_lowercase();
     let mut values = vec![
         ("symbol", symbol),
+        ("symbol_lower", lower.as_str()),
         ("interval", interval),
         ("from", window.from.as_str()),
         ("to", window.to.as_str()),
@@ -819,17 +877,21 @@ pub(crate) struct Reading {
 }
 
 /// Reads a parsed history response. The feed and the dialog's Test both call it, so the preview
-/// cannot disagree with the chart. The error says why nothing can be read: the rows are not
-/// where the mapping says, or no row has a readable time.
+/// cannot disagree with the chart. The rows are looked up for `symbol` ([`Rows::for_symbol`]).
+/// The error says why nothing can be read: the rows are not where the mapping says, or no row
+/// has a readable time.
+///
+/// [`Rows::for_symbol`]: super::profile::Rows::for_symbol
 pub(crate) fn read(
     response: &Value,
     history: &History,
+    symbol: &str,
     zone: &TimezoneId,
     clock: &BarClock,
     timeframe: Timeframe,
     now: DateTime<Utc>,
 ) -> Result<Reading, String> {
-    let rows = shape::rows(response, &history.rows)?;
+    let rows = shape::rows(response, &history.rows.for_symbol(symbol))?;
     let read = rows
         .iter()
         .filter_map(|row| bars::bar(row, &history.bar, zone, clock, timeframe));
@@ -1219,6 +1281,25 @@ pub(crate) mod tests {
                 ],
                 FIRST,
                 vec![BEFORE_B3, BEFORE_B0],
+                all(),
+            ),
+            case(
+                "rows filed under the symbol, and the symbol in lower case in the address",
+                |profile| {
+                    let history = profile.history.as_mut().unwrap();
+                    history.url = history.url.replace("{symbol}", "{symbol_lower}");
+                    history.rows.path = vec![Segment::Key("result".into()), Segment::Key("{symbol}".into())];
+                },
+                vec![
+                    format!(r#"{{"error":[],"result":{{"ABC":{},"last":1794407700}}}}"#, list(&[J3, J4, J5])),
+                    format!(r#"{{"error":[],"result":{{"ABC":{},"last":1794407520}}}}"#, list(&[J0, J1, J2])),
+                    r#"{"error":[],"result":{"last":1794407400}}"#.into(),
+                ],
+                "GET /bars?symbol=abc&interval=1m&to=",
+                vec![
+                    "GET /bars?symbol=abc&interval=1m&to=1794407580&limit=3",
+                    "GET /bars?symbol=abc&interval=1m&to=1794407400&limit=3",
+                ],
                 all(),
             ),
             // Five rows for a limit of three: the newest three are B3 to B5 once sorted.
