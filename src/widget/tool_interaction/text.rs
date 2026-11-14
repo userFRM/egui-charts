@@ -122,9 +122,38 @@ pub(super) fn begin_fibonacci_edit(
 }
 
 /// Open the text field of a selected rectangle, circle or ellipse on a click on its text, or on
-/// the hint it shows in place of none. The click that selects the shape leaves the field closed,
-/// as does a double click, which the host answers with the drawing's settings.
+/// the hint it shows in place of none. The click that selects the shape leaves the field closed.
+/// A click on one of the shape's handles leaves it closed too, so a circle's centre handle, where
+/// its text is painted, keeps starting a move. The field opens once the double-click delay has
+/// passed with no second press, since a field over the text would take the second click of a
+/// double click, which the host answers with the drawing's settings.
 pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: &egui::Response) {
+    type Pending = (usize, egui::Pos2, f64);
+    let key = response.id.with("shape_edit_pending");
+    let press_key = response.id.with("shape_edit_press");
+    let now = ui.input(|input| input.time);
+    let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+    // A click is released at most a click distance from its press, and the drag tests the press.
+    if let Some(origin) = ui.input(|input| input.pointer.press_origin()) {
+        ui.data_mut(|data| data.insert_temp(press_key, origin));
+    }
+    if let Some((id, pos, due)) = ui.data(|data| data.get_temp::<Pending>(key)) {
+        // Any press ends the wait, also one in the frame the delay ends. A wait that frames
+        // skipped past its due time is stale and dropped.
+        if ui.input(|input| input.pointer.any_pressed()) || now - due > delay {
+            ui.data_mut(|data| data.remove_temp::<Pending>(key));
+        } else if now >= due {
+            ui.data_mut(|data| data.remove_temp::<Pending>(key));
+            if manager.active_tool.is_none() && manager.text_editor.is_none() {
+                open_shape_edit(ui, manager, id, pos);
+            }
+            return;
+        } else {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(due - now));
+            return;
+        }
+    }
     if manager.active_tool.is_some()
         || manager.eraser_mode
         || manager.text_editor.is_some()
@@ -138,17 +167,41 @@ pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: 
     let Some(pos) = response.interact_pointer_pos() else {
         return;
     };
-    let Some(drawing) = manager.hit_test(pos).and_then(|id| {
-        manager.drawings.iter().find(|drawing| {
-            drawing.id == id
-                && matches!(
-                    drawing.tool_type,
-                    DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse
-                )
-                && !drawing.locked
-                && manager.is_selected(id)
-        })
-    }) else {
+    let Some(id) = manager
+        .hit_test(pos)
+        .filter(|&id| editable_shape(manager, id).is_some())
+    else {
+        return;
+    };
+    // The same handle test as the drag in `handle_selection`, which starts it for one selection.
+    let origin = ui
+        .data(|data| data.get_temp::<egui::Pos2>(press_key))
+        .unwrap_or(pos);
+    let one = manager.selected_ids().count() == 1;
+    if one && manager.hit_test_handle_by_id(origin, id).is_some() {
+        return;
+    }
+    ui.data_mut(|data| data.insert_temp(key, (id, pos, now + delay)));
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs_f64(delay));
+}
+
+/// The selected, unlocked rectangle, circle or ellipse `id`.
+fn editable_shape(manager: &DrawingManager, id: usize) -> Option<&crate::drawings::Drawing> {
+    manager.drawings.iter().find(|drawing| {
+        drawing.id == id
+            && matches!(
+                drawing.tool_type,
+                DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse
+            )
+            && !drawing.locked
+            && manager.is_selected(id)
+    })
+}
+
+/// Opens the field of shape `id` when the click at `pos` is on its painted text or hint.
+fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::Pos2) {
+    let Some(drawing) = editable_shape(manager, id) else {
         return;
     };
     let text = drawing.text.clone().filter(|t| !t.trim().is_empty());
@@ -156,10 +209,9 @@ pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: 
         .clone()
         .unwrap_or_else(|| l10n::text(ui.ctx(), "Add text"));
     if manager
-        .painted_text(drawing.id, &field)
+        .painted_text(id, &field)
         .is_some_and(|(min, galley)| Rect::from_min_size(min, galley.size()).contains(pos))
     {
-        let id = drawing.id;
         manager.text_editor = Some(TextEditState {
             id,
             draft: text.unwrap_or_default(),
@@ -584,9 +636,12 @@ mod tests {
     }
 
     /// A selected rectangle, circle or ellipse shows a hint where its text would be and opens its
-    /// text field on a click there. A double click that begins by selecting the shape does not,
-    /// and a locked shape has no field. A draft that starts blank keeps its field, cancels
-    /// without history, and confirms as one undoable edit that a saved file restores.
+    /// text field on a still click there, once the double-click delay has passed. A double click,
+    /// whether or not it begins by selecting the shape, reports the double click and leaves the
+    /// field closed, and a locked shape has no field. A circle's centre handle, where its text is
+    /// painted, opens no field and still starts a move after a click on it. A draft that starts
+    /// blank keeps its field, cancels without history, and confirms as one undoable edit that a
+    /// saved file restores.
     #[test]
     fn shape_text_field_click_edits_the_text() {
         use crate::drawings::{ChartPoint, Drawing};
@@ -599,8 +654,9 @@ mod tests {
                 let ctx = Context::default();
                 let mut chart = chart(&[10.0; 20], &[20.0; 20]);
                 let mut drawing = Drawing::new(7, tool);
+                // Wide enough that the centre is clear of the side handles.
                 drawing.chart_points =
-                    vec![ChartPoint::new(8.0, 15.0), ChartPoint::new(12.0, 18.0)];
+                    vec![ChartPoint::new(8.0, 15.0), ChartPoint::new(28.0, 18.0)];
                 drawing.completed = true;
                 drawing.locked = locked;
                 drawing.text = initial.map(String::from);
@@ -632,6 +688,18 @@ mod tests {
                 };
                 let hint = |chart: &crate::Chart| chart.drawings().painted_text(7, "Add text");
                 assert!(hint(&chart).is_none(), "{tool:?}");
+                // A circle paints its text on its centre handle, so its click lands beside it.
+                let click_at = |chart: &crate::Chart| {
+                    let (min, galley) = chart
+                        .drawings()
+                        .painted_text(7, initial.unwrap_or("Add text"))
+                        .unwrap();
+                    if tool == DrawingToolType::Circle {
+                        min + egui::vec2(galley.size().x - 2.0, galley.size().y / 2.0)
+                    } else {
+                        center
+                    }
+                };
                 step(&mut chart, vec![Event::PointerMoved(center)]);
                 for pressed in [true, false, true, false] {
                     step(&mut chart, vec![button(center, pressed)]);
@@ -644,20 +712,54 @@ mod tests {
                     initial.is_none() && !locked,
                     "{tool:?} {initial:?} locked {locked}"
                 );
+                if !locked {
+                    // A double click on the selected shape's text or hint reports itself.
+                    let click = click_at(&chart);
+                    for _ in 0..5 {
+                        step(&mut chart, vec![]);
+                    }
+                    chart.drain_events().for_each(drop);
+                    for pressed in [true, false, true, false] {
+                        step(&mut chart, vec![button(click, pressed)]);
+                    }
+                    for _ in 0..5 {
+                        step(&mut chart, vec![]);
+                    }
+                    let doubles = chart
+                        .drain_events()
+                        .filter(|event| {
+                            matches!(event, crate::widget::ChartEvent::DoubleClick { .. })
+                        })
+                        .count();
+                    assert_eq!(doubles, 1, "{tool:?} {initial:?} double click");
+                    assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
+                }
                 for confirm in [false, true] {
                     // Later than a double click of the last one.
                     for _ in 0..5 {
                         step(&mut chart, vec![]);
                     }
+                    let click = if locked { center } else { click_at(&chart) };
                     for pressed in [true, false] {
-                        step(&mut chart, vec![button(center, pressed)]);
+                        step(&mut chart, vec![button(click, pressed)]);
                     }
+                    // The field opens once a second click can no longer make it a double click.
                     step(&mut chart, vec![]);
+                    if !locked {
+                        assert!(chart.drawings().text_editor.is_none(), "{tool:?} waits");
+                    }
+                    for _ in 0..3 {
+                        step(&mut chart, vec![]);
+                    }
                     if locked {
                         assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
                         break;
                     }
-                    assert_eq!(chart.drawings().text_editor.as_ref().unwrap().id, 7);
+                    assert_eq!(
+                        chart.drawings().text_editor.as_ref().map(|e| e.id),
+                        Some(7),
+                        "{tool:?} {initial:?}"
+                    );
                     step(
                         &mut chart,
                         vec![key(Key::A, Modifiers::COMMAND), Event::Text(" ".into())],
@@ -688,6 +790,46 @@ mod tests {
                         assert_eq!(text(&chart).as_deref(), initial, "{tool:?}");
                         assert!(!chart.can_undo());
                     }
+                }
+                if tool == DrawingToolType::Circle && !locked {
+                    // A press on the centre handle moves the circle, also after a still click.
+                    // A loaded drawing has its screen points after the next frame, and a new id.
+                    step(&mut chart, vec![]);
+                    let id = chart.drawings().drawings[0].id;
+                    let handle = chart.drawings().drawings[0].points[0];
+                    let before = chart.drawings().drawings[0].chart_points[0].bar_idx;
+                    // Select the circle first, so the still click below lands on a selected shape.
+                    for pressed in [true, false] {
+                        step(&mut chart, vec![button(handle, pressed)]);
+                    }
+                    for _ in 0..5 {
+                        step(&mut chart, vec![]);
+                    }
+                    assert!(chart.drawings().is_selected(id), "{initial:?}");
+                    for pressed in [true, false] {
+                        step(&mut chart, vec![button(handle, pressed)]);
+                    }
+                    for _ in 0..4 {
+                        step(&mut chart, vec![]);
+                    }
+                    assert!(chart.drawings().text_editor.is_none(), "{initial:?}");
+                    step(&mut chart, vec![button(handle, true)]);
+                    for dx in [10.0, 20.0, 30.0, 40.0] {
+                        step(
+                            &mut chart,
+                            vec![Event::PointerMoved(handle + egui::vec2(dx, 0.0))],
+                        );
+                    }
+                    step(
+                        &mut chart,
+                        vec![button(handle + egui::vec2(40.0, 0.0), false)],
+                    );
+                    step(&mut chart, vec![]);
+                    let after = chart.drawings().drawings[0].chart_points[0].bar_idx;
+                    assert!(
+                        after > before + 1.0,
+                        "{initial:?} moved from {before} to {after}"
+                    );
                 }
             }
         }

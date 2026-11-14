@@ -98,7 +98,7 @@ impl Chart {
             desired_visible_bars: None,
             last_visible_bars: 0,
             apply_visible_bars_once: false,
-            price_axis_drag: None,
+            scroll_start_spacing: None,
             pending_start_idx: None,
             pending_scroll_time: None,
             scroll_animation: None,
@@ -245,6 +245,7 @@ impl Chart {
             marks: Default::default(),
             marker_options: Default::default(),
             change_marks: None,
+            frame_clock: None,
             price_lines: Vec::new(),
             next_price_line: 0,
             #[cfg(feature = "ui")]
@@ -499,7 +500,34 @@ impl Chart {
     /// clears the zoom history and selection and keeps the right-edge item by time and rank.
     /// A volume candles style read from a document saved before that style existed takes the
     /// defaults; applying the document's chart settings builds it from their body colours.
-    pub fn set_chart_type_params(&mut self, mut params: ChartTypeParams) {
+    pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+        let pending = params
+            .size_methods()
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
+        self.replace_chart_type_params(params, pending);
+    }
+
+    /// Sets `params` as settings apply them: a size whose method is unchanged keeps its resolved
+    /// value, or keeps waiting for history, and only a changed method resolves again.
+    pub(crate) fn apply_chart_type_params(&mut self, mut params: ChartTypeParams) {
+        let mut pending = self.pending_box_sizes;
+        let methods = params.size_methods().into_iter();
+        let current = self.chart_type_params.size_methods();
+        let sizes = params.sizes_mut().into_iter();
+        let kept = self.chart_type_params.sizes_mut();
+        for (((method, current), (size, kept)), pending) in
+            methods.zip(current).zip(sizes.zip(kept)).zip(&mut pending)
+        {
+            if method != current {
+                *pending = method != crate::model::BoxSizeMethod::Fixed;
+            } else if method != crate::model::BoxSizeMethod::Fixed {
+                *size = *kept;
+            }
+        }
+        self.replace_chart_type_params(params, pending);
+    }
+
+    fn replace_chart_type_params(&mut self, mut params: ChartTypeParams, pending: [bool; 4]) {
         if params.styles.volume_candles.is_saved_without_style() {
             params.styles.volume_candles = Default::default();
         }
@@ -510,10 +538,7 @@ impl Chart {
             self.drawings.deselect();
         }
         self.chart_type_params = params;
-        self.pending_box_sizes = self
-            .chart_type_params
-            .size_methods()
-            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
+        self.pending_box_sizes = pending;
         self.chart_type_params
             .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
     }
