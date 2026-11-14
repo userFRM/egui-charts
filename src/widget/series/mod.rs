@@ -242,7 +242,7 @@ impl Chart {
             let merged = merge(&mut item.bars, &mut BTreeMap::new(), &clock, incoming);
             item.feed.rejected_bars += merged.rejected;
             if let Some(marks) = &mut item.change_marks {
-                marks.record(&item.bars, &clock, before);
+                marks.record(&item.bars, &clock, before, self.frame_clock.as_ref());
             }
             if merged.first_changed.is_some_and(|first| first + 1 < len) {
                 item.revision = crate::model::next_revision();
@@ -750,7 +750,12 @@ impl Chart {
             merged.first_changed
         });
         if let (Some(marks), Some(closes)) = (&mut self.change_marks, closes) {
-            marks.record(&self.state.data().bars, clock, closes);
+            marks.record(
+                &self.state.data().bars,
+                clock,
+                closes,
+                self.frame_clock.as_ref(),
+            );
         }
         self.feed.rejected_bars += merged.rejected;
         #[cfg(feature = "drawings")]
@@ -992,7 +997,7 @@ impl Chart {
         }
         let right = self.right_edge().right;
         let scale = self.state.time_scale_mut();
-        let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
+        let full = (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing()) - 1.0;
         let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
         let stop = full.clamp(0.0, last);
         // The right edge a stop leaves at `full` can read back a rounding error short of it.

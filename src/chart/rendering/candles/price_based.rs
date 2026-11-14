@@ -679,6 +679,62 @@ mod tests {
         }
     }
 
+    /// A range bar is drawn over its whole range, wherever in it the bar opened.
+    #[test]
+    fn range_bars_are_painted_over_their_whole_range() {
+        use crate::model::BarData;
+        use crate::widget::{
+            Chart,
+            test_frames::{frame, shapes},
+        };
+        // With a range of 2, the fall from 100 to 99 and the rise to 101 complete a bar that
+        // opened at 100, in the middle of its range from 99 to 101.
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let source = [
+            (100.0, 100.0, 100.0, 100.0),
+            (100.0, 100.0, 99.0, 99.0),
+            (99.0, 101.0, 99.0, 101.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close))| {
+            let time = start + Duration::minutes(i as i64);
+            Bar::new(time, open, high, low, close, 1.0)
+        })
+        .collect();
+        let mut chart = Chart::new(BarData::from_bars(source));
+        chart.set_chart_type_params(ChartTypeParams {
+            range_size: 2.0,
+            ..Default::default()
+        });
+        chart.set_chart_type(ChartType::Range);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+        let map = chart.get_chart_mapping();
+        let colors = [chart.config().bullish_color, chart.config().bearish_color];
+        let first = painted
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Rect(rect)
+                    if colors.contains(&rect.fill)
+                        && (rect.rect.center().x - map.idx_to_x(0)).abs() < 0.5 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("the first range bar");
+        let (top, bottom) = (map.price_to_y(101.0), map.price_to_y(99.0));
+        assert!(
+            (first.top() - top).abs() < 0.01 && (first.bottom() - bottom).abs() < 0.01,
+            "painted {} to {}, want {top} to {bottom}",
+            first.top(),
+            first.bottom()
+        );
+    }
+
     #[test]
     fn box_sizes_freeze_through_streaming_and_wait_for_history() {
         use crate::model::{BarData, BoxSizeMethod};

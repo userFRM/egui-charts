@@ -117,7 +117,8 @@ pub struct TimeScaleOptions {
     /// Default: None
     pub border_color: Option<Color32>,
 
-    /// Timezone mode for displaying ts
+    /// Timezone mode for displaying ts. Behind UTC, bars of a day or longer given without a feed
+    /// read their date in UTC unless they sit at this zone's midnight.
     /// Default: UTC
     pub timezone: TimezoneMode,
 }

@@ -10,6 +10,7 @@
 //! Use [`to_renko_bricks`] to transform OHLCV bars into Renko bricks.
 
 use super::PriceBasedSource;
+use super::rounding_tolerance;
 use crate::model::{Bar, PriceBuilder};
 use chrono::{DateTime, Utc};
 
@@ -104,6 +105,10 @@ impl RenkoConfig {
 /// brick's close, and reverses it when a close reaches one brick beyond the
 /// last brick's open, so a reversal needs a two-brick move.
 ///
+/// Brick prices are whole multiples of the brick size, and a close that reaches a multiple within
+/// the rounding of decimal prices and sizes is on it: with a brick of 0.1, closes at 1.1, 1.2 and
+/// 1.3 complete one brick each.
+///
 /// Returns no bricks when the brick size is not a positive finite number.
 ///
 /// # Safety Limits
@@ -127,14 +132,26 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
 
 pub(crate) const MAX_BRICKS: usize = 10_000;
 
+/// Whether a price that is `short` of a brick or range boundary has reached it. Decimal prices
+/// and sizes are not exact in binary, so a price one size beyond the last boundary can lie just
+/// under the next: it counts as reached within a billionth of the size, or within a few ulps of
+/// the price where those are more, and never from more than half a size away.
+pub(super) fn reaches(short: f64, size: f64, price: f64) -> bool {
+    short
+        <= (1e-9 * size)
+            .max(rounding_tolerance(price, 4.0 * f64::EPSILON))
+            .min(size / 2.0)
+}
+
 /// Builds Renko bricks bar by bar; `size` must be a positive finite number.
 #[derive(Clone)]
 pub(crate) struct RenkoBuilder {
     size: f64,
     source: PriceBasedSource,
     extremes: Option<(f64, f64)>,
-    /// Open and close of the last brick, or the start price before the first brick; `None`
-    /// until the first bar.
+    /// Open and close of the last brick, counted in brick sizes from zero, or the start twice
+    /// before the first brick; `None` until the first bar. Prices are these counts times the
+    /// size, so no rounding builds up from brick to brick.
     last: Option<(f64, f64)>,
     bricks: Vec<RenkoBrick>,
 }
@@ -157,7 +174,10 @@ impl PriceBuilder for RenkoBuilder {
     fn push(&mut self, bar: &Bar) {
         let size = self.size;
         let Some(mut last) = self.last else {
-            let start = (bar.close / size).floor() * size;
+            let mut start = (bar.close / size).floor();
+            if reaches((start + 1.0) * size - bar.close, size, bar.close) {
+                start += 1.0;
+            }
             self.last = Some((start, start));
             self.extremes = Some((bar.close, bar.close));
             return;
@@ -172,14 +192,14 @@ impl PriceBuilder for RenkoBuilder {
         let price = match self.source {
             PriceBasedSource::Close => bar.close,
             PriceBasedSource::HighLow if close >= open => {
-                if high >= close + size {
+                if reaches((close + 1.0) * size - high, size, high) {
                     high
                 } else {
                     low
                 }
             }
             PriceBasedSource::HighLow => {
-                if low <= close - size {
+                if reaches(low - (close - 1.0) * size, size, low) {
                     low
                 } else {
                     high
@@ -190,13 +210,14 @@ impl PriceBuilder for RenkoBuilder {
             let (open, close) = last;
             let (low, high) = (open.min(close), open.max(close));
             // Before the first brick both ends are the start, so either direction needs one brick.
-            let (brick_open, brick_close) = if price >= high + size {
-                (high, high + size)
-            } else if price <= low - size {
-                (low, low - size)
+            let (from, to) = if reaches((high + 1.0) * size - price, size, price) {
+                (high, high + 1.0)
+            } else if reaches(price - (low - 1.0) * size, size, price) {
+                (low, low - 1.0)
             } else {
                 break;
             };
+            let (brick_open, brick_close) = (from * size, to * size);
             // A box below the precision of the price moves nothing.
             if brick_close == brick_open {
                 break;
@@ -223,7 +244,7 @@ impl PriceBuilder for RenkoBuilder {
                     RenkoDirection::Down
                 },
             });
-            last = (brick_open, brick_close);
+            last = (from, to);
             wick_low = brick_close;
             wick_high = brick_close;
 

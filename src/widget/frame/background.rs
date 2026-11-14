@@ -1,32 +1,97 @@
 use super::Chart;
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
-use egui::{Rect, Ui};
+use egui::{Color32, Pos2, Rect, Ui};
+
+/// The colour at `pos` of a background of `style` whose gradient spans `frame`; `color` when it
+/// is solid.
+pub(in crate::widget) fn background_at(
+    frame: Rect,
+    style: BackgroundStyle,
+    color: Color32,
+    pos: Pos2,
+) -> Color32 {
+    match style {
+        BackgroundStyle::Solid => color,
+        BackgroundStyle::VerticalGradient {
+            top_color,
+            bottom_color,
+        } => top_color.lerp_to_gamma(
+            bottom_color,
+            egui::remap_clamp(pos.y, frame.y_range(), 0.0..=1.0),
+        ),
+        BackgroundStyle::HorizontalGradient {
+            left_color,
+            right_color,
+        } => left_color.lerp_to_gamma(
+            right_color,
+            egui::remap_clamp(pos.x, frame.x_range(), 0.0..=1.0),
+        ),
+    }
+}
+
+/// Fills `rect` with the part behind it of a background of `style` whose gradient spans `frame`,
+/// so that rects filled one by one join without a seam; `color` when it is solid.
+pub(in crate::widget) fn paint_background(
+    painter: &egui::Painter,
+    frame: Rect,
+    rect: Rect,
+    style: BackgroundStyle,
+    color: Color32,
+) {
+    if style == BackgroundStyle::Solid {
+        painter.rect_filled(rect, 0.0, color);
+        return;
+    }
+    let vertices = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+    ]
+    .map(|pos| egui::epaint::Vertex {
+        pos,
+        uv: egui::epaint::WHITE_UV,
+        color: background_at(frame, style, color, pos),
+    });
+    painter.add(egui::Shape::mesh(egui::Mesh {
+        indices: vec![0, 1, 2, 2, 3, 0],
+        vertices: vertices.to_vec(),
+        texture_id: egui::TextureId::default(),
+    }));
+}
 
 impl Chart {
+    /// The rect the background spans: `rect`, the price frame, with the other panes and the time
+    /// axis below them, so that a gradient runs once through the chart.
+    pub(in crate::widget) fn background_frame(&self, rect: Rect) -> Rect {
+        let mut panes = self
+            .pane_layout
+            .panes
+            .iter()
+            .fold(Rect::NOTHING, |frame, pane| frame.union(pane.rect));
+        // Stacked panes share the time axis below the last of them.
+        if self.has_panes() {
+            panes.max.y += self.time_axis_height();
+        }
+        rect.union(panes)
+    }
+
+    /// The colour of the chart's background at `pos`, whether the chart or its container paints
+    /// it; `rect` is the price frame.
+    pub(in crate::widget) fn background_at(&self, rect: Rect, pos: Pos2) -> Color32 {
+        background_at(
+            self.background_frame(rect),
+            self.config.background_style,
+            self.config.background_color,
+            pos,
+        )
+    }
+
     /// The background colour at `pos` within the frame painted by [`Self::draw_background`],
     /// or `None` when something else paints it.
-    pub(super) fn plot_background(&self, rect: Rect, pos: egui::Pos2) -> Option<egui::Color32> {
-        if self.config.skip_background {
-            return None;
-        }
-        Some(match self.config.background_style {
-            BackgroundStyle::Solid => self.config.background_color,
-            BackgroundStyle::VerticalGradient {
-                top_color,
-                bottom_color,
-            } => top_color.lerp_to_gamma(
-                bottom_color,
-                egui::remap_clamp(pos.y, rect.y_range(), 0.0..=1.0),
-            ),
-            BackgroundStyle::HorizontalGradient {
-                left_color,
-                right_color,
-            } => left_color.lerp_to_gamma(
-                right_color,
-                egui::remap_clamp(pos.x, rect.x_range(), 0.0..=1.0),
-            ),
-        })
+    pub(super) fn plot_background(&self, rect: Rect, pos: Pos2) -> Option<Color32> {
+        (!self.config.skip_background).then(|| self.background_at(rect, pos))
     }
 
     /// Draw the chart background (solid or gradient)
@@ -35,78 +100,13 @@ impl Chart {
         if self.config.skip_background {
             return;
         }
-
-        match self.config.background_style {
-            BackgroundStyle::Solid => {
-                painter.rect_filled(rect, 0.0, self.config.background_color);
-            }
-            BackgroundStyle::VerticalGradient {
-                top_color,
-                bottom_color,
-            } => {
-                // Draw vertical gradient using a mesh
-                let mesh = egui::Mesh {
-                    indices: vec![0, 1, 2, 2, 3, 0],
-                    vertices: vec![
-                        egui::epaint::Vertex {
-                            pos: rect.left_top(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: top_color,
-                        },
-                        egui::epaint::Vertex {
-                            pos: rect.right_top(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: top_color,
-                        },
-                        egui::epaint::Vertex {
-                            pos: rect.right_bottom(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: bottom_color,
-                        },
-                        egui::epaint::Vertex {
-                            pos: rect.left_bottom(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: bottom_color,
-                        },
-                    ],
-                    texture_id: egui::TextureId::default(),
-                };
-                painter.add(egui::Shape::mesh(mesh));
-            }
-            BackgroundStyle::HorizontalGradient {
-                left_color,
-                right_color,
-            } => {
-                // Draw horizontal gradient using a mesh
-                let mesh = egui::Mesh {
-                    indices: vec![0, 1, 2, 2, 3, 0],
-                    vertices: vec![
-                        egui::epaint::Vertex {
-                            pos: rect.left_top(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: left_color,
-                        },
-                        egui::epaint::Vertex {
-                            pos: rect.right_top(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: right_color,
-                        },
-                        egui::epaint::Vertex {
-                            pos: rect.right_bottom(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: right_color,
-                        },
-                        egui::epaint::Vertex {
-                            pos: rect.left_bottom(),
-                            uv: egui::epaint::WHITE_UV,
-                            color: left_color,
-                        },
-                    ],
-                    texture_id: egui::TextureId::default(),
-                };
-                painter.add(egui::Shape::mesh(mesh));
-            }
-        }
+        paint_background(
+            painter,
+            self.background_frame(rect),
+            rect,
+            self.config.background_style,
+            self.config.background_color,
+        );
     }
 
     /// Paints the symbol watermark: the custom text at the configured size, else the symbol and

@@ -115,16 +115,19 @@ impl Drawing {
     }
 
     /// Colours of a price label's badge. Unset text is white or black, whichever reads on the
-    /// fill, and a label without a border colour, as saved before it had one, has no border.
+    /// fill, and an unset border takes the label's colour, which it keeps when its background
+    /// changes.
     pub(crate) fn price_label_colors(&self) -> TextBoxColors {
         let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
         let fill = self.fill_color32().unwrap_or(self.color32());
         TextBoxColors {
             text: self.text_color.map_or_else(|| label_text_color(fill), rgba),
             fill,
-            border: match self.border_color {
-                Some(color) if self.border => Stroke::new(stroke::HAIRLINE, rgba(color)),
-                _ => Stroke::NONE,
+            border: if self.border {
+                let color = self.border_color.map_or_else(|| self.color32(), rgba);
+                Stroke::new(stroke::HAIRLINE, color)
+            } else {
+                Stroke::NONE
             },
         }
     }
@@ -411,14 +414,16 @@ mod tests {
         shapes
     }
 
-    /// A price label's badge takes its text and border colours with their opacity. A label saved
-    /// before it had a border colour stored none and keeps its plain badge.
+    /// A price label's badge takes its text and border colours with their opacity. A border never
+    /// chosen takes the label's colour however that is set, and a chosen one stays when the colour
+    /// changes. A label without a border, as one saved before it had a border loads, keeps its
+    /// plain badge.
     #[test]
     fn price_label_badge_takes_its_text_and_border_colours() {
         const BLUE: Color32 = Color32::from_rgb(41, 98, 255);
         const RED: Color32 = Color32::from_rgb(242, 54, 69);
         type Row = (fn(&mut Drawing), Color32, Stroke);
-        let rows: [Row; 4] = [
+        let rows: [Row; 5] = [
             (|_| {}, Color32::WHITE, Stroke::new(1.0, BLUE)),
             // A border that shares the label's colour follows it.
             (
@@ -426,12 +431,19 @@ mod tests {
                 Color32::WHITE,
                 Stroke::new(1.0, RED),
             ),
-            (|d| d.border_color = None, Color32::WHITE, Stroke::NONE),
+            // The public field, as the `Drawing` example and `edit_drawing` closures set it.
+            (
+                |d| d.color = [242, 54, 69, 255],
+                Color32::WHITE,
+                Stroke::new(1.0, RED),
+            ),
+            (|d| d.border = false, Color32::WHITE, Stroke::NONE),
             (
                 |d| {
                     d.fill_color = Some([255, 235, 59, 255]);
                     d.text_color = Some([1, 2, 3, 128]);
                     d.border_color = Some([0, 128, 0, 64]);
+                    d.set_line_color([242, 54, 69, 255]);
                 },
                 Color32::from_rgba_unmultiplied(1, 2, 3, 128),
                 Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 128, 0, 64)),
