@@ -619,8 +619,17 @@ pub struct ChartTypeParams {
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
     /// imbalance zones. None follows the buy or sell colour.
     pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
-    /// Footprint: instrument ticks per row; zero groups automatically with zoom.
+    /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
+    /// `footprint_row_atr` use it only until the chart holds a complete bar.
     pub footprint_row_ticks: u32,
+    /// Footprint: size rows from Wilder's average true range of the bars the chart holds, not
+    /// the bars in view, so panning and zooming keep them. A row is a fifth of the average, in
+    /// whole instrument ticks and at least one. The newest bar, which may still be forming, is
+    /// left out.
+    pub footprint_row_atr: bool,
+    /// Footprint: length of the average true range that sizes rows, 1 to 200; with fewer
+    /// complete bars the average takes as many as there are.
+    pub footprint_row_atr_length: u32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
     /// settings, under [`FootprintColor::VolumeSteps`].
     pub footprint_imbalance: bool,
@@ -762,6 +771,8 @@ impl Default for ChartTypeParams {
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
+            footprint_row_atr: false,
+            footprint_row_atr_length: 14,
             footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
@@ -906,6 +917,33 @@ impl ChartTypeParams {
         }
     }
 
+    /// Instrument ticks per footprint row on `bars` with instrument ticks of `tick`: from the
+    /// average true range of their complete bars when `footprint_row_atr` chooses it and there
+    /// is one, otherwise `footprint_row_ticks`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn footprint_row_size(&self, bars: &[super::Bar], tick: f64) -> u32 {
+        if !self.footprint_row_atr {
+            return self.footprint_row_ticks;
+        }
+        let newest = bars.iter().rposition(|bar| !bar.is_whitespace());
+        let complete = &bars[..newest.unwrap_or(0)];
+        // Whitespace bars have no range, and `BoxSizeMethod::resolve` skips them too.
+        let count = complete.iter().filter(|bar| !bar.is_whitespace()).count();
+        // shortcut: smooths the whole history on every frame, cache it per bar close if long
+        // histories show in frame times.
+        let average = super::BoxSizeMethod::Atr {
+            period: (self.footprint_row_atr_length.clamp(1, 200) as usize).min(count),
+            multiplier: 0.2,
+        };
+        average
+            .resolve(0.0, complete)
+            .map(|size| size / tick)
+            .filter(|ticks| ticks.is_finite())
+            .map_or(self.footprint_row_ticks, |ticks| {
+                ticks.round().clamp(1.0, 1_000_000.0) as u32
+            })
+    }
+
     /// Why `chart_type` cannot be drawn with these parameters, if it cannot. A size derived from
     /// history is judged by its method, since it is 0 while it waits for history.
     #[cfg(feature = "widget")]
@@ -969,6 +1007,7 @@ mod tests {
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
             "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
@@ -1019,6 +1058,8 @@ mod tests {
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
+        assert_eq!(legacy["footprint_row_atr"], false);
+        assert_eq!(legacy["footprint_row_atr_length"], 14);
         assert_eq!(legacy["tpo_letters"], false);
         assert_eq!(
             legacy["footprint_colors"],

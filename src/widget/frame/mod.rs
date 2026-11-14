@@ -1043,6 +1043,16 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
+        // Rows of the chart type's footprint, from all the bars the chart holds and never from
+        // the ones in view.
+        let feed_row_ticks = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .map_or(0, |flow| {
+                self.chart_type_params
+                    .footprint_row_size(&self.state.data().bars, flow.tick_size())
+            });
         // Cells are drawn only while a column is wide enough; narrower bars stay candles.
         let spacing = self.state.time_scale().bar_spacing();
         let drawn_as_cells = move |config: &FootprintConfig| {
@@ -1067,9 +1077,10 @@ impl Chart {
                     drawn_as_cells(&FootprintConfig::from_chart_params(
                         &self.chart_type_params,
                         colors,
+                        feed_row_ticks,
                     ))
                 })
-                .map(|flow| (flow, self.chart_type_params.footprint_row_ticks)),
+                .map(|flow| (flow, feed_row_ticks)),
         }
         .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
         let footprint_prices = fixed_footprint
@@ -1216,7 +1227,9 @@ impl Chart {
                             // The room does not depend on the colours.
                             let colors = [egui::Color32::TRANSPARENT; 4];
                             let params = &self.chart_type_params;
-                            room(flow, &FootprintConfig::from_chart_params(params, colors))
+                            let config =
+                                FootprintConfig::from_chart_params(params, colors, feed_row_ticks);
+                            room(flow, &config)
                         })
                 }
                 None => 0.0,
@@ -1730,6 +1743,7 @@ impl Chart {
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
+                feed_row_ticks,
             )
         });
         let session_profiles = host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
