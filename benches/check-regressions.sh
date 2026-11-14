@@ -21,13 +21,12 @@ elif [[ $mode != --compare ]]; then
 fi
 base_bin=$work/base/frame_time
 head_bin=$work/head/frame_time
-log=$work/log
 # glibc raises its mmap threshold as large blocks are freed, which changes whether growing a
 # vector copies it. That moved the tessellator's mesh growth by about 5% for unrelated changes,
 # so the threshold is fixed and counts follow the code.
 export MALLOC_MMAP_THRESHOLD_=131072
 instructions() {
-    local count
+    local count log=$work/$2.log
     if ! FRAME_TIME_FRAMES=$3 valgrind --tool=cachegrind --cache-sim=no --branch-sim=no \
         --cachegrind-out-file=/dev/null "$1" --regression "$2" > /dev/null 2> "$log"; then
         cat "$log" >&2
@@ -37,21 +36,36 @@ instructions() {
     [[ $count =~ ^[0-9]+$ ]] || { cat "$log" >&2; exit 1; }
     echo "$count"
 }
-if [[ $mode != --measure ]]; then
-    printf '| Scenario | Base instructions | Head instructions | Change | Tolerance |\n'
-    printf '|---|---:|---:|---:|---:|\n'
+scenarios=(frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies bar-limit studies drawings depth bubbles tpo-400 tpo-1600 trade-replay session-resample markers events comparisons-1 comparisons-2 comparisons-5)
+# A replay already looks up 100,000 ids; one measured frame is enough.
+samples_of() { if [[ $1 == trade-replay ]]; then echo 1; else echo 20; fi; }
+if [[ $mode == --measure ]]; then
+    measure() {
+        local zero measured
+        zero=$(instructions "$base_bin" "$1" 0)
+        measured=$(instructions "$base_bin" "$1" "$(samples_of "$1")")
+        printf '%s %s %s\n' "$1" "$zero" "$measured" > "$work/$1.counts"
+    }
+    # Cachegrind counts instructions, not time, so the scenarios run side by side, one per processor.
+    # A failed scenario leaves no counts file and fails below.
+    slots=$(nproc)
+    for scenario in "${scenarios[@]}"; do
+        while (( $(jobs -pr | wc -l) >= slots )); do wait -n || true; done
+        measure "$scenario" &
+    done
+    wait
+    for scenario in "${scenarios[@]}"; do
+        [[ -s $work/$scenario.counts ]] || { echo "::error::No instruction count for $scenario" >&2; exit 1; }
+        cat "$work/$scenario.counts"
+    done
+    exit 0
 fi
+printf '| Scenario | Base instructions | Head instructions | Change | Tolerance |\n'
+printf '|---|---:|---:|---:|---:|\n'
 fail=0
-for scenario in frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies bar-limit studies drawings depth bubbles tpo-400 tpo-1600 trade-replay session-resample markers events comparisons-1 comparisons-2 comparisons-5; do
-    # A replay already looks up 100,000 ids; one measured batch is enough.
-    samples=20
-    [[ $scenario != trade-replay ]] || samples=1
-    if [[ $mode == --measure ]]; then
-        base0=$(instructions "$base_bin" "$scenario" 0)
-        base_measured=$(instructions "$base_bin" "$scenario" "$samples")
-        printf '%s %s %s\n' "$scenario" "$base0" "$base_measured"
-        continue
-    elif [[ $mode == --compare ]]; then
+for scenario in "${scenarios[@]}"; do
+    samples=$(samples_of "$scenario")
+    if [[ $mode == --compare ]]; then
         read -r base0 base_measured <<< "$(awk -v s="$scenario" '$1 == s { print $2, $3 }' "$1")"
         read -r head0 head_measured <<< "$(awk -v s="$scenario" '$1 == s { print $2, $3 }' "$2")"
         [[ $base0 =~ ^[0-9]+$ && $base_measured =~ ^[0-9]+$ && $head0 =~ ^[0-9]+$ && $head_measured =~ ^[0-9]+$ ]] || {
