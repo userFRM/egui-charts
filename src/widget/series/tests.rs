@@ -564,7 +564,9 @@ fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
             "pop_bars" => {
                 chart.pop_bars(SeriesId::MAIN, 5);
             }
-            "set_data" => chart.set_data(SeriesId::MAIN, window(0, 95)),
+            "set_data" => {
+                chart.set_data(SeriesId::MAIN, window(0, 95));
+            }
             "replay" => chart.set_replay_time(Some(bar(95 * 60, 10.0).time)),
             "pop and update" => {
                 let popped = chart.pop_bars(SeriesId::MAIN, 1);
@@ -575,7 +577,9 @@ fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
                     chart.set_replay_time(Some(bar(minute * 60, 10.0).time));
                 }
             }
-            "insert" => chart.update(SeriesId::MAIN, bar(80 * 60 + 30, 10.0)),
+            "insert" => {
+                chart.update(SeriesId::MAIN, bar(80 * 60 + 30, 10.0));
+            }
             "pop through the right edge" => {
                 chart.pop_bars(SeriesId::MAIN, 31);
             }
