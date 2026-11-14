@@ -182,26 +182,26 @@ Chart,Crosshair and interaction,Table view of chart data,incomplete,library,src/
 Chart,Crosshair and interaction,Touch crosshair tracking,incomplete,library,src/config/interaction.rs;src/config/tooltip.rs;src/widget/interaction.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/events.rs,1889;2488;2489;2487;2512
 Chart,Crosshair and interaction,Undo and redo,unverified,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/series/options.rs;examples/demo/comparison.rs;terminal/src/compare.rs;src/scales/pricescale.rs;src/widget/layout.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs,1922;2316;2321;2505;2520;2527;2522;2688;2689
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,incomplete,library,src/widget/pan_zoom/mod.rs;src/widget/pan_zoom/box_zoom.rs,
-Chart,Keyboard shortcuts,Copy and paste drawings across symbols,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/widget/pane/mod.rs;src/studies/template.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs;terminal/src/commands.rs,2418;2445;2804;2805
-Chart,Keyboard shortcuts,Ctrl+Left/Right move further,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2797
+Chart,Keyboard shortcuts,Copy and paste drawings across symbols,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/widget/pane/mod.rs;src/studies/template.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs;terminal/src/commands.rs,2418;2445;2805;2804
+Chart,Keyboard shortcuts,Ctrl+Left/Right move further,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs,2797
 Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs,
 Chart,Keyboard shortcuts,Digits or comma to change interval,incomplete,library,src/widget/keyboard.rs;src/config/keyboard.rs;terminal/src/time.rs,2801
-Chart,Keyboard shortcuts,Drawing tool hotkeys,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs;src/widget/tool_interaction/mod.rs,2798;2799
-Chart,Keyboard shortcuts,Go to date,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/time.rs,2798;2799
+Chart,Keyboard shortcuts,Drawing tool hotkeys,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs;src/widget/tool_interaction/mod.rs,
+Chart,Keyboard shortcuts,Go to date,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/time.rs,
 Chart,Keyboard shortcuts,Hide all drawings,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2802;2803
 Chart,Keyboard shortcuts,Jump to latest bar,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
-Chart,Keyboard shortcuts,Keyboard zoom,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/model/timescale.rs,2798
-Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/interaction.rs,2797
+Chart,Keyboard shortcuts,Keyboard zoom,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/model/timescale.rs,
+Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/interaction.rs,
 Chart,Keyboard shortcuts,Maximize chart,incomplete,library,src/config/keyboard.rs;src/widget/layout.rs,
 Chart,Keyboard shortcuts,Next and previous chart,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs;terminal/src/layouts.rs,
-Chart,Keyboard shortcuts,Open indicators,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/commands.rs,2798;2800
+Chart,Keyboard shortcuts,Open indicators,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/commands.rs,2798;2800
 Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs;src/ui_kit/command_palette/fuzzy.rs;terminal/src/commands.rs,2809
 Chart,Keyboard shortcuts,Reset chart,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Save layout,verified,library,src/config/keyboard.rs;terminal/src/layouts.rs,
-Chart,Keyboard shortcuts,Scale toggles,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2798;2799;2810
-Chart,Keyboard shortcuts,Shortcut list dialog,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/dialogs/keyboard_shortcuts/mod.rs;terminal/src/commands.rs,2798
+Chart,Keyboard shortcuts,Scale toggles,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2810;2798;2799
+Chart,Keyboard shortcuts,Shortcut list dialog,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/dialogs/keyboard_shortcuts/mod.rs;terminal/src/commands.rs,2798
 Chart,Keyboard shortcuts,Snapshot,incomplete,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs;terminal/src/commands.rs,
-Chart,Keyboard shortcuts,Type to change symbol,incomplete,host,src/widget/keyboard.rs;terminal/src/commands.rs,2798;2799;2800;2810
+Chart,Keyboard shortcuts,Type to change symbol,incomplete,host,src/widget/keyboard.rs;terminal/src/commands.rs,2810;2798;2799;2800
 Chart,Keyboard shortcuts,Undo and redo,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs;src/widget/layout.rs;src/widget/studies.rs;src/studies/settings.rs,2505;2522;2688;2689;2810;2812;2813;2844
 Chart,Legend and data window,Data window panel,incomplete,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;terminal/src/drawings.rs;src/widget/format.rs,1939;2483;2814;2815;2817;2818;2819
 Chart,Legend and data window,Indicator entries in the legend,incomplete,library,src/chart/rendering/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,
