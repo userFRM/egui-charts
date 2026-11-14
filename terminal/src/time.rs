@@ -27,7 +27,7 @@ pub(super) struct State {
     picker: DatePicker,
     /// The text of the interval entry dialog while it is open.
     entry: Option<String>,
-    /// Focus the entry field on the next frame the dialog is drawn.
+    /// Whether the entry field of the open dialog has yet to take the keyboard focus.
     focus_entry: bool,
 }
 
@@ -319,14 +319,24 @@ impl Terminal {
                     "Minutes, or an interval such as 30s, 2h, 1D, 10T, 100V, 10R or 100delta",
                 ));
                 let input_id = egui::Id::unique("interval_entry_input");
-                if std::mem::take(&mut self.time.focus_entry) {
+                // The dialog is laid out unseen in its first frame, where a field cannot take
+                // focus: ask until the field has it, with the caret after the typed text.
+                if self.time.focus_entry {
                     ui.memory_mut(|memory| memory.request_focus(input_id));
+                    let mut state =
+                        egui::TextEdit::load_state(ui.ctx(), input_id).unwrap_or_default();
+                    let end = egui::text::CCursor::end_of_str(&text);
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                    state.store(ui.ctx(), input_id);
                 }
-                ui.add(
+                let field = ui.add(
                     egui::TextEdit::singleline(&mut text)
                         .id(input_id)
                         .desired_width(ui.available_width()),
                 );
+                self.time.focus_entry &= !field.has_focus();
                 apply = DialogFooter::new("Apply").show(ui).0
                     || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             });
@@ -685,16 +695,25 @@ mod tests {
         frame(terminal, SIZE, vec![]);
     }
 
-    /// A bare number enters minutes, Enter applies it through the normal action path, and undo
-    /// and redo bring the interval and the clock of the bottom bar back with the chart.
+    /// Keys arrive one a frame, as a keyboard sends them. A bare number enters minutes, a comma
+    /// opens the field for an interval with a unit, Enter applies either through the normal
+    /// action path, and undo and redo bring the interval and the clock of the bottom bar back
+    /// with the chart.
     #[test]
     fn typed_interval_entry_applies_minutes() {
-        let mut terminal = terminal("AAPL", Timeframe::Min1);
-        frame(&mut terminal, SIZE, vec![Event::Text("15".into())]);
-        frame(&mut terminal, SIZE, vec![]);
-        let applied = frame(&mut terminal, SIZE, vec![key(Key::Enter, Modifiers::NONE)]);
-        assert!(applied.actions.is_empty());
-        assert!(!terminal.time_modal());
+        let typed = |keys: &[&str]| {
+            let mut terminal = terminal("AAPL", Timeframe::Min1);
+            for key in keys {
+                frame(&mut terminal, SIZE, vec![Event::Text((*key).into())]);
+            }
+            let applied = frame(&mut terminal, SIZE, vec![key(Key::Enter, Modifiers::NONE)]);
+            assert!(applied.actions.is_empty());
+            assert!(!terminal.time_modal());
+            terminal
+        };
+        let hours = typed(&[",", "2", "h"]);
+        assert_eq!(hours.chart().timeframe().unwrap().duration_ms(), 7_200_000);
+        let mut terminal = typed(&["1", "5"]);
         assert_eq!(terminal.chart().timeframe().unwrap().duration_ms(), 900_000);
         terminal.run(Action::TopToolbar(TopToolbarAction::IntervalSelected(
             Timeframe::Hour1,

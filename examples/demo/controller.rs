@@ -6835,37 +6835,43 @@ mod tests {
         }
     }
 
-    /// A bare number enters minutes and Enter applies it through the normal host path.
+    /// Keys arrive one a frame, as a keyboard sends them. A bare number enters minutes, a comma
+    /// opens the field for an interval with a unit, and Enter applies either through the normal
+    /// host path.
     #[test]
     fn typed_interval_entry_applies_minutes() {
         use eframe::App;
-        let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.live.set_paused(true);
-        for events in [
-            vec![egui::Event::Text("15".into())],
-            vec![],
-            vec![egui::Event::Key {
+        let typed = |keys: &[&str]| {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            let enter = egui::Event::Key {
                 key: egui::Key::Enter,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
-            }],
-        ] {
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
-            )
-            .drop_without_applying_deltas();
-        }
+            };
+            let keys = keys.iter().map(|key| egui::Event::Text((*key).into()));
+            for event in keys.chain([enter]) {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events: vec![event],
+                        ..Default::default()
+                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                )
+                .drop_without_applying_deltas();
+            }
+            (ctx, app)
+        };
+        let (_, app) = typed(&[",", "2", "h"]);
+        assert_eq!(app.state.timeframe.duration_ms(), 7_200_000);
+        let (ctx, mut app) = typed(&["1", "5"]);
         assert_eq!(app.state.timeframe, Timeframe::Min15);
         assert_eq!(app.state.timeframe.duration_ms(), 900_000);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
