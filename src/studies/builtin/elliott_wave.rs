@@ -117,6 +117,7 @@ impl ElliottWave {
                     .map(String::from)
                     .to_vec(),
                 rows: Vec::new(),
+                ..Default::default()
             },
             colors: [palette::ACCENT, palette::GREEN, palette::RED],
             visible: true,

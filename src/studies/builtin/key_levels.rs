@@ -186,6 +186,7 @@ impl Indicator for KeyLevels {
             title: "Key levels".to_string(),
             columns: ["Level", "Touches", "Pivots"].map(String::from).to_vec(),
             rows,
+            ..Default::default()
         };
     }
 

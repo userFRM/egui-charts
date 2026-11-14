@@ -217,6 +217,7 @@ impl Volume24h {
                 }
                 Some(_) => "Quote amount unavailable".into(),
             })]],
+            ..Default::default()
         });
     }
 
