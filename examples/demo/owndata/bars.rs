@@ -475,7 +475,10 @@ mod tests {
             ..fields.clone()
         };
         use egui_charts::model::OrderSide::{Buy, Sell};
-        for (value, side) in [
+        let side = |record: &Value, fields: &TradeFields| {
+            trade(record, fields, &utc).map(|trade| trade.side)
+        };
+        for (value, read) in [
             (json!(false), Some(Buy)),
             (json!(true), Some(Sell)),
             (json!("true"), Some(Sell)),
@@ -484,17 +487,16 @@ mod tests {
             (json!([true]), None),
         ] {
             let record = json!({"t": T, "p": 100.0, "s": 1.0, "m": value});
-            let read = trade(&record, &sided, &utc).map(|trade| trade.side);
-            assert_eq!(read, Some(side), "{record}");
+            assert_eq!(side(&record, &sided), Some(read), "{record}");
         }
         let unsided = json!({"t": T, "p": 100.0, "s": 1.0});
-        assert_eq!(trade(&unsided, &sided, &utc).map(|trade| trade.side), Some(None));
+        assert_eq!(side(&unsided, &sided), Some(None));
         // An empty value marks nothing, also for a field that holds empty text.
         let half = TradeFields {
             buy: String::new(),
             ..sided.clone()
         };
         let empty = json!({"t": T, "p": 100.0, "s": 1.0, "m": ""});
-        assert_eq!(trade(&empty, &half, &utc).map(|trade| trade.side), Some(None));
+        assert_eq!(side(&empty, &half), Some(None));
     }
 }

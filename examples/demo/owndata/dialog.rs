@@ -161,7 +161,10 @@ impl Draft {
         Self {
             symbols: profile.symbols.join(", "),
             zone: profile.time_zone.name().to_owned(),
-            step: profile.tick_size.map(|step| step.to_string()).unwrap_or_default(),
+            step: profile
+                .tick_size
+                .map(|step| step.to_string())
+                .unwrap_or_default(),
             profile,
             values,
             keep,
@@ -2255,7 +2258,10 @@ fn price_step(text: &str) -> Option<Option<f64>> {
     if text.is_empty() {
         return Some(None);
     }
-    let step = text.parse::<f64>().ok().filter(|step| step.is_finite() && *step > 0.0)?;
+    let step = text
+        .parse::<f64>()
+        .ok()
+        .filter(|step| step.is_finite() && *step > 0.0)?;
     Some(Some(step))
 }
 

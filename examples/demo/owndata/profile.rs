@@ -408,7 +408,10 @@ impl Profile {
         if period == Some(0) {
             return Some("The keep-alive period must be at least 1 second.".to_owned());
         }
-        if self.tick_size.is_some_and(|step| !(step.is_finite() && step > 0.0)) {
+        if self
+            .tick_size
+            .is_some_and(|step| !(step.is_finite() && step > 0.0))
+        {
             return Some("The price step must be a number above zero.".to_owned());
         }
         for key in &self.keys {
@@ -434,6 +437,12 @@ impl Profile {
     pub(crate) fn service_interval(&self, timeframe: Timeframe) -> Option<&str> {
         let row = self.intervals.iter().find(|row| row.chart == timeframe)?;
         Some(&row.service)
+    }
+
+    /// Whether the stream has a trades route, so that the chart receives trades.
+    pub(crate) fn has_trades(&self) -> bool {
+        let mut routes = self.stream.iter().flat_map(|stream| &stream.routes);
+        routes.any(|route| matches!(route.kind, RouteKind::Trades(_)))
     }
 }
 

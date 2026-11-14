@@ -291,7 +291,7 @@ pub(crate) mod tests {
 
     use eframe::egui;
     use egui_charts::data::FeedStatus;
-    use egui_charts::model::Timeframe;
+    use egui_charts::model::{OrderSide, Tick, Timeframe};
     use egui_charts::widget::{Chart, ChartBuilder, SeriesId};
     use serde_json::json;
     use tungstenite::handshake::server::{Callback, ErrorResponse, Request, Response};
@@ -300,7 +300,8 @@ pub(crate) mod tests {
 
     use super::super::feed::MappedFeed;
     use super::super::profile::{
-        BarFields, Route, RouteKind, Segment, Stream, TimeSpec, TimeUnit, TradeFields,
+        BarFields, ConditionRule, Route, RouteKind, Segment, Stream, TimeSpec, TimeUnit,
+        TradeFields,
     };
     use super::{Routed, Session, StreamEvent, route};
 
@@ -671,7 +672,8 @@ pub(crate) mod tests {
     /// A chart on the mapped feed, with history from the scripted server and trades from the
     /// scripted peer. A trade that arrives while a page is being fetched is dropped by rule, so
     /// every message of the peer waits behind a `Hold`, which the test releases only once the
-    /// chart shows the state the message builds on. The fixture is one-minute bars of
+    /// chart shows the state the message builds on. Each trade folded into a bar also reaches the
+    /// chart's trades and the tape of time and sales, once. The fixture is one-minute bars of
     /// 11 November 2026: 14:35 UTC is second 1,794,407,700, and a trade gives its time in
     /// milliseconds.
     #[test]
@@ -693,7 +695,7 @@ pub(crate) mod tests {
         const ABC: &str = r#"{"action":"subscribe","symbol":"ABC","interval":"1m"}"#;
         const XYZ: &str = r#"{"action":"subscribe","symbol":"XYZ","interval":"1m"}"#;
         const STATUS: &str = r#"{"type":"status","message":"authenticated"}"#;
-        const IN_LAST_BAR: &str = r#"{"type":"trade","data":[{"p":"101.75","s":3,"t":1794407710000},{"p":99.75,"s":2,"t":1794407715000}]}"#;
+        const IN_LAST_BAR: &str = r#"{"type":"trade","data":[{"p":"101.75","s":3,"t":1794407710000,"side":"buy"},{"p":99.75,"s":2,"t":1794407715000,"side":"sell"},{"p":120.0,"s":50,"t":1794407716000,"c":"X"},{"p":98.0,"s":4,"t":1794407717000,"c":"T"}]}"#;
         const NEW_SLOT: &str = r#"{"type":"trade","data":[{"p":100.5,"s":4,"t":1794407765000}]}"#;
         const AFTER_FILL: &str = r#"{"type":"trade","data":[{"p":101.5,"s":5,"t":1794407850000}]}"#;
         const AFTER_RESUME: &str =
@@ -704,7 +706,7 @@ pub(crate) mod tests {
         const B3: Shown = (1794407580, Some([100.75, 103.0, 100.5, 102.5, 1500.0]));
         const B4: Shown = (1794407640, Some([102.5, 102.75, 101.0, 101.25, 800.0]));
         const B5: Shown = (1794407700, Some([101.25, 101.5, 100.0, 100.25, 700.0]));
-        const B5A: Shown = (1794407700, Some([101.25, 101.75, 99.75, 99.75, 705.0]));
+        const B5A: Shown = (1794407700, Some([101.25, 101.75, 99.75, 99.75, 709.0]));
         const T6: Shown = (1794407760, Some([100.5, 100.5, 100.5, 100.5, 4.0]));
         const F6: Shown = (1794407760, Some([100.5, 101.0, 100.25, 100.75, 40.0]));
         const F7: Shown = (1794407820, Some([100.75, 101.25, 100.5, 101.0, 25.0]));
@@ -715,6 +717,19 @@ pub(crate) mod tests {
         const Y0: Shown = (1794407820, Some([50.0, 50.5, 49.75, 50.25, 100.0]));
         const Y1: Shown = (1794407880, Some([50.25, 50.75, 50.0, 50.5, 80.0]));
         const Y1E: Shown = (1794407880, Some([50.25, 51.0, 50.0, 51.0, 85.0]));
+        // The trades the chart and time and sales receive: time in milliseconds, price, size and
+        // side. The ignored trade at 120.0 is in neither.
+        type Fed = (i64, f64, f64, Option<OrderSide>);
+        const P1: Fed = (1794407710000, 101.75, 3.0, Some(OrderSide::Buy));
+        const P2: Fed = (1794407715000, 99.75, 2.0, Some(OrderSide::Sell));
+        const P4: Fed = (1794407717000, 98.0, 4.0, None);
+        const P6: Fed = (1794407765000, 100.5, 4.0, None);
+        const P8: Fed = (1794407850000, 101.5, 5.0, None);
+        const P9: Fed = (1794407920000, 51.0, 5.0, None);
+        let fed = |trades: Vec<Tick>| -> Vec<Fed> {
+            let row = |t: &Tick| (t.ts.timestamp_millis(), t.price, t.size, t.side);
+            trades.iter().map(row).collect()
+        };
 
         let list = |rows: &[&str]| format!("[{}]", rows.join(","));
         let server = Server::start(pages(vec![
@@ -782,15 +797,25 @@ pub(crate) mod tests {
                         },
                         price: key("p"),
                         size: key("s"),
+                        condition: key("c"),
+                        conditions: vec![
+                            ("T".to_owned(), ConditionRule::VolumeOnly),
+                            ("X".to_owned(), ConditionRule::Ignore),
+                        ],
+                        side: key("side"),
+                        buy: "buy".to_owned(),
+                        sell: "sell".to_owned(),
                         ..TradeFields::default()
                     }),
                 },
             ],
             ..Stream::default()
         });
+        profile.tick_size = Some(0.25);
         let secrets = vec![("key".to_owned(), "s3cret-7f3a".to_owned())];
+        let feed = Arc::new(MappedFeed::new(profile, secrets));
         let mut chart = ChartBuilder::new()
-            .with_feed(Arc::new(MappedFeed::new(profile, secrets)))
+            .with_feed(feed.clone())
             .with_symbol("ABC")
             .with_timeframe(Timeframe::Min1)
             .with_initial_bars(3)
@@ -807,16 +832,21 @@ pub(crate) mod tests {
             });
         };
 
-        // 1. History.
+        // 1. History. The instrument carries the profile's price step.
         see(&mut chart, "history", &[B3, B4, B5]);
+        assert_eq!(chart.instrument().and_then(|i| i.tick_size), Some(0.25));
         // 2. Trades in the slot of the newest bar continue that bar. Its open stays the one of
         // history, 101.75, sent as text, is the high, 99.75 is the low and the close, and the
-        // volume is 700 + 3 + 2.
+        // volume is 700 + 3 + 2 + 4: the ignored trade counts nothing, and the volume only
+        // trade at 98.0 counts its size without moving a price.
         peer.release();
         see(&mut chart, "trades in the last bar", &[B3, B4, B5A]);
         // 3. The first trade of the next slot opens the next bar, at its price and with its size.
         peer.release();
         see(&mut chart, "a new slot", &[B3, B4, B5A, T6]);
+        let trades = fed(chart.trades(SeriesId::MAIN).cloned().collect());
+        assert_eq!(trades, [P1, P2, P4, P6]);
+        assert_eq!(fed(feed.drain_tape("ABC")), [P1, P2, P4, P6]);
 
         // 4. The connection is lost. The chart says so with the endpoint, and without the key
         // that travels in the address: in its path the key is shown by its name.
@@ -844,6 +874,9 @@ pub(crate) mod tests {
             "a trade after the fill",
             &[B3, B4, B5A, F6, F7C],
         );
+        // The bars the fill loaded, from 14:36:05 to 14:37:30, bring no trades.
+        let trades = fed(chart.trades(SeriesId::MAIN).cloned().collect());
+        assert_eq!(trades, [P1, P2, P4, P6, P8]);
 
         // 6. A paused chart has no socket: the peer sees the connection end during the pause.
         chart.set_feed_paused(true);
@@ -871,6 +904,10 @@ pub(crate) mod tests {
         // 51.0 is the high and the close, and the volume is 80 + 5.
         peer.release();
         see(&mut chart, "its trade", &[Y0, Y1E]);
+        // The chart keeps the trades of the shown symbol only, and so does time and sales: the
+        // trades of steps 5 and 7, still in the tape, are of the old symbol.
+        assert_eq!(fed(chart.trades(SeriesId::MAIN).cloned().collect()), [P9]);
+        assert_eq!(fed(feed.drain_tape("XYZ")), [P9]);
 
         let lines: Vec<String> = server.seen().iter().map(|seen| seen.line.clone()).collect();
         assert_eq!(lines.len(), 7, "{lines:?}");

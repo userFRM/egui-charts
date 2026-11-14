@@ -1,6 +1,6 @@
 //! The mapped feed: a profile served to the chart through the library's `Datafeed` trait.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeDelta, Utc};
@@ -8,7 +8,7 @@ use egui_charts::data::{
     Datafeed, FeedCapabilities, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Sink,
     Subscription, SubscriptionId,
 };
-use egui_charts::model::{Bar, BarClock, Instrument, Timeframe, TimezoneId};
+use egui_charts::model::{Bar, BarClock, Instrument, Tick, Timeframe, TimezoneId};
 use serde_json::Value;
 
 use super::bars::{self, Aggregator, DAY_MS};
@@ -39,6 +39,9 @@ struct State {
     joins: Vec<(Key, Join)>,
     /// The run of empty windows of each symbol and interval.
     runs: HashMap<(String, Timeframe), Run>,
+    /// The trades fed to the chart that time and sales has not taken yet, oldest first, each
+    /// with its symbol, at most [`TAPE`].
+    tape: VecDeque<(String, Tick)>,
 }
 
 /// The bars that belong together: those of one symbol and interval on one clock. The clock is
@@ -131,6 +134,10 @@ struct Kept {
 /// A run of empty windows ends history with this many windows.
 const LONGEST_RUN: u32 = 64;
 
+/// The most trades the feed keeps for time and sales between two frames, as many as the panel
+/// lists.
+const TAPE: usize = 10_000;
+
 /// A run of empty windows also ends history with the first window that starts more than this
 /// many days before the end of the run's first window.
 const FARTHEST_RUN_DAYS: i64 = 366;
@@ -146,6 +153,15 @@ impl MappedFeed {
                 state: Mutex::default(),
             }),
         }
+    }
+
+    /// The trades of `symbol` fed to the chart since the last call, oldest first, at most the
+    /// latest 10,000, for time and sales. Trades of another symbol, left from before a change of
+    /// symbol, are dropped.
+    pub(crate) fn drain_tape(&self, symbol: &str) -> Vec<Tick> {
+        let tape = std::mem::take(&mut self.shared.state().tape);
+        let held = tape.into_iter().filter(|(of, _)| of == symbol);
+        held.map(|(_, tick)| tick).collect()
     }
 }
 
@@ -475,7 +491,7 @@ impl Shared {
                                         if !bars::ahead(clock, *timeframe, slot, now) {
                                             live.pushed = live.pushed.max(Some(slot));
                                         }
-                                        pushes.push(bar);
+                                        pushes.push((None, bar));
                                     }
                                     None => unread = unread.or(Some((&route.value, "time"))),
                                 }
@@ -483,7 +499,12 @@ impl Shared {
                             RouteKind::Trades(fields) => {
                                 match bars::read_trade(&record, fields, zone) {
                                     Ok(trade) if folding => {
-                                        pushes.extend(live.aggregator.add(&trade, now));
+                                        if let Some(bar) = live.aggregator.add(&trade, now) {
+                                            let (time, price) = (trade.time, trade.price);
+                                            let tick =
+                                                Tick::new(time, price, trade.size, trade.side);
+                                            pushes.push((Some(tick), bar));
+                                        }
                                     }
                                     Ok(_) => {}
                                     Err(part) => unread = unread.or(Some((&route.value, part))),
@@ -501,9 +522,19 @@ impl Shared {
                             live.endpoint
                         );
                     }
-                    live.sink.clone()
+                    let (sink, symbol) = (live.sink.clone(), live.key.symbol.clone());
+                    let fed = pushes.iter().filter_map(|(tick, _)| tick.clone());
+                    state.tape.extend(fed.map(|tick| (symbol.clone(), tick)));
+                    let over = state.tape.len().saturating_sub(TAPE);
+                    state.tape.drain(..over);
+                    sink
                 };
-                for bar in pushes {
+                // A trade goes before its bar: the bar, which already holds the trade, replaces
+                // what the chart folds the trade into, so its volume is counted once.
+                for (tick, bar) in pushes {
+                    if let Some(tick) = tick {
+                        sink.push_tick(tick);
+                    }
                     sink.push_bar(bar);
                 }
             }
