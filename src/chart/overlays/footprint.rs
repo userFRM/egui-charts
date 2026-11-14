@@ -3,6 +3,7 @@
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::draw_dashed_line;
 use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+use crate::localization as l10n;
 use crate::model::{Bar, ChartTypeParams, FootprintStatistic, SessionProvider};
 use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
@@ -773,11 +774,15 @@ pub fn render_footprint(
                 let edge = mapping
                     .price_to_y((level + i64::from(high)) as f64 * step - flow.tick_size() * 0.5);
                 let text = row.ratio().map_or_else(
-                    || "A/B n/a".to_owned(),
+                    || l10n::text(painter.ctx(), "A/B n/a"),
                     |ratio| {
-                        format!(
-                            "A/B {}",
-                            egui::emath::format_with_decimals_in_range(ratio, 0..=2)
+                        l10n::format_text(
+                            painter.ctx(),
+                            "A/B {ratio}",
+                            &[(
+                                "ratio",
+                                egui::emath::format_with_decimals_in_range(ratio, 0..=2),
+                            )],
                         )
                     },
                 );
@@ -1750,21 +1755,32 @@ pub fn render_footprint_studies(
                         (opposite > 0.0).then(|| format!("{:.2}:1", side / opposite))
                     }),
                 };
-                hovered.push(format!("{label}: {}", value.as_deref().unwrap_or("n/a")));
+                let ctx = painter.ctx();
+                let value = value.unwrap_or_else(|| l10n::text(ctx, "n/a"));
+                hovered.push(l10n::format_text(
+                    ctx,
+                    "{label}: {value}",
+                    &[("label", l10n::text(ctx, label)), ("value", value)],
+                ));
             }
             continue;
         }
         if pointer.is_some_and(|p| rect.expand(2.0).contains(p)) {
-            let state = match study.state {
-                FootprintStudyState::Unvisited => "unvisited",
-                FootprintStudyState::Revisited => "revisited",
-                FootprintStudyState::Expired => "expired",
-                FootprintStudyState::Local => "this bar",
+            let key = match study.state {
+                FootprintStudyState::Unvisited => "{label}: {low} to {high} (unvisited)",
+                FootprintStudyState::Revisited => "{label}: {low} to {high} (revisited)",
+                FootprintStudyState::Expired => "{label}: {low} to {high} (expired)",
+                FootprintStudyState::Local => "{label}: {low} to {high} (this bar)",
             };
-            hovered.push(format!(
-                "{label}: {} to {} ({state})",
-                study.low as f64 * flow.price_step(),
-                study.high as f64 * flow.price_step(),
+            let ctx = painter.ctx();
+            hovered.push(l10n::format_text(
+                ctx,
+                key,
+                &[
+                    ("label", l10n::text(ctx, label)),
+                    ("low", (study.low as f64 * flow.price_step()).to_string()),
+                    ("high", (study.high as f64 * flow.price_step()).to_string()),
+                ],
             ));
         }
         if !detail {

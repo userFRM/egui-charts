@@ -10,9 +10,9 @@ use egui_charts::data::{
     Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
     ScreenerQuery, ScreenerRow,
 };
-use egui_charts::model::{Bar, Quote};
+use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Quotes,
+    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Posts, Quotes,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -296,26 +296,30 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
-    let symbols: Vec<&DemoSymbol> = if query.symbols.is_empty() {
+    let mut stories = stories(&query.symbols, query.highlights, now);
+    stories.sort_by(|a, b| b.time.cmp(&a.time));
+    stories.truncate(query.limit);
+    stories
+}
+
+/// The synthetic headlines, or highlights, of `symbols`, or of every catalog symbol when it is
+/// empty, published on the hour before `now`.
+fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<NewsStory> {
+    let specs: Vec<&DemoSymbol> = if symbols.is_empty() {
         DemoSymbol::catalog().iter().collect()
     } else {
         DemoSymbol::catalog()
             .iter()
             .filter(|spec| {
-                query
-                    .symbols
+                symbols
                     .iter()
                     .any(|symbol| spec.symbol.eq_ignore_ascii_case(symbol))
             })
             .collect()
     };
-    let templates = if query.highlights {
-        HIGHLIGHTS
-    } else {
-        HEADLINES
-    };
+    let templates = if highlights { HIGHLIGHTS } else { HEADLINES };
     let hour = now.duration_trunc(TimeDelta::hours(1)).unwrap_or(now);
-    let mut stories: Vec<NewsStory> = symbols
+    specs
         .iter()
         .flat_map(|spec| {
             templates
@@ -336,10 +340,28 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
                     story
                 })
         })
-        .collect();
-    stories.sort_by(|a, b| b.time.cmp(&a.time));
-    stories.truncate(query.limit);
-    stories
+        .collect()
+}
+
+/// Resolves the links of post and idea cards that name a demo news story into that story, as a
+/// host would from its own feed. The demo has no content for other links.
+pub(super) struct DemoPosts;
+
+impl Posts for DemoPosts {
+    fn resolve(&self, link: &str, reply: Reply<PostContent>) {
+        let story = stories(&[], false, Utc::now())
+            .into_iter()
+            .find(|story| story.url.as_deref() == Some(link));
+        reply.send(
+            story
+                .map(|story| {
+                    let mut content = PostContent::new(story.source, story.time, story.body);
+                    content.title = story.headline;
+                    content
+                })
+                .ok_or(FeedError::NotSupported),
+        );
+    }
 }
 
 /// The countries the demo calendar knows.

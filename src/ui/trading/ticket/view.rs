@@ -70,7 +70,7 @@ impl OrderTicket {
                 // A new order from the ladder waits for confirmation without one-click trading.
                 match ladder {
                     Some(Action::Place(request)) => {
-                        let bracketed = self.with_brackets(request, market);
+                        let bracketed = self.with_brackets(ui.ctx(), request, market);
                         self.dom_error = bracketed.as_ref().err().cloned();
                         match bracketed {
                             Ok(request) if *one_click => Some(Action::Place(request)),
@@ -135,6 +135,7 @@ impl OrderTicket {
         if let Some(request) = &self.confirm {
             let mut open = true;
             let message = confirmation(
+                ui.ctx(),
                 request,
                 &market.numbers(),
                 decimals(market.rules.quantity_step),
@@ -266,7 +267,7 @@ impl OrderTicket {
                 )
                 .clicked()
             {
-                let preset = self.preset(name.to_owned(), market);
+                let preset = self.preset(ui.ctx(), name.to_owned(), market);
                 presets.retain(|existing| existing.name != preset.name);
                 presets.push(preset);
                 self.preset_name.clear();
@@ -315,7 +316,7 @@ impl OrderTicket {
     /// The full-width send button in the side's colour, or what keeps the order from being sent.
     fn send(&mut self, ui: &mut Ui, market: &Market<'_>) -> Option<Action> {
         let theme = ui.active_theme();
-        let request = self.request(market);
+        let request = self.request(ui.ctx(), market);
         if let Err(reason) = &request {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), reason))
@@ -341,16 +342,13 @@ impl OrderTicket {
         let name = side_name(self.side);
         let detail = request.as_ref().map_or(String::new(), |request| {
             summary(
+                ui.ctx(),
                 request,
                 &market.numbers(),
                 decimals(market.rules.quantity_step),
             )
         });
-        let translated_label = format!(
-            "{} {}",
-            l10n::text(ui.ctx(), name),
-            l10n::text(ui.ctx(), &detail)
-        );
+        let translated_label = format!("{} {detail}", l10n::text(ui.ctx(), name));
         response
             .widget_info(|| WidgetInfo::labeled(Role::Button, request.is_ok(), &translated_label));
         let mut fill = side_fill(&theme, self.side);
@@ -504,7 +502,7 @@ mod tests {
                         ticket.price, price,
                         "an invalid entered price must not become the market price"
                     );
-                    assert!(ticket.request(&market).is_err());
+                    assert!(ticket.request(&egui::Context::default(), &market).is_err());
                 }
             }
         }
