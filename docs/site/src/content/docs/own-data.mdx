@@ -41,8 +41,9 @@ offers:
 - **Time zone.** The zone of every time that names none and of bounds printed as dates.
   It is UTC unless you change it.
 - **Price step.** The smallest price change of the symbols, such as `0.01`. The footprint
-  and the volume profiles group trades by it; without it they draw candles. One step serves
-  every symbol of the profile.
+  and the volume profiles group trades by it. Without it the volume footprint and session
+  volume profile charts draw candles, and the volume profile studies keep their estimate
+  from bars. One step serves every symbol of the profile.
 - **Keys.** A name and a value. Write the name in braces, such as `{key}`, where the value
   belongs in an address, a header, a body or a message. Values are sent only to the
   endpoints of the profile. *Keep keys in this browser* is off unless you tick it; a kept
@@ -281,8 +282,8 @@ side.
   the symbol is loaded again.
 - A trade older than the trade before it is in its bar and in time and sales, but not in
   the footprint or the studies.
-- The bars a reconnect loads from REST hold no trades: the footprint and the studies show
-  that span as if nothing traded.
+- The bars a reconnect or a resume loads from REST hold no trades: the footprint and the
+  studies show that span as if nothing traded.
 
 ## Reconnecting, pausing and changing symbol
 
@@ -364,8 +365,8 @@ The demo shows one chart, in the profile's zone.
   date, the settings and the paper order ticket.
 - **Off, and says so:** alerts, compare, layouts, replay, the samples, the strategy tester
   and watchlists. The market panels show an empty state, except time and sales, which lists
-  the trades of a trades route. The liquidity heatmap, the price
-  unit and the market recording are unavailable.
+  the trades of a trades route. The liquidity heatmap, the price unit and the market
+  recording are unavailable.
 
 Studies and drawings made on own data are not saved, and connecting a changed profile
 starts a new chart. The paper account is the same on both data sources and is priced at

@@ -365,8 +365,8 @@ impl Profile {
     /// can: an empty name, no symbol, no interval, an interval listed twice or one without a
     /// duration, neither history nor a stream, a URL that does not start with `http://`,
     /// `https://`, `ws://` or `wss://` as its kind needs, a page size or keep-alive period of
-    /// zero, a price step that is not a number above zero, or a key name that is empty, has other characters than lower-case letters, digits
-    /// and `_`, or is one of [`PLACEHOLDERS`].
+    /// zero, a price step that is not a number above zero, or a key name that is empty, has
+    /// other characters than lower-case letters, digits and `_`, or is one of [`PLACEHOLDERS`].
     pub(crate) fn problem(&self) -> Option<String> {
         if self.name.trim().is_empty() {
             return Some("Give the profile a name.".to_owned());
