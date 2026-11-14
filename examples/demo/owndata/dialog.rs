@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use chrono::{DateTime, Utc};
 use egui::{RichText, TextEdit};
 use egui_charts::data::{FeedError, FeedState, FeedStatus};
-use egui_charts::model::{Bar, BarClock, Timeframe, TimezoneId};
+use egui_charts::model::{Bar, BarClock, OrderSide, Timeframe, TimezoneId};
 use egui_charts::theme::ThemeExt as _;
 use egui_charts::ui_kit::alert::Alert;
 use egui_charts::ui_kit::buttons::Button;
@@ -147,6 +147,8 @@ struct Draft {
     symbols: String,
     /// The time zone as typed. The profile keeps the last valid one.
     zone: String,
+    /// The price step as typed. The profile keeps the last valid one.
+    step: String,
     /// The history and the stream as they were when their switch was turned off.
     history_off: Option<History>,
     stream_off: Option<Stream>,
@@ -159,6 +161,7 @@ impl Draft {
         Self {
             symbols: profile.symbols.join(", "),
             zone: profile.time_zone.name().to_owned(),
+            step: profile.tick_size.map(|step| step.to_string()).unwrap_or_default(),
             profile,
             values,
             keep,
@@ -227,6 +230,7 @@ enum Slot {
     Price,
     Size,
     Condition,
+    Side,
 }
 
 impl Slot {
@@ -246,6 +250,7 @@ impl Slot {
             Self::Price => "price",
             Self::Size => "size",
             Self::Condition => "condition",
+            Self::Side => "side",
         }
     }
 }
@@ -362,6 +367,7 @@ impl<'a> Fields<'a> {
             (Slot::Price, &mut fields.price),
             (Slot::Size, &mut fields.size),
             (Slot::Condition, &mut fields.condition),
+            (Slot::Side, &mut fields.side),
         ];
         Self {
             time: &mut fields.time,
@@ -1121,6 +1127,21 @@ impl DataSourceDialog {
         if draft.zone.trim().parse::<TimezoneId>().is_err() {
             let kept = draft.profile.time_zone.name();
             ui.error_label(format!("This is not a time zone. {kept} stays in use."));
+        }
+        let step = FormRow::new("Price step").description(
+            "The smallest price change of the symbols, such as 0.01. The footprint groups \
+             trades by it; without it the footprint draws candles.",
+        );
+        step.show(ui, |ui| {
+            let field = TextEdit::singleline(&mut draft.step).hint_text("0.01");
+            if ui.add(field.desired_width(120.0)).changed()
+                && let Some(step) = price_step(&draft.step)
+            {
+                draft.profile.tick_size = step;
+            }
+        });
+        if price_step(&draft.step).is_none() {
+            ui.error_label("A price step is a number above zero, or nothing.");
         }
         let keys = FormRow::new("Keys").description(
             "Written as {name} in an address, a header, a body or a message. A key typed \
@@ -2080,11 +2101,12 @@ impl DataSourceDialog {
                         Some(trade.map(|trade| {
                             let at = trade.time.with_timezone(&zone).naive_local();
                             format!(
-                                "trade at {}, price {}, size {}, {}",
+                                "trade at {}, price {}, size {}, {}, {}",
                                 at.format("%Y-%m-%d %H:%M:%S%.3f"),
                                 number(trade.price),
                                 number(trade.size),
-                                rule_label(trade.rule)
+                                rule_label(trade.rule),
+                                side_label(trade.side)
                             )
                         }))
                     }
@@ -2094,10 +2116,13 @@ impl DataSourceDialog {
                     ui.label(format!("The feed reads: {read}"));
                 }
             }
-            if let RouteKind::Trades(fields) = &mut route.kind
-                && !fields.condition.is_empty()
-            {
-                condition_rows(ui, &mut fields.conditions, &mut live.condition);
+            if let RouteKind::Trades(fields) = &mut route.kind {
+                if !fields.condition.is_empty() {
+                    condition_rows(ui, &mut fields.conditions, &mut live.condition);
+                }
+                if !fields.side.is_empty() {
+                    side_rows(ui, fields);
+                }
             }
         }
 
@@ -2221,6 +2246,17 @@ fn listed(text: &str) -> Vec<String> {
         }
     }
     entries
+}
+
+/// The price step typed as `text`: `Some(None)` when it is empty, `None` when it is not a number
+/// above zero.
+fn price_step(text: &str) -> Option<Option<f64>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(None);
+    }
+    let step = text.parse::<f64>().ok().filter(|step| step.is_finite() && *step > 0.0)?;
+    Some(Some(step))
 }
 
 /// A path as the dialog prints it: `data.candles`, `[0]`, `t`.
@@ -2353,6 +2389,14 @@ fn rule_label(rule: ConditionRule) -> &'static str {
     }
 }
 
+fn side_label(side: Option<OrderSide>) -> &'static str {
+    match side {
+        Some(OrderSide::Buy) => "buy",
+        Some(OrderSide::Sell) => "sell",
+        None => "side unknown",
+    }
+}
+
 /// The rows at the node `path` of `sample`, laid out as the node says: an object holds one
 /// list per field, a list of lists holds arrays, anything else holds objects. A header that
 /// was chosen stays with a list of lists.
@@ -2407,12 +2451,14 @@ fn above_records(records: &[Segment], root: &Value, path: &[Segment]) -> bool {
 }
 
 /// What decides the route of a record and the condition values it offers: the place of the
-/// records, the routing field and the routes without their rule lists.
+/// records, the routing field and the routes without their rule lists and side values.
 fn basis(stream: &Stream) -> Basis {
     let mut routes = stream.routes.clone();
     for route in &mut routes {
         if let RouteKind::Trades(fields) = &mut route.kind {
             fields.conditions.clear();
+            fields.buy.clear();
+            fields.sell.clear();
         }
     }
     (stream.records.clone(), stream.route_by.clone(), routes)
@@ -2719,6 +2765,18 @@ fn condition_rows(ui: &mut egui::Ui, rules: &mut Vec<(String, ConditionRule)>, t
         {
             rules.push((std::mem::take(typed), ConditionRule::PriceAndVolume));
         }
+    });
+}
+
+/// The values of the side field of a trades route that mark a buy and a sell. Any other value
+/// leaves a trade's side unknown.
+fn side_rows(ui: &mut egui::Ui, fields: &mut TradeFields) {
+    ui.strong("Side");
+    ui.horizontal_wrapped(|ui| {
+        let buy = TextEdit::singleline(&mut fields.buy).hint_text("buy value");
+        ui.add(buy.desired_width(120.0));
+        let sell = TextEdit::singleline(&mut fields.sell).hint_text("sell value");
+        ui.add(sell.desired_width(120.0));
     });
 }
 
@@ -3061,14 +3119,15 @@ mod tests {
     }
 
     /// A visitor who has typed two addresses and a subscribe message gets from there to a
-    /// connected profile by clicks alone: the proposed layout and fields, one field clicked in
-    /// the first row, the routes made from the first message without one, the place of the
-    /// records, the fields of a trade clicked in a record and the condition values of the log.
+    /// connected profile by clicks and the two values of the side: the proposed layout and
+    /// fields, one field clicked in the first row, the routes made from the first message
+    /// without one, the place of the records, the fields of a trade clicked in a record, the
+    /// values that mark a buy and a sell, and the condition values of the log.
     #[test]
     fn a_profile_is_mapped_from_a_test_response_and_the_live_log() {
         const PAGE: &str = r#"{"data":{"candles":[{"t":1794407580,"o":100.75,"h":103.0,"l":100.5,"c":102.5,"q":1500},{"t":1794407640,"o":102.5,"h":102.75,"l":101.0,"c":101.25,"q":800},{"t":1794407700,"o":101.25,"h":101.5,"l":100.0,"c":100.25,"q":700}]}}"#;
         const STATUS: &str = r#"{"type":"status","message":"authenticated"}"#;
-        const TRADES: &str = r#"{"type":"trade","data":[{"c":"@","p":101.75,"s":3,"t":1794407710000},{"c":"T","p":99.75,"s":2,"t":1794407715000}]}"#;
+        const TRADES: &str = r#"{"type":"trade","data":[{"c":"@","m":false,"p":101.75,"s":3,"t":1794407710000},{"c":"T","m":true,"p":99.75,"s":2,"t":1794407715000}]}"#;
         let server = Server::start(|_, _| (200, PAGE.to_owned()));
         let peer = Peer::start(vec![vec![
             Step::Receive(1),
@@ -3147,9 +3206,12 @@ mod tests {
         // The fields of a trade, clicked in the record. Each click moves on to the next empty
         // slot.
         click(&ctx, &mut dialog, "time");
-        for field in ["t:", "p:", "s:", "c:"] {
+        for field in ["t:", "p:", "s:", "c:", "m:"] {
             node(&ctx, &mut dialog, "Record", field);
         }
+        // The values of the side field that mark a buy and a sell, typed beside it.
+        enter(&ctx, &mut dialog, "buy value", "false");
+        enter(&ctx, &mut dialog, "sell value", "true");
         // Both condition values of the log are listed. `T` gets another rule in its row.
         choose(&ctx, &mut dialog, "T", "Volume only");
 
@@ -3201,6 +3263,9 @@ mod tests {
                                 ("@".to_owned(), ConditionRule::PriceAndVolume),
                                 ("T".to_owned(), ConditionRule::VolumeOnly),
                             ],
+                            side: key("m"),
+                            buy: "false".to_owned(),
+                            sell: "true".to_owned(),
                         }),
                     },
                 ],

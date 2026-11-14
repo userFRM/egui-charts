@@ -158,9 +158,13 @@ impl Datafeed for MappedFeed {
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         // Any symbol resolves. One the service does not know fails there, with its status.
         let timeframes = self.shared.profile.intervals.iter().map(|row| row.chart);
-        reply.send(Ok(
-            Instrument::new(symbol).with_supported_timeframes(timeframes)
-        ));
+        let instrument = Instrument::new(symbol).with_supported_timeframes(timeframes);
+        // The footprint and the volume profiles group trades by the price step.
+        let instrument = match self.shared.profile.tick_size {
+            Some(step) => instrument.with_tick_size(step),
+            None => instrument,
+        };
+        reply.send(Ok(instrument));
     }
 
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {

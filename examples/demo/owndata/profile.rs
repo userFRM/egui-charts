@@ -43,6 +43,12 @@ pub(crate) struct Profile {
     /// Zone of every time that names none: a date with a time of day, ISO 8601 text without an
     /// offset, and `{from}` and `{to}` printed as dates. UTC by default.
     pub(crate) time_zone: TimezoneId,
+    /// The price step of the symbols: the smallest change of their price, such as 0.01. The
+    /// footprint and the volume profiles group trades by it. `None` when unknown; the footprint
+    /// then draws candles.
+    // shortcut: one step for every symbol of the profile; upgrade to a step per symbol when a
+    // profile's symbols need different ones.
+    pub(crate) tick_size: Option<f64>,
     /// The interval table, in the order the interval picker offers. The chart opens on the
     /// first row.
     pub(crate) intervals: Vec<Interval>,
@@ -62,6 +68,7 @@ impl Default for Profile {
             name: String::new(),
             symbols: Vec::new(),
             time_zone: TimezoneId::utc(),
+            tick_size: None,
             intervals: Vec::new(),
             keys: Vec::new(),
             history: None,
@@ -316,7 +323,7 @@ pub(crate) enum RouteKind {
     Ignore,
     /// Bars of the chart's interval, merged into the bar with the same open time.
     Bars(BarFields),
-    /// Trades, aggregated into bars of the chart's interval.
+    /// Trades, folded into bars of the chart's interval and fed to the chart as trades.
     Trades(TradeFields),
 }
 
@@ -332,6 +339,12 @@ pub(crate) struct TradeFields {
     /// The rule of each condition value, compared as text. A value that is not listed counts
     /// price and volume.
     pub(crate) conditions: Vec<(String, ConditionRule)>,
+    /// Empty when trades carry no side. The field holds the side of the trade's aggressor.
+    pub(crate) side: FieldPath,
+    /// The value of `side` that marks a buy, compared as text. Empty marks none.
+    pub(crate) buy: String,
+    /// The value of `side` that marks a sell, compared as text. Empty marks none.
+    pub(crate) sell: String,
 }
 
 /// What a trade with a given condition does to the bar it falls in.
@@ -352,7 +365,7 @@ impl Profile {
     /// can: an empty name, no symbol, no interval, an interval listed twice or one without a
     /// duration, neither history nor a stream, a URL that does not start with `http://`,
     /// `https://`, `ws://` or `wss://` as its kind needs, a page size or keep-alive period of
-    /// zero, or a key name that is empty, has other characters than lower-case letters, digits
+    /// zero, a price step that is not a number above zero, or a key name that is empty, has other characters than lower-case letters, digits
     /// and `_`, or is one of [`PLACEHOLDERS`].
     pub(crate) fn problem(&self) -> Option<String> {
         if self.name.trim().is_empty() {
@@ -394,6 +407,9 @@ impl Profile {
         let period = self.stream.as_ref().map(|stream| stream.keep_alive_every);
         if period == Some(0) {
             return Some("The keep-alive period must be at least 1 second.".to_owned());
+        }
+        if self.tick_size.is_some_and(|step| !(step.is_finite() && step > 0.0)) {
+            return Some("The price step must be a number above zero.".to_owned());
         }
         for key in &self.keys {
             if key.is_empty() {
