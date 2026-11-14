@@ -922,6 +922,9 @@ pub struct ChartSyncOptions {
     /// Synchronize the hovered timestamp.
     pub sync_crosshair: bool,
     /// Synchronize completed main-pane drawings between charts of the same symbol.
+    /// A chart that comes to a symbol receives the drawings mirrored there. Turning this on links
+    /// equal drawings of the charts of a symbol and mirrors the others both ways, without replaying
+    /// what was done while it was off.
     /// Study-owned drawings stay local because study ids and scales belong to each chart.
     /// Charts that keep their drawings in the same storage are left to it: they read each other's
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
@@ -1556,8 +1559,16 @@ impl ChartLayout {
             self.active = index;
         }
         // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
+        #[cfg(feature = "drawings")]
+        let known = self.previous_charts;
         for (index, chart) in charts.iter().enumerate() {
             if self.previous_charts[index] != chart.layout_identity {
+                // A chart new to the layout brings drawings new to it, while one that
+                // `swap_slots` moved keeps its links.
+                #[cfg(feature = "drawings")]
+                if !known.contains(&chart.layout_identity) {
+                    self.drawings.forget_slot(index);
+                }
                 self.previous_charts[index] = chart.layout_identity;
                 self.previous[index] = None;
                 self.previous_ranges[index] = None;
@@ -1884,23 +1895,28 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         #[cfg(feature = "drawings")]
-        if (self.sync.sync_drawings
-            || charts.iter().take(total).any(|chart| {
-                chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .any(|d| d.folder_sync_mode().is_some())
-            }))
-            && self.drawings.sync(
+        {
+            let tracking = self.sync.sync_drawings
+                || charts.iter().take(total).any(|chart| {
+                    chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .any(|d| d.folder_sync_mode().is_some())
+                });
+            if !tracking {
+                // Turning the switch on is the first time for the drawings it mirrors, while
+                // those that their folder mirrors stay linked on the charts away from them.
+                self.drawings.forget_switched(charts, total);
+            } else if self.drawings.sync(
                 charts,
                 total,
                 &self.groups,
                 pointer_down,
                 self.sync.sync_drawings,
-            )
-        {
-            ui.ctx().request_repaint();
+            ) {
+                ui.ctx().request_repaint();
+            }
         }
         #[cfg(feature = "drawings")]
         if Chart::share_stored_drawings(charts) {

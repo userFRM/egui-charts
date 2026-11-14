@@ -20,6 +20,8 @@ assert sys.argv[1:5] == ['--tool=cachegrind', '--cache-sim=no', '--branch-sim=no
 assert os.environ['MALLOC_MMAP_THRESHOLD_'] == '131072'
 binary, flag, scenario = sys.argv[5:]
 assert flag == '--regression'
+if scenario == os.environ.get('TEST_FAIL'):
+    sys.exit(1)
 assert binary.endswith(('/base/frame_time', '/head/frame_time'))
 samples = int(os.environ['FRAME_TIME_FRAMES'])
 assert samples in (0, 1 if scenario == 'trade-replay' else 20)
@@ -71,6 +73,12 @@ print(f'I refs: {1000 + delta:,}', file=sys.stderr)
         compared = run("--compare", work / "base.txt", work / "head.txt")
         assert compared.returncode == 1
         assert "::error::Invalid instruction delta for frame-1000" in compared.stderr
+
+    # A scenario that fails must fail the whole measurement, not drop out of the counts.
+    env.update(TEST_FAIL="depth")
+    measured = run("--measure", work / "head")
+    assert measured.returncode == 1, measured
+    assert "::error::No instruction count for depth" in measured.stderr
 
 print("instruction comparison: PASS")
 

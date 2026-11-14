@@ -38,6 +38,9 @@ const CHURN_PER_TRADE: usize = 6;
 /// The instrument whose feed sends individual orders instead of aggregate depth.
 pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 
+/// The only demo symbol whose feed answers analyst price targets.
+pub(super) const TARGETS_SYMBOL: &str = "SAMPLE";
+
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(
     Mutex<Simulation>,
@@ -1548,7 +1551,7 @@ impl Datafeed for LiveFeed {
     }
 
     fn price_targets(&self, symbol: &str, reply: Reply<egui_charts::data::PriceTargets>) {
-        if symbol != "SAMPLE" {
+        if symbol != TARGETS_SYMBOL {
             reply.send(Err(FeedError::NotSupported));
             return;
         }

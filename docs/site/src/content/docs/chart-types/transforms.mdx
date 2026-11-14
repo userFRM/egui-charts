@@ -67,12 +67,14 @@ These main renderers share the parameter workflow above:
 | --- | --- | --- |
 | `Kagi` | Close by default, or `kagi_source` high/low; `kagi_reversal` in price units and `kagi_size_method` | Chart up/down colours and `styles.kagi` thick/thin widths; [`KagiConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/kagi/struct.KagiConfig.html) |
 | `LineBreak` | Close by default, or `line_break_source` high/low; `line_break_count` reversal lookback, 1 to 10 | Chart up/down colours; [`LineBreakConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/line_break/struct.LineBreakConfig.html) |
-| `Range` | Retained executions in order, or an OHLC path approximation when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
+| `Range` | Retained executions in order, after the OHLC path approximation of the bars before the one holding the first retained trade, or that approximation alone when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
 
 [`ChartTypeParams`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html)
 holds all these fields. For high/low input, intrabar order is unknown: continuation
 takes priority over reversal and at most one direction is processed per source
 bar. OHLC range bars are an approximation; original executions give their actual path.
+When trades start after OHLC history, the approximated range bars stay in front of the
+bars built from the trades, and the range in progress at the first trade gives way to them.
 See the [order-flow guide](../../../../../order-flow.md) for supplying executions.
 
 ## Sizes, styles and axis restrictions
