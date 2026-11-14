@@ -1116,6 +1116,18 @@ pub(crate) mod tests {
             Some([100500.0, 102000.0, 99500.0, 100000.0, 75.875]),
         );
 
+        // Kraken: rows under the pair's name, time in seconds, then open, high, low, close,
+        // vwap, volume and count; values as text. `last` beside them is not a row.
+        const OHLC: &str = r#"{"error":[],"result":{"BTC/USD":[[1794407580,"100750.0","103000.0","100500.0","102500.0","101900.0","1.50000000",120],[1794407640,"102500.0","102750.0","101000.0","101250.0","101800.0","0.75000000",64],[1794407700,"101250.0","101500.0","100000.0","100250.0","100700.0","0.50000000",41]],"last":1794407640}}"#;
+        // `side` is the taker's.
+        const TRADES: &str = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"sell","price":100000.0,"qty":0.125,"ord_type":"market","trade_id":4665906,"timestamp":"2026-11-11T14:35:12.000000Z"},{"symbol":"BTC/USD","side":"buy","price":102000.0,"qty":0.25,"ord_type":"limit","trade_id":4665907,"timestamp":"2026-11-11T14:35:13.000000Z"}]}"#;
+        // The trades continue the history bar: the sell at 100000 is the close, the buy at
+        // 102000 the high and the close; volume 0.875.
+        const B5T: Shown = (
+            1794407700,
+            Some([101250.0, 102000.0, 100000.0, 102000.0, 0.875]),
+        );
+
         let rows = [
             Ready {
                 name: "Binance spot (public)",
@@ -1185,6 +1197,34 @@ pub(crate) mod tests {
                 target: "/",
                 received: vec![
                     r#"{"type":"subscribe","product_ids":["BTC-USD"],"channels":["matches"]}"#,
+                ],
+            },
+            Ready {
+                name: "Kraken (public)",
+                symbol: "BTC/USD",
+                timeframe: Timeframe::Min1,
+                // Kraken sends its newest bars and no older ones, so the chart asks once.
+                pages: vec![OHLC.to_owned()],
+                script: vec![
+                    Step::Receive(1),
+                    Step::Hold,
+                    Step::Send(TRADES),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![B3, B4, B5], vec![B3, B4, B5T]],
+                trades: vec![
+                    (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                    (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                ],
+                tick_size: 0.01,
+                first: (
+                    "GET /0/public/OHLC?pair=BTC%2FUSD&interval=1&assetVersion=1",
+                    "",
+                ),
+                asked: vec![],
+                target: "/v2",
+                received: vec![
+                    r#"{"method":"subscribe","params":{"channel":"trade","symbol":["BTC/USD"]}}"#,
                 ],
             },
         ];

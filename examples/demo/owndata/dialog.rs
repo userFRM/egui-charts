@@ -3745,6 +3745,32 @@ mod tests {
         assert_eq!(names(), ["Local", "My Binance"]);
     }
 
+    /// The History Test of the ready Kraken profile previews the bars Kraken files under the
+    /// pair's name: the sample is read for the symbol the Test asked for.
+    #[test]
+    fn the_history_test_reads_rows_filed_under_the_symbol() {
+        const OHLC: &str = r#"{"error":[],"result":{"BTC/USD":[[1794407580,"100750.0","103000.0","100500.0","102500.0","101900.0","1.50000000",120],[1794407640,"102500.0","102750.0","101000.0","101250.0","101800.0","0.75000000",64],[1794407700,"101250.0","101500.0","100000.0","100250.0","100700.0","0.50000000",41]],"last":1794407640}}"#;
+        let server = Server::start(|_, _| (200, OHLC.to_owned()));
+        let storage = Arc::new(DemoStorage::default());
+        let chosen = Saved {
+            asked: true,
+            current: Some("Kraken (public)".to_owned()),
+            ..Saved::default()
+        };
+        chosen.save(&storage);
+        let ctx = egui::Context::default();
+        let mut dialog = DataSourceDialog::new(storage, true);
+        dialog.open();
+        let history = dialog.draft.profile.history.as_mut().unwrap();
+        history.url = history
+            .url
+            .replace("https://api.kraken.com", &server.origin);
+
+        click(&ctx, &mut dialog, "History");
+        click(&ctx, &mut dialog, "Test");
+        wait(&ctx, &mut dialog, "3 bars, 0 rows skipped");
+    }
+
     /// The status line shows the connection error while the stream is down, and no longer once it
     /// is live again, although the chart keeps the error as its most recent one.
     #[test]
