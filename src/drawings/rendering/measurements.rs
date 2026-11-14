@@ -867,6 +867,7 @@ mod tests {
     /// A 0.00001 tick is a tenth of a 0.0001 pip: 0.00123 is +12.3 pips and 0.0012 is +12 pips.
     #[test]
     fn pip_readout_keeps_the_tick_precision_of_a_pip() {
+        let ctx = egui::Context::default();
         for (tick, pip, change, want) in [
             (0.01, 0.1, 2357.89 - 2345.67, "+122.2 pips"),
             (0.00001, 0.0001, 0.00123, "+12.3 pips"),
@@ -876,7 +877,7 @@ mod tests {
                 .with_tick_size(tick)
                 .with_pip_size(pip);
             assert_eq!(
-                unit_change_text(change, Some(&instrument), false).as_deref(),
+                unit_change_text(&ctx, change, Some(&instrument), false).as_deref(),
                 Some(want),
                 "{tick}, {pip}, {change}"
             );
