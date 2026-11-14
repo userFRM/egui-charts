@@ -4,6 +4,7 @@
 /// same type; its coordinates, closed outline, name, notes, layer, post link and persistence identity
 /// stay intact.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct DrawingTemplate {
     /// Tool and reusable properties. Serialization omits anchors and record identity.
     pub settings: crate::drawings::Drawing,
