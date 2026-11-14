@@ -1319,16 +1319,17 @@ mod tests {
     }
 
     /// A size that waits for more history than is loaded is not invalid: the chart names the
-    /// bars it waits for and other settings apply. A fixed size of 0 is still rejected.
+    /// bars it waits for and other settings apply. A fixed size of 0 is still rejected. Whitespace
+    /// bars do not count, so the size resolves once 14 bars with prices are loaded.
     #[test]
     fn settings_apply_while_a_history_derived_size_waits() {
         use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
         use crate::widget::test_frames::shapes;
-        let bars = (0..5)
-            .map(|minute| {
-                let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
-                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 0.0)
-            })
+        let time = |minute| chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+        let bar = |minute| Bar::new(time(minute), 100.0, 101.0, 99.0, 100.0, 0.0);
+        let bars = (-10..0)
+            .map(|minute| Bar::whitespace(time(minute)))
+            .chain((0..5).map(bar))
             .collect();
         let mut chart = Chart::new(BarData::from_bars(bars));
         chart.set_chart_type(ChartType::Renko);
@@ -1364,6 +1365,11 @@ mod tests {
                 ..
             })
         ));
+        for minute in 5..14 {
+            chart.update(crate::widget::SeriesId::MAIN, bar(minute));
+        }
+        chart.show_elements();
+        assert!((chart.chart_type_params().renko_brick_size - 2.0).abs() < 1e-12);
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the

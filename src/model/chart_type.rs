@@ -858,13 +858,15 @@ impl ChartTypeParams {
     #[cfg(feature = "widget")]
     pub(crate) fn resolve_sizes(&mut self, bars: &[super::Bar], pending: &mut [bool; 4]) {
         let methods = self.size_methods();
+        // Whitespace bars have no price and do not count, as in `BoxSizeMethod::resolve`.
+        let loaded = bars.iter().filter(|bar| !bar.is_whitespace()).count();
         for ((method, size), pending) in methods.into_iter().zip(self.sizes_mut()).zip(pending) {
             if !*pending {
                 continue;
             }
             let waiting = match method {
-                super::BoxSizeMethod::Atr { period, .. } => period > bars.len(),
-                super::BoxSizeMethod::Percentage(_) => bars.is_empty(),
+                super::BoxSizeMethod::Atr { period, .. } => period > loaded,
+                super::BoxSizeMethod::Percentage(_) => loaded == 0,
                 super::BoxSizeMethod::Fixed => false,
             };
             *size = method.resolve(*size, bars).unwrap_or(0.0);
