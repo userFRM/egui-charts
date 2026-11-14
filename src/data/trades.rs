@@ -10,7 +10,8 @@
 //! from the instant of the newest retained trade through that of the oldest live trade, each under
 //! the same rule. A page's trades at the stream's first instant may have traded before the
 //! subscription, so the live trades left to a page there are kept apart: they, not the page's, are
-//! what the stream sent at that instant.
+//! what the stream sent at that instant. A loss of older trades to stay within capacity leaves the
+//! page's trades there held, so the live ones stay apart until the loss reaches that instant.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -156,7 +157,9 @@ pub(crate) struct Trades {
     /// arrival order, each id once, with that instant: the time of the paged trade holding a
     /// trade's id, which a page may stamp apart from the stream, or else the trade's own. The
     /// instant is that of the first live trade so left, the only one at which a page's trades can
-    /// include some that the stream never sent.
+    /// include some that the stream never sent. Live trades are kept only while every trade dropped
+    /// to stay within capacity is older than that instant, as the page's trades of it are then all
+    /// held, and the list goes when the store evicts a trade of that instant or a later one.
     unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
@@ -221,7 +224,8 @@ impl Trades {
     /// The first instant, as the page stamps it, where a live trade was left to a page's trades,
     /// and the live trades left to the page's trades of that instant, in arrival order: with the
     /// held live trades of that instant they are all the stream sent at it, while the page's
-    /// trades there may include some it never sent.
+    /// trades there may include some it never sent. They survive the loss of older trades and end
+    /// with the eviction of a trade of that instant or a later one.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -323,8 +327,11 @@ impl Trades {
             if self.left_out_at == Some(evicted.ts) {
                 self.left_out_at = None;
             }
-            // After a loss the paged trades stand in for no live one.
-            self.unheld_live = None;
+            // Paged trades through the loss fill no bar, so once it reaches the kept instant the
+            // kept trades guard nothing.
+            if (self.unheld_live.as_ref()).is_some_and(|(at, _)| evicted.ts >= *at) {
+                self.unheld_live = None;
+            }
             changed(&evicted, false);
         }
     }
@@ -356,9 +363,10 @@ impl Trades {
                 Some(at) => at >= self.paged,
                 None => paged_until.is_none_or(|until| trade.ts > until),
             };
-            if !live && self.lost_until.is_none() {
-                // A page may stamp its copy of a trade with an id apart from the stream.
-                let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+            // A page may stamp its copy of a trade with an id apart from the stream.
+            let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+            // A loss of older trades leaves the page's trades of this instant held.
+            if !live && self.lost_until.is_none_or(|lost| lost < time) {
                 let (kept_at, kept) = self.unheld_live.get_or_insert_with(|| (time, Vec::new()));
                 // shortcut: a scan per trade with an id at this one instant; index the ids if a
                 // feed stamps thousands of trades with one time.

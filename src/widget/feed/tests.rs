@@ -2575,6 +2575,111 @@ fn footprint_turned_on_later_leaves_out_a_paged_execution_the_sink_dropped() {
     }
 }
 
+/// Hand counts on 2t at price 100, executions of 1 without ids, the chart showing candles. A
+/// trade page is answered in the drain that streams the first executions, into a store too small
+/// for both. In the first row the page holds a sell at 23:59:59, a sell at 00:00:00 that traded
+/// before the subscription and a copy of the stream's first buy; the stream buys twice at
+/// 00:00:00 and once at 00:00:01, and the store of three drops the sell at 23:59:59 for the last
+/// buy. In the second the page also holds a sell at 23:59:58, for which the store of three has no
+/// room. The sink's bars are the two buys at 00:00:00 and the buy at 00:00:01, without the sells,
+/// so the page's executions give the first bar no cells, after the footprint is turned on and
+/// after it is turned off and on. In the third row the page holds copies of the buys at 00:00:00
+/// to 00:00:03, the stream buys once a second from 00:00:00 to 00:00:05, and the store of four
+/// drops the page's buys at 00:00:00 and 00:00:01 for the last two: past the stream's first
+/// instant, the page's copies at 00:00:02 and 00:00:03 fill the 00:00:02 bar, bid 0 and ask 2.
+#[test]
+fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
+    use crate::model::OrderSide::{Buy, Sell};
+    let start = bars(1)[0].time;
+    let at = |second: i64| start + TimeDelta::seconds(second);
+    let fill = |second, side| Tick::new(at(second), 100.0, 1.0, Some(side));
+    // The store's capacity, the page, the stream's buys, the newest execution the store dropped,
+    // the opens of the chart's bars, all in seconds from 00:00:00, and the bid and ask of each
+    // bar drawn with cells, `None` for a candle.
+    type Row = (
+        &'static str,
+        usize,
+        Vec<Tick>,
+        &'static [i64],
+        i64,
+        &'static [i64],
+        &'static [Option<(f64, f64)>],
+    );
+    let rows: [Row; 3] = [
+        (
+            "a live execution evicts an older page execution",
+            3,
+            vec![fill(-1, Sell), fill(0, Sell), fill(0, Buy)],
+            &[0, 0, 1],
+            -1,
+            &[0, 1],
+            &[None, None],
+        ),
+        (
+            "the page is larger than the store",
+            3,
+            vec![fill(-2, Sell), fill(-1, Sell), fill(0, Sell), fill(0, Buy)],
+            &[0, 0, 1],
+            -1,
+            &[0, 1],
+            &[None, None],
+        ),
+        (
+            "the loss reaches the stream's first instant",
+            4,
+            (0..4).map(|second| fill(second, Buy)).collect(),
+            &[0, 1, 2, 3, 4, 5],
+            1,
+            &[0, 2, 4],
+            &[None, Some((0.0, 2.0)), None],
+        ),
+    ];
+    for (label, capacity, paged, streamed, lost, opens, cells) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe("2t".parse().unwrap());
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(capacity);
+        // The chart applies the page before the executions it drains with.
+        (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(paged, false)));
+        let sink = feed.sink();
+        for second in streamed {
+            sink.push_tick(fill(*second, Buy));
+        }
+        frames.run(&mut chart);
+        let trades = &chart.feed_link.as_ref().unwrap().trades;
+        assert_eq!(trades.lost_until(), Some(at(lost)), "{label}: loss");
+        let opens: Vec<_> = opens.iter().map(|second| at(*second)).collect();
+        for turned in ["on", "on again"] {
+            chart.set_chart_type(ChartType::VolumeFootprint);
+            for _ in 0..4 {
+                frames.run(&mut chart);
+            }
+            let drawn: Vec<_> = (chart.bars(SeriesId::MAIN).iter())
+                .map(|bar| bar.time)
+                .collect();
+            assert_eq!(drawn, opens, "{label}, turned {turned}");
+            let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+            let complete = flow.complete_from();
+            let shown: Vec<_> = (opens.iter())
+                .map(|open| {
+                    flow.bar_at(*open)
+                        .filter(|_| complete.is_some_and(|from| *open >= from))
+                        .map(|bar| (bar.bid, bar.ask))
+                })
+                .collect();
+            assert_eq!(shown, cells, "{label}, turned {turned}");
+            chart.set_chart_type(ChartType::Candles);
+            frames.run(&mut chart);
+        }
+    }
+}
+
 /// Hand counts on two-trade bars of buys at 100, one a second: 1 and 2 (volume 3), 3 and 4 (7),
 /// 5 and 6 (11), and the live 7 and 8 (15). A store of seven leaves out the buy of 1 in both
 /// orders, and a store of six the buys of 1 and 2, so that the oldest held execution opens the
