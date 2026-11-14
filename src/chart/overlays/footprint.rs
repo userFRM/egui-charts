@@ -166,7 +166,13 @@ impl Default for FootprintConfig {
 }
 
 impl FootprintConfig {
-    pub(crate) fn from_chart_params(params: &ChartTypeParams, colors: [Color32; 4]) -> Self {
+    /// The footprint of the chart type under `params`, its rows `row_ticks` instrument ticks
+    /// tall, as `ChartTypeParams::footprint_row_size` resolves them, or grouped by zoom at zero.
+    pub(crate) fn from_chart_params(
+        params: &ChartTypeParams,
+        colors: [Color32; 4],
+        row_ticks: u32,
+    ) -> Self {
         let [ask_color, bid_color, text_color, neutral_color] =
             std::array::from_fn(|i| params.footprint_colors[i].unwrap_or(colors[i]));
         Self {
@@ -179,8 +185,8 @@ impl FootprintConfig {
             imbalance_bid_color: params.footprint_imbalance_colors[1],
             text_color,
             neutral_color,
-            auto_row_height: (params.footprint_row_ticks == 0).then_some(16.0),
-            row_ticks: params.footprint_row_ticks,
+            auto_row_height: (row_ticks == 0).then_some(16.0),
+            row_ticks,
             imbalance_ratio: params.footprint_imbalance_ratio,
             imbalance_min_volume: params.footprint_imbalance_min_volume,
             diagonal: params.footprint_diagonal,
