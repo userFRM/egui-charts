@@ -70,6 +70,8 @@ pub(crate) struct DataSourceDialog {
     can_save: bool,
     /// The saved state as it was last written.
     saved: Saved,
+    /// The ready profiles whose name no saved profile has, first in the profile list.
+    ready: Vec<Profile>,
     open: bool,
     /// Whether `startup` has acted.
     started: bool,
@@ -192,9 +194,10 @@ impl Draft {
         Self::of(profile.clone(), values, kept.is_some(), origin)
     }
 
-    /// The profile in use, else the one used last, else a new one.
-    fn current(saved: &Saved) -> Self {
-        let named = |name: &String| saved.profiles.iter().find(|profile| profile.name == *name);
+    /// The profile in use, else the one used last, saved or ready, else a new one.
+    fn current(saved: &Saved, ready: &[Profile]) -> Self {
+        let mut listed = saved.profiles.iter().chain(ready);
+        let named = |name: &String| listed.find(|profile| profile.name == *name);
         let profile = saved.current.as_ref().and_then(named);
         profile.map_or_else(Self::blank, |profile| Self::saved(saved, profile))
     }
@@ -673,11 +676,15 @@ impl DataSourceDialog {
     /// its answer could not be remembered, and nothing is saved.
     pub(crate) fn new(storage: Arc<DemoStorage>, can_save: bool) -> Self {
         let saved = Saved::load(&storage);
+        let mut ready = store::ready();
+        // A saved profile of that name, made before the ready one shipped, stays the visitor's.
+        ready.retain(|profile| !saved.profiles.iter().any(|held| held.name == profile.name));
         Self {
-            draft: Draft::current(&saved),
+            draft: Draft::current(&saved, &ready),
             storage,
             can_save,
             saved,
+            ready,
             open: false,
             started: false,
             view: View::Steps,
@@ -721,7 +728,8 @@ impl DataSourceDialog {
             return None;
         }
         let current = self.saved.current.as_ref();
-        let named = |name: &String| self.saved.profiles.iter().find(|saved| saved.name == *name);
+        let mut listed = self.saved.profiles.iter().chain(&self.ready);
+        let named = |name: &String| listed.find(|saved| saved.name == *name);
         let Some(profile) = current.and_then(named) else {
             // The profile that was in use is gone.
             self.saved.own = false;
@@ -906,7 +914,8 @@ impl DataSourceDialog {
         let footer = footer.primary_enabled(problem.is_none() && !taken);
         let (connect, cancel) = footer.show_with_left(ui, |ui| {
             if self.can_save {
-                let named = !self.draft.profile.name.is_empty() && !taken;
+                let named =
+                    !self.draft.profile.name.is_empty() && !taken && self.ready_draft().is_none();
                 save = ui
                     .add(Button::new("Save").outlined().enabled(named))
                     .clicked();
@@ -955,13 +964,24 @@ impl DataSourceDialog {
         });
     }
 
-    /// Whether another saved profile has the name of the draft.
+    /// Whether another saved profile has the name of the draft, or a ready profile that the
+    /// draft no longer equals: a ready profile is never saved, so a changed one needs another
+    /// name.
     fn name_taken(&self) -> bool {
         let draft = &self.draft;
         let other = |saved: &Profile| {
             saved.name == draft.profile.name && Some(&saved.name) != draft.origin.as_ref()
         };
         self.saved.profiles.iter().any(other)
+            || self
+                .ready_draft()
+                .is_some_and(|ready| *ready != draft.profile)
+    }
+
+    /// The ready profile with the draft's name.
+    fn ready_draft(&self) -> Option<&Profile> {
+        let name = &self.draft.profile.name;
+        self.ready.iter().find(|ready| ready.name == *name)
     }
 
     /// Stores the draft: it replaces the saved profile it was loaded from, or is appended when
@@ -1007,7 +1027,10 @@ impl DataSourceDialog {
         if !self.report.is_empty() {
             return None;
         }
-        self.store_draft();
+        // A ready profile connects as shipped and is not stored.
+        if self.ready_draft().is_none() {
+            self.store_draft();
+        }
         self.saved.own = true;
         self.saved.current = Some(self.draft.profile.name.clone());
         self.saved.save(&self.storage);
@@ -1028,7 +1051,7 @@ impl DataSourceDialog {
             saved.current = None;
         }
         saved.save(&self.storage);
-        self.draft = Draft::current(&self.saved);
+        self.draft = Draft::current(&self.saved, &self.ready);
         self.forget_tests();
     }
 
@@ -1043,16 +1066,14 @@ impl DataSourceDialog {
             Export,
             Delete,
         }
-        let names = self
-            .saved
-            .profiles
-            .iter()
-            .map(|saved| Some(saved.name.clone()));
+        let profiles = self.ready.iter().chain(&self.saved.profiles);
+        let names = profiles.map(|profile| Some(profile.name.clone()));
         let names: Vec<Option<String>> = names.collect();
         let mut chosen = self.draft.origin.clone();
-        // The profile on the chart stays.
+        // The profile on the chart stays, and a ready one is never stored.
         let on_chart = self.saved.own && self.saved.current == chosen;
-        let deletable = chosen.is_some() && !on_chart;
+        let ready = |name: &String| self.ready.iter().any(|ready| ready.name == *name);
+        let deletable = chosen.as_ref().is_some_and(|name| !ready(name)) && !on_chart;
         let idle = self.import.is_none();
         let mut pick = None;
         FormRow::new("Profile").show(ui, |ui| {
@@ -1078,8 +1099,8 @@ impl DataSourceDialog {
         });
         match pick {
             Some(Pick::Load) => {
-                let named =
-                    |name: String| self.saved.profiles.iter().find(|saved| saved.name == name);
+                let mut listed = self.saved.profiles.iter().chain(&self.ready);
+                let named = |name: String| listed.find(|saved| saved.name == name);
                 if let Some(profile) = chosen.and_then(named) {
                     self.draft = Draft::saved(&self.saved, profile);
                     self.forget_tests();
@@ -1095,13 +1116,16 @@ impl DataSourceDialog {
             None => {}
         }
 
-        let taken = self.name_taken();
+        let taken = self.name_taken().then(|| match self.ready_draft() {
+            Some(_) => "A ready profile has this name. Rename it to save your own copy.",
+            None => "Another saved profile has this name.",
+        });
         let draft = &mut self.draft;
         FormRow::new("Name").show(ui, |ui| {
             ui.add(TextEdit::singleline(&mut draft.profile.name).desired_width(f32::INFINITY));
         });
-        if taken {
-            ui.error_label("Another saved profile has this name.");
+        if let Some(taken) = taken {
+            ui.error_label(taken);
         }
         let symbols = FormRow::new("Symbols").description(
             "Spelled as the service expects them, separated by commas or line ends. The chart \
@@ -1252,6 +1276,7 @@ impl DataSourceDialog {
             .saved
             .profiles
             .iter()
+            .chain(&self.ready)
             .any(|saved| saved.name == profile.name)
         {
             profile.name = format!("{base} {number}");
@@ -2862,8 +2887,12 @@ mod tests {
         /// when enough of it is to be hit.
         fn visible(&self, node: &Node) -> Option<egui::Pos2> {
             let area = node.rect.expand(2.0);
+            // An empty text, such as a field's cursor, is no node's: a node without a hint, as in
+            // a list, would otherwise take it.
             let own = |(text, rect, _): &&Painted| {
-                (*text == node.text || *text == node.hint) && area.contains(rect.center())
+                !text.is_empty()
+                    && (*text == node.text || *text == node.hint)
+                    && area.contains(rect.center())
             };
             let (_, rect, clip) = self.texts.iter().find(own)?;
             let shown = rect.intersect(*clip);
@@ -3408,6 +3437,72 @@ mod tests {
         click(&ctx, &mut dialog, "Keep keys in this browser");
         click(&ctx, &mut dialog, "Save");
         assert!(!stored(&fresh).contains(SECRET));
+    }
+
+    /// A ready profile is listed above the visitor's profiles, connects as shipped without being
+    /// stored, connects again at the next start, and is saved only as a renamed copy once
+    /// changed. Opening its steps leaves it unchanged.
+    #[test]
+    fn a_ready_profile_connects_as_shipped_and_saves_only_as_a_renamed_copy() {
+        const READY: &str = "Binance spot (public)";
+        let ctx = egui::Context::default();
+        let storage = Arc::new(DemoStorage::default());
+        let local = Saved {
+            asked: true,
+            profiles: vec![profile("http://127.0.0.1:9")],
+            ..Saved::default()
+        };
+        local.save(&storage);
+        let names = || -> Vec<String> {
+            let saved = Saved::load(&storage).profiles.into_iter();
+            saved.map(|profile| profile.name).collect()
+        };
+        let mut dialog = DataSourceDialog::new(storage.clone(), true);
+        dialog.open();
+
+        // 1. The list shows the ready profile first.
+        click(&ctx, &mut dialog, "New profile");
+        let screen = draw(&ctx, &mut dialog, vec![]);
+        let top = |text: &str| {
+            let listed = |node: &&Node| node.text == text && !node.field();
+            screen.nodes.iter().find(listed).map(|node| node.rect.top())
+        };
+        let (ready, local) = (top(READY).unwrap(), top("Local").unwrap());
+        assert!(ready < local, "{ready} {local}");
+
+        // 2. Chosen and its steps opened, it connects as shipped, with no key, and is not stored.
+        click(&ctx, &mut dialog, READY);
+        click(&ctx, &mut dialog, "History");
+        click(&ctx, &mut dialog, "Live");
+        let Some(Outcome::Connect { profile, secrets }) = click(&ctx, &mut dialog, "Connect")
+        else {
+            panic!("the ready profile did not connect");
+        };
+        assert_eq!(*profile, store::ready()[0]);
+        assert!(secrets.is_empty());
+        let saved = Saved::load(&storage);
+        assert!(saved.own);
+        assert_eq!(saved.current.as_deref(), Some(READY));
+        assert_eq!(names(), ["Local"]);
+
+        // 3. The next start connects it again.
+        let mut next = DataSourceDialog::new(storage.clone(), true);
+        let Some(Outcome::Connect { profile, .. }) = next.startup() else {
+            panic!("the start did not connect the ready profile");
+        };
+        assert_eq!(profile.name, READY);
+
+        // 4. Changed, it neither connects nor saves under its name; renamed, it saves.
+        dialog.open();
+        click(&ctx, &mut dialog, "Source");
+        dialog.draft.profile.symbols.push("XRPUSDT".to_owned());
+        wait(&ctx, &mut dialog, "A ready profile has this name");
+        assert!(click(&ctx, &mut dialog, "Connect").is_none());
+        click(&ctx, &mut dialog, "Save");
+        assert_eq!(names(), ["Local"]);
+        dialog.draft.profile.name = "My Binance".to_owned();
+        click(&ctx, &mut dialog, "Save");
+        assert_eq!(names(), ["Local", "My Binance"]);
     }
 
     /// The status line shows the connection error while the stream is down, and no longer once it

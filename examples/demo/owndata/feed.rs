@@ -508,6 +508,9 @@ impl Shared {
                                         // is not the newest bar known.
                                         if !bars::ahead(clock, *timeframe, slot, now) {
                                             live.pushed = live.pushed.max(Some(slot));
+                                            // The trades that follow continue the service's
+                                            // own bar.
+                                            live.aggregator.follow(&bar);
                                         }
                                         pushes.push((None, bar));
                                     }
