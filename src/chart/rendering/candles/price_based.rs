@@ -302,7 +302,6 @@ impl ExecutionRanges {
     /// `clock` holding the first such trade; `trades_revision` identifies `trades` and
     /// `history_revision` `history`. `None` for an invalid range size, one that waits for
     /// history or without a trade, when the range bars come from the chart's OHLC bars alone.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn bars<'a>(
         &mut self,
         params: &ChartTypeParams,
