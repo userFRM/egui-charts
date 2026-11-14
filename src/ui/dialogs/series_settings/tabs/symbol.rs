@@ -162,7 +162,7 @@ impl SymbolTab {
                         ui,
                         "Border",
                         [&mut style.border_up, &mut style.border_down],
-                        body,
+                        body.map(crate::chart::rendering::candles::brick_border),
                     );
                     Self::custom_colors_row(
                         ui,
