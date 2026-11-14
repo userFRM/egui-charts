@@ -72,6 +72,7 @@ pub use crate::model::NodeSensitivity;
 
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FootprintBar {
     /// Bar open from the supplied clock or trade-bar allocation.
     pub time: DateTime<Utc>,

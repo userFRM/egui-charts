@@ -931,11 +931,14 @@ impl Chart {
     }
 
     /// Calendar boundaries selected by the chart, including the resolved exchange or local zone.
+    /// Its days are those that date the bars: bars of a day or longer given without a feed run
+    /// on UTC days under a display zone behind UTC unless they sit at its midnight, as
+    /// [`format_time`](Self::format_time) reads them.
     pub fn bar_clock(&self) -> BarClock {
         let clock = BarClock::new(self.timeframe.unwrap_or_default());
-        let clock = match self.display_timezone() {
-            crate::scales::TimezoneMode::Local => clock.with_local_timezone(),
-            zone => clock.with_timezone(zone.to_tz().unwrap_or(crate::model::TimezoneId::utc())),
+        let clock = match self.calendar_timezone() {
+            Some(zone) => clock.with_timezone(zone),
+            None => clock.with_local_timezone(),
         };
         match self.instrument().and_then(|instrument| {
             Some((

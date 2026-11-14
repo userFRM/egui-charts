@@ -382,10 +382,9 @@ pub fn calendar_history(
                 to = DateTime::from_timestamp_millis(hi).unwrap();
             }
             if from == start && to == end {
-                push(Bar {
-                    time: slot,
-                    ..bar.clone()
-                });
+                let mut whole = bar.clone();
+                whole.time = slot;
+                push(whole);
             } else {
                 let a = (from - start).num_milliseconds();
                 let b = (to - start).num_milliseconds();

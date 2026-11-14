@@ -134,6 +134,19 @@ impl eframe::App for ExampleApp {
             let window = web_sys::window().unwrap();
             let document = window.document().unwrap();
             let root = document.document_element().unwrap();
+            if self.dark.is_none() {
+                // Wake when the guide switches the theme, instead of polling for it.
+                let ctx = ui.ctx().clone();
+                let wake = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+                    ctx.request_repaint();
+                });
+                let options = web_sys::MutationObserverInit::new();
+                options.set_attribute_filter(&vec![String::from("data-theme")].into());
+                web_sys::MutationObserver::new(wake.as_ref().unchecked_ref())
+                    .and_then(|observer| observer.observe_with_options(&root, &options))
+                    .unwrap();
+                wake.forget();
+            }
             let dark = root.get_attribute("data-theme").as_deref() != Some("light");
             if self.dark != Some(dark) {
                 self.dark = Some(dark);
@@ -157,9 +170,8 @@ impl eframe::App for ExampleApp {
             if canvas.width() != width || canvas.height() != height {
                 canvas.set_width(width);
                 canvas.set_height(height);
+                ui.ctx().request_repaint();
             }
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(250));
         }
         egui::CentralPanel::default().show(ui, |ui| {
             match &mut self.scene {
