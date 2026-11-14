@@ -525,10 +525,13 @@ impl<'a> Fields<'a> {
 
 /// The Test of the History step and what it found.
 struct HistoryTest {
-    /// Where the answer of the request in flight arrives, and the endpoint it was sent to.
-    pending: Option<(Answer, String)>,
+    /// Where the answer of the request in flight arrives, the endpoint it was sent to and its
+    /// symbol.
+    pending: Option<(Answer, String, String)>,
     /// The endpoint of the last answer.
     endpoint: String,
+    /// The symbol of the last sample. A key of the rows path can name it.
+    symbol: String,
     /// Why the last Test gave no sample.
     error: Option<String>,
     /// Whether the last Test proposed the mapping.
@@ -550,6 +553,7 @@ impl Default for HistoryTest {
         Self {
             pending: None,
             endpoint: String::new(),
+            symbol: String::new(),
             error: None,
             proposed: false,
             sample: None,
@@ -1310,8 +1314,9 @@ impl DataSourceDialog {
             ui.add(field.desired_width(f32::INFINITY));
         });
         ui.hint_label(format!(
-            "Placeholders: {{symbol}}, {{interval}}, {{from}}, {{to}}, {{limit}}{keys}. A key \
-             typed here instead of as {{name}} is saved and exported with the profile."
+            "Placeholders: {{symbol}}, {{symbol_lower}}, {{interval}}, {{from}}, {{to}}, \
+             {{limit}}{keys}. A key typed here instead of as {{name}} is saved and exported with \
+             the profile."
         ));
         FormRow::new("Headers").show(ui, |ui| header_rows(ui, &mut history.headers));
         let body = FormRow::new("Body").description(
@@ -1383,7 +1388,7 @@ impl DataSourceDialog {
             Ok(request) => {
                 let answer = Answer::default();
                 let shown = conceal(endpoint(&request.url), &secrets);
-                test.pending = Some((answer.clone(), shown));
+                test.pending = Some((answer.clone(), shown, symbol.clone()));
                 let repaint = ctx.clone();
                 http::fetch(request, move |result| {
                     // A reason can repeat the endpoint, and a key in its path.
@@ -1401,13 +1406,14 @@ impl DataSourceDialog {
     /// Takes the answer of the history Test when it has arrived.
     fn poll_history(&mut self) {
         let test = &mut self.history;
-        let Some((answer, endpoint)) = &test.pending else {
+        let Some((answer, endpoint, symbol)) = &test.pending else {
             return;
         };
         let Some(result) = answer.lock().unwrap_or_else(PoisonError::into_inner).take() else {
             return;
         };
         test.endpoint.clone_from(endpoint);
+        let symbol = symbol.clone();
         test.pending = None;
         let failed = |failure: Failure| format!("{}: {failure}", test.endpoint);
         let body = match result {
@@ -1436,12 +1442,14 @@ impl DataSourceDialog {
             test.slot = Fields::bar(&mut history.bar).next(Slot::Rows);
         }
         test.sample = Some(sample);
+        test.symbol = symbol;
         test.samples += 1;
     }
 
     /// The preview of the sample, its two trees and the slots of the mapping.
     fn history_mapping(&mut self, ui: &mut egui::Ui) {
         let zone = self.draft.profile.time_zone.clone();
+        let symbol = self.history.symbol.clone();
         let timeframe = self
             .target()
             .map_or(Timeframe::Min1, |(_, timeframe)| timeframe);
@@ -1458,14 +1466,22 @@ impl DataSourceDialog {
             };
             if !test.preview.as_ref().is_some_and(fresh) {
                 let clock = BarClock::new(timeframe).with_timezone(zone.clone());
-                let rows = shape::rows(sample, &history.rows);
+                let rows = shape::rows(sample, &history.rows.for_symbol(&symbol));
                 test.preview = Some(Preview {
                     history: history.clone(),
                     zone: zone.clone(),
                     timeframe,
                     samples: test.samples,
                     row: rows.ok().and_then(|rows| rows.into_iter().next()),
-                    reading: feed::read(sample, history, &zone, &clock, timeframe, Utc::now()),
+                    reading: feed::read(
+                        sample,
+                        history,
+                        &symbol,
+                        &zone,
+                        &clock,
+                        timeframe,
+                        Utc::now(),
+                    ),
                 });
             }
         }
@@ -1511,6 +1527,8 @@ impl DataSourceDialog {
             history.bar = bar;
         }
 
+        // The place of the rows in the sample, for the marks and the slots.
+        let found = history.rows.for_symbol(&symbol);
         let row = test
             .preview
             .as_ref()
@@ -1518,10 +1536,10 @@ impl DataSourceDialog {
         let mut clicked_response = None;
         let mut clicked_row = None;
         if let Some(sample) = &test.sample {
-            let mut response = vec![(history.rows.path.clone(), Slot::Rows.label())];
+            let mut response = vec![(found.path.clone(), Slot::Rows.label())];
             if let Layout::Arrays {
                 header: Some(header),
-            } = &history.rows.layout
+            } = &found.layout
             {
                 response.push((header.clone(), Slot::Header.label()));
             }
@@ -1556,7 +1574,7 @@ impl DataSourceDialog {
                 ui,
                 Slot::Rows,
                 &mut test.slot,
-                &history.rows.path,
+                &found.path,
                 true,
                 test.sample.as_ref(),
             );
@@ -1567,7 +1585,7 @@ impl DataSourceDialog {
                 ui.weak(layout_label(&history.rows.layout));
             });
             ui.end_row();
-            if let Layout::Arrays { header } = &history.rows.layout {
+            if let Layout::Arrays { header } = &found.layout {
                 let path = header.clone().unwrap_or_default();
                 slot_cells(
                     ui,
@@ -1643,8 +1661,8 @@ impl DataSourceDialog {
         ui.hint_label(format!(
             "A browser sends no headers when it opens a WebSocket. Write {{name}} in the URL, \
              in a subprotocol or in a connect message to send the key of that name there. \
-             Placeholders: {{symbol}}, {{interval}}{keys}. A key typed here instead of as \
-             {{name}} is saved and exported with the profile."
+             Placeholders: {{symbol}}, {{symbol_lower}}, {{interval}}{keys}. A key typed here \
+             instead of as {{name}} is saved and exported with the profile."
         ));
         let protocols = FormRow::new("Subprotocols").description(
             "Offer one only when the service answers with it: a connection that offers \
@@ -1696,11 +1714,7 @@ impl DataSourceDialog {
             return;
         }
         let interval = profile.service_interval(timeframe).unwrap_or_default();
-        let mut values = vec![
-            ("symbol".to_owned(), symbol),
-            ("interval".to_owned(), interval.to_owned()),
-        ];
-        values.extend(secrets.iter().cloned());
+        let values = profile::stream_values(&symbol, interval, &secrets);
         let borrowed: Vec<(&str, &str)> = values
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))

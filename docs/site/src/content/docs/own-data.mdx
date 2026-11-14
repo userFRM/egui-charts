@@ -61,6 +61,7 @@ The address is a template. The demo fills these placeholders:
 | Placeholder | Filled with |
 | --- | --- |
 | `{symbol}` | The symbol on the chart |
+| `{symbol_lower}` | The symbol on the chart in lower case, such as `btcusdt` for `BTCUSDT` |
 | `{interval}` | The text of the interval table for the chart's interval |
 | `{from}` | The start of the range asked for |
 | `{to}` | The end of the range asked for |
@@ -117,7 +118,8 @@ page size can leave a hole. For sparse data a larger page size widens the window
 ### Response shapes
 
 A response is read as one of four layouts. Rows may sit at the root or under a path such as
-`data.candles`.
+`data.candles`. In a profile file, a key of that path can be `{symbol}` or `{symbol_lower}`,
+for a service that files the rows under the symbol, such as `["result", "{symbol}"]`.
 
 A list of objects, with fields named by their keys:
 
@@ -198,8 +200,8 @@ service stamps such bars at local midnight, and leave it at UTC when it stamps t
 
 ### The connection
 
-The address starts with `ws://` or `wss://` and takes `{symbol}`, `{interval}` and the
-names of the keys. Offer a subprotocol only when the service answers with it: a connection
+The address starts with `ws://` or `wss://` and takes `{symbol}`, `{symbol_lower}`, `{interval}`
+and the names of the keys. Offer a subprotocol only when the service answers with it: a connection
 that offers subprotocols ends when the server selects none.
 
 Connect messages are sent in their order every time the socket opens: the login first, then
