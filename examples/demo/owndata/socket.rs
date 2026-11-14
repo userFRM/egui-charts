@@ -52,9 +52,22 @@ mod native {
     /// How long a read waits for data before the thread looks at its queue and its flag again.
     const TICK: Duration = Duration::from_millis(250);
 
-    /// A plain or a TLS stream behind one type.
-    trait Wire: Read + Write {}
-    impl<T: Read + Write> Wire for T {}
+    /// A plain or a TLS stream behind one type, and the TCP stream under it.
+    trait Wire: Read + Write {
+        fn tcp(&self) -> &TcpStream;
+    }
+
+    impl Wire for TcpStream {
+        fn tcp(&self) -> &TcpStream {
+            self
+        }
+    }
+
+    impl Wire for rustls::StreamOwned<rustls::ClientConnection, TcpStream> {
+        fn tcp(&self) -> &TcpStream {
+            self.get_ref()
+        }
+    }
 
     /// A connection that is open or being opened. Dropping it closes the connection without
     /// waiting; no event is started afterwards.
@@ -174,7 +187,6 @@ mod native {
             // Dropped while connecting: nothing more is sent, and this reason is never reported.
             return Err(String::new());
         }
-        let tick = tcp.try_clone().map_err(cannot)?;
         let stream: Box<dyn Wire> = if tls {
             let roots = rustls::RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -209,7 +221,13 @@ mod native {
         })?;
         // From here a read that times out is the idle tick of the loop. That is safe: the frame
         // reader keeps a partly read frame for the next call, and so does the TLS layer.
-        tick.set_read_timeout(Some(TICK)).map_err(lost)?;
+        // It is set on the stream that reads, not on a clone of it: set through a clone, the
+        // reads on Windows went on waiting for `PATIENCE`.
+        socket
+            .get_ref()
+            .tcp()
+            .set_read_timeout(Some(TICK))
+            .map_err(lost)?;
         Ok(socket)
     }
 
