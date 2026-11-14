@@ -212,6 +212,37 @@ fn window(start: i64, len: i64) -> Vec<Bar> {
     (start..start + len).map(|i| bar(i * 60, 10.0)).collect()
 }
 
+/// The bar setters report whether `series` holds bars, not whether the call changed them.
+#[test]
+fn bar_setters_report_whether_the_series_holds_bars() {
+    let mut chart = Chart::new(BarData::from_bars(vec![bar(0, 10.0), bar(60, 11.0)]));
+    let added = chart.add_series(SeriesOptions::default());
+    let removed = chart.add_series(SeriesOptions::default());
+    assert!(chart.remove_series(removed));
+    let study = chart.add_indicator(Box::new(SMA::new(2)));
+    for (series, holds_bars) in [
+        (SeriesId::MAIN, true),
+        (added, true),
+        (removed, false),
+        (study, false),
+    ] {
+        let results = [
+            chart.set_data(series, vec![bar(0, 10.0)]),
+            chart.update(series, bar(60, 11.0)),
+            chart.set_bar_limit(series, NonZeroUsize::new(10)),
+            chart.set_markers(series, Vec::new()),
+            chart.set_marker_options(series, MarkerOptions::default()),
+            chart.set_price_lines(series, Vec::new()),
+            chart.set_change_markers(series, None),
+        ];
+        assert_eq!(results, [holds_bars; 7], "{series:?}");
+    }
+    // A negative volume is invalid, so the bar is dropped.
+    let mut dropped = bar(120, 12.0);
+    dropped.volume = -1.0;
+    assert!(chart.update(SeriesId::MAIN, dropped));
+}
+
 /// Streaming keeps the configured live offset, or the same scrolled-back element.
 #[test]
 fn appended_bars_keep_the_view() {
@@ -711,9 +742,15 @@ fn updates_reach_bars_studies_and_revision() {
         let revision = chart.state.revision();
         for action in actions {
             match action {
-                Update(bar) => chart.update(SeriesId::MAIN, bar),
-                SetData(bars) => chart.set_data(SeriesId::MAIN, bars),
-                Limit(count) => chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(count)),
+                Update(bar) => {
+                    chart.update(SeriesId::MAIN, bar);
+                }
+                SetData(bars) => {
+                    chart.set_data(SeriesId::MAIN, bars);
+                }
+                Limit(count) => {
+                    chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(count));
+                }
                 RemoveOldest(count) => {
                     assert_eq!(
                         chart.remove_oldest_bars(SeriesId::MAIN, count),

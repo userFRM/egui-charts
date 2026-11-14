@@ -1013,23 +1013,16 @@ mod tests {
                 crate::sampledata::us_equity_session(),
                 false,
             );
+        let mut shifted = daily.clone();
+        shifted.time = "2026-11-02T05:00:00Z".parse().unwrap();
         assert_eq!(
             crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
-            vec![Bar {
-                time: "2026-11-02T05:00:00Z".parse().unwrap(),
-                ..daily.clone()
-            }]
+            vec![shifted]
         );
+        let mut sunday = daily;
+        sunday.time = "2026-11-01T00:00:00Z".parse().unwrap();
         assert!(
-            crate::sampledata::calendar_history(
-                &[Bar {
-                    time: "2026-11-01T00:00:00Z".parse().unwrap(),
-                    ..daily
-                }],
-                &[],
-                clock
-            )
-            .is_empty(),
+            crate::sampledata::calendar_history(&[sunday], &[], clock).is_empty(),
             "a shifted stock calendar must not invent Sunday bars"
         );
         let feed = Arc::new(LiveFeed::new("SAMPLE", now));

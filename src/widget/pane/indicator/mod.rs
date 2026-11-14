@@ -100,6 +100,15 @@ pub struct IndicatorPane {
     pub(super) text_color: Option<egui::Color32>,
 }
 
+impl std::fmt::Debug for IndicatorPane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorPane")
+            .field("config", &self.config)
+            .field("overlay", &self.overlay)
+            .finish_non_exhaustive()
+    }
+}
+
 impl IndicatorPane {
     /// Create a new indicator panel with custom configuration
     pub fn with_config(config: IndicatorPaneConfig) -> Self {

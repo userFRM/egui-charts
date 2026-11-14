@@ -59,7 +59,7 @@ use crate::studies::IndicatorValues;
 /// fresh.calculate(&bars);
 /// assert_eq!(format!("{:?}", study.values()), format!("{:?}", fresh.values()));
 /// ```
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Stepper<S> {
     state: S,
     before_last: S,

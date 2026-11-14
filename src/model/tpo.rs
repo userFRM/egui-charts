@@ -40,6 +40,7 @@ pub struct TPOLetter {
 /// Contains all TPO letters, statistical levels (POC, value area,
 /// initial balance), and structural flags (poor high/low, single prints).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TPOProfile {
     /// Session timestamp
     pub session_date: DateTime<Utc>,
@@ -89,6 +90,7 @@ pub struct TPOProfile {
 
 /// Configuration for TPO chart generation and rendering.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TPOConfig {
     /// Row height for price grouping, such as 0.25 for one ES tick or 1.0 for four. With
     /// `instrument_tick` it rounds up to whole ticks. [`to_tpo_profiles`] widens it to bound the

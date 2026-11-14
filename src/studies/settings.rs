@@ -302,6 +302,7 @@ impl StudyIntervalRange {
 
 /// Host-serializable presentation settings of an applied study.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct StudySettings {
     /// Show values in the status line when the chart enables study values. Defaults to true.
     #[serde(default = "enabled_by_default")]
@@ -369,13 +370,39 @@ pub struct StudySettings {
     pub gradients: Vec<GradientStyle>,
 }
 
+impl Default for StudySettings {
+    /// No plot styles, the chart's default precision and no hidden intervals, with the status
+    /// line values and the pane tint shown, as older saved settings restore them.
+    fn default() -> Self {
+        Self {
+            show_legend_values: true,
+            user_edit_enabled: None,
+            help_url: None,
+            plots: Vec::new(),
+            precision: None,
+            hidden_intervals: Vec::new(),
+            interval_range: StudyIntervalRange::default(),
+            levels: Vec::new(),
+            fill_between_levels: false,
+            level_fill_color: Color32::TRANSPARENT,
+            untagged_plots: Vec::new(),
+            price_line_plots: Vec::new(),
+            plot_variants: Vec::new(),
+            background: None,
+            background_visible: true,
+            fills: Vec::new(),
+            gradients: Vec::new(),
+        }
+    }
+}
+
 fn enabled_by_default() -> bool {
     true
 }
 
 /// An owned settings and input snapshot without calculated study data.
 /// Used by chart history; restoring it requires recalculation on the current bars.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StudySettingsSnapshot {
     inputs: Vec<(String, InputValue)>,
     pub(crate) settings: StudySettings,
@@ -517,6 +544,15 @@ pub struct ConfiguredStudy {
 struct Kept {
     values: IndicatorValues,
     shift: usize,
+}
+
+impl std::fmt::Debug for ConfiguredStudy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfiguredStudy")
+            .field("settings", &self.settings)
+            .field("timeframe", &self.timeframe)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ConfiguredStudy {
@@ -2530,5 +2566,15 @@ mod tests {
         study.apply_settings(&[], settings).unwrap();
         study.snapshot_settings().restore(&mut study).unwrap();
         assert_eq!(study.fills()[0].color, own);
+    }
+
+    /// `StudySettings::default()`, where an `Indicator::settings` override starts, holds what
+    /// settings saved with only the original fields restore, so it shows the status line values
+    /// and the pane tint.
+    #[test]
+    fn default_settings_match_settings_saved_without_the_newer_fields() {
+        let saved: StudySettings =
+            serde_json::from_str(r#"{"plots":[],"precision":null,"hidden_intervals":[]}"#).unwrap();
+        assert_eq!(StudySettings::default(), saved);
     }
 }

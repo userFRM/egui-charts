@@ -14,7 +14,7 @@ use egui::Color32;
 /// Connected charts request its history and live updates through the datafeed. Hosts
 /// supplying study data directly convert [`crate::data::MetricPoint`] into [`Bar`]
 /// and pass them to `Chart::set_study_data` with this study's request.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MetricStudy {
     metric: MetricSeries,
     values: IndicatorValues,

@@ -16,6 +16,7 @@ use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 /// Manages selection state, handle dragging, and hit testing. Unlike
 /// [`DrawingManager`](crate::drawings::DrawingManager) which coordinates all
 /// services, `DrawingInteraction` focuses purely on pointer-based interaction.
+#[derive(Debug)]
 pub struct DrawingInteraction {
     /// Currently selected drawing ID, or `None`.
     pub sel_drawing: Option<usize>,

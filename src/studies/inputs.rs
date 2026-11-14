@@ -30,6 +30,7 @@ pub enum InputKind {
 
 /// An editable input, with a stable study-local id and its current value.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct StudyInput {
     /// Id passed to [`Indicator::set_input`](super::Indicator::set_input).
     pub id: String,
