@@ -420,7 +420,7 @@ impl ChartSettingsState {
                     reason: error,
                 });
             }
-            chart.set_chart_type_params(params.clone());
+            chart.apply_chart_type_params(params.clone());
         }
         if let Some(source) = self.price_source {
             chart.config_mut().price_source = source;
@@ -1234,7 +1234,8 @@ mod tests {
 
     /// The state read from a chart applies back without changing its configuration, so pressing
     /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
-    /// left as shown while the one it fell back to changes keeps what it showed.
+    /// left as shown while the one it fell back to changes keeps what it showed. A size resolved
+    /// from history keeps its value until its method is edited.
     #[test]
     fn unedited_settings_apply_records_no_undo() {
         let bars = || {
@@ -1274,6 +1275,41 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // An ATR(14) reversal of 2 on 14 bars with a true range of 2 stays through a streamed
+        // bar with a true range of 16 and an unedited apply, which would make it
+        // (13 * 2 + 16) / 14 = 3. An edited period resolves again: ATR(15) seeds 44 / 15.
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
+        let bar = |minute, high| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+            Bar::new(time, 100.0, high, 99.0, 100.0, 0.0)
+        };
+        let atr = |period| BoxSizeMethod::Atr {
+            period,
+            multiplier: 1.0,
+        };
+        let mut chart = Chart::new(BarData::from_bars((0..14).map(|i| bar(i, 101.0)).collect()));
+        chart.set_chart_type(ChartType::Kagi);
+        chart.set_chart_type_params(ChartTypeParams {
+            kagi_size_method: atr(14),
+            ..Default::default()
+        });
+        chart.update(crate::widget::SeriesId::MAIN, bar(14, 115.0));
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        assert!(!chart.can_undo());
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings
+            .chart_type_params
+            .as_mut()
+            .unwrap()
+            .kagi_size_method = atr(15);
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert!((chart.chart_type_params().kagi_reversal - 44.0 / 15.0).abs() < 1e-12);
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the

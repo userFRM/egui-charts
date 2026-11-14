@@ -842,18 +842,23 @@ impl ChartTypeParams {
         ]
     }
 
+    /// Sizes in Renko, Kagi, Range, Point and Figure order.
+    #[cfg(feature = "widget")]
+    pub(crate) fn sizes_mut(&mut self) -> [&mut f64; 4] {
+        [
+            &mut self.renko_brick_size,
+            &mut self.kagi_reversal,
+            &mut self.range_size,
+            &mut self.pnf_box_size,
+        ]
+    }
+
     /// Resolve pending sizes only when their history is ready. Each successful calculation is
     /// frozen until explicitly armed again; prepending history and live corrections keep it.
     #[cfg(feature = "widget")]
     pub(crate) fn resolve_sizes(&mut self, bars: &[super::Bar], pending: &mut [bool; 4]) {
         let methods = self.size_methods();
-        let sizes = [
-            &mut self.renko_brick_size,
-            &mut self.kagi_reversal,
-            &mut self.range_size,
-            &mut self.pnf_box_size,
-        ];
-        for ((method, size), pending) in methods.into_iter().zip(sizes).zip(pending) {
+        for ((method, size), pending) in methods.into_iter().zip(self.sizes_mut()).zip(pending) {
             if !*pending {
                 continue;
             }
