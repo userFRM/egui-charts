@@ -11,6 +11,7 @@ use egui::{Color32, Pos2, Rect, Response};
 /// for common indicators via [`IndicatorPaneConfig::rsi`],
 /// [`IndicatorPaneConfig::macd`], and [`IndicatorPaneConfig::stochastic`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct IndicatorPaneConfig {
     /// Panel height in egui logical points.
     pub height: f32,
@@ -211,6 +212,7 @@ impl IndicatorCoordParams {
 /// Returned by [`super::IndicatorPane::show_aligned_interactive`]. Besides the rects
 /// and y-axis range used for click hit-testing, it carries the [`Response`] for
 /// the legend's close "x" so the host can offer one-click pane removal.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct PaneInteraction {
     /// Full panel rect, including the y-axis label gutter.

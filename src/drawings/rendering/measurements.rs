@@ -809,6 +809,27 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
+    /// A pip count takes the decimals one tick has in pips: a 0.01 tick is a tenth of a 0.1 pip,
+    /// so 2345.67 to 2357.89 is +122.2 pips, although 0.01 / 0.1 is 0.09999999999999999 in binary.
+    /// A 0.00001 tick is a tenth of a 0.0001 pip: 0.00123 is +12.3 pips and 0.0012 is +12 pips.
+    #[test]
+    fn pip_readout_keeps_the_tick_precision_of_a_pip() {
+        for (tick, pip, change, want) in [
+            (0.01, 0.1, 2357.89 - 2345.67, "+122.2 pips"),
+            (0.00001, 0.0001, 0.00123, "+12.3 pips"),
+            (0.00001, 0.0001, 0.0012, "+12 pips"),
+        ] {
+            let instrument = crate::model::Instrument::new("TEST")
+                .with_tick_size(tick)
+                .with_pip_size(pip);
+            assert_eq!(
+                unit_change_text(change, Some(&instrument), false).as_deref(),
+                Some(want),
+                "{tick}, {pip}, {change}"
+            );
+        }
+    }
+
     /// A 30-by-40 screen segment is 50 points, or five 10-point periods, at atan(4/3).
     /// Raw 100 to 200 is +100 (+100%), 400 quarter-point ticks or 200 half-point pips.
     /// A logarithmic midpoint is sqrt(100*200), not the arithmetic price midpoint.

@@ -816,17 +816,14 @@ mod tests {
                 show_economic_events: true,
                 ..Default::default()
             });
+        let mut hidden = ToolAvailability::default();
+        hidden.visible = false;
+        hidden.enabled = false;
         terminal
             .chart_mut()
             .drawings_mut()
             .registry
-            .set_availability(
-                DrawingToolType::TrendLine,
-                ToolAvailability {
-                    visible: false,
-                    enabled: false,
-                },
-            );
+            .set_availability(DrawingToolType::TrendLine, hidden);
         let mut drawing = Drawing::new(7, DrawingToolType::HorizontalLine);
         drawing.completed = true;
         drawing.chart_points.push(ChartPoint::new(10.0, 42.0));
