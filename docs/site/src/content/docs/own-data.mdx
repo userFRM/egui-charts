@@ -46,8 +46,12 @@ offers:
   from bars. One step serves every symbol of the profile.
 - **Keys.** A name and a value. Write the name in braces, such as `{key}`, where the value
   belongs in an address, a header, a body or a message. Values are sent only to the
-  endpoints of the profile. *Keep keys in this browser* is off unless you tick it; a kept
-  key is plain text in the browser's storage for the site.
+  endpoints of the profile. *Keep keys in this browser*, *Keep keys on this device* in the
+  native demo, is off unless you tick it. A kept key is plain text in the browser's storage
+  for the site or, in the native demo, in its settings file `app.ron`: in
+  `~/.local/share/egui-chartsdemo` on Linux (under `$XDG_DATA_HOME` when that is set),
+  `~/Library/Application Support/egui-charts-demo` on macOS and
+  `%APPDATA%\egui-charts demo\data` on Windows.
 
 A key typed straight into an address, a header or a message, instead of as a name in
 braces, is part of the profile. It is saved and exported with it.
@@ -180,7 +184,9 @@ profile's zone and in UTC. A wrong unit shows there before anything is charted.
 | A date and a time of day | A wall time in the profile's zone |
 
 The time of day is milliseconds since midnight, seconds since midnight or text such as
-`09:30:00`. It is a reading of the wall clock: 09:30 is the same value on every day of the
+`09:30:00`. A click on the field picks the reading its value has: text that is a time of
+day, else seconds below 86,400, else milliseconds. The choice beside the field changes it.
+It is a reading of the wall clock: 09:30 is the same value on every day of the
 year. When clocks go back, a wall time that occurs twice is its first occurrence. When
 clocks go forward, a wall time that does not occur is the moment of the change.
 
@@ -215,8 +221,9 @@ the subscribe message.
 
 A keep-alive message is sent at its period for as long as the socket is open.
 
-A browser sends no headers when it opens a WebSocket, so a key travels in one of three
-places: the address, a subprotocol or a connect message.
+A browser sends no headers when it opens a WebSocket, and the native demo sends none
+either, so a key travels in one of three places: the address, a subprotocol or a connect
+message.
 
 - The subscribe message is sent right after the login, without waiting for its answer.
 - A hidden browser tab slows timers, so a keep-alive period under a minute is not kept
@@ -299,10 +306,11 @@ or interval asks history again and moves the subscription.
 
 ## Profiles
 
-A profile is saved in the browser by *Save* and by *Connect*. *Export* shows the whole
-file before it saves it; the file holds no key value. In another browser, *Import* the
-file, enter the keys and *Connect*. An imported profile never replaces a saved one, and a
-file written by a newer version of the demo is refused.
+A profile is saved by *Save* and by *Connect*, where the keys are kept (see *Keys* above).
+*Export* shows the whole file before it saves it; the file holds no key value. In another
+browser or on another device, *Import* the file, enter the keys and *Connect*. An imported
+profile never replaces a saved one, and a file written by a newer version of the demo is
+refused.
 
 ## What the browser requires
 
