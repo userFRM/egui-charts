@@ -619,8 +619,17 @@ pub struct ChartTypeParams {
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
     /// imbalance zones. None follows the buy or sell colour.
     pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
-    /// Footprint: instrument ticks per row; zero groups automatically with zoom.
+    /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
+    /// `footprint_row_atr` use it only until the chart holds a complete bar.
     pub footprint_row_ticks: u32,
+    /// Footprint: size rows from the average true range of the last `footprint_row_atr_length`
+    /// complete bars the chart holds, not the bars in view, so panning, zooming and loading
+    /// older history keep them. A row is a fifth of the average, in whole instrument ticks and
+    /// at least one. The newest bar, which may still be forming, is left out.
+    pub footprint_row_atr: bool,
+    /// Footprint: length of the average true range that sizes rows, 1 to 200; with fewer
+    /// complete bars the average takes as many as there are.
+    pub footprint_row_atr_length: u32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
     /// settings, under [`FootprintColor::VolumeSteps`].
     pub footprint_imbalance: bool,
@@ -762,6 +771,8 @@ impl Default for ChartTypeParams {
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
+            footprint_row_atr: false,
+            footprint_row_atr_length: 14,
             footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
@@ -906,6 +917,41 @@ impl ChartTypeParams {
         }
     }
 
+    /// Instrument ticks per footprint row on `bars` with instrument ticks of `tick`: from the
+    /// average true range of their last complete bars when `footprint_row_atr` chooses it and
+    /// there is one, otherwise `footprint_row_ticks`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn footprint_row_size(&self, bars: &[super::Bar], tick: f64) -> u32 {
+        if !self.footprint_row_atr {
+            return self.footprint_row_ticks;
+        }
+        // The newest bar may still be forming. Of the bars before it only the last `length`
+        // count, so older history that a pan loads leaves the rows as they are. Whitespace bars
+        // have no range, and `BoxSizeMethod::resolve` skips them too.
+        let length = self.footprint_row_atr_length.clamp(1, 200) as usize;
+        let mut loaded = (0..bars.len())
+            .rev()
+            .filter(|&at| !bars[at].is_whitespace());
+        let newest = loaded.next().unwrap_or(0);
+        let complete = loaded.take(length);
+        let first = complete.clone().last().unwrap_or(newest);
+        let count = complete.count();
+        let average = super::BoxSizeMethod::Atr {
+            period: count,
+            multiplier: 0.2,
+        };
+        match average
+            .resolve(0.0, &bars[first..newest])
+            .map(|size| size / tick)
+            .filter(|ticks| ticks.is_finite())
+        {
+            Some(ticks) => ticks.round().clamp(1.0, 1_000_000.0) as u32,
+            // The chart holds valid bars only, so complete bars without a size never moved.
+            None if count > 0 => 1,
+            None => self.footprint_row_ticks,
+        }
+    }
+
     /// Why `chart_type` cannot be drawn with these parameters, if it cannot. A size derived from
     /// history is judged by its method, since it is 0 while it waits for history.
     #[cfg(feature = "widget")]
@@ -969,6 +1015,7 @@ mod tests {
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
             "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
@@ -1019,6 +1066,8 @@ mod tests {
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
+        assert_eq!(legacy["footprint_row_atr"], false);
+        assert_eq!(legacy["footprint_row_atr_length"], 14);
         assert_eq!(legacy["tpo_letters"], false);
         assert_eq!(
             legacy["footprint_colors"],
@@ -1048,6 +1097,46 @@ mod tests {
         ] {
             assert_eq!(legacy["profile"][field], false);
         }
+    }
+
+    /// Rows from the average true range take the last `footprint_row_atr_length` complete bars,
+    /// so older bars that a pan loads leave them as they are. Every bar closes at 100 with its
+    /// range centred on it, so its true range is its own range. At length 3 the three bars of
+    /// 10 before the newest, whose 50 may still be forming, average 10, and a fifth of that is 2
+    /// ticks, also with bars of 100 loaded before them. Bars that never moved have no positive
+    /// average and get rows of one tick; with no complete bar the ticks per row apply.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn footprint_rows_average_the_last_complete_bars() {
+        use crate::model::Bar;
+        use chrono::{Duration, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2024, 3, 5, 9, 30, 0).unwrap();
+        let bar = |minute, range: f64| {
+            let (time, half) = (start + Duration::minutes(minute), range / 2.0);
+            Bar::new(time, 100.0, 100.0 + half, 100.0 - half, 100.0, 1.0)
+        };
+        let recent = [
+            bar(3, 10.0),
+            bar(4, 10.0),
+            bar(5, 10.0),
+            Bar::whitespace(start + Duration::minutes(6)),
+            bar(7, 10.0),
+            bar(8, 50.0),
+        ];
+        let paged: Vec<_> = (0..3)
+            .map(|minute| bar(minute, 100.0))
+            .chain(recent.clone())
+            .collect();
+        let flat: Vec<_> = (0..4).map(|minute| bar(minute, 0.0)).collect();
+        let params = ChartTypeParams {
+            footprint_row_ticks: 4,
+            footprint_row_atr: true,
+            footprint_row_atr_length: 3,
+            ..Default::default()
+        };
+        let rows = [&recent[..], &paged[..], &flat[..], &recent[5..]]
+            .map(|bars| params.footprint_row_size(bars, 1.0));
+        assert_eq!(rows, [2, 2, 1, 4], "recent, paged, flat, newest only");
     }
 
     /// A zone chosen from the session zone list is listed once when the list is opened again,
