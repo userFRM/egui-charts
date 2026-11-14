@@ -255,11 +255,25 @@ impl StudyTemplate {
                     .inputs
                     .push(("auto_interval".to_owned(), InputValue::Toggle(false)));
             }
-            // A majority rule drew the signed direction before it could report the percentage.
-            "MajRule" if !has("mode") => {
-                template
-                    .inputs
-                    .push(("mode".to_owned(), InputValue::Choice(1)));
+            // A majority rule drew the signed direction before it could report the percentage, and
+            // no guide before it opened with one at 50; hidden, the guide leaves the pane as saved.
+            "MajRule" if !has("mode") || self.settings.levels.is_empty() => {
+                if !has("mode") {
+                    template
+                        .inputs
+                        .push(("mode".to_owned(), InputValue::Choice(1)));
+                }
+                if self.settings.levels.is_empty() {
+                    let declared = crate::studies::MajorityRule::default();
+                    let (levels, ..) = super::settings::declared_levels(&declared);
+                    template.settings.levels = levels
+                        .into_iter()
+                        .map(|level| crate::studies::LevelStyle {
+                            visible: false,
+                            ..level
+                        })
+                        .collect();
+                }
             }
             // An RSI drew no average and no middle line before it opened with both; the hidden
             // level keeps the styles saved for the other two and stays within their band. Its
@@ -866,7 +880,7 @@ mod tests {
     /// An RSI, a VWAP, an auto anchored VWAP and a Correlation Coefficient saved before their
     /// defaults gained an average, bands, and an area with guides at its bounds restore with the
     /// plots and guides they had, and a Rank Correlation saved before it had an average, levels
-    /// and a filled band restores without them.
+    /// and a filled band, and a Majority Rule saved before its guide at 50, restore without them.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -1029,6 +1043,19 @@ mod tests {
         let current = StudyTemplate::from_study(&RankCorrelationIndex::default());
         assert_eq!(drawn(&current), (2, (3, 3), true));
 
+        // A Majority Rule saved before its guide at 50 draws none, one saved since draws it, and
+        // one in direction mode has none to draw.
+        let current = StudyTemplate::from_study(&crate::studies::MajorityRule::default());
+        let mut older = current.clone();
+        older.settings.levels.clear();
+        assert_eq!(drawn(&older), (1, (1, 0), false));
+        assert_eq!(drawn(&current), (1, (1, 1), false));
+        let direction = crate::studies::MajorityRule::default()
+            .with_mode(crate::studies::MajorityMode::Direction);
+        assert_eq!(
+            drawn(&StudyTemplate::from_study(&direction)),
+            (1, (0, 0), false)
+        );
         // A Technical Ratings as the release before its table inputs saved it, its fast length
         // edited to 20 and its summary to orange: it rates every vote, requests no other interval
         // and draws its table where and as it did.
