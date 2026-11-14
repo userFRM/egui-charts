@@ -122,6 +122,7 @@ pub use drawings::{SymbolDrawing, SymbolDrawings};
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
+#[non_exhaustive]
 pub enum ChartLayoutMode {
     /// One chart.
     #[default]
@@ -916,6 +917,7 @@ impl LayoutEditLink {
 
 /// Independent synchronization switches within each layout group.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ChartSyncOptions {
     /// Synchronize scrolling and zooming using UTC plot edges.
     pub sync_time_axis: bool,
@@ -1007,6 +1009,18 @@ pub struct ChartLayout {
     previous_preset: Option<(ChartLayoutMode, usize)>,
     sizing: SizingState,
     edits: LayoutEdits,
+}
+
+impl std::fmt::Debug for ChartLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartLayout")
+            .field("mode", &self.mode)
+            .field("sync", &self.sync)
+            .field("text_sync_groups", &self.text_sync_groups)
+            .field("active", &self.active)
+            .field("maximized", &self.maximized)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Identifies a chart's bars: it changes when they are replaced, not when they stream.

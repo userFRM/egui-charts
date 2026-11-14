@@ -78,6 +78,14 @@ pub struct IndicatorFactory {
     defaults: HashMap<String, StudyTemplate>,
 }
 
+impl std::fmt::Debug for IndicatorFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorFactory")
+            .field("constructors", &self.constructors.keys())
+            .finish_non_exhaustive()
+    }
+}
+
 impl IndicatorFactory {
     /// The category of every indicator added with [`register`](Self::register).
     pub const CUSTOM: &'static str = "Custom";

@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "name": "Binance spot (public)",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT"
+  ],
+  "time_zone": "UTC",
+  "tick_size": 0.01,
+  "intervals": [
+    {
+      "chart": "Min1",
+      "service": "1m"
+    },
+    {
+      "chart": {
+        "Custom": 180
+      },
+      "service": "3m"
+    },
+    {
+      "chart": "Min5",
+      "service": "5m"
+    },
+    {
+      "chart": "Min15",
+      "service": "15m"
+    },
+    {
+      "chart": "Min30",
+      "service": "30m"
+    },
+    {
+      "chart": "Hour1",
+      "service": "1h"
+    },
+    {
+      "chart": {
+        "Custom": 7200
+      },
+      "service": "2h"
+    },
+    {
+      "chart": "Hour4",
+      "service": "4h"
+    },
+    {
+      "chart": {
+        "Custom": 21600
+      },
+      "service": "6h"
+    },
+    {
+      "chart": {
+        "Custom": 28800
+      },
+      "service": "8h"
+    },
+    {
+      "chart": {
+        "Custom": 43200
+      },
+      "service": "12h"
+    },
+    {
+      "chart": "Day1",
+      "service": "1d"
+    },
+    {
+      "chart": "Week1",
+      "service": "1w"
+    },
+    {
+      "chart": "Month1",
+      "service": "1M"
+    }
+  ],
+  "keys": [],
+  "history": {
+    "url": "https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&endTime={to}&limit={limit}",
+    "headers": [],
+    "body": "",
+    "range": "milliseconds",
+    "page_size": 1000,
+    "rows": {
+      "path": [],
+      "layout": {
+        "arrays": {
+          "header": null
+        }
+      }
+    },
+    "bar": {
+      "time": {
+        "instant": {
+          "field": [
+            0
+          ],
+          "unit": "milliseconds"
+        }
+      },
+      "open": [
+        1
+      ],
+      "high": [
+        2
+      ],
+      "low": [
+        3
+      ],
+      "close": [
+        4
+      ],
+      "volume": [
+        5
+      ]
+    }
+  },
+  "stream": {
+    "url": "wss://data-stream.binance.vision/stream?streams={symbol_lower}@kline_{interval}/{symbol_lower}@aggTrade",
+    "protocols": [],
+    "connect": [],
+    "keep_alive": "",
+    "keep_alive_every": 30,
+    "records": [
+      "data"
+    ],
+    "route_by": [
+      "e"
+    ],
+    "routes": [
+      {
+        "value": "kline",
+        "kind": {
+          "bars": {
+            "time": {
+              "instant": {
+                "field": [
+                  "k",
+                  "t"
+                ],
+                "unit": "milliseconds"
+              }
+            },
+            "open": [
+              "k",
+              "o"
+            ],
+            "high": [
+              "k",
+              "h"
+            ],
+            "low": [
+              "k",
+              "l"
+            ],
+            "close": [
+              "k",
+              "c"
+            ],
+            "volume": [
+              "k",
+              "v"
+            ]
+          }
+        }
+      },
+      {
+        "value": "aggTrade",
+        "kind": {
+          "trades": {
+            "time": {
+              "instant": {
+                "field": [
+                  "T"
+                ],
+                "unit": "milliseconds"
+              }
+            },
+            "price": [
+              "p"
+            ],
+            "size": [
+              "q"
+            ],
+            "condition": [],
+            "conditions": [],
+            "side": [
+              "m"
+            ],
+            "buy": "false",
+            "sell": "true"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -140,18 +140,19 @@ impl Chart {
     /// A view scrolled back stays on its bars when older or newer bars arrive, and stops with the
     /// oldest bar in view once the replacement no longer holds them.
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning, and so is
-    /// the main series while it is removed from a chart that keeps the original pane.
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series, a study
+    /// or the main series while it is removed from a chart that keeps the original pane. Unknown
+    /// ids and study ids also log a warning.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
     /// observe every accepted call, including empty and unchanged replacements.
-    pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
+    pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) -> bool {
         if (series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay_retains(series)
         {
             self.replay_set_data(series, bars);
             self.data_set(series);
-            return;
+            return true;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let (mut bars, rejected) = clean(bars, &self.clock());
@@ -164,13 +165,14 @@ impl Chart {
             }
             item.feed.rejected_bars += rejected;
             self.data_set(series);
-            return;
+            return true;
         }
         if !self.main_bars_live() || !holds_bars(series, "set_data") {
-            return;
+            return false;
         }
         self.replace_main_data(bars);
         self.data_set(series);
+        true
     }
 
     pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
@@ -206,10 +208,12 @@ impl Chart {
     /// oldest bar in view once a bar limit has evicted them. A merged bar is
     /// reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    /// A series that holds bars returns `true`, also when the bar is dropped as invalid.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
     /// observe every accepted call, including unchanged updates.
-    pub fn update(&mut self, series: SeriesId, bar: Bar) {
+    pub fn update(&mut self, series: SeriesId, bar: Bar) -> bool {
         let operation = if self.host_events.data_operations && valid(&bar) {
             let clock = self.clock();
             let slot = clock.bar_open(bar.time);
@@ -255,7 +259,7 @@ impl Chart {
                 .first_changed
                 .is_some()
         } else {
-            return;
+            return false;
         };
         if changed {
             self.data_updated(series);
@@ -263,6 +267,7 @@ impl Chart {
         if let Some(operation) = operation {
             self.data_operation(series, operation);
         }
+        true
     }
 
     /// Removes the last `count` bars of `series`, or all of them for a larger count, and returns
@@ -324,10 +329,11 @@ impl Chart {
     /// Each eviction restarts the studies on the retained window, including their warm-up, so a
     /// stream of new bars restarts them once per `limit / 8 + 1` bars. Drawing timestamps
     /// are kept, even for evicted bars; markers and raw trades have independent lifetimes.
-    /// Unknown ids and study ids are ignored with a warning.
-    pub fn set_bar_limit(&mut self, series: SeriesId, limit: Option<NonZeroUsize>) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_bar_limit(&mut self, series: SeriesId, limit: Option<NonZeroUsize>) -> bool {
         if !self.bar_series_present(series, "set_bar_limit") {
-            return;
+            return false;
         }
         match limit {
             Some(limit) => {
@@ -341,6 +347,7 @@ impl Chart {
         if !self.replay_windows(series) && self.enforce_bar_limit(series) > 0 {
             self.data_updated(series);
         }
+        true
     }
 
     /// The retained-bar limit of `series`, or `None` when unlimited or absent. The main bars keep
@@ -578,13 +585,17 @@ impl Chart {
 
     /// Replaces the markers drawn on the bars of `series` (trade signals, events).
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
-    pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) -> bool {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.markers = markers.into();
         } else if self.main_series_present && holds_bars(series, "set_markers") {
             self.marks = markers.into();
+        } else {
+            return false;
         }
+        true
     }
 
     /// The markers of `series` from [`set_markers`](Self::set_markers), without those of a
@@ -613,13 +624,17 @@ impl Chart {
     /// Sets whether the markers of `series` widen its autoscaled price range and where they
     /// are painted. The main series' options also apply to the bar marks of a mark source.
     ///
-    /// Bar series accept options; unknown ids and study ids are ignored with a warning.
-    pub fn set_marker_options(&mut self, series: SeriesId, options: MarkerOptions) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_marker_options(&mut self, series: SeriesId, options: MarkerOptions) -> bool {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.marker_options = options;
         } else if self.main_series_present && holds_bars(series, "set_marker_options") {
             self.marker_options = options;
+        } else {
+            return false;
         }
+        true
     }
 
     /// Replaces the price lines drawn on the scale of `series`. Handles of its previous lines,
@@ -627,12 +642,16 @@ impl Chart {
     ///
     /// Every bar series accepts price lines. The price
     /// scale does not fit to them: a line whose price is off the scale or not finite is not drawn.
-    pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) {
+    /// Returns `false` when `series` holds no bars, as
+    /// [`add_price_line`](Self::add_price_line) returns `None`.
+    pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) -> bool {
         let first = self.next_price_line;
         self.next_price_line += lines.len() as u64;
-        if let Some(stored) = self.price_lines_mut(series, "set_price_lines") {
-            *stored = (first..).map(PriceLineId).zip(lines).collect();
-        }
+        let Some(stored) = self.price_lines_mut(series, "set_price_lines") else {
+            return false;
+        };
+        *stored = (first..).map(PriceLineId).zip(lines).collect();
+        true
     }
 
     /// Adds `line` to the price lines drawn on the scale of `series` and returns its handle,

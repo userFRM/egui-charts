@@ -341,12 +341,31 @@ pub(crate) fn render_primitive_time_label(
     Some(tag.intersect(axis))
 }
 
-/// Last-bar values of visible study lines, in the same units and colours as their plot.
+/// The last bar `coords` shows, partly or whole, as in the chart's visible range, or `None` when
+/// the view ends before the first bar. A view past the newest bar gives an index past the data.
+pub(crate) fn last_bar_in_view(coords: &crate::chart::coords::ChartMapping) -> Option<usize> {
+    // The slot of bar `i` spans `i - 0.5..i + 0.5`; the plot's last pixel ends the view.
+    let last = (coords.x_to_idx_f64(coords.rect.right() - 1.0) - 0.5).ceil();
+    (last >= 0.0).then_some(last as usize)
+}
+
+/// The bar a study's value tags read: `last_in_view`, the last bar in view, or the study's last
+/// bar when the view reaches past it. `None` without values or without bars in view.
+pub(crate) fn study_tag_bar(
+    study: &dyn crate::studies::Indicator,
+    last_in_view: Option<usize>,
+) -> Option<usize> {
+    Some(study.values().len().checked_sub(1)?.min(last_in_view?))
+}
+
+/// Values of visible study lines at the bar [`study_tag_bar`] gives for `last_in_view`, in the
+/// same units and colours as their plot.
 pub(crate) fn render_study_tags(
     painter: &Painter,
     plot: Rect,
     map: &PriceMap,
     study: &dyn crate::studies::Indicator,
+    last_in_view: Option<usize>,
     axis_right: f32,
     occupied: &mut Vec<Option<Rect>>,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
@@ -358,8 +377,7 @@ pub(crate) fn render_study_tags(
     {
         return;
     }
-    let values = study.values();
-    let Some(bar) = values.len().checked_sub(1) else {
+    let Some(bar) = study_tag_bar(study, last_in_view) else {
         return;
     };
     let transform = map.transform();
@@ -563,6 +581,15 @@ pub fn price_axis_width(
     formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> f32 {
     price_axis_width_with_edges(painter, price_map, tag_labels, formatter, None)
+}
+
+/// Width of an axis column that holds each of `tags` whole, with the plot gap and right
+/// clearance of the labels.
+pub(crate) fn axis_tags_width<'a>(tags: impl IntoIterator<Item = &'a Option<Rect>>) -> f32 {
+    tags.into_iter()
+        .flatten()
+        .map(|tag| tag.width() + 5.0 + 6.0)
+        .fold(0.0, f32::max)
 }
 
 /// Measures the list painted by an axis, including edge ticks when `pane` is present.
@@ -1533,6 +1560,7 @@ mod tests {
                     plot,
                     &map,
                     &study,
+                    Some(usize::MAX),
                     120.0,
                     &mut Vec::new(),
                     None,

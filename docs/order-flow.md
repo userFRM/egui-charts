@@ -191,9 +191,9 @@ by skipping updates silently:
 [`TradeProfileRanges::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfileRanges.html#method.new) takes ordered, non-overlapping half-open ranges of bar opening times.
 Supply exchange session boundaries, including any pre-market or post-market splits, aligned
 with the footprint's bar clock. [`trade_profiles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/fn.trade_profiles.html) sums the existing exact rows over each range.
-Bars before [`Footprint::complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.complete_from), whose executions are not all held, are left out, and
-[`TradeProfile::complete`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#structfield.complete) is false for a range that starts before it; the chart labels such a
-profile "Partial executions".
+Incomplete bars are left out; complete prepared bars before a missing join still contribute.
+[`TradeProfile::complete`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#structfield.complete) is false when the range starts outside known coverage or includes incomplete bars; the chart labels such a
+profile "Partial executions". [`Footprint::complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.complete_from) names the complete suffix after the last gap, not every usable prepared bar.
 [`merge_next`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfileRanges.html#method.merge_next) combines neighbours; [`split`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfileRanges.html#method.split) divides a composite at an interior bar boundary.
 [`ui::trade_profile_menu`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/fn.trade_profile_menu.html) exposes these operations to a host's menu and returns whether it changed
 the ranges. Recompute profiles when trades or ranges change.

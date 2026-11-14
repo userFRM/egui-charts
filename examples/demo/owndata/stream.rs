@@ -1018,4 +1018,162 @@ pub(crate) mod tests {
         let listed: Vec<_> = tape.iter().map(row).collect();
         assert_eq!(listed, [(1794355210000, 101.75)]);
     }
+
+    /// Every ready profile reads its service's history rows, bar messages and trade messages,
+    /// in the form the service documents them, into the chart's bars and trades. The service's
+    /// hosts are swapped for local ones, so nothing leaves the machine. The fixture is
+    /// one-minute bars of 11 November 2026 from 14:33 UTC (second 1,794,407,580); every
+    /// expected bar and request is worked out by hand.
+    #[test]
+    fn ready_profiles_chart_recorded_history_and_stream() {
+        use super::super::feed::tests::{Server, Shown, pages, shown, until};
+        use super::super::profile::Profile;
+        use super::super::store;
+
+        /// A ready profile on recorded answers. The pages answer the history requests in order;
+        /// the script runs the peer's one connection, each `Hold` until the bars before it are
+        /// shown.
+        struct Ready {
+            name: &'static str,
+            symbol: &'static str,
+            timeframe: Timeframe,
+            pages: Vec<String>,
+            script: Vec<Step>,
+            /// The bars once history has ended, then after each release of the peer.
+            bars: Vec<Vec<Shown>>,
+            /// What the chart and the tape hold at the end: time in ms, price, size, side.
+            trades: Vec<(i64, f64, f64, Option<OrderSide>)>,
+            tick_size: f64,
+            /// The start and the end of the first request line, whose bound comes from the
+            /// clock.
+            first: (&'static str, &'static str),
+            /// Every later request line.
+            asked: Vec<&'static str>,
+            /// The handshake's target and the messages the peer received.
+            target: &'static str,
+            received: Vec<&'static str>,
+        }
+
+        // Binance: rows of twelve columns, times in milliseconds, values as text.
+        const R3: &str = r#"[1794407580000,"100750.00","103000.00","100500.00","102500.00","1.50000000",1794407639999,"153375.00000000",120,"0.75000000","76687.50000000","0"]"#;
+        const R4: &str = r#"[1794407640000,"102500.00","102750.00","101000.00","101250.00","0.75000000",1794407699999,"76312.50000000",64,"0.25000000","25437.50000000","0"]"#;
+        const R5: &str = r#"[1794407700000,"101250.00","101500.00","100000.00","100250.00","0.50000000",1794407759999,"50437.50000000",41,"0.25000000","25218.75000000","0"]"#;
+        const KLINE: &str = r#"{"stream":"btcusdt@kline_1m","data":{"e":"kline","E":1794407711000,"s":"BTCUSDT","k":{"t":1794407700000,"T":1794407759999,"s":"BTCUSDT","i":"1m","f":4100,"L":4180,"o":"101250.00","c":"99750.00","h":"101750.00","l":"99750.00","v":"0.75000000","n":81,"x":false,"q":"75687.50000000","V":"0.25000000","Q":"25312.50000000","B":"0"}}}"#;
+        // `m` is true when the buyer was the maker: the trade sold into the bid.
+        const SELL: &str = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1794407712001,"s":"BTCUSDT","a":2001,"p":"100000.00","q":"0.12500000","f":4181,"l":4182,"T":1794407712000,"m":true,"M":true}}"#;
+        const BUY: &str = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1794407713001,"s":"BTCUSDT","a":2002,"p":"102000.00","q":"0.25000000","f":4183,"l":4183,"T":1794407713000,"m":false,"M":true}}"#;
+        const B3: Shown = (
+            1794407580,
+            Some([100750.0, 103000.0, 100500.0, 102500.0, 1.5]),
+        );
+        const B4: Shown = (
+            1794407640,
+            Some([102500.0, 102750.0, 101000.0, 101250.0, 0.75]),
+        );
+        const B5: Shown = (
+            1794407700,
+            Some([101250.0, 101500.0, 100000.0, 100250.0, 0.5]),
+        );
+        // The kline takes the place of the history bar.
+        const K5: Shown = (
+            1794407700,
+            Some([101250.0, 101750.0, 99750.0, 99750.0, 0.75]),
+        );
+        // The trades continue the kline's bar: the sell at 100000 is the close, volume 0.875;
+        // the buy at 102000 is the high and the close, volume 1.125. Continuing the history
+        // bar would give the low 100000 and the volume 0.875.
+        const K5T: Shown = (
+            1794407700,
+            Some([101250.0, 102000.0, 99750.0, 102000.0, 1.125]),
+        );
+
+        let rows = [Ready {
+            name: "Binance spot (public)",
+            symbol: "BTCUSDT",
+            timeframe: Timeframe::Min1,
+            // At or before `endTime`, so the older page holds the row that opens at it. That
+            // row is the symbol's first: the page ends history.
+            pages: vec![format!("[{R3},{R4},{R5}]"), format!("[{R3}]")],
+            script: vec![
+                Step::Hold,
+                Step::Send(KLINE),
+                Step::Hold,
+                Step::Send(SELL),
+                Step::Send(BUY),
+                Step::UntilClosed,
+            ],
+            bars: vec![vec![B3, B4, B5], vec![B3, B4, K5], vec![B3, B4, K5T]],
+            trades: vec![
+                (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
+            ],
+            tick_size: 0.01,
+            first: (
+                "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=",
+                "&limit=3",
+            ),
+            // Before the oldest bar held, in milliseconds; the chart asks 600 bars at a time.
+            asked: vec![
+                "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=1794407580000&limit=600",
+            ],
+            target: "/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade",
+            received: vec![],
+        }];
+
+        for row in rows {
+            let server = Server::start(pages(row.pages));
+            let peer = Peer::start(vec![row.script]);
+            let named = |ready: &Profile| ready.name == row.name;
+            let mut profile = store::ready().into_iter().find(named).unwrap();
+            // The service's address is kept after its host, which is the local one.
+            let local = |url: &mut String, origin: &str| {
+                let rest = url.split_once("://").unwrap().1;
+                let path = rest.find('/').map_or("", |at| &rest[at..]);
+                *url = format!("{origin}{path}");
+            };
+            local(&mut profile.history.as_mut().unwrap().url, &server.origin);
+            local(&mut profile.stream.as_mut().unwrap().url, &peer.url);
+            let feed = Arc::new(MappedFeed::new(profile, Vec::new()));
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(row.symbol)
+                .with_timeframe(row.timeframe)
+                .with_initial_bars(3)
+                .build();
+            let ctx = egui::Context::default();
+            for (step, bars) in row.bars.iter().enumerate() {
+                if step > 0 {
+                    peer.release();
+                }
+                let what = format!("{}, bars {step}", row.name);
+                until(&ctx, &mut chart, &what, |chart| {
+                    let state = chart.feed_state(SeriesId::MAIN);
+                    state.is_some_and(|state| state.history_complete) && shown(chart) == *bars
+                });
+            }
+            let fed = |trades: Vec<Tick>| -> Vec<(i64, f64, f64, Option<OrderSide>)> {
+                let row = |t: &Tick| (t.ts.timestamp_millis(), t.price, t.size, t.side);
+                trades.iter().map(row).collect()
+            };
+            let held = fed(chart.trades(SeriesId::MAIN).cloned().collect());
+            assert_eq!(held, row.trades, "{}", row.name);
+            let tape = fed(feed.drain_tape(row.symbol, Some(row.timeframe)));
+            assert_eq!(tape, row.trades, "{}", row.name);
+            let step = chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size);
+            assert_eq!(step, Some(row.tick_size), "{}", row.name);
+
+            let lines: Vec<String> = server.seen().iter().map(|seen| seen.line.clone()).collect();
+            let (start, end) = row.first;
+            let first = lines.first().map(String::as_str).unwrap_or_default();
+            assert!(
+                first.starts_with(start) && first.ends_with(end),
+                "{lines:?}"
+            );
+            assert_eq!(lines[1..], row.asked, "{}", row.name);
+            assert_eq!(peer.asked(), [row.target], "{}", row.name);
+            assert_eq!(peer.received(), [row.received], "{}", row.name);
+        }
+    }
 }

@@ -30,6 +30,7 @@ const MAX_CONFIRMED: usize = 64;
 
 /// The formation a detector looks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FormationKind {
     /// A rise, then a falling channel; confirms above it.
     BullFlag,
@@ -187,6 +188,7 @@ pub enum PatternDirection {
 
 /// Whether a formation has broken out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FormationStatus {
     /// All its pivots are known but no close has broken its boundary yet.
     Developing,
@@ -196,6 +198,7 @@ pub enum FormationStatus {
 
 /// A detected formation, with bar indices into the calculated bars.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Formation {
     /// The formation's shape.
     pub kind: FormationKind,

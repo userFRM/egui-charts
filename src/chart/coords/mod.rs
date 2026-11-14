@@ -14,6 +14,7 @@ use egui::{Pos2, Rect};
 ///
 /// Share the mapping with overlays and hit tests to keep them aligned with the pane.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ChartMapping {
     /// Numeric row positions shared with the time scale; `None` keeps ordinal spacing.
     pub numeric_positions: Option<crate::model::NumericPositions>,

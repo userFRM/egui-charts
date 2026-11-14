@@ -155,6 +155,7 @@ impl DemoApp {
                 .then(|| self.notification_host.clone()),
             times: Default::default(),
         })));
+        chart.set_post_source(Some(Arc::new(super::feeds::DemoPosts)));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
         } else {
@@ -841,12 +842,12 @@ impl DemoApp {
         }
         self.refresh_active_chart();
         self.apply_formatting();
-        self.settings_state = egui_charts::widget::settings::ChartSettingsState {
-            alerts: self.settings_state.alerts.clone(),
-            trading: self.trading.display.clone(),
-            adjust_for_dividends: self.timeframe_toolbar.state.adjust_for_dividends,
-            ..egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart)
-        };
+        let mut settings =
+            egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart);
+        settings.alerts = self.settings_state.alerts.clone();
+        settings.trading = self.trading.display.clone();
+        settings.adjust_for_dividends = self.timeframe_toolbar.state.adjust_for_dividends;
+        self.settings_state = settings;
         true
     }
 
@@ -1243,13 +1244,13 @@ mod tests {
         app.chart
             .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing).unwrap());
         assert!(app.chart.flush_stored_drawings());
-        app.chart.drawings_mut().registry.set_availability(
-            egui_charts::drawings::DrawingToolType::TrendLine,
-            egui_charts::drawings::ToolAvailability {
-                visible: false,
-                enabled: false,
-            },
-        );
+        let mut hidden = egui_charts::drawings::ToolAvailability::default();
+        hidden.visible = false;
+        hidden.enabled = false;
+        app.chart
+            .drawings_mut()
+            .registry
+            .set_availability(egui_charts::drawings::DrawingToolType::TrendLine, hidden);
         app.chart.set_main_series_visible(false);
         app.chart
             .set_event_visibility(egui_charts::model::EventVisibility {

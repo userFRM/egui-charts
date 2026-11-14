@@ -567,11 +567,18 @@ impl FloatingReplayControl {
                                 && let Some(mut interval) = self.update_interval
                                 && ui
                                     .add_enabled_ui(!self.selecting, |ui| {
+                                        let ctx = ui.ctx().clone();
                                         ui.combo_select_width(
                                             "replay_update_interval",
                                             &mut interval,
                                             self.update_intervals.iter().copied(),
-                                            |interval| format!("{} updates", interval),
+                                            |interval| {
+                                                l10n::format_text(
+                                                    &ctx,
+                                                    "{count} updates",
+                                                    &[("count", interval.to_string())],
+                                                )
+                                            },
                                             110.0,
                                         )
                                     })

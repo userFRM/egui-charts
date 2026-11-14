@@ -278,6 +278,7 @@ impl DrawingManager {
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
     /// saved. A locked drawing accepts only visibility, name and folder changes, or an edit that unlocks it.
+    /// An edit that hides the drawing deselects it.
     /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
@@ -304,7 +305,7 @@ impl DrawingManager {
                 drawing.folder = folder;
                 drawing.folder_sync = folder_sync;
             }
-            if !drawing.selectable {
+            if !drawing.selectable || (old.visible && !drawing.visible) {
                 self.selection.deselect(id);
             }
             self.queue_edit(&old);
@@ -343,6 +344,7 @@ impl DrawingManager {
 
     /// Edits live drawing ids as one undo step and queues their saved changes.
     /// Locked drawings accept visibility, name and folder changes, or an edit that unlocks them.
+    /// The drawings the edit hides are deselected.
     pub fn edit_drawings(&mut self, ids: &[usize], mut edit: impl FnMut(&mut Drawing)) {
         if ids.is_empty() {
             return;
@@ -380,7 +382,7 @@ impl DrawingManager {
                 drawing.folder = folder;
                 drawing.folder_sync = folder_sync;
             }
-            if !drawing.selectable {
+            if !drawing.selectable || (old.visible && !drawing.visible) {
                 self.selection.deselect(old.id);
             }
             before.push((index, old));
@@ -529,14 +531,15 @@ impl DrawingManager {
 
     // === Visibility ===
 
-    /// Toggles the visibility of all drawings. If all are visible, hides them
-    /// all; otherwise shows them all.
+    /// Hides every drawing unless all of them are already hidden, in which case shows them all,
+    /// as the Hide drawings toolbar entry does. Does nothing without drawings.
     pub fn toggle_visibility_all(&mut self) {
-        let visible = !self.drawings.iter().all(|drawing| drawing.visible);
+        let visible = self.drawings.iter().all(|drawing| !drawing.visible);
         self.set_visibility_all(visible);
     }
 
-    /// Set every drawing's visibility as one undoable edit.
+    /// Set every drawing's visibility as one undoable edit. Hiding deselects the drawings it hides;
+    /// undo restores their visibility, not the selection.
     pub fn set_visibility_all(&mut self, visible: bool) {
         let mut before = Vec::new();
         for (index, drawing) in self
@@ -560,6 +563,9 @@ impl DrawingManager {
         }
         for (_, drawing) in &before {
             self.stamp(drawing.id);
+            if !visible {
+                self.selection.deselect(drawing.id);
+            }
         }
         self.history.push_snapshot(before);
     }
