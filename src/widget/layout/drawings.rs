@@ -408,7 +408,12 @@ impl DrawingLinks {
         let arrived = self.arrived_drawings(charts, count, groups, &changes, &joined, layout_wide);
         let arrived: Vec<_> = arrived
             .into_iter()
-            .filter(|a| !extra.iter().any(|e| e.0 == a.0 && e.2 == a.2))
+            // The version a returning link takes goes to an arriving chart too.
+            .filter(|a| {
+                !extra
+                    .iter()
+                    .any(|e| e.2 == a.2 && self.origin_of(e.0) == self.origin_of(a.0))
+            })
             .collect();
         extra.extend(arrived);
         let changes = changes
@@ -708,8 +713,9 @@ impl DrawingLinks {
     }
 
     /// The mirrored drawings of its symbol that other charts hold, for each chart that came to the
-    /// symbol and has no copy of them: each goes to that chart alone, once. A drawing on a chart
-    /// that is equal to one of them is linked to it instead.
+    /// symbol and has no copy of them: each goes to that chart alone, once, unless a change of its
+    /// link in this frame reaches that chart anyway. A drawing on a chart that is equal to one of
+    /// them is linked to it instead.
     fn arrived_drawings(
         &mut self,
         charts: &[&mut Chart],
@@ -719,11 +725,15 @@ impl DrawingLinks {
         joined: &HashSet<Key>,
         layout_wide: bool,
     ) -> Vec<Change> {
-        let sending: HashSet<Key> = changes
+        // The link and the chart of each change sent in this frame: it goes to every chart of
+        // that chart's symbol and group, an arriving one too.
+        let sent: Vec<(Key, usize)> = changes
             .iter()
             .filter(|(key, ..)| !joined.contains(key))
-            .map(|(key, ..)| *key)
+            .map(|(key, ..)| (self.origin_of(*key), key.0))
             .collect();
+        // Each link an arriving chart is given, by the first chart that holds it.
+        let mut given: HashSet<(Key, usize)> = HashSet::new();
         let mut arrivals = Vec::new();
         let mut slots: Vec<usize> = std::mem::take(&mut self.arriving).into_iter().collect();
         slots.sort_unstable();
@@ -735,10 +745,18 @@ impl DrawingLinks {
             }) {
                 for drawing in &charts[source].drawings().drawings {
                     let key = (source, drawing.id);
+                    let origin = self.origin_of(key);
                     if drawing.pane.is_some()
-                        || sending.contains(&key)
                         || !mirrored(drawing.folder_sync_mode(), layout_wide)
-                        || self.linked_on(charts, slot, self.origin_of(key)).is_some()
+                        || sent.iter().any(|&(changed, from)| {
+                            changed == origin
+                                && groups[from] == groups[slot]
+                                && charts[from].symbol() == charts[slot].symbol()
+                        })
+                        // Read from the storage they share, as the loop leaves it.
+                        || (drawing.saveable && charts[slot].shares_stored_drawings(charts[source]))
+                        || given.contains(&(origin, slot))
+                        || self.linked_on(charts, slot, origin).is_some()
                     {
                         continue;
                     }
@@ -747,6 +765,7 @@ impl DrawingLinks {
                     let equal: Vec<Key> =
                         equal.into_iter().filter(|other| other.0 == slot).collect();
                     if self.join(charts, key, equal).is_empty() {
+                        given.insert((origin, slot));
                         arrivals.push((key, Some(drawing.clone()), Some(slot)));
                     }
                 }
@@ -2945,7 +2964,9 @@ mod tests {
 
     /// A chart that comes to a symbol receives the mirrored drawings its group holds for it, those
     /// made while it showed another symbol too, once its bars are in place, and not the ones local
-    /// to their chart.
+    /// to their chart. It receives each once, in the version the frame ends with, never one
+    /// deleted in that frame, also when another chart of the group brings the drawing back in
+    /// that frame.
     #[test]
     fn chart_arriving_at_a_symbol_receives_its_mirrored_drawings() {
         let (mut layout, mut charts) = mirrored_pair(false);
@@ -2985,6 +3006,74 @@ mod tests {
             [vec![80.0, 90.0, 104.0], vec![90.0, 104.0]],
             "second chart back on SAMPLE"
         );
+
+        // A chart that comes to the symbol where two charts hold the line receives it once, in
+        // the version the frame ends with, also when the line changes, goes or comes back in
+        // that frame on another chart of the group, but not for a change in another group.
+        type Step = fn(&mut ChartLayout, &mut [Chart; 3]);
+        let rows: [(&str, Step, [Vec<f64>; 3], usize); 5] = [
+            (
+                "held by two charts",
+                |_, charts| charts[2].set_symbol("SAMPLE"),
+                [vec![104.0], vec![104.0], vec![104.0]],
+                1,
+            ),
+            (
+                "moved in the frame",
+                |_, charts| {
+                    charts[2].set_symbol("SAMPLE");
+                    move_first(&mut charts[1], 95.0);
+                },
+                [vec![95.0], vec![95.0], vec![95.0]],
+                1,
+            ),
+            (
+                "deleted in the frame",
+                |_, charts| {
+                    charts[2].set_symbol("SAMPLE");
+                    let id = charts[0].drawings().drawings[0].id;
+                    charts[0].drawings_mut().delete_drawing(id);
+                },
+                [vec![], vec![], vec![]],
+                0,
+            ),
+            (
+                "with a return in the frame",
+                |layout, charts| {
+                    charts[1].set_symbol("OTHER");
+                    frames(layout, charts);
+                    move_first(&mut charts[0], 95.0);
+                    frames(layout, charts);
+                    for chart in &mut charts[1..] {
+                        chart.set_symbol("SAMPLE");
+                    }
+                },
+                [vec![95.0], vec![95.0], vec![95.0]],
+                1,
+            ),
+            (
+                "moved in another group",
+                |layout, charts| {
+                    layout.set_sync_group(0, Some("Second".into()));
+                    frames(layout, charts);
+                    move_first(&mut charts[0], 95.0);
+                    charts[2].set_symbol("SAMPLE");
+                },
+                [vec![95.0], vec![104.0], vec![104.0]],
+                1,
+            ),
+        ];
+        for (name, step, expected, edits) in rows {
+            let (mut layout, mut charts) = three_charts(["SAMPLE", "SAMPLE", "OTHER"]);
+            step(&mut layout, &mut charts);
+            frames(&mut layout, &mut charts);
+            assert_eq!(prices(&charts), expected, "{name}");
+            let mut steps = 0;
+            while charts[2].drawings_mut().undo() {
+                steps += 1;
+            }
+            assert_eq!(steps, edits, "edits of the arriving chart, {name}");
+        }
     }
 
     /// What was done to the drawings of a chart while the switch was off stays on that chart when
