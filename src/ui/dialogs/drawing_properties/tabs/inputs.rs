@@ -4,12 +4,12 @@ use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
     BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig,
     GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize,
-    RegressionTrendConfig, VwapBand,
+    RegressionTrendConfig, VwapBand, VwapBandMode, VwapFill, VwapPlotType,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
 use crate::localization as l10n;
-use crate::model::LineStyle;
+use crate::model::{LineStyle, PriceSource};
 use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid, buttons::Button};
@@ -457,7 +457,8 @@ impl InputsTab {
                 let original = drawing.vwap.unwrap_or_default();
                 let mut config = original;
                 let pickers = grid_pickers(pickers, 0);
-                pickers.resize_with(config.bands.len(), ColorPickerState::default);
+                // One picker per band, then the band fill's and the background's.
+                pickers.resize_with(config.bands.len() + 2, ColorPickerState::default);
                 for (i, band) in config.bands.iter_mut().enumerate() {
                     ui.push_id(i, |ui| {
                         ui.horizontal(|ui| {
@@ -483,6 +484,81 @@ impl InputsTab {
                         });
                     });
                 }
+                let (band_color, line_color) = (config.bands[0].color, drawing.color);
+                let [band_picker, background_picker] = &mut pickers[3..] else {
+                    unreachable!("resized above")
+                };
+                vwap_fill(
+                    ui,
+                    "Band 1 fill",
+                    &mut config.band_fill,
+                    band_color,
+                    band_picker,
+                );
+                vwap_fill(
+                    ui,
+                    "Background",
+                    &mut config.background,
+                    line_color,
+                    background_picker,
+                );
+                FormGrid::new("vwap_inputs").show(ui, |ui| {
+                    let label = ui.label(l10n::text(ui.ctx(), "Source"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "vwap_source",
+                            &mut config.source,
+                            PriceSource::all(),
+                            |s| s.label().into(),
+                        );
+                    });
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Bands calculation"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "vwap_band_mode",
+                            &mut config.band_mode,
+                            [VwapBandMode::Deviation, VwapBandMode::Percentage],
+                            |mode| match mode {
+                                VwapBandMode::Deviation => l10n::text(&ctx, "Standard deviation"),
+                                VwapBandMode::Percentage => l10n::text(&ctx, "Percentage"),
+                            },
+                        );
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut config.show_line, l10n::text(ui.ctx(), "VWAP line"));
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Plot type"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "vwap_plot_type",
+                            &mut config.plot_type,
+                            VwapPlotType::ALL,
+                            |plot| l10n::text(&ctx, plot.name()),
+                        );
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut config.track_price, l10n::text(ui.ctx(), "Price line"));
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Precision"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "vwap_precision",
+                            &mut config.precision,
+                            std::iter::once(None).chain((0..=8).map(Some)),
+                            |places| {
+                                places
+                                    .map_or_else(|| l10n::text(&ctx, "Default"), |p| p.to_string())
+                            },
+                        );
+                    });
+                    ui.end_row();
+                });
                 if config != original {
                     drawing.vwap = Some(config);
                 }
@@ -642,6 +718,41 @@ fn number(ui: &mut Ui, label: &str, value: &mut f64, range: std::ops::RangeInclu
     ui.add(egui::DragValue::new(value).range(range).speed(0.1))
         .labelled_by(label.id);
     ui.end_row();
+}
+
+/// A checkbox, colour and opacity row for an anchored VWAP fill whose colour follows `fallback`
+/// until one is picked.
+fn vwap_fill(
+    ui: &mut Ui,
+    name: &str,
+    fill: &mut VwapFill,
+    fallback: [u8; 4],
+    picker: &mut ColorPickerState,
+) {
+    ui.push_id(name, |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut fill.visible, l10n::text(ui.ctx(), name));
+            let mut color = fill.color.unwrap_or(fallback);
+            if level_color(ui, &mut color, picker) {
+                fill.color = Some(color);
+            }
+            let mut percent = fill.opacity() * 100.0;
+            if ui
+                .add_enabled(
+                    fill.visible,
+                    egui::DragValue::new(&mut percent)
+                        .range(0.0..=100.0)
+                        .max_decimals(1)
+                        .suffix("%")
+                        .prefix(l10n::text(ui.ctx(), "Opacity ")),
+                )
+                .changed()
+                && let Some(updated) = VwapFill::new(fill.visible, fill.color, percent / 100.0)
+            {
+                *fill = updated;
+            }
+        });
+    });
 }
 
 fn background(ui: &mut Ui, show: &mut bool, opacity: &mut u8) {
