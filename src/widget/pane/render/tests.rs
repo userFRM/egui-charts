@@ -404,6 +404,31 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
         let main = chart.get_rendered_price_rect();
         let before = chart.get_rendered_indicator_panes().to_vec();
         let separator = Pos2::new(main.center().x, before[1].panel_rect.top() - 0.5);
+        // Past the 40 point minimum the separator waits at it until the pointer comes back.
+        let [upper, lower] = [0, 1].map(|at| before[at].panel_rect.height());
+        pointer(&ctx, &mut chart, separator, None);
+        pointer(&ctx, &mut chart, separator, Some(true));
+        for (moved, expected) in [
+            (400.0, lower - 40.0),
+            (300.0, lower - 40.0),
+            (-25.0, -25.0),
+            (0.0, 0.0),
+        ] {
+            for _ in 0..2 {
+                pointer(&ctx, &mut chart, separator + egui::vec2(0.0, moved), None);
+            }
+            let panes = chart.get_rendered_indicator_panes();
+            assert!(
+                (panes[0].panel_rect.height() - upper - expected).abs() < 0.1,
+                "{moved}"
+            );
+            assert!(
+                (panes[1].panel_rect.height() - lower + expected).abs() < 0.1,
+                "{moved}"
+            );
+            assert_eq!(chart.get_rendered_price_rect(), main);
+        }
+        pointer(&ctx, &mut chart, separator, Some(false));
         drag(
             &ctx,
             &mut chart,

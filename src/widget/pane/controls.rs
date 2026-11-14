@@ -438,14 +438,24 @@ impl Chart {
                 continue;
             }
             let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-            if response.dragged() && !collapsed && !upper_collapsed {
-                let delta = response.drag_delta().y.clamp(
-                    40.0 - upper.height(),
-                    (rect.height() - 40.0).max(40.0 - upper.height()),
+            // Heights follow the whole drag from the press, so movement past a limit is kept.
+            if response.drag_started() {
+                ui.data_mut(|data| data.insert_temp(response.id, (upper.height(), rect.height())));
+            }
+            if response.dragged()
+                && !collapsed
+                && !upper_collapsed
+                && let Some(((upper_height, height), total)) = ui
+                    .data(|data| data.get_temp::<(f32, f32)>(response.id))
+                    .zip(response.total_drag_delta())
+            {
+                let delta = total.y.clamp(
+                    40.0 - upper_height,
+                    (height - 40.0).max(40.0 - upper_height),
                 );
                 // The other panes keep their heights: these two exchange pixels.
-                self.pane_layout.panes[upper_idx].height = Some(upper.height() + delta);
-                self.pane_layout.panes[idx].height = Some(rect.height() - delta);
+                self.pane_layout.panes[upper_idx].height = Some(upper_height + delta);
+                self.pane_layout.panes[idx].height = Some(height - delta);
                 ui.ctx().request_repaint();
             }
             if response.double_clicked() && !self.pane_collapse_click(ui.ctx()) {
