@@ -7,6 +7,8 @@
 use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarState};
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
+use crate::model::TimezoneId;
+use crate::scales::TimezoneMode;
 use crate::styles::{icons as icon_sizes, stroke};
 use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
@@ -27,6 +29,146 @@ pub struct TimeframeToolbar {
     config_theme: Option<(Theme, TimeframeToolbarConfig)>,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+}
+
+/// Zone names [`default_time_zones`] offers: the main trading centres, west to east within the
+/// Americas, Europe and Africa, the Middle East, Asia and Oceania. Without the `timezones` feature,
+/// fixed offsets stand in for them.
+#[cfg(feature = "timezones")]
+pub(crate) const DEFAULT_TIME_ZONES: &[&str] = &[
+    "UTC",
+    "Pacific/Honolulu",
+    "America/Anchorage",
+    "America/Los_Angeles",
+    "America/Vancouver",
+    "America/Phoenix",
+    "America/Denver",
+    "America/Chicago",
+    "America/Mexico_City",
+    "America/Bogota",
+    "America/Lima",
+    "America/New_York",
+    "America/Toronto",
+    "America/Caracas",
+    "America/Halifax",
+    "America/Santiago",
+    "America/Sao_Paulo",
+    "America/Argentina/Buenos_Aires",
+    "Atlantic/Reykjavik",
+    "Europe/Dublin",
+    "Europe/Lisbon",
+    "Europe/London",
+    "Africa/Casablanca",
+    "Africa/Lagos",
+    "Europe/Amsterdam",
+    "Europe/Berlin",
+    "Europe/Brussels",
+    "Europe/Copenhagen",
+    "Europe/Luxembourg",
+    "Europe/Madrid",
+    "Europe/Oslo",
+    "Europe/Paris",
+    "Europe/Prague",
+    "Europe/Rome",
+    "Europe/Stockholm",
+    "Europe/Vienna",
+    "Europe/Warsaw",
+    "Europe/Zurich",
+    "Africa/Cairo",
+    "Africa/Johannesburg",
+    "Europe/Athens",
+    "Europe/Bucharest",
+    "Europe/Helsinki",
+    "Europe/Istanbul",
+    "Africa/Nairobi",
+    "Europe/Moscow",
+    "Asia/Jerusalem",
+    "Asia/Bahrain",
+    "Asia/Kuwait",
+    "Asia/Qatar",
+    "Asia/Riyadh",
+    "Asia/Tehran",
+    "Asia/Dubai",
+    "Asia/Muscat",
+    "Asia/Karachi",
+    "Asia/Kolkata",
+    "Asia/Colombo",
+    "Asia/Kathmandu",
+    "Asia/Dhaka",
+    "Asia/Yangon",
+    "Asia/Bangkok",
+    "Asia/Ho_Chi_Minh",
+    "Asia/Jakarta",
+    "Asia/Kuala_Lumpur",
+    "Asia/Manila",
+    "Asia/Shanghai",
+    "Asia/Singapore",
+    "Asia/Hong_Kong",
+    "Asia/Taipei",
+    "Asia/Seoul",
+    "Asia/Tokyo",
+    "Australia/Perth",
+    "Australia/Adelaide",
+    "Australia/Brisbane",
+    "Australia/Sydney",
+    "Pacific/Auckland",
+    "Pacific/Chatham",
+];
+
+#[cfg(not(feature = "timezones"))]
+pub(crate) const DEFAULT_TIME_ZONES: &[&str] = &[
+    "UTC", "-10:00", "-08:00", "-07:00", "-06:00", "-05:00", "-04:00", "-03:00", "+01:00",
+    "+02:00", "+03:00", "+04:00", "+05:30", "+07:00", "+08:00", "+09:00", "+10:00", "+12:00",
+];
+
+/// The zones the chart settings offer unless the host supplies its own: UTC and the main
+/// trading centres of the Americas, Europe, Africa, the Middle East, Asia and Oceania. Without the
+/// `timezones` feature, fixed offsets from UTC.
+pub fn default_time_zones() -> Vec<TimezoneId> {
+    DEFAULT_TIME_ZONES
+        .iter()
+        .filter_map(|name| name.parse().ok())
+        .collect()
+}
+
+/// The rows of a time zone choice, each a label and the mode it selects: UTC, exchange time,
+/// local time, then `zones`. The exchange row keeps the fallback zone `current` holds, and a zone
+/// `current` holds that `zones` lacks gets a row of its own before them.
+pub(crate) fn zone_rows(
+    zones: &[TimezoneId],
+    current: &TimezoneMode,
+) -> Vec<(String, TimezoneMode)> {
+    let utc = TimezoneId::utc();
+    // A chart a host set to the UTC zone shows it on the UTC row.
+    let utc_row = if *current == TimezoneMode::Timezone(utc.clone()) {
+        current.clone()
+    } else {
+        TimezoneMode::Utc
+    };
+    let mut rows = vec![
+        ("UTC".to_owned(), utc_row),
+        (
+            "Exchange time".to_owned(),
+            match current {
+                TimezoneMode::Exchange(_) => current.clone(),
+                _ => TimezoneMode::Exchange(utc.clone()),
+            },
+        ),
+        ("Local time".to_owned(), TimezoneMode::Local),
+    ];
+    if let TimezoneMode::Timezone(zone) = current
+        && *zone != utc
+        && !zones.contains(zone)
+    {
+        rows.push((zone.name().to_owned(), current.clone()));
+    }
+    rows.extend(
+        zones
+            .iter()
+            .filter(|zone| **zone != utc)
+            .map(|zone| (zone.name().to_owned(), TimezoneMode::Timezone(zone.clone()))),
+    );
+    rows
 }
 
 /// Configuration for the bottom panel appearance
