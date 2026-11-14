@@ -2839,6 +2839,7 @@ impl Chart {
                 ));
         }
         if show_price_axis && study_axis.show_study_values {
+            let last_in_view = rendering::axes::last_bar_in_view(&coords);
             for study in studies
                 .indicators()
                 .iter()
@@ -2867,6 +2868,7 @@ impl Chart {
                             price_rect,
                             &mapping.price,
                             study.as_ref(),
+                            last_in_view,
                             axis_edge,
                             &mut tags,
                             &study_axis,
@@ -2884,6 +2886,7 @@ impl Chart {
                     price_rect,
                     &price_map,
                     study.as_ref(),
+                    last_in_view,
                     axis_edge,
                     &mut tags,
                     price_formatter.as_deref(),
@@ -3918,9 +3921,11 @@ impl Chart {
             self.measured_axis_width += 26.0;
         }
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
-        for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
-            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
-        }
+        self.measured_axis_width = self
+            .measured_axis_width
+            .max(rendering::axes::axis_tags_width(
+                tags.iter().skip(usize::from(has_currency)),
+            ));
 
         if show_price_axis && has_currency {
             let currency = self
