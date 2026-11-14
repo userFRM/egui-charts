@@ -432,8 +432,9 @@ impl Chart {
             replay.live_sizes = [None; 4];
         }
         self.count_replay_rejections(id, rejected);
-        // New history resolves the sizes again, as `set_data` does outside replay.
-        if id == SeriesId::MAIN {
+        // In bar replay new main history resolves the sizes again from the bars before the
+        // cursor, as `set_data` does outside replay. In market replay it changes no bar on show.
+        if id == SeriesId::MAIN && self.market_replay.is_none() {
             self.arm_box_sizes();
         }
         self.apply_replay_window();
@@ -931,6 +932,59 @@ mod tests {
                 "{step:?}: {got:?}"
             );
         }
+    }
+
+    /// During market replay the host's main history goes to the retained bars while the driver
+    /// keeps building the bars on show, so the sizes the session resolved stay. 1% of the close of
+    /// 100 at entry is 1, and playback's trade at 200 keeps it, as bars streaming in do.
+    #[test]
+    fn market_replay_host_history_keeps_the_session_sizes() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams, Instrument, Tick};
+        let events = (0..7)
+            .map(|minute| {
+                let price = if minute < 6 { 100.0 } else { 200.0 };
+                let fill = Tick::new(time(minute), price, 1.0, None);
+                ReplayEvent::new("A", time(minute), minute as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let driver = Arc::new(
+            ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap(),
+        );
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time(5));
+        let mut chart = Chart::new(BarData::new());
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Percentage(1.0),
+            ..Default::default()
+        });
+        chart.set_market_replay(Some(driver.clone()));
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        chart.show_elements();
+        let entry = chart.chart_type_params().renko_brick_size;
+        driver.set_speed(1.0).unwrap();
+        driver.advance(std::time::Duration::from_secs(60)).unwrap();
+        chart.pump(&ctx);
+        chart.show_elements();
+        assert_eq!(
+            chart.bars(SeriesId::MAIN).last().map(|bar| bar.close),
+            Some(200.0),
+            "playback shows the trade at 00:06"
+        );
+        let played = chart.chart_type_params().renko_brick_size;
+        chart.set_data(
+            SeriesId::MAIN,
+            (0..5).map(|minute| bar(minute, [100.0; 5])).collect(),
+        );
+        chart.show_elements();
+        let after = chart.chart_type_params().renko_brick_size;
+        assert_eq!([entry, played, after], [1.0; 3]);
     }
 
     /// Bar replay over recorded trades: one-trade bars build the unfinished chart bar from the
