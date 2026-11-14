@@ -65,7 +65,7 @@ use egui_charts::Chart;
 use egui_charts::chart::overlays::{BookProfile, OrderBookView};
 use egui_charts::data::{DepthHistory, DepthHistoryConfig, OrderFilter, OrderSizeTiers};
 use egui_charts::model::{Alert, AlertCondition};
-use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
+use egui_charts::model::{Bar, BarData, BoxSizeMethod, ChartType, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{
@@ -613,6 +613,7 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
+        size_by_atr(&mut chart);
         chart.set_event_visibility(
             cc.storage
                 .and_then(|storage| eframe::get_value(storage, "event_visibility"))
@@ -1131,26 +1132,23 @@ impl DemoApp {
 
     fn regenerate_bars(&mut self) {
         self.apply_session();
-        self.size_price_based_charts();
+        self.size_range_interval();
     }
 
-    /// The sizes of the price-based charts are in price units: take them from the bars on show.
-    fn size_price_based_charts(&mut self) {
-        let chart = &mut self.chart;
-        let mut params = chart.chart_type_params().clone();
-        let size = RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 0.5).brick_size;
-        if size > 0.0 && size.is_finite() {
-            params.renko_brick_size = size;
-            params.kagi_reversal = size;
+    /// A range interval names the size of its bars, in ticks of the instrument. The other
+    /// price-based sizes stay as the chart settings have them.
+    fn size_range_interval(&mut self) {
+        let Timeframe::Range(ticks) = self.state.timeframe else {
+            return;
+        };
+        let size = ticks.get() as f64 * self.live.instrument().tick_size.unwrap_or(0.01);
+        let params = self.chart.chart_type_params();
+        if params.range_size != size || params.range_size_method != BoxSizeMethod::Fixed {
+            let mut params = params.clone();
             params.range_size = size;
-            params.pnf_box_size = size;
+            params.range_size_method = BoxSizeMethod::Fixed;
+            self.chart.set_chart_type_params(params);
         }
-        if let Timeframe::Range(ticks) = self.state.timeframe {
-            let tick_size = self.live.instrument().tick_size.unwrap_or(0.01);
-            params.range_size = ticks.get() as f64 * tick_size;
-            params.range_size_method = egui_charts::model::BoxSizeMethod::Fixed;
-        }
-        chart.set_chart_type_params(params);
     }
 
     fn apply_session(&mut self) {
@@ -2309,7 +2307,7 @@ impl DemoApp {
             TopToolbarAction::ChartStyleSelected(ct) => {
                 self.state.chart_type = ct;
                 self.chart.set_chart_type(ct);
-                self.size_price_based_charts();
+                self.size_range_interval();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
             TopToolbarAction::OpenSymbolSearch => self
@@ -3631,7 +3629,7 @@ impl DemoApp {
         {
             self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
             self.loading_bars = false;
-            self.size_price_based_charts();
+            self.size_range_interval();
             self.annotate();
         }
         if !self.keyboard_dialog_open()
@@ -3696,8 +3694,8 @@ impl DemoApp {
                         own.sizing = true;
                     }
                 }
-                // The first bars of a symbol or interval of own data size the price-based
-                // chart types, as the end of a synthetic load does.
+                // The first bars of a symbol or interval of own data size a range interval, as
+                // the end of a synthetic load does.
                 egui_charts::widget::ChartEvent::DataLoaded {
                     series: SeriesId::MAIN,
                     bars,
@@ -3712,7 +3710,7 @@ impl DemoApp {
             }
         }
         if size {
-            self.size_price_based_charts();
+            self.size_range_interval();
         }
         if let Some(index) = replay_click.and_then(|pos| self.replay_start_bar(pos)) {
             let time = self.chart.state().shown()[index].time;
@@ -4400,6 +4398,21 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)
+}
+
+/// Gives the price-based chart types of `chart` half the 14-bar average true range of the bars
+/// on show, which suits any symbol, until a size is entered in the chart settings.
+fn size_by_atr(chart: &mut Chart) {
+    let mut params = chart.chart_type_params().clone();
+    let half_atr = BoxSizeMethod::Atr {
+        period: 14,
+        multiplier: 0.5,
+    };
+    params.renko_size_method = half_atr;
+    params.kagi_size_method = half_atr;
+    params.range_size_method = half_atr;
+    params.pnf_size_method = half_atr;
+    chart.set_chart_type_params(params);
 }
 
 fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str) {
@@ -9491,6 +9504,51 @@ mod tests {
             }
         }
     }
+
+    /// A size entered in the chart settings is the user's: no chart type, interval or symbol
+    /// choice replaces it. The types without an entered size keep a size taken from the bars on
+    /// show.
+    #[test]
+    fn entered_price_based_sizes_survive_navigation() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Kagi));
+        let mut settings = ChartSettingsState::from_chart(&app.chart);
+        let params = settings.chart_type_params.as_mut().unwrap();
+        params.kagi_size_method = BoxSizeMethod::Fixed;
+        params.kagi_reversal = 12.5;
+        app.apply_chart_settings(settings);
+        assert_eq!(app.chart.chart_type_params().kagi_reversal, 12.5);
+        let sample_brick = app.chart.chart_type_params().renko_brick_size;
+        for change in ["Point and Figure", "Kagi", "one hour", "BTCUSD"] {
+            match change {
+                "Point and Figure" => app.handle_top_toolbar(
+                    &ctx,
+                    TopToolbarAction::ChartStyleSelected(ChartType::PointAndFigure),
+                ),
+                "Kagi" => app.handle_top_toolbar(
+                    &ctx,
+                    TopToolbarAction::ChartStyleSelected(ChartType::Kagi),
+                ),
+                "one hour" => app
+                    .handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Hour1)),
+                symbol => app.switch_symbol(symbol),
+            }
+            settle(&mut app, &ctx);
+            let params = app.chart.chart_type_params();
+            assert_eq!(params.kagi_size_method, BoxSizeMethod::Fixed, "{change}");
+            assert_eq!(params.kagi_reversal, 12.5, "{change}");
+        }
+        // Bitcoin trades far above the sample symbol, and its bricks are sized to match.
+        let close = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
+        let brick = app.chart.chart_type_params().renko_brick_size;
+        assert!(
+            brick > sample_brick && brick < close / 10.0,
+            "{sample_brick} {brick} {close}"
+        );
+    }
+
     /// Selecting seconds must rebuild the same executions, including the current partial minute.
     #[test]
     fn interval_switch_rebuilds_the_same_executions() {
@@ -9528,7 +9586,7 @@ mod tests {
             let mut params = app.chart.chart_type_params().clone();
             params.range_size = 1.0;
             app.chart.set_chart_type_params(params);
-            app.size_price_based_charts();
+            app.size_range_interval();
             assert!((app.chart.chart_type_params().range_size - ticks * tick_size).abs() < 1e-10);
         }
         app.switch_timeframe(Timeframe::Min1);

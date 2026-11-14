@@ -24,8 +24,8 @@ pub(crate) struct OwnData {
     pub(crate) synthetic_paused: bool,
     /// The feed error shown last, so that a standing error is notified once.
     pub(crate) reported: Option<String>,
-    /// True from a symbol or interval change until its first bars arrive. The price-based
-    /// chart types are then sized from those bars.
+    /// True from a symbol or interval change until its first bars arrive. A range interval
+    /// then takes its size in ticks of the instrument.
     pub(crate) sizing: bool,
     /// The symbol search of the synthetic session, set aside while own data is on.
     pub(crate) search: SymbolSearchDialog,
@@ -120,6 +120,7 @@ impl DemoApp {
             .with_visible_candles(0)
             .build();
         self.formatting.apply(&mut chart);
+        super::super::size_by_atr(&mut chart);
         chart.set_event_visibility(self.chart.event_visibility().clone());
         chart.drawings_mut().tool_defaults = self.chart.drawings().tool_defaults.clone();
         // Bars are dated in the profile's zone, so the chart starts in it.
