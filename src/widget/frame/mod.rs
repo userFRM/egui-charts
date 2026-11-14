@@ -590,8 +590,10 @@ impl Chart {
         });
         // A button owns the whole gesture, including a drag that leaves the row. The chart's
         // own response goes back to the caller; the gesture handlers see a hover-only one.
-        let mut shown =
-            shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
+        // The other panes stand in for a price frame without height in what the caller gets.
+        let mut shown = shared_plot
+            .filter(|_| rect.height() == 0.0)
+            .map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         if self.pane_collapse_click(ui.ctx()) {
             response.flags.remove(egui::response::Flags::CLICKED);
             shown.flags.remove(egui::response::Flags::CLICKED);
@@ -685,21 +687,16 @@ impl Chart {
                                 .or(input.pointer.hover_pos())
                                 .is_some_and(|pos| axis_corner.contains(pos))
                     })));
-        let hover_rect = shared_plot.map_or_else(
-            || {
-                Rect::from_min_max(
-                    Pos2::new(
-                        chart_rect.left(),
-                        self.pane_layout
-                            .panes
-                            .iter()
-                            .map(|pane| pane.rect.top())
-                            .fold(chart_rect.top(), f32::min),
-                    ),
-                    Pos2::new(chart_rect.right(), time_axis_top),
-                )
-            },
-            |plot| plot.rect,
+        let hover_rect = Rect::from_min_max(
+            Pos2::new(
+                chart_rect.left(),
+                self.pane_layout
+                    .panes
+                    .iter()
+                    .map(|pane| pane.rect.top())
+                    .fold(chart_rect.top(), f32::min),
+            ),
+            Pos2::new(chart_rect.right(), time_axis_top),
         );
         let touch_readout_interaction = self.handle_touch_crosshair(
             ui,
@@ -748,7 +745,7 @@ impl Chart {
             response.rect = rect;
         }
 
-        // The visible pane drives time navigation even while the price pane has no height.
+        // The plots of the other panes drive time navigation as the price plot does.
         let mut time_response =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         time_response.flags.remove(readout_flags);
@@ -802,13 +799,23 @@ impl Chart {
         );
 
         // Handle double-click to reset axes
-        self.handle_double_click(&time_response, price_axis_rect, time_axis_rect);
+        self.handle_double_click(&time_response, time_axis_rect);
+
+        // The price axis: a drawing or a touch readout that owns the drag keeps it, as on the plot.
+        let mut axis_response = time_response.clone();
+        if is_drawing_interaction || touch_readout_interaction {
+            axis_response.flags.remove(egui::response::Flags::DRAGGED);
+        }
+        let price_axis_gestures = self.price_axis_gestures(ui, &axis_response, price_axis_rect);
+        if price_axis_gestures.reset {
+            self.state.price_scale_mut().reset();
+        }
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
-        let pending_price_zoom = self.handle_mouse_wheel(
+        self.handle_mouse_wheel(
             ui,
             &time_response,
             chart_width,
@@ -1348,7 +1355,12 @@ impl Chart {
                 self.fit_main_marker_scale(&painter, price_rect, main_margins);
             }
         }
-        self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
+        // After the fit, so that a scale on automatic is zoomed from this frame's range.
+        price_axis_gestures.zoom(
+            self.state.price_scale_mut(),
+            price_rect.top(),
+            price_rect.bottom(),
+        );
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
             self.state.price_scale_mut().set_bar_ratio_locked(
