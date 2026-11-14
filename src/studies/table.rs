@@ -21,7 +21,8 @@ pub struct StudyTable {
     /// Background of every cell of each row, in row order. Rows past its end, and every row
     /// when it is empty, keep the default cell background.
     pub cell_colors: Vec<egui::Color32>,
-    /// Background of the column headings, or `None` for the default.
+    /// Background of the column headings, which also frames the table in white, or `None` for
+    /// the default.
     pub header_color: Option<egui::Color32>,
     /// Text of the column headings and of rows with a background, or `None` for the default.
     /// Text over a background it does not contrast with turns towards black.
