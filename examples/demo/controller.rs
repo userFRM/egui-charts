@@ -65,7 +65,7 @@ use egui_charts::Chart;
 use egui_charts::chart::overlays::{BookProfile, OrderBookView};
 use egui_charts::data::{DepthHistory, DepthHistoryConfig, OrderFilter, OrderSizeTiers};
 use egui_charts::model::{Alert, AlertCondition};
-use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
+use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Tick, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{
@@ -1103,13 +1103,13 @@ impl DemoApp {
 
     fn sync_symbol(&mut self) {
         self.copied_drawing = None;
+        self.time_and_sales.clear();
         if self.own_data.is_some() {
             self.state.symbol = self.chart.symbol().to_owned();
             return;
         }
         let spec = DemoSymbol::find(self.chart.symbol());
         self.live.set_symbol(spec.symbol);
-        self.time_and_sales.clear();
         self.watchlist.set_selected(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
@@ -2738,9 +2738,21 @@ impl DemoApp {
                 }),
             )
             .show(ui, |ui| match which {
+                SidePanel::TimeAndSales
+                    if self
+                        .own_data
+                        .as_ref()
+                        .is_some_and(|own| !own.profile.has_trades()) =>
+                {
+                    EmptyState::new("No trades")
+                        .description(
+                            "The data source maps no trades. A trades route in its Live step \
+                             lists them here.",
+                        )
+                        .show(ui);
+                }
                 SidePanel::Alerts
                 | SidePanel::Watchlist
-                | SidePanel::TimeAndSales
                 | SidePanel::OrderFlow
                 | SidePanel::Highlights
                 | SidePanel::Screener
@@ -3001,7 +3013,10 @@ impl DemoApp {
     /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
     /// and sales the executions of the live feed and reports matching filters as notifications.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
-        if self.own_data.is_some() {
+        if let Some(own) = &self.own_data {
+            let (symbol, timeframe) = (self.chart.symbol(), self.chart.timeframe());
+            let tape = own.feed.drain_tape(symbol, timeframe);
+            self.feed_time_and_sales(tape);
             return;
         }
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
@@ -3076,9 +3091,17 @@ impl DemoApp {
             .set_timezone(timezone.unwrap_or_default());
         self.highlights.set_symbol(&chart_symbol);
         self.news.set_symbol(&chart_symbol);
+        let tape = self.live.drain_tape();
+        self.feed_time_and_sales(tape);
+    }
+
+    /// Lists `tape`, the trades the chart's feed received since the last frame, in time and
+    /// sales, notifies a size filter that matched, and formats the panel for the chart's
+    /// instrument and the chosen zone.
+    fn feed_time_and_sales(&mut self, tape: Vec<Tick>) {
         let instrument = self.chart.instrument();
         let mut alert = None;
-        for trade in self.live.drain_tape() {
+        for trade in tape {
             if self.time_and_sales.push(trade.clone()).is_some() {
                 alert = Some(trade);
             }

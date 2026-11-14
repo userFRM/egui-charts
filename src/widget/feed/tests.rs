@@ -2639,6 +2639,66 @@ fn range_bars_are_built_from_the_held_trades() {
     );
 }
 
+/// Trades that arrive after OHLC history keep the range bars approximated before the bar that
+/// holds the first trade, on either side of a replay cursor at that trade.
+#[test]
+fn range_bars_keep_the_approximated_history_before_the_first_trade() {
+    use crate::model::RangeBarSource::{OhlcApproximation, OhlcThenExecutions};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_chart_type(crate::model::ChartType::Range);
+    chart.set_chart_type_params(crate::model::ChartTypeParams {
+        range_size: 1.0,
+        ..Default::default()
+    });
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    // Flat minute bars at 100 to 105: range bars closing at 101 to 105, then one at 105 in
+    // progress.
+    feed.page().send(page(bars(6), true));
+    frames.run(&mut chart);
+    let closes = |chart: &Chart| {
+        chart
+            .state
+            .shown()
+            .iter()
+            .map(|bar| bar.close)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(closes(&chart), [101.0, 102.0, 103.0, 104.0, 105.0, 105.0]);
+    let history = chart.state.shown()[..4].to_vec();
+    // Trades at 105 and 106 in the last bar's minute replace that bar: the bars before it give
+    // the range bars closing at 101 to 104, and the trades one from 105 to 106.
+    let minute = bars(6)[5].time;
+    let sink = feed.sink();
+    for (seconds, price) in [(10, 105.0), (20, 106.0)] {
+        sink.push_tick(Tick::new(
+            minute + TimeDelta::seconds(seconds),
+            price,
+            1.0,
+            None,
+        ));
+    }
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(OhlcThenExecutions));
+    assert_eq!(closes(&chart), [101.0, 102.0, 103.0, 104.0, 106.0]);
+    assert_eq!(chart.state.shown()[..4], history);
+    // Replay keeps the five completed bars: their approximation before the first trade, the
+    // approximated range bars and that trade's range bar after it.
+    for (seconds, source, last) in [
+        (5, OhlcApproximation, 104.0),
+        (15, OhlcThenExecutions, 105.0),
+    ] {
+        chart.set_replay_time(Some(minute + TimeDelta::seconds(seconds)));
+        frames.run(&mut chart);
+        assert_eq!(chart.range_bar_source(), Some(source), "{seconds} s");
+        assert_eq!(chart.state.shown()[..4], history, "{seconds} s");
+        assert_eq!(chart.state.shown()[4].close, last, "{seconds} s");
+        assert_eq!(chart.state.shown().len(), 5, "{seconds} s");
+    }
+}
+
 #[test]
 fn replay_reset_removes_future_data_from_the_chart() {
     let feed = Arc::new(Script::default());
