@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 /// One finding of the host's analytics: a marker, a level or a zone, for the chart to draw in the
 /// theme's colours for its direction and category.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Signal {
     /// Identifies the signal within its subscription: an upsert with the same id replaces it.
     pub id: SignalId,
@@ -16,6 +17,20 @@ pub struct Signal {
     pub label: Option<String>,
     /// Text shown while the pointer is over the signal.
     pub tooltip: Option<String>,
+}
+
+impl Signal {
+    /// A signal without a label or tooltip. Assign [`label`](Self::label) and
+    /// [`tooltip`](Self::tooltip) to add them.
+    pub fn new(id: SignalId, shape: SignalShape, category: impl Into<String>) -> Self {
+        Self {
+            id,
+            shape,
+            category: category.into(),
+            label: None,
+            tooltip: None,
+        }
+    }
 }
 
 /// Identifies a signal. The host chooses it.

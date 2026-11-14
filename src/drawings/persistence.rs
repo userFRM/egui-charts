@@ -49,6 +49,7 @@ use std::fmt;
 /// these values are independent of chart pan/zoom and of the loaded history,
 /// making them suitable for long-term storage and cross-device synchronization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredCoord {
     /// Timestamp in Unix epoch milliseconds.
     pub ts_ms: i64,
@@ -97,6 +98,7 @@ fn is_zero(value: &u32) -> bool {
 /// type and every setting. Convert between the two with [`drawing_to_stored`]
 /// and [`stored_to_drawing`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredDrawing {
     /// Unique identifier (string for backend compatibility).
     pub id: String,
@@ -317,6 +319,7 @@ impl StoredDrawing {
 /// It is read only through [`Self::from_json`], which checks the version,
 /// migrates older files and loads each drawing on its own.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct DrawingStorage {
     /// Format version, [`Self::CURRENT_VERSION`] once loaded
     pub version: u32,
@@ -332,6 +335,7 @@ pub struct DrawingStorage {
 
 /// Storage metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StorageMetadata {
     /// When the storage was created
     pub created_at: i64,
@@ -764,6 +768,7 @@ impl DrawingStorage {
 
 /// Why [`DrawingStorage::to_json`] did not save.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SaveError {
     /// A drawing holds NaN or an infinity, which JSON cannot store, or a size or pitchfork
     /// level out of the range drawings are drawn at, and loading skips it.
@@ -846,6 +851,7 @@ impl std::error::Error for SaveError {
 /// A drawing [`DrawingStorage::from_json`] left out because it could not be
 /// read or its id was already taken.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SkippedDrawing {
     /// The position of the entry in the file's list of drawings, counted from 0.
     pub index: usize,

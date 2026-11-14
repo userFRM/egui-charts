@@ -625,7 +625,7 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let is_drawing_interaction = false;
+        let (is_drawing_interaction, drawing_gesture) = (false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -636,10 +636,12 @@ impl Chart {
                 self.drawings.end_selection_area();
             }
         }
+        // A Ctrl or Command press on empty space arms a selection area, which only a drag starts.
+        #[cfg(feature = "drawings")]
+        let box_selection = self.drawings.box_selection_input(ui);
         // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
-        let is_drawing_interaction = self.drawings.box_selection_input(ui)
-            || self.drawings.active_tool.is_some()
+        let drawing_gesture = self.drawings.active_tool.is_some()
             || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
@@ -657,6 +659,8 @@ impl Chart {
                                 .any(|d| d.id == id && !d.locked)
                         })
                 });
+        #[cfg(feature = "drawings")]
+        let is_drawing_interaction = box_selection || drawing_gesture;
         let show_price_button =
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
@@ -4026,6 +4030,14 @@ impl Chart {
         if let Some(id) = overlay_remove {
             self.user_action(|chart| chart.remove_series(id));
         }
+        // The pane layout reads it to maximize or restore the price pane.
+        self.price_plot_double_click = response.double_clicked()
+            && !drawing_gesture
+            && !eraser_mode
+            && self.host_events.target.is_none()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|pos| chart_rect.contains(pos) && pos.y > legend_bottom);
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
         shown

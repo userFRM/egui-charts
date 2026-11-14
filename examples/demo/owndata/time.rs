@@ -232,6 +232,17 @@ pub(crate) fn guess(field: FieldPath, value: &Value) -> TimeSpec {
     TimeSpec::Instant { field, unit }
 }
 
+/// The reading of a time-of-day field that reads `value`: text such as `09:30:00`, else seconds
+/// since midnight, else milliseconds since midnight. `held` when none of them reads it. A
+/// number below 86,400 is therefore read as seconds; as milliseconds it would fall in the first
+/// minute and a half of the day. The dialog offers it and the user can change it.
+pub(crate) fn clock_unit(value: &Value, held: ClockUnit) -> ClockUnit {
+    [ClockUnit::Text, ClockUnit::Seconds, ClockUnit::Milliseconds]
+        .into_iter()
+        .find(|unit| time_of_day(value, unit).is_some())
+        .unwrap_or(held)
+}
+
 /// `instant` as the text of `{from}` or `{to}`. The two date forms print the calendar day of
 /// `instant` in `zone`.
 pub(crate) fn print(instant: DateTime<Utc>, format: &RangeFormat, zone: &TimezoneId) -> String {

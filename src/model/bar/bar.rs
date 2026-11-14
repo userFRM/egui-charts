@@ -46,6 +46,7 @@ pub(crate) fn last_with_value(bars: &[Bar]) -> Option<&Bar> {
 /// assert!(bar.is_bullish()); // close > open
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Bar {
     /// Timestamp of the bar. Read from JSON as an RFC 3339 time, or as a date alone
     /// (`"2024-03-15"`), which is midnight UTC of that day, the open of its day bar.
