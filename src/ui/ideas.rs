@@ -55,6 +55,16 @@ pub struct Idea {
 impl Idea {
     /// An entry without a title, instrument, interval or attachment: set them as known. A short
     /// post keeps the empty title.
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use egui_charts::ui::ideas::{Idea, IdeaKind, IdeaPage};
+    ///
+    /// let mut idea = Idea::new("1", IdeaKind::Idea, "Breakout above the range", "analyst", Utc::now());
+    /// idea.title = "Range breakout".into();
+    /// let mut page = IdeaPage::default();
+    /// page.items.push(idea);
+    /// ```
     pub fn new(
         id: impl Into<String>,
         kind: IdeaKind,

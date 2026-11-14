@@ -153,27 +153,14 @@ type BarTimes = (
     Vec<DateTime<Utc>>,
 );
 
-/// The part of a [`MarksRequest`] the demo answers.
-struct View {
-    symbol: String,
-    timeframe: Timeframe,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
-}
-
 impl Marks for DemoMarks {
     fn marks(&self, request: MarksRequest, reply: Reply<MarksPage>) {
-        reply.send(Ok(self.annotations(&View {
-            symbol: request.symbol,
-            timeframe: request.timeframe,
-            from: request.from,
-            to: request.to,
-        })));
+        reply.send(Ok(self.annotations(&request)));
     }
 }
 
 impl DemoMarks {
-    fn annotations(&self, request: &View) -> MarksPage {
+    fn annotations(&self, request: &MarksRequest) -> MarksPage {
         let mut page = MarksPage::default();
         let Some(spec) = DemoSymbol::catalog()
             .iter()
@@ -283,12 +270,8 @@ mod tests {
             notifications: None,
             times: Default::default(),
         };
-        let mut request = View {
-            symbol: "SAMPLE".into(),
-            timeframe: Timeframe::Min1,
-            from: now - TimeDelta::hours(2),
-            to: now,
-        };
+        let mut request =
+            MarksRequest::new("SAMPLE", Timeframe::Min1, now - TimeDelta::hours(2), now);
         let initial = source.annotations(&request);
         assert!(!initial.events.is_empty());
         request.from = now + TimeDelta::minutes(1);

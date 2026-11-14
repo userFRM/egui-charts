@@ -158,6 +158,13 @@ impl<'a> TradingLineOptions<'a> {
     /// with no profit or loss, no last price and a [`point_value`](Self::point_value) of one.
     /// `currency` names the account's currency and `tick_size` rounds dragged prices. Assign
     /// the other fields to offer more.
+    ///
+    /// ```
+    /// use egui_charts::chart::TradingLineOptions;
+    ///
+    /// let mut options = TradingLineOptions::new("USD", 0.25);
+    /// options.modify = true;
+    /// ```
     pub fn new(currency: &'a str, tick_size: f64) -> Self {
         Self {
             show_orders: true,

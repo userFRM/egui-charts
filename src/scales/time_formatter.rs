@@ -30,6 +30,26 @@ pub struct TickMarkContext<'a> {
     pub locale: Option<&'a str>,
 }
 
+impl<'a> TickMarkContext<'a> {
+    /// A tick at `time` of `mark_type` precision with English names: assign
+    /// [`locale`](Self::locale) for another language.
+    ///
+    /// ```
+    /// use chrono::{DateTime, Utc};
+    /// use egui_charts::scales::{TickMarkContext, TickMarkType};
+    ///
+    /// let context = TickMarkContext::new(DateTime::<Utc>::UNIX_EPOCH, TickMarkType::Year);
+    /// assert_eq!(context.locale, None);
+    /// ```
+    pub fn new(time: DateTime<Utc>, mark_type: TickMarkType) -> Self {
+        Self {
+            time,
+            mark_type,
+            locale: None,
+        }
+    }
+}
+
 /// Trait for custom time formatting
 /// Allows users to customize how time labels are displayed on the axis
 pub trait TimeFormatter: Send + Sync {

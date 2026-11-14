@@ -81,6 +81,13 @@ pub enum MarkerZOrder {
 }
 
 /// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
+///
+/// ```
+/// use egui_charts::model::MarkerOptions;
+///
+/// let mut options = MarkerOptions::default();
+/// options.auto_scale = false;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MarkerOptions {
@@ -230,6 +237,13 @@ impl Marker {
 
 /// Colours and lifetime of the marks that show where the close of a series rose or fell
 /// between live updates; see `Chart::set_change_markers`.
+///
+/// ```
+/// use egui_charts::model::ChangeMarkers;
+///
+/// let mut markers = ChangeMarkers::default();
+/// markers.duration = std::time::Duration::from_millis(500);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ChangeMarkers {

@@ -63,6 +63,19 @@ impl Default for Theme {
 }
 
 /// Colours of the UI chrome.
+///
+/// ```
+/// use egui_charts::theme::{ChartColors, Radii, Spacing, UiColors};
+///
+/// let mut ui = UiColors::default();
+/// ui.text = egui::Color32::WHITE;
+/// let mut chart = ChartColors::default();
+/// chart.grid_line = egui::Color32::DARK_GRAY;
+/// let mut spacing = Spacing::default();
+/// spacing.md = 10.0;
+/// let mut radii = Radii::default();
+/// radii.sm = 3.0;
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]

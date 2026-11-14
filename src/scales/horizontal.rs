@@ -151,6 +151,26 @@ pub struct TickMarkLayout {
     pub uniform_distribution: bool,
 }
 
+impl TickMarkLayout {
+    /// A plot `width` points wide with `bar_spacing` points per slot and labels at least
+    /// `min_spacing` points apart, of one weight all or none when `uniform_distribution`.
+    ///
+    /// ```
+    /// use egui_charts::scales::TickMarkLayout;
+    ///
+    /// let layout = TickMarkLayout::new(800.0, 6.0, 80.0, false);
+    /// assert_eq!(layout.width, 800.0);
+    /// ```
+    pub fn new(width: f32, bar_spacing: f32, min_spacing: f32, uniform_distribution: bool) -> Self {
+        Self {
+            width,
+            bar_spacing,
+            min_spacing,
+            uniform_distribution,
+        }
+    }
+}
+
 /// What the keys of the horizontal axis mean: which of them are labelled, how, and how the
 /// crosshair label reads.
 ///

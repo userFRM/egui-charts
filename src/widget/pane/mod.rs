@@ -63,6 +63,13 @@ fn upgraded_study(
 
 /// Behaviour and colours of the separators between panes, set with
 /// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
+///
+/// ```
+/// use egui_charts::widget::PaneOptions;
+///
+/// let mut options = PaneOptions::default();
+/// options.resizable = false;
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PaneOptions {

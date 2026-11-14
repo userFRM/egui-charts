@@ -77,6 +77,13 @@ fn pixel_conflation_threshold() -> Option<f32> {
 ///
 /// Tick spacing is a property of each scale, set through
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
+///
+/// ```
+/// use egui_charts::config::PriceAxisOptions;
+///
+/// let mut options = PriceAxisOptions::default();
+/// options.show_symbol_name = true;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

@@ -20,6 +20,13 @@ pub enum SeriesFormat {
 }
 
 /// Saved numeric display settings for a bar series. Values and scale modes stay unchanged.
+///
+/// ```
+/// use egui_charts::model::SeriesDisplayFormat;
+///
+/// let mut format = SeriesDisplayFormat::default();
+/// format.precision = 4;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -82,6 +89,15 @@ impl AutoscaleMargins {
 }
 
 /// Prices and extra screen space contributed to one automatically fitted price scale.
+///
+/// ```
+/// use egui_charts::model::{AutoscaleInfo, AutoscaleMargins};
+///
+/// let mut info = AutoscaleInfo::from((90.0, 110.0));
+/// let mut margins = AutoscaleMargins::default();
+/// margins.top = 12.0;
+/// info.margins = margins;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct AutoscaleInfo {
@@ -179,6 +195,13 @@ impl Default for SeriesAlerts {
 ///
 /// The chart-wide `ChartConfig::show_symbol_last_val` and `show_price_line` switches hide every
 /// series' labels and price lines.
+///
+/// ```
+/// use egui_charts::model::SeriesStyle;
+///
+/// let mut style = SeriesStyle::default();
+/// style.base_line_visible = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

@@ -224,6 +224,13 @@ pub enum PrimitivePass {
 /// Drawings retain priority; built-in series still follow series visual order.
 /// Within a renderer, return its best object using these same pass and distance rules,
 /// breaking ties in reverse paint order. Object ids are local to the pointer's target.
+///
+/// ```
+/// use egui_charts::widget::PrimitiveHit;
+///
+/// let mut hit = PrimitiveHit::new(egui::CursorIcon::PointingHand);
+/// hit.object_id = Some("level".into());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PrimitiveHit {

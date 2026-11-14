@@ -28,6 +28,14 @@ pub struct SavedStudy {
 }
 
 /// The markers and price lines of one bar series of a [`ChartSnapshot`].
+///
+/// ```
+/// use egui_charts::model::MarkerOptions;
+/// use egui_charts::widget::SavedAnnotations;
+///
+/// let mut annotations = SavedAnnotations::default();
+/// annotations.options = MarkerOptions::default();
+/// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SavedAnnotations {

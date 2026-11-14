@@ -25,6 +25,33 @@ pub struct HostMenuContext {
     pub price: f64,
 }
 
+impl HostMenuContext {
+    /// A click on `target` at `price`, near the bar or element at `time` if there is one.
+    ///
+    /// ```
+    /// use egui_charts::ui::context_menu::HostMenuContext;
+    /// use egui_charts::widget::RightClickTarget;
+    ///
+    /// let target = RightClickTarget::Background {
+    ///     pos: egui::pos2(10.0, 20.0),
+    ///     price: 100.0,
+    /// };
+    /// let context = HostMenuContext::new(target, None, 100.0);
+    /// assert_eq!(context.price, 100.0);
+    /// ```
+    pub fn new(
+        target: RightClickTarget,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+        price: f64,
+    ) -> Self {
+        Self {
+            target,
+            time,
+            price,
+        }
+    }
+}
+
 /// A host row appended to the chart, series and drawing menus in registration order.
 ///
 /// Use [`Self::when`] to restrict a row to particular click targets. Host ids must be unique

@@ -58,6 +58,13 @@ pub struct Bracket {
 
 impl Bracket {
     /// A bracket of `value`, read as `mode` says.
+    ///
+    /// ```
+    /// use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset};
+    ///
+    /// let mut preset = OrderPreset::new("Scalp", 2.0);
+    /// preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
+    /// ```
     pub fn new(mode: BracketMode, value: f64) -> Self {
         Self { mode, value }
     }

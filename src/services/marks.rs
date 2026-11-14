@@ -29,6 +29,33 @@ pub struct MarksRequest {
     pub to: DateTime<Utc>,
 }
 
+impl MarksRequest {
+    /// The view of `symbol` at `timeframe` from `from` to `to`, both included.
+    ///
+    /// ```
+    /// use chrono::{TimeDelta, Utc};
+    /// use egui_charts::model::Timeframe;
+    /// use egui_charts::services::MarksRequest;
+    ///
+    /// let to = Utc::now();
+    /// let request = MarksRequest::new("AAPL", Timeframe::Min5, to - TimeDelta::hours(1), to);
+    /// assert_eq!(request.symbol, "AAPL");
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        timeframe: Timeframe,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timeframe,
+            from,
+            to,
+        }
+    }
+}
+
 /// One complete answer for a visible range. Empty vectors clear the source's marks.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]

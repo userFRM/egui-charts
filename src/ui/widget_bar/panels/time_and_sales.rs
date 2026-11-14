@@ -40,6 +40,15 @@ impl TradeSizeFilter {
 }
 
 /// Formatting of the time and sales panel.
+///
+/// ```
+/// use egui_charts::ui::widget_bar::{TimeAndSalesConfig, TradeSizeFilter};
+///
+/// let mut config = TimeAndSalesConfig::default();
+/// config.size_decimals = Some(0);
+/// let mut filter = TradeSizeFilter::new(100.0);
+/// filter.sound = true;
+/// ```
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct TimeAndSalesConfig {

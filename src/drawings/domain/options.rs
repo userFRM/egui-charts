@@ -965,6 +965,13 @@ impl PositionSizing {
 /// Statistics and account conversion for long and short position drawings.
 /// New drawings show full statistics only while selected. Currency conversion is supplied
 /// by the host: the library never downloads exchange rates.
+///
+/// ```
+/// use egui_charts::drawings::PositionReadout;
+///
+/// let mut readout = PositionReadout::default();
+/// readout.account_currency = Some("USD".into());
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -1075,6 +1082,14 @@ impl PositionReadout {
 /// stop colours, whose opacity is that of their zones, are
 /// [`Drawing::position_target_color`](crate::drawings::Drawing::position_target_color) and
 /// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
+///
+/// ```
+/// use egui_charts::drawings::PositionStyle;
+///
+/// let mut style = PositionStyle::default();
+/// style.line_width = 2.0;
+/// assert!(style.is_valid());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -1140,6 +1155,14 @@ pub struct NoteTextStyle {
 
 impl NoteTextStyle {
     /// Text of `color` at `font_size` points, neither bold nor italic.
+    ///
+    /// ```
+    /// use egui_charts::drawings::NoteTextStyle;
+    ///
+    /// let mut style = NoteTextStyle::new([255, 255, 255, 255], 14.0);
+    /// style.bold = true;
+    /// assert!(style.is_valid());
+    /// ```
     pub fn new(color: [u8; 4], font_size: f32) -> Self {
         Self {
             color,
@@ -1250,6 +1273,13 @@ pub enum LineTextOrientation {
 /// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
 /// saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
+///
+/// ```
+/// use egui_charts::drawings::LineMeasurements;
+///
+/// let mut measurements = LineMeasurements::default();
+/// measurements.bar_count = true;
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

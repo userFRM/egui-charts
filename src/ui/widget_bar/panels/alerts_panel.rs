@@ -71,6 +71,13 @@ pub enum AlertSortKey {
 }
 
 /// Saved presentation of the manager. Every optional field starts visible.
+///
+/// ```
+/// use egui_charts::ui::widget_bar::AlertListOptions;
+///
+/// let mut options = AlertListOptions::default();
+/// options.descending = true;
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

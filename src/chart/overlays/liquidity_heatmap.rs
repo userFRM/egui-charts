@@ -45,6 +45,13 @@ struct Column {
 /// Brightness and resting-size range of the liquidity heatmap. Defaults shade logarithmically
 /// against an upper cut-off shared by every held column. Does not change the sampled depth, best
 /// bid/ask lines or live book profile. Serializable for host chart settings.
+///
+/// ```
+/// use egui_charts::chart::overlays::LiquidityHeatmapConfig;
+///
+/// let mut config = LiquidityHeatmapConfig::default();
+/// config.brightness = 1.5;
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

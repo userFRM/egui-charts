@@ -13,6 +13,14 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
 }
 
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
+///
+/// ```
+/// use egui_charts::data::FootprintLevel;
+///
+/// let mut level = FootprintLevel::default();
+/// level.level = 4;
+/// level.ask = 12.0;
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct FootprintLevel {

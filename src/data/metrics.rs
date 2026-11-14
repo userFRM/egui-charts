@@ -77,6 +77,26 @@ pub struct MetricRequest {
     pub count: usize,
 }
 
+impl MetricRequest {
+    /// The latest `count` points of `metric` for `symbol`: assign [`before`](Self::before) to
+    /// page back.
+    ///
+    /// ```
+    /// use egui_charts::data::MetricRequest;
+    ///
+    /// let request = MetricRequest::new("AAPL", "open_interest", 100);
+    /// assert_eq!(request.before, None);
+    /// ```
+    pub fn new(symbol: impl Into<String>, metric: impl Into<String>, count: usize) -> Self {
+        Self {
+            symbol: symbol.into(),
+            metric: metric.into(),
+            before: None,
+            count,
+        }
+    }
+}
+
 /// A page of metric history, in any order. The chart sorts and deduplicates by timestamp.
 /// A live correction of the same timestamp takes precedence over history.
 #[derive(Clone, Debug, Default, PartialEq)]

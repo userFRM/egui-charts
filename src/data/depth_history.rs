@@ -59,6 +59,13 @@ impl Default for DepthHistoryConfig {
 
 /// The resting size at each price row of the book over `[time, time + span)`, and the largest
 /// individual order in each row when the history samples individual orders.
+///
+/// ```
+/// use egui_charts::data::DepthColumn;
+///
+/// let mut column = DepthColumn::default();
+/// column.bids = vec![(100, 5.0)];
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct DepthColumn {

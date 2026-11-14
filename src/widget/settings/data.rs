@@ -544,6 +544,13 @@ impl Default for AlertsSettings {
 }
 
 /// Independent order-flow layers and their appearance. Missing saved fields keep layers off.
+///
+/// ```
+/// use egui_charts::widget::settings::OrderFlowSettings;
+///
+/// let mut settings = OrderFlowSettings::default();
+/// settings.show_heatmap = true;
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

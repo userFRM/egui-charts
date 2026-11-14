@@ -185,6 +185,13 @@ pub struct PriceScaleOptions {
 ///
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
+///
+/// ```
+/// use egui_charts::scales::PriceTransform;
+///
+/// let mut transform = PriceTransform::default();
+/// transform.base = 100.0;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct PriceTransform {

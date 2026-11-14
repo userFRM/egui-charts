@@ -12,6 +12,13 @@ use crate::services::SignalEvent;
 /// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
 /// ticks without reversing. If any fill identifies its aggressor, at least three distinct
 /// aggressors are required. Unknown-side fills are excluded.
+///
+/// ```
+/// use egui_charts::services::{StopRunRule, StopSweepRule};
+///
+/// let rules = (StopRunRule::default(), StopSweepRule::default());
+/// println!("{rules:?}");
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct StopRunRule;

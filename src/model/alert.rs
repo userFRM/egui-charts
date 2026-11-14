@@ -151,6 +151,14 @@ impl AlertDelivery {
 
 /// The source view and study definitions captured when an alert is created. The alert's
 /// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
+///
+/// ```
+/// use egui_charts::model::{AlertCalendar, AlertInputs, AlertStudy};
+///
+/// let mut inputs = AlertInputs::default();
+/// inputs.calendar = Some(AlertCalendar::new("BTCUSD"));
+/// inputs.studies = vec![AlertStudy::new(0, "RSI", Vec::new())];
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct AlertInputs {
@@ -226,6 +234,25 @@ pub struct AlertCalendar {
     pub session: Option<super::Session>,
 }
 
+impl AlertCalendar {
+    /// The calendar of `symbol` with a continuous session and no exchange zone: assign
+    /// [`timezone`](Self::timezone) and [`session`](Self::session) for exchange hours.
+    ///
+    /// ```
+    /// use egui_charts::model::AlertCalendar;
+    ///
+    /// let calendar = AlertCalendar::new("BTCUSD");
+    /// assert_eq!(calendar.session, None);
+    /// ```
+    pub fn new(symbol: impl Into<String>) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timezone: None,
+            session: None,
+        }
+    }
+}
+
 /// Serializable calculation inputs of a study, without computed values or shared stream state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -236,6 +263,28 @@ pub struct AlertStudy {
     pub name: String,
     /// Typed parameters, including auxiliary symbols and intervals.
     pub inputs: Vec<(String, super::InputValue)>,
+}
+
+impl AlertStudy {
+    /// The study `name`, known to the alert sources as `id`, calculated with `inputs`.
+    ///
+    /// ```
+    /// use egui_charts::model::{AlertStudy, InputValue};
+    ///
+    /// let study = AlertStudy::new(0, "RSI", vec![("length".into(), InputValue::Length(14))]);
+    /// assert_eq!(study.name, "RSI");
+    /// ```
+    pub fn new(
+        id: usize,
+        name: impl Into<String>,
+        inputs: Vec<(String, super::InputValue)>,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            inputs,
+        }
+    }
 }
 
 impl Alert {
@@ -927,6 +976,18 @@ impl NotificationWindow {
 impl NotificationSchedule {
     /// Delivery on `days` inside `windows`, both read on the clock of `timezone`;
     /// [`is_valid`](Self::is_valid) asks for at least one of each.
+    ///
+    /// ```
+    /// use chrono::{NaiveTime, Weekday};
+    /// use egui_charts::model::{NotificationSchedule, NotificationWindow, TimezoneId};
+    ///
+    /// let window = NotificationWindow::new(
+    ///     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+    ///     NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+    /// );
+    /// let schedule = NotificationSchedule::new(TimezoneId::utc(), vec![Weekday::Mon], vec![window]);
+    /// assert!(schedule.is_valid());
+    /// ```
     pub fn new(timezone: TimezoneId, days: Vec<Weekday>, windows: Vec<NotificationWindow>) -> Self {
         Self {
             timezone,

@@ -589,6 +589,37 @@ impl Default for KagiStyle {
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
 /// step, marker, area, HLC area, baseline and Kagi chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
+///
+/// ```
+/// use egui_charts::model::{
+///     CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle, HighLowStyle, HlcAreaStyle,
+///     HollowStyle, KagiStyle, VolumeCandlesStyle,
+/// };
+///
+/// let mut styles = ChartTypeStyles::default();
+/// let mut candles = CandlesStyle::default();
+/// candles.wick_visible = false;
+/// styles.candles = candles;
+/// let mut heikin = HeikinStyle::default();
+/// heikin.color_by_previous_close = true;
+/// styles.heikin = heikin;
+/// let mut hollow = HollowStyle::default();
+/// hollow.wick_visible = false;
+/// styles.hollow = hollow;
+/// let mut volume_candles = VolumeCandlesStyle::default();
+/// volume_candles.border_visible = false;
+/// styles.volume_candles = volume_candles;
+/// let mut high_low = HighLowStyle::default();
+/// high_low.labels_visible = false;
+/// styles.high_low = high_low;
+/// let mut hlc_area = HlcAreaStyle::default();
+/// hlc_area.high_line_visible = false;
+/// styles.hlc_area = hlc_area;
+/// let mut kagi = KagiStyle::default();
+/// kagi.thick_width = 3.0;
+/// styles.kagi = kagi;
+/// styles.columns = ColumnsStyle::default();
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

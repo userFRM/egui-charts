@@ -23,6 +23,13 @@ use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
 /// Host number formatters shared by legends and tooltips. Missing entries retain the
 /// renderer's instrument precision and built-in formatting. Prices use instrument units;
 /// percentages use percentage points, so `5.0` means 5%.
+///
+/// ```
+/// use egui_charts::widget::ValueFormatters;
+///
+/// let formatters = ValueFormatters::default();
+/// assert!(formatters.price.is_none());
+/// ```
 #[derive(Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct ValueFormatters<'a> {

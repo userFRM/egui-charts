@@ -29,6 +29,13 @@ pub enum AxisSide {
 }
 
 /// Layout of a pane's axes, independent of their units, ranges and source assignments.
+///
+/// ```
+/// use egui_charts::model::PaneAxisOptions;
+///
+/// let mut options = PaneAxisOptions::default();
+/// options.hide_unused = true;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

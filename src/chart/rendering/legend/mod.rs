@@ -33,6 +33,14 @@ pub struct LegendStatus<'a> {
 
 impl<'a> LegendStatus<'a> {
     /// A mark showing `text` in `color` on `background`.
+    ///
+    /// ```
+    /// use egui::Color32;
+    /// use egui_charts::widget::LegendStatus;
+    ///
+    /// let status = LegendStatus::new("Halted", Color32::WHITE, Color32::DARK_RED);
+    /// assert_eq!(status.text, "Halted");
+    /// ```
     pub fn new(text: &'a str, color: Color32, background: Color32) -> Self {
         Self {
             text,

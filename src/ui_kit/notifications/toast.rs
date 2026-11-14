@@ -75,6 +75,14 @@ pub struct TradingToast {
 impl TradingToast {
     /// A placed order without a logo: assign [`executed`](Self::executed) for a fill and
     /// [`logo`](Self::logo) to show the symbol's logo.
+    ///
+    /// ```
+    /// use egui_charts::model::OrderSide;
+    /// use egui_charts::ui_kit::notifications::TradingToast;
+    ///
+    /// let mut toast = TradingToast::new("AAPL", OrderSide::Buy, 10.0, "189.25");
+    /// toast.executed = true;
+    /// ```
     pub fn new(
         symbol: impl Into<String>,
         side: crate::model::OrderSide,

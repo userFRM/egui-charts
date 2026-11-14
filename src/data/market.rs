@@ -238,6 +238,24 @@ pub struct ScreenerFilter {
     pub value: f64,
 }
 
+impl ScreenerFilter {
+    /// Rows whose `column` compares to `value` as `op` says.
+    ///
+    /// ```
+    /// use egui_charts::data::{ScreenerFilter, ScreenerOp};
+    ///
+    /// let filter = ScreenerFilter::new("price", ScreenerOp::Above, 10.0);
+    /// assert_eq!(filter.column, "price");
+    /// ```
+    pub fn new(column: impl Into<String>, op: ScreenerOp, value: f64) -> Self {
+        Self {
+            column: column.into(),
+            op,
+            value,
+        }
+    }
+}
+
 /// The rows a screener asks [`Datafeed::screen`](super::Datafeed::screen) for. The feed
 /// filters, sorts and limits.
 #[derive(Clone, Debug, PartialEq)]

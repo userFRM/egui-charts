@@ -403,6 +403,13 @@ pub enum FootprintColor {
 ///
 /// The default compares each price row with its immediate neighbours, which is the most
 /// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
+///
+/// ```
+/// use egui_charts::data::NodeSensitivity;
+///
+/// let mut sensitivity = NodeSensitivity::default();
+/// sensitivity.smoothing = 3;
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodeSensitivity {
@@ -433,6 +440,16 @@ pub struct CustomProfileSession {
 impl CustomProfileSession {
     /// Sessions from `start` to `end` on the instrument's exchange clock, or in UTC without one:
     /// assign [`zone`](Self::zone) to read them in another zone.
+    ///
+    /// ```
+    /// use chrono::NaiveTime;
+    /// use egui_charts::model::CustomProfileSession;
+    ///
+    /// let open = NaiveTime::from_hms_opt(9, 30, 0).unwrap();
+    /// let close = NaiveTime::from_hms_opt(16, 0, 0).unwrap();
+    /// let session = CustomProfileSession::new(open, close);
+    /// assert_eq!(session.zone, None);
+    /// ```
     pub fn new(start: chrono::NaiveTime, end: chrono::NaiveTime) -> Self {
         Self {
             start,
@@ -480,6 +497,13 @@ pub enum ProfileRows {
 
 /// Display settings of the chart's execution-based session profiles.
 /// Defaults retain the stacked session histogram, with optional annotations hidden.
+///
+/// ```
+/// use egui_charts::model::TradeProfileSettings;
+///
+/// let mut settings = TradeProfileSettings::default();
+/// settings.developing_poc = true;
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
