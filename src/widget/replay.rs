@@ -173,7 +173,9 @@ impl Chart {
     /// that studies request for other symbols and intervals. A bar closes at its next open on
     /// [`Self::bar_clock`]; without a timeframe or on numeric and custom horizontal axes, keys
     /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
-    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
+    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar. ATR and
+    /// percentage sizes resolve from the bars before the cursor when the session starts and after
+    /// a step back, and stay while the cursor moves forward.
     ///
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
@@ -260,14 +262,15 @@ impl Chart {
                 session_quote: self.session_quote.take(),
             });
             self.set_feed_paused(true);
-            // The session resolves its sizes from the bars before the cursor.
-            self.arm_box_sizes();
         }
         self.apply_replay_window();
         self.replay_order_flow(previous.map_or(time, |previous| previous.min(time)));
         // Studies on other histories see the bars completed by the new cursor.
         self.invalidate_study_data();
         if rewind {
+            // No size may come from a bar after the cursor: they resolve from the bars before
+            // it, as at the start of the session.
+            self.arm_box_sizes();
             // A cached value at the cursor may have used the candle's later high or close.
             for study in self.studies.indicators_mut() {
                 study.update(&[], 0);
@@ -860,11 +863,11 @@ mod tests {
         );
     }
 
-    /// A session resolves ATR and percentage sizes from the bars before the cursor when it starts,
-    /// or once the cursor passes enough bars, and keeps them while the cursor moves, as bars
-    /// streaming in do. Parameters set and main history supplied during the session resolve from
-    /// the bars before the cursor. The end gives back the live sizes, or resolves from the
-    /// restored history those set or supplied during the session.
+    /// A session resolves ATR and percentage sizes from the bars before the cursor when it starts
+    /// and after a step back, or once the cursor passes enough bars, and keeps them while the
+    /// cursor moves forward, as bars streaming in do. Parameters set and main history supplied
+    /// during the session resolve from the bars before the cursor. The end gives back the live
+    /// sizes, or resolves from the restored history those set or supplied during the session.
     /// ATR(14) of 14 true ranges of 2 is 2, a 15th of max(16, 15, 1) = 16 makes it
     /// (13 * 2 + 16) / 14 = 3 and one of max(30, 29, 1) = 30 makes it (13 * 2 + 30) / 14 = 4; 1%
     /// of the closes 100, 110 and 120 is 1, 1.1 and 1.2.
@@ -904,6 +907,8 @@ mod tests {
             (At(15), [2.0, 1.0]),
             (End, [2.0, 1.0]),
             (At(15), [3.0, 1.1]),
+            (At(14), [2.0, 1.0]),
+            (At(15), [2.0, 1.0]),
             (Params, [3.0, 1.1]),
             (End, [3.0, 1.1]),
             (At(15), [3.0, 1.1]),
