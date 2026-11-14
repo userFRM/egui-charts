@@ -214,9 +214,8 @@ pub enum ProfileSource {
     /// chart's bars or from finer bars where they cover the chart bars.
     Estimated,
     /// Executed volume at each price, split by aggressor side, with unclassified volume
-    /// apart. `complete` is false when the span starts before the first bar whose executions
-    /// are all held, [`Footprint::complete_from`](super::Footprint::complete_from), so the
-    /// earliest rows may be missing.
+    /// apart. `complete` is false when the span starts before held coverage or includes a bar
+    /// whose executions may be missing. Prepared bars before a later gap can still form a complete span.
     Executions {
         /// Whether the executions of every bar in the span are held.
         complete: bool,

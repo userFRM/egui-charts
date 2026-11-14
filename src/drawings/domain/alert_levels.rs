@@ -142,6 +142,43 @@ impl Drawing {
         }
         levels
     }
+
+    /// The alert source name template of fork level `level` of [`Self::alert_levels`] and the
+    /// value of its setting, which fills `{value}`; `None` for a median and other drawings. With
+    /// `{tool}` and `{id}` filled, its English is the drawing's name and the level's name, as
+    /// alerts and presets saved before names kept their parts hold it.
+    pub(crate) fn fork_line(&self, level: usize) -> Option<(&'static str, String)> {
+        if !is_fork(self.tool_type) {
+            return None;
+        }
+        let config = self
+            .pitchfork
+            .clone()
+            .unwrap_or_else(PitchforkConfig::legacy);
+        let value = config.levels.get(level / 2)?.value;
+        (value != 0.0).then(|| {
+            (
+                [
+                    "{tool} {id}: {value}: first line",
+                    "{tool} {id}: {value}: second line",
+                ][level % 2],
+                value.to_string(),
+            )
+        })
+    }
+}
+
+/// Whether [`Drawing::fork_alert_levels`] gives the alert levels of `tool`.
+pub(super) fn is_fork(tool: DrawingToolType) -> bool {
+    use DrawingToolType as T;
+    matches!(
+        tool,
+        T::Pitchfork
+            | T::SchiffPitchfork
+            | T::ModifiedSchiffPitchfork
+            | T::InsidePitchfork
+            | T::Pitchfan
+    )
 }
 
 /// A straight painted segment in axis coordinates, extended to the requested bar.

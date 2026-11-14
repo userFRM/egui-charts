@@ -103,6 +103,7 @@ impl Chart {
             pending_scroll_time: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
+            price_plot_double_click: false,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
             #[cfg(feature = "studies")]
@@ -477,16 +478,10 @@ impl Chart {
 
     /// What a Range chart's bars are built from, or `None` for another chart type. The chart
     /// builds them from the trades the feed supplied, including during replay up to its cutoff,
-    /// and falls back to the OHLC approximation while it holds none.
+    /// after the OHLC approximation of the bars before the one holding the first trade, and
+    /// falls back to the approximation alone while it holds none.
     pub fn range_bar_source(&self) -> Option<crate::model::RangeBarSource> {
-        use crate::model::RangeBarSource::{Executions, OhlcApproximation};
-        (self.chart_type == ChartType::Range).then(|| {
-            if self.execution_ranges.in_use() {
-                Executions
-            } else {
-                OhlcApproximation
-            }
-        })
+        (self.chart_type == ChartType::Range).then(|| self.execution_ranges.source())
     }
 
     /// Sets the parameters of the price-based chart types (Renko, Kagi, Range, Point and Figure,
@@ -648,6 +643,16 @@ pub struct ChartBuilder {
     storage: Option<Arc<dyn crate::services::Storage>>,
     #[cfg(feature = "ui")]
     study_factory: Option<crate::studies::IndicatorFactory>,
+}
+
+impl std::fmt::Debug for ChartBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartBuilder")
+            .field("symbol", &self.symbol)
+            .field("timeframe", &self.timeframe)
+            .field("chart_type", &self.chart_type)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ChartBuilder {
@@ -1357,5 +1362,13 @@ mod tests {
             let candles = chart.state.time_scale().visible_candles();
             assert_eq!(candles, count, "width {width}");
         }
+    }
+
+    /// A host can move a chart to another thread or share it behind `Arc<Mutex<Chart>>`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn charts_are_send() {
+        fn needs_send<T: Send>() {}
+        needs_send::<Chart>();
     }
 }

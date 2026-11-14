@@ -20,6 +20,16 @@ pub struct AlertData<'a> {
     pub drawings: &'a [crate::drawings::Drawing],
 }
 
+impl std::fmt::Debug for AlertData<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertData")
+            .field("request", &self.request)
+            .field("bars", &self.bars.len())
+            .field("history_complete", &self.history_complete)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Historical and streaming inputs for an alert without a rendered chart. Uses the same
 /// validation, trade aggregation and history/live merge rules as a chart. Dropping it stops
 /// its subscription and discards late replies. Available with `alert-engine`.
@@ -50,6 +60,17 @@ pub struct AlertFeed {
     #[cfg(feature = "studies")]
     live: bool,
     start: Option<DateTime<Utc>>,
+}
+
+impl std::fmt::Debug for AlertFeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertFeed")
+            .field("request", &self.request)
+            .field("bars", &self.bars.len())
+            .field("ready", &self.ready)
+            .field("stopped", &self.stopped)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AlertFeed {

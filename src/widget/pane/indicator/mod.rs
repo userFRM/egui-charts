@@ -100,6 +100,15 @@ pub struct IndicatorPane {
     pub(super) text_color: Option<egui::Color32>,
 }
 
+impl std::fmt::Debug for IndicatorPane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorPane")
+            .field("config", &self.config)
+            .field("overlay", &self.overlay)
+            .finish_non_exhaustive()
+    }
+}
+
 impl IndicatorPane {
     /// Create a new indicator panel with custom configuration
     pub fn with_config(config: IndicatorPaneConfig) -> Self {
@@ -213,6 +222,7 @@ impl IndicatorPane {
             y_min,
             y_max,
             indicator,
+            visible_range.end.checked_sub(1),
             Some(crate::scales::PriceScaleId::Right),
             None,
         );
@@ -309,6 +319,7 @@ impl IndicatorPane {
             y_min,
             y_max,
             indicator,
+            crate::chart::rendering::axes::last_bar_in_view(&horizontal),
             Some(crate::scales::PriceScaleId::Right),
             None,
         );
@@ -655,7 +666,15 @@ impl IndicatorPane {
             axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
             // Draw y-axis labels
             self.measured_axis_width = self.draw_y_axis_labels(
-                painter, rect, chart_rect, y_min, y_max, indicator, axis, tag,
+                painter,
+                rect,
+                chart_rect,
+                y_min,
+                y_max,
+                indicator,
+                crate::chart::rendering::axes::last_bar_in_view(&mapping),
+                axis,
+                tag,
             );
         }
 
@@ -906,7 +925,8 @@ mod tests {
     }
 
     /// A fitted pane keeps a study's levels in view when its values lie between them, and a
-    /// hidden level holds the scale open only when its value line is visible.
+    /// hidden level holds the scale open only when its value line is visible. Williams %R fits a
+    /// source that reads past -100 to 0 rather than clipping it.
     #[test]
     fn fitted_panes_keep_visible_levels_in_view() {
         let bars: Vec<_> = [(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]
@@ -942,5 +962,15 @@ mod tests {
             assert!(low < 38.2, "{low}..{high}");
             assert_eq!(high > 61.8, shown, "{low}..{high}");
         }
+
+        // Williams %R fits a source past its bounds. With the same bars and a two-bar window, a
+        // source of 14 on bar 1 gives (12 - 14) / (12 - 8) * -100 = 50 and 9 on bar 2 gives
+        // (12 - 9) / (12 - 7) * -100 = -60, so with its levels at -20 and -80 the values and
+        // levels span -80 to 50.
+        let mut study =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::WilliamsR::new(2)));
+        study.update_source(&bars, 0, &[f64::NAN, 14.0, 9.0]);
+        let (low, high) = fit(&study);
+        assert!(low < -80.0 && high > 50.0, "{low}..{high}");
     }
 }

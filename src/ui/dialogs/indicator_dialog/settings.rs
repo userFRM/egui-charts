@@ -35,7 +35,8 @@ pub struct StudyEdit {
 pub struct IndicatorSettingsDialog {
     edit: Option<StudyEdit>,
     inputs: Vec<StudyInput>,
-    title: String,
+    /// The edited study's name, for the title.
+    study: String,
     line_names: Vec<String>,
     levels: Vec<(f64, &'static str)>,
     gradient_names: Vec<&'static str>,
@@ -95,7 +96,7 @@ impl IndicatorSettingsDialog {
             settings: study.settings(),
         });
         self.inputs = study.inputs();
-        self.title = format!("{} settings", study.name());
+        self.study = study.name().to_owned();
         self.line_names = study.line_names();
         self.gradient_names = study.gradients().iter().map(|fill| fill.name).collect();
         self.levels = study
@@ -243,7 +244,8 @@ impl IndicatorSettingsDialog {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        Modal::new("indicator_settings", &self.title)
+        let title = l10n::format_text(ctx, "{name} settings", &[("name", self.study.as_str())]);
+        Modal::new("indicator_settings", title)
             .width(620.0)
             .height(560.0)
             .top(120.0)
@@ -509,10 +511,10 @@ impl IndicatorSettingsDialog {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(
                                             &mut fill.visible,
-                                            format!(
-                                                "{} {}",
-                                                l10n::text(ui.ctx(), "Band"),
-                                                index + 1
+                                            l10n::format_text(
+                                                ui.ctx(),
+                                                "Band {number}",
+                                                &[("number", (index + 1).to_string())],
                                             ),
                                         );
                                         ui.color_edit_button_srgba(&mut fill.color)

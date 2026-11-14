@@ -6,7 +6,8 @@
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`],
-//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]).
+//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]), and the marker settings of pins
+//! and signposts ([`AnnotationMarker`]).
 
 use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ use std::ops::RangeInclusive;
 /// `Start` and `End`; rectangles use four corner and four edge handles;
 /// multi-point tools use indexed `Point(i)` handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HandlePos {
     /// First anchor point of the drawing.
     Start,
@@ -50,6 +52,7 @@ pub enum HandlePos {
 
 /// Arrow/arrowhead style for line drawings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ArrowStyle {
     /// No arrowhead
     None,
@@ -108,6 +111,7 @@ pub use crate::config::FontWeight;
 /// value are those of its label, as [`Timeframe::as_str`](crate::model::Timeframe::as_str) writes
 /// it: `90min` is 90 minutes, and a 24 hour interval, labelled `1D`, is 1 day.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TimeframeVisibility {
     /// Show on every interval.
     pub show_on_all: bool,
@@ -283,6 +287,7 @@ impl TimeframeVisibility {
 
 /// Drawing interaction options
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DrawingOptions {
     /// Enable snap to OHLC prices
     pub snap_to_price: bool,
@@ -322,6 +327,7 @@ impl Default for DrawingOptions {
 
 /// Configuration for a single Fibonacci level
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FibonacciLevel {
     /// The ratio value (e.g., 0.236, 0.382, 0.618)
     pub value: f32,
@@ -907,6 +913,7 @@ impl Default for RegressionTrendConfig {
 /// without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionSizing {
     /// Account-currency value of one price point per underlying unit.
     pub point_value: f64,
@@ -1135,6 +1142,41 @@ impl NoteTextStyle {
     }
 }
 
+/// What a pin and a signpost show at their marker: a pin's text popup, and the glyph a signpost
+/// can carry on a coloured disc below its text. Other tools ignore these settings. A new drawing
+/// shows a pin's text and leaves a signpost's glyph off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct AnnotationMarker {
+    /// Whether a pin shows its text in a popup while it is selected or under the pointer.
+    pub show_text: bool,
+    /// Glyph on a signpost's disc: an emoji, or the id of a bundled icon or sticker.
+    pub glyph: String,
+    /// Whether a signpost carries the disc and its glyph.
+    pub show_glyph: bool,
+    /// Colour of a signpost's disc; `None` takes the drawing colour.
+    pub glyph_color: Option<[u8; 4]>,
+}
+
+impl Default for AnnotationMarker {
+    fn default() -> Self {
+        Self {
+            show_text: true,
+            glyph: "🙂".into(),
+            show_glyph: false,
+            glyph_color: None,
+        }
+    }
+}
+
+impl AnnotationMarker {
+    /// Whether the glyph is named, in at most 32 bytes.
+    pub fn is_valid(&self) -> bool {
+        (1..=32).contains(&self.glyph.len())
+    }
+}
+
 /// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineMeasurementPosition {
@@ -1291,6 +1333,7 @@ impl LineMeasurements {
 
 /// How a long or short position drawing sizes its quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PositionSize {
     /// A fixed quantity, interpreted as lots by [`Self::quantity_with_sizing`].
     Quantity(f64),
