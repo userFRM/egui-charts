@@ -1068,14 +1068,16 @@ fn history_run<'a>(
 /// Groups `trades`, the held executions the sink allocated, in time order, along `history`, the
 /// chart's bars, from the oldest bar whose parts are all held: the executions are the newest part
 /// of the sink's stream and the chart's bars hold exactly its parts, so the volume held counts
-/// them from the newest. Returns the parts and the grouping after them, or `None` unless they
-/// rebuild every bar through the newest.
+/// them from the newest. `before` is the open of the bar before `history`'s first when the chart
+/// dropped it. Returns the parts and the grouping after them, or `None` unless they rebuild every
+/// bar through the newest.
 #[cfg(feature = "widget")]
 pub(crate) fn live_run<'a>(
     timeframe: crate::model::Timeframe,
     tick_size: Option<f64>,
     trades: &[&'a Tick],
     history: &[crate::model::Bar],
+    before: Option<DateTime<Utc>>,
 ) -> Option<(Parts<'a>, super::inbox::TradeBars)> {
     let mut left: f64 = trades.iter().map(|trade| trade.size).sum();
     let mut first = history.len();
@@ -1093,7 +1095,10 @@ pub(crate) fn live_run<'a>(
         through - left > 1e-9 * trade.size
     })?;
     let rest = (through - left).min(trades[start].size);
-    let previous = first.checked_sub(1).map(|index| history[index].time);
+    let previous = first
+        .checked_sub(1)
+        .map(|index| history[index].time)
+        .or(before);
     let run = history_run(
         timeframe,
         tick_size,

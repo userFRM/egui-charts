@@ -1657,7 +1657,10 @@ fn restored_order_flow_study_keeps_the_chart_bars() {
 /// buys of 1 to 8, which leaves no live execution in the first two bars, or for the buys of 1 to
 /// 4 on a chart limited to two bars, which keeps the 2 s and 4 s bars while the study's source
 /// keeps the 0 s one. The replay cutoff at 3 s is exclusive and falls in the 2 s bar, before
-/// which only the buy of 4 came.
+/// which only the buy of 4 came. With the buys of 1, 2 and 4 at 0 s, 8 at 1 s and 16 at 2 s, the
+/// bars are 1 and 2 at 0 s, 4 and 8 (12) at 0 s + 1 ns, opened a nanosecond after it, and 16 at
+/// 2 s; a page of the three at 0 s on a chart limited to two bars drops the 0 s bar the source
+/// keeps, and the cutoff at 0.5 s falls in the 0 s + 1 ns bar, before which only the buy of 4 came.
 #[cfg(feature = "studies")]
 #[test]
 fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
@@ -1665,22 +1668,23 @@ fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
     use crate::studies::OrderFlowStudy;
     use std::num::NonZeroUsize;
     let start = bars(1)[0].time;
-    let tape: Vec<_> = [1.0, 2.0, 4.0, 8.0, 16.0]
-        .iter()
-        .enumerate()
-        .map(|(second, size)| {
-            let at = start + TimeDelta::seconds(second as i64);
-            Tick::new(at, 100.0, *size, Some(Buy))
-        })
-        .collect();
-    // The executions the page holds, the bar limit (none for 0), and the deltas before and during
-    // the replay.
-    let rows: [(usize, usize, &[f64], &[f64]); 3] = [
-        (1, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
-        (4, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
-        (3, 2, &[12.0, 16.0], &[4.0]),
+    let apart = [0, 1000, 2000, 3000, 4000];
+    // The buys' times and the replay cutoff in milliseconds, the executions the page holds, the
+    // bar limit (none for 0), and the deltas before and during the replay.
+    type Row = ([i64; 5], i64, usize, usize, &'static [f64], &'static [f64]);
+    let rows: [Row; 4] = [
+        (apart, 3000, 1, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
+        (apart, 3000, 4, 0, &[3.0, 12.0, 16.0], &[3.0, 4.0]),
+        (apart, 3000, 3, 2, &[12.0, 16.0], &[4.0]),
+        ([0, 0, 0, 1000, 2000], 500, 3, 2, &[12.0, 16.0], &[4.0]),
     ];
-    for (paged, limit, live, replayed) in rows {
+    for (times, cutoff, paged, limit, live, replayed) in rows {
+        let tape: Vec<_> = (times.iter().zip([1.0, 2.0, 4.0, 8.0, 16.0]))
+            .map(|(at, size)| {
+                let at = start + TimeDelta::milliseconds(*at);
+                Tick::new(at, 100.0, size, Some(Buy))
+            })
+            .collect();
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe("2t".parse().unwrap());
@@ -1703,12 +1707,20 @@ fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
             let study = chart.indicators().next().unwrap().1;
             study.values().line(0).to_vec()
         };
-        assert_eq!(deltas(&mut chart), live, "{paged} paged");
+        assert_eq!(deltas(&mut chart), live, "{paged} paged, cutoff {cutoff}");
         chart.set_feed_paused(true);
-        chart.set_replay_time(Some(start + TimeDelta::seconds(3)));
-        assert_eq!(deltas(&mut chart), replayed, "{paged} paged, replay");
+        chart.set_replay_time(Some(start + TimeDelta::milliseconds(cutoff)));
+        assert_eq!(
+            deltas(&mut chart),
+            replayed,
+            "{paged} paged, cutoff {cutoff}, replay"
+        );
         chart.set_replay_time(None);
-        assert_eq!(deltas(&mut chart), live, "{paged} paged, left");
+        assert_eq!(
+            deltas(&mut chart),
+            live,
+            "{paged} paged, cutoff {cutoff}, left"
+        );
     }
 }
 
