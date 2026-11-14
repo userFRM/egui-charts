@@ -258,6 +258,9 @@ fn price_labels_and_lines_are_independent_on_either_axis() {
 /// Line tags use the anchor, stay clear of the last price and follow this frame's drag.
 /// Bar 51 is 1,700,000,000 + 51 * 86,400 = Jan 4, 2024 at 22:13:20 UTC;
 /// bar 61 is ten days later. Yellow's contrast with white is 1.22, so its text is black.
+/// An anchored VWAP tags its latest value only while it tracks it, at its own precision: the
+/// typical prices of bars 98 and 99 are 320 / 3 and 340 / 3, so from bar 98 it is 110 and from
+/// bar 99 it is 113.33.
 #[cfg(feature = "drawings")]
 #[test]
 fn line_drawings_tag_their_price_and_time_on_the_axes() {
@@ -278,6 +281,8 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
         (9, T::CrossLine, 81.0, 103.59, [9, 9, 9, 255]),
         (10, T::HorizontalRay, 1000.0, 114.71, [200, 0, 0, 255]),
         (11, T::HorizontalLine, 90.0, 120.0, [140, 70, 20, 255]),
+        (12, T::AnchoredVWAP, 98.0, 110.0, [0, 150, 136, 255]),
+        (13, T::AnchoredVWAP, 99.0, 113.0, [0, 150, 136, 255]),
     ] {
         let mut drawing = Drawing::with_color(id, tool, color);
         drawing.chart_points = vec![ChartPoint::new(bar, price)];
@@ -286,6 +291,13 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
             8 => drawing.time_axis_label = false,
             6 => drawing.visible = false,
             7 => drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]),
+            12 => {
+                drawing.vwap = Some(crate::drawings::VwapConfig {
+                    track_price: true,
+                    precision: Some(4),
+                    ..Default::default()
+                })
+            }
             _ => {}
         }
         chart.drawings_mut().drawings.push(drawing);
@@ -309,6 +321,8 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
         ("118.13", false),
         ("103.59", false),
         ("114.71", false),
+        ("110.0000", true),
+        ("113.33", false),
     ] {
         assert_eq!(price_texts.contains(&label), shown, "price {label}");
     }
