@@ -220,10 +220,10 @@ impl DataTableDialog {
                 action = DataTableAction::Export(csv);
             }
             ui.label(
-                egui::RichText::new(format!(
-                    "{} {}",
-                    table.rows.len(),
-                    l10n::text(ui.ctx(), "loaded bars")
+                egui::RichText::new(l10n::format_text(
+                    ui.ctx(),
+                    "{count} loaded bars",
+                    &[("count", table.rows.len().to_string())],
                 ))
                 .color(ui.visuals().weak_text_color()),
             );
