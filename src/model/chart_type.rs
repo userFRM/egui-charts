@@ -446,6 +446,33 @@ pub enum ProfileSession {
     Custom(CustomProfileSession),
 }
 
+#[cfg(all(feature = "widget", feature = "studies"))]
+impl ProfileSession {
+    /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
+    /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
+    /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
+    /// and for regular or extended hours without `hours`.
+    pub(crate) fn session_clock(
+        &self,
+        clock: &super::BarClock,
+        zone: &super::TimezoneId,
+        hours: Option<&super::Session>,
+    ) -> Option<super::BarClock> {
+        use chrono::Weekday::*;
+        let (zone, session, extended) = match self {
+            Self::Chart => return None,
+            Self::Custom(custom) => {
+                let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
+                let window = super::SessionWindow::new(every_day, custom.start, custom.end);
+                let zone = custom.zone.as_ref().unwrap_or(zone);
+                (zone, super::Session::new([window]), false)
+            }
+            Self::Regular | Self::Extended => (zone, hours?.clone(), *self == Self::Extended),
+        };
+        Some(clock.clone().with_session(zone.clone(), session, extended))
+    }
+}
+
 /// How a session volume profile groups executions into price rows, in instrument ticks.
 ///
 /// Rows are never finer than the feed's own rows, and align to multiples of their height.
