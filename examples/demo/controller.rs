@@ -83,6 +83,7 @@ use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
+    default_time_zones,
 };
 #[cfg(test)]
 use egui_charts::ui::top_toolbar::CompareAction;
@@ -1020,12 +1021,11 @@ impl DemoApp {
             return;
         }
         self.state.chart_type = self.chart.chart_type();
-        let timezone = &self.chart.chart_options().time_scale.timezone;
-        let name = timezone
-            .to_tz()
-            .map_or_else(|| "UTC".to_owned(), |zone| zone.name().to_owned());
-        let clock_changed = self.timeframe_toolbar.state.timezone != name;
-        self.timeframe_toolbar.set_timezone(name);
+        let clock = self.timeframe_toolbar.state.timezone.clone();
+        self.timeframe_toolbar
+            .state
+            .set_display_timezone(&self.chart.display_timezone());
+        let clock_changed = self.timeframe_toolbar.state.timezone != clock;
         let symbol_changed = self.state.symbol != self.chart.symbol();
         if symbol_changed {
             self.sync_symbol();
@@ -3388,6 +3388,10 @@ impl DemoApp {
             }))
             .show(ui, |ui| {
                 self.timeframe_toolbar.state.date_picker_open = self.date_picker.is_open;
+                // The clock reads the zone of the time axis, however it was chosen.
+                self.timeframe_toolbar
+                    .state
+                    .set_display_timezone(&self.chart.display_timezone());
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
                 self.show_timeframe_menus(ui.ctx());
@@ -3417,6 +3421,14 @@ impl DemoApp {
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
             TimeframeToolbarAction::OpenTimezoneMenu => {
+                // On own data the zone of the profile is offered too, to return to it.
+                let mut zones = default_time_zones();
+                if let Some(own) = &self.own_data
+                    && !zones.contains(&own.profile.time_zone)
+                {
+                    zones.insert(0, own.profile.time_zone.clone());
+                }
+                self.timeframe_toolbar.set_time_zones(zones);
                 self.timeframe_toolbar.state.timezone_menu_open = true;
             }
             TimeframeToolbarAction::OpenSessionMenu => {
@@ -3466,36 +3478,11 @@ impl DemoApp {
                 });
             self.timeframe_toolbar.state.session_menu_open &= open;
         }
-        if self.timeframe_toolbar.state.timezone_menu_open {
-            let mut open = true;
-            egui::Window::new("Chart timezone")
-                .collapsible(false)
-                .resizable(false)
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    // On own data the zone of the profile is offered too, to return to it.
-                    let own_zone = self
-                        .own_data
-                        .as_ref()
-                        .map(|own| own.profile.time_zone.name().to_owned());
-                    let labels = ["UTC", "America/New_York"].into_iter().chain(
-                        own_zone
-                            .as_deref()
-                            .filter(|zone| !matches!(*zone, "UTC" | "America/New_York")),
-                    );
-                    for label in labels {
-                        if ui
-                            .selectable_label(self.timeframe_toolbar.state.timezone == label, label)
-                            .clicked()
-                        {
-                            self.user_action(|app| {
-                                apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, label)
-                            });
-                            self.timeframe_toolbar.state.timezone_menu_open = false;
-                        }
-                    }
-                });
-            self.timeframe_toolbar.state.timezone_menu_open &= open;
+        let current = self.chart.chart_options().time_scale.timezone.clone();
+        if let Some(timezone) = self.timeframe_toolbar.show_timezone_menu(ctx, &current) {
+            self.user_action(|app| {
+                apply_timezone_mode(&mut app.chart, &mut app.timeframe_toolbar, timezone)
+            });
         }
     }
 
@@ -4529,6 +4516,15 @@ fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str)
     } else {
         return;
     };
+    apply_timezone_mode(chart, toolbar, timezone);
+}
+
+/// Shows the chart in `timezone` and the clock in the zone the chart resolves for it.
+fn apply_timezone_mode(
+    chart: &mut Chart,
+    toolbar: &mut TimeframeToolbar,
+    timezone: egui_charts::config::TimezoneMode,
+) {
     if chart.chart_options().time_scale.timezone != timezone {
         let mut options = chart.chart_options().clone();
         options.time_scale.timezone = timezone;
@@ -4538,7 +4534,9 @@ fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str)
         *chart = previous.with_chart_options(options);
         chart.apply_synced_time_scale(spacing, offset);
     }
-    toolbar.set_timezone(name.to_owned());
+    toolbar
+        .state
+        .set_display_timezone(&chart.display_timezone());
 }
 
 /// Apply display settings to the live chart and its clock.
@@ -4548,7 +4546,9 @@ fn apply_settings_state(
     toolbar: &mut TimeframeToolbar,
 ) {
     if state.apply_to_chart(chart).is_ok() {
-        toolbar.set_timezone(state.timezone.clone());
+        toolbar
+            .state
+            .set_display_timezone(&chart.display_timezone());
     }
 }
 
@@ -9989,6 +9989,89 @@ mod tests {
         );
     }
 
+    /// After a choice in the time axis menu, the clock shows the time and the zone of the time
+    /// axis: #2886.
+    #[test]
+    fn clock_follows_the_time_axis_menu() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-10T19:29:50Z".parse().unwrap(),
+            true,
+        );
+        app.switch_symbol("AAPL");
+        let frame = |app: &mut DemoApp, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let texts: Vec<(String, egui::Pos2)> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let click = |app: &mut DemoApp, button, pos| {
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let plot = app.chart.get_rendered_price_rect();
+        let bottom = (app.chart.get_rendered_indicator_panes().last())
+            .map_or(plot.bottom(), |pane| pane.panel_rect.bottom());
+        let axis = egui::pos2(plot.center().x, bottom + 14.0);
+        click(&mut app, egui::PointerButton::Secondary, axis);
+        let texts = frame(&mut app, vec![]);
+        let exchange = texts
+            .iter()
+            .find(|(text, _)| text == "Exchange time")
+            .unwrap_or_else(|| panic!("the time axis menu offers exchange time: {texts:?}"))
+            .1;
+        click(&mut app, egui::PointerButton::Primary, exchange);
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        assert!(matches!(
+            app.chart.chart_options().time_scale.timezone,
+            egui_charts::config::TimezoneMode::Exchange(_)
+        ));
+        let now = app
+            .timeframe_toolbar
+            .state
+            .curr_time
+            .expect("the clock runs");
+        let clock = app.timeframe_toolbar.state.formatted_time();
+        let time = app.chart.format_time(now);
+        assert!(time.ends_with(&clock[..5]), "{clock} against {time}");
+        assert!(clock.ends_with(" America/New_York"), "{clock}");
+    }
+
     /// The demo published every subscribed quote once per frame, and the first push after a drain
     /// wakes the UI, so the demo asked for a repaint on every frame forever: #852. A settled demo
     /// with nothing on screen changing must ask for at most the once-a-second repaint of the bar
@@ -10492,7 +10575,7 @@ mod tests {
         for (name, expected) in [
             ("RSI", "14 close SMA 14"),
             ("VWAP", "Session 1"),
-            ("Vol Profile Session", "24 70 Up / down"),
+            ("Vol Profile Session", "24 70 Up / down Trading day"),
             ("Time Weighted Average Price", "Session"),
             ("Trend Strength Index", "14 close"),
             ("Higher Interval Candles", "1D"),
