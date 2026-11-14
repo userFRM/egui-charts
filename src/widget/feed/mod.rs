@@ -208,9 +208,11 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// open before the live executions, or without them before the oldest pushed bar the history
-    /// lacks or holds with other values, and that they rebuild ([`Footprint::push_history`]). With
-    /// `before`, includes only executions strictly before that replay cutoff.
+    /// open before the live executions, held ones or those the store kept apart at the first
+    /// instant a page covers while the chart holds a bar at or before the oldest of them, or
+    /// without them before the oldest pushed bar the history lacks or holds with other values,
+    /// and that they rebuild ([`Footprint::push_history`]). With `before`, includes only
+    /// executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -248,7 +250,15 @@ impl FeedLink {
             // Until a trade page fills the time after the retained executions, some that traded
             // after them may be missing: their end is not the page's and proves nothing.
             let ended = self.trades.retained_until().is_none();
-            flow.push_history(&paged, &history[..paged_bars], before, ended);
+            // The sink opened the bars from the oldest live execution the store kept apart, where
+            // the page may hold executions the stream never sent: its allocations fill those
+            // bars, as `OrderFlowInput::chart_run` rebuilds them. A chart that starts after it
+            // holds no bar with the page's executions of that instant.
+            let stream_from = (self.trades.unheld_live())
+                .and_then(|(_, kept)| kept.first())
+                .map(|trade| trade.ts)
+                .filter(|at| history.first().is_some_and(|bar| bar.time <= *at));
+            flow.push_history(&paged, &history[..paged_bars], before, ended, stream_from);
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
             for trade in trades() {
                 let _ = flow.push(trade);

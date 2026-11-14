@@ -781,7 +781,11 @@ impl Footprint {
     /// page's end only when it ends with the last of `history`. The newest proven run is kept, so
     /// its bars have no gap. Older bars get no cells and draw candles. With `before`, adds only
     /// the executions strictly before it. Unless `ended`, executions after the last one may be
-    /// missing: the page does not end there, and that end proves nothing.
+    /// missing: the page does not end there, and that end proves nothing. Bars that open at or
+    /// after `stream_from`, the time of the oldest live execution the store kept apart at an
+    /// instant the page covers, get no cells: the sink opened them, and the page's executions
+    /// there may include some the stream never sent. They still count in the matching, so the
+    /// bars before keep their proof.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
@@ -789,6 +793,7 @@ impl Footprint {
         history: &[crate::model::Bar],
         before: Option<DateTime<Utc>>,
         ended: bool,
+        stream_from: Option<DateTime<Utc>>,
     ) {
         let Some(timeframe) = self.clock.timeframe().filter(|tf| tf.is_trade_based()) else {
             return;
@@ -843,7 +848,9 @@ impl Footprint {
             }
         }
         for (trade, open, size) in newest {
-            if before.is_none_or(|before| trade.ts < before) {
+            if before.is_none_or(|before| trade.ts < before)
+                && stream_from.is_none_or(|from| open < from)
+            {
                 let _ = self.push_part(trade, open, size);
             }
         }
@@ -1493,9 +1500,9 @@ mod tests {
         let references: Vec<_> = trades.iter().collect();
         let mut flow = fresh();
         let empty = flow.revision();
-        flow.push_history(&references, &history, Some(time), true);
+        flow.push_history(&references, &history, Some(time), true, None);
         assert_eq!(flow.revision(), empty);
-        flow.push_history(&references, &history, None, true);
+        flow.push_history(&references, &history, None, true, None);
         assert_ne!(flow.revision(), empty);
         assert_eq!(flow.bars().len(), 2);
         let mut copied = fresh();
