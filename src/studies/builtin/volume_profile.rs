@@ -12,8 +12,8 @@
 //! they narrow the estimate without making it exact.
 //! Where the chart holds the executions of a profile's bars, through
 //! [`Indicator::order_flow_inputs`], the profile sums them instead, in rows of whole ticks: the
-//! Height input rounded to whole ticks, or the traded ticks over Row count, rounded up and widened
-//! where rows counted from multiples of that height would exceed Row count.
+//! Height input, or Height in ticks, rounded to whole ticks, or the traded ticks over Row count,
+//! rounded up and widened where rows counted from multiples of that height would exceed Row count.
 //! A profile whose executions start after its first bar sums those held and reports itself
 //! partial; one without them, or whose bars do not each hold their own executions, keeps the bars.
 //!
@@ -71,6 +71,9 @@ struct ProfileStudy {
     rows: usize,
     value_area: f64,
     row_size: f64,
+    /// Instrument ticks per row of a session or periodic profile, in place of `row_size`; 0 for
+    /// `row_size`.
+    row_ticks: usize,
     /// Share of a session's or period's width that its widest row takes.
     width: f64,
     extend: [bool; 3],
@@ -260,6 +263,7 @@ impl ProfileStudy {
             rows: rows.max(1),
             value_area: 0.7,
             row_size: 0.0,
+            row_ticks: 0,
             width: 0.3,
             extend: [false; 3],
             display: ProfileDisplay::UpDown,
@@ -344,6 +348,15 @@ impl ProfileStudy {
                 InputKind::Toggle,
             ),
         ];
+        if matches!(self.kind, Kind::Session | Kind::Periodic) {
+            let ticks = StudyInput::new(
+                "row_ticks",
+                "Height in ticks (0 = Height)",
+                InputValue::Length(self.row_ticks),
+                InputKind::Length(0, 100_000),
+            );
+            inputs.insert(3, ticks);
+        }
         if matches!(self.kind, Kind::Fixed | Kind::Anchored) {
             inputs.push(StudyInput::new(
                 "start_time",
@@ -485,6 +498,7 @@ impl ProfileStudy {
             ("row_count", InputValue::Length(v)) => self.rows = v,
             ("value_area", InputValue::Number(v)) => self.value_area = v / 100.0,
             ("row_size", InputValue::Number(v)) => self.row_size = v,
+            ("row_ticks", InputValue::Length(v)) => self.row_ticks = v,
             ("display", InputValue::Choice(v)) => self.display = DISPLAYS[v],
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
@@ -968,8 +982,13 @@ impl ProfileStudy {
     /// The row layout, value area and colours of profiles built while `ranges` are in view;
     /// `None` for settings no profile takes.
     fn config(&self, ranges: &[Range<usize>]) -> Option<VolumeProfileConfig> {
+        // Rows of whole instrument ticks, where the instrument has a tick size, replace Height.
+        let ticks = self.tick_size.filter(|_| self.row_ticks > 0);
+        let height = ticks
+            .map(|tick| self.row_ticks as f64 * tick)
+            .or((self.row_size > 0.0).then_some(self.row_size));
         let mut config = VolumeProfileConfig::new(self.rows, self.value_area)
-            .and_then(|c| c.with_row_size((self.row_size > 0.0).then_some(self.row_size)))?;
+            .and_then(|c| c.with_row_size(height))?;
         if self.adaptive
             && let Some(height) = self.adaptive_height(ranges)
         {
@@ -2767,6 +2786,48 @@ mod tests {
             let mut new = periodic(period, count, timeframe, clock.as_ref());
             new.calculate(&bars);
             assert_eq!(profiles(&new, 0), fresh, "{case}");
+        }
+    }
+
+    /// Height in ticks sizes session and periodic rows in whole ticks of the instrument's tick
+    /// size, in place of Height, which holds at 0 ticks and without a tick size.
+    #[test]
+    fn session_rows_follow_whole_ticks_of_the_instrument() {
+        let at = "2026-03-05T15:00:00Z".parse().unwrap();
+        let session = || Box::new(VolProfileSession::new(24)) as Box<dyn Indicator>;
+        for (mut study, tick, row_ticks, height, expected) in [
+            (session(), Some(0.25), 4, 0.0, Some(1.0)),
+            (session(), Some(0.01), 4, 0.0, Some(0.04)),
+            (session(), Some(1e-8), 4, 0.0, Some(4e-8)),
+            (session(), Some(1e6), 4, 0.0, Some(4e6)),
+            (session(), Some(0.25), 0, 0.5, Some(0.5)),
+            (session(), None, 4, 0.5, Some(0.5)),
+            (session(), None, 4, 0.0, None),
+            (
+                Box::new(VolProfilePeriodic::new(24)) as Box<dyn Indicator>,
+                Some(0.25),
+                4,
+                0.0,
+                Some(1.0),
+            ),
+        ] {
+            let mut instrument = Instrument::new("X");
+            instrument.tick_size = tick;
+            study.set_instrument(Some(&instrument));
+            study
+                .set_input("row_ticks", InputValue::Length(row_ticks))
+                .unwrap();
+            study
+                .set_input("row_size", InputValue::Number(height))
+                .unwrap();
+            let (low, high) = (1000.0 * tick.unwrap_or(0.01), 1010.0 * tick.unwrap_or(0.01));
+            study.calculate(&[Bar::new(at, low, high, low, high, 1.0)]);
+            assert_eq!(
+                study.volume_profiles(0..1)[0].config.row_size(),
+                expected,
+                "{} tick {tick:?} ticks {row_ticks} height {height}",
+                study.name()
+            );
         }
     }
 }
