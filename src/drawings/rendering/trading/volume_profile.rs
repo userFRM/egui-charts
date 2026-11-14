@@ -794,6 +794,7 @@ mod tests {
             bars,
             revision: 0,
             bar_to_x: &|b| 100.0 + 10.0 * b,
+            bar_spacing: 10.0,
             price_to_y: &|p| ((20.0 - p) * 10.0) as f32,
             y_to_price: &|y| 20.0 - f64::from(y) / 10.0,
             time_axis: true,
@@ -957,6 +958,7 @@ mod tests {
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y,
                         y_to_price: &|y| {
                             8.0 + f64::from(y - price_to_y(8.0))
@@ -1128,6 +1130,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &bar_to_x,
+            bar_spacing: 10.0,
             price_to_y: &|p| 500.0 - p as f32 * 10.0,
             y_to_price: &|y| f64::from(500.0 - y) / 10.0,
             time_axis: true,
@@ -1278,6 +1281,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &bar_to_x,
+            bar_spacing: 10.0,
             price_to_y: &|p| 500.0 - p as f32 * 10.0,
             y_to_price: &|y| f64::from(500.0 - y) / 10.0,
             time_axis: true,
@@ -1363,7 +1367,7 @@ mod tests {
             ] {
                 let mut manager = crate::drawings::DrawingManager::new();
                 manager.drawings.push(vwap.clone());
-                manager.update_all_screen_coords(bar_to_x, view.price_to_y);
+                manager.update_all_screen_coords(bar_to_x, view.price_to_y, 10.0);
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 ctx.run_ui(
@@ -1430,6 +1434,7 @@ mod tests {
                 bars,
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|price| price as f32,
                 y_to_price: &f64::from,
                 time_axis: true,
@@ -1492,6 +1497,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &|x| x,
+            bar_spacing: 1.0,
             price_to_y: &|price| price as f32,
             y_to_price: &f64::from,
             time_axis: true,
@@ -1689,6 +1695,7 @@ mod tests {
                 bars: &daily,
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|price| price as f32,
                 y_to_price: &f64::from,
                 time_axis: true,

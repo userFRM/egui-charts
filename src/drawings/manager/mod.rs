@@ -199,18 +199,19 @@ impl TextEditState {
 /// #     bar_to_x: impl Fn(f32) -> f32 + Copy,
 /// #     price_to_y: impl Fn(f64) -> f32 + Copy,
 /// #     y_to_price: impl Fn(f32) -> f64 + Copy,
+/// #     bar_spacing: f32,
 /// # ) {
 /// // 1. Sync state from app
 /// manager.sync_from_app_state(drawing_state);
 ///
 /// // 2. Update screen coordinates from chart coordinates
-/// manager.update_all_screen_coords(bar_to_x, price_to_y);
+/// manager.update_all_screen_coords(bar_to_x, price_to_y, bar_spacing);
 ///
 /// // 3. Handle user input (clicks, drags, keyboard)
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
 /// // 4. Render against the chart's bars and coordinate mapping
-/// let view = ChartView { price_formatter: None, time_formatter: None, bar_seconds: 0, instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, y_to_price: &y_to_price, time_axis: true, executions: None, timeframe: None, finer: &[] };
+/// let view = ChartView { price_formatter: None, time_formatter: None, bar_seconds: 0, instrument: None, bars, revision, bar_to_x: &bar_to_x, bar_spacing, price_to_y: &price_to_y, y_to_price: &y_to_price, time_axis: true, executions: None, timeframe: None, finer: &[] };
 /// manager.render_all(painter, price_rect, &view);
 /// # }
 /// ```
@@ -1022,7 +1023,7 @@ mod tests {
 
         // Pasting a lower layer puts the copy above existing drawings too.
         manager.paste_drawings(&[manager.drawings[1].clone()]);
-        manager.update_all_screen_coords(|bar| bar, |price| price as f32);
+        manager.update_all_screen_coords(|bar| bar, |price| price as f32, 1.0);
         let copy_id = manager.drawings.last().unwrap().id;
         assert_eq!(manager.hit_test(on_both), Some(copy_id));
         assert!(manager.undo());
@@ -1247,7 +1248,7 @@ mod tests {
         manager.drawings[2].selectable = false;
         manager.drawings[2].chart_points =
             vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(100.0, 10.0)];
-        manager.update_all_screen_coords(|x| x, |y| y as f32);
+        manager.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
         assert_eq!(manager.hit_test(Pos2::new(50.0, 10.0)), None);
         assert_eq!(
             manager.hit_test_handle(&manager.drawings[2], Pos2::new(0.0, 10.0)),
