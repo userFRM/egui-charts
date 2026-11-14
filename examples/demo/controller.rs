@@ -613,6 +613,8 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
+        // The library hides the navigation row by default; the demo shows where it is.
+        chart.config_mut().navigation_buttons = egui_charts::config::NavigationButtons::OnHover;
         size_by_atr(&mut chart);
         chart.set_event_visibility(
             cc.storage
@@ -9613,6 +9615,36 @@ mod tests {
             brick > sample_brick && brick < close / 10.0,
             "{sample_brick} {brick} {close}"
         );
+    }
+
+    /// A new session shows the navigation row while the pointer is over the main pane only.
+    #[test]
+    fn new_session_shows_navigation_buttons_on_hover() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        let pane = app.chart.get_rendered_price_rect().center();
+        for (pointer, shown) in [(pane, true), (egui::pos2(700.0, 15.0), false)] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events: vec![egui::Event::PointerMoved(pointer)],
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            // The row's logarithmic toggle is the only "log" the demo paints.
+            let painted = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "log")
+            });
+            output.drop_without_applying_deltas();
+            assert_eq!(painted, shown, "{pointer:?}");
+        }
     }
 
     /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind
