@@ -188,7 +188,7 @@ Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,verified,librar
 Chart,Keyboard shortcuts,Digits or comma to change interval,incomplete,library,src/widget/keyboard.rs;src/config/keyboard.rs;terminal/src/time.rs,2801
 Chart,Keyboard shortcuts,Drawing tool hotkeys,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs;src/widget/tool_interaction/mod.rs,
 Chart,Keyboard shortcuts,Go to date,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/time.rs,
-Chart,Keyboard shortcuts,Hide all drawings,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs,2802;2803
+Chart,Keyboard shortcuts,Hide all drawings,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/drawings/manager/edit.rs,2802;2803
 Chart,Keyboard shortcuts,Jump to latest bar,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Keyboard zoom,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/model/timescale.rs,
 Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/interaction.rs,
