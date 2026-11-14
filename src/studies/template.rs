@@ -164,7 +164,8 @@ impl StudyTemplate {
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
-        // Nor did it have the presentation an upgrade gives that built-in's older templates.
+        // A host study registered under a built-in's name never had the presentation an upgrade
+        // gives that built-in's older templates either.
         let settings = if factory.is_host(&self.name) {
             &self.settings
         } else {
