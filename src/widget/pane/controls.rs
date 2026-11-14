@@ -556,7 +556,16 @@ mod tests {
 
     #[test]
     fn pointer_command_double_click_collapses_and_restores_the_pointed_pane() {
-        for location in ["plot", "header", "axis", "price", "moved-price", "disabled"] {
+        for location in [
+            "plot",
+            "header",
+            "axis",
+            "price",
+            "moved-price",
+            "disabled",
+            "maximized",
+            "maximized-price",
+        ] {
             for modifiers in [
                 Modifiers::CTRL.plus(Modifiers::COMMAND),
                 Modifiers::MAC_CMD.plus(Modifiers::COMMAND),
@@ -565,6 +574,9 @@ mod tests {
                 let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
                 let study = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
                 let study_pane = chart.series_pane(study).unwrap();
+                if location.starts_with("maximized") {
+                    chart.add_indicator(Box::new(crate::studies::RSI::new(7)));
+                }
                 if location == "price" {
                     chart.add_indicator(Box::new(crate::studies::RSI::new(7)));
                     for pane in &mut chart.pane_layout.panes {
@@ -576,11 +588,14 @@ mod tests {
                 if location == "moved-price" {
                     chart.move_series_to_pane(SeriesId::MAIN, study_pane);
                 }
-                let id = if location == "price" || location == "moved-price" {
+                let id = if location.ends_with("price") {
                     chart.main_series_pane()
                 } else {
                     study_pane
                 };
+                if location.starts_with("maximized") {
+                    chart.pane_layout.maximized = Some(id);
+                }
                 let screen_height = std::cell::Cell::new(600.0);
                 let mut time = 0.0;
                 let mut frame = |chart: &mut Chart, events| {
@@ -615,9 +630,14 @@ mod tests {
                     .unwrap();
                 let height = chart.pane_height(id).unwrap();
                 let stretch = chart.pane_stretch_factor(id).unwrap();
+                // Left of the first bar the price pane's plot has no series to hit.
+                let first_bar = chart.get_chart_mapping().idx_to_x(0);
                 let click = |rect: Rect| match location {
                     "header" => rect.left_top() + egui::vec2(30.0, 10.0),
                     "axis" => rect.right_center() - egui::vec2(10.0, 0.0),
+                    "maximized-price" => {
+                        Pos2::new((rect.left() + first_bar) / 2.0, rect.center().y)
+                    }
                     _ => rect.center(),
                 };
                 let pos = click(chart.pane_layout.panes[at].rect);
@@ -637,6 +657,23 @@ mod tests {
                     );
                 }
                 frame(&mut chart, vec![]);
+                if location.starts_with("maximized") {
+                    // There it is the plain double-click: one step that brings back every pane.
+                    assert_eq!(chart.pane_layout.maximized, None, "{modifiers:?}");
+                    assert_eq!(chart.pane_layout.panes.len(), 3, "{location}");
+                    assert!(
+                        chart
+                            .pane_layout
+                            .panes
+                            .iter()
+                            .all(|pane| pane.rect.height() > 24.0),
+                        "{modifiers:?}"
+                    );
+                    assert!(chart.undo());
+                    assert_eq!(chart.pane_layout.maximized, Some(id));
+                    assert!(!chart.can_undo());
+                    continue;
+                }
                 if location == "disabled" {
                     assert_eq!(chart.pane_height(id), Some(height));
                     assert_eq!(chart.pane_layout.maximized, None);

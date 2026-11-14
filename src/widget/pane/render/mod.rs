@@ -1643,7 +1643,10 @@ impl Chart {
         if main_collapsed {
             self.collapsed_price_header(ui, main_rect);
         }
-        self.pane_collapse_shortcut(ui);
+        // On a pane maximized when the frame began, the gesture was the plain double-click.
+        if maximized.is_none() {
+            self.pane_collapse_shortcut(ui);
+        }
 
         ui.advance_cursor_after_rect(available);
         ui.spacing_mut().item_spacing = host_spacing;
