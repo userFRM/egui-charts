@@ -629,6 +629,7 @@ impl DemoApp {
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
         chart.set_storage(storage.clone());
+        chart.set_post_source(Some(Arc::new(feeds::DemoPosts)));
         let notification_host: Arc<feeds::DemoNotifications> = Arc::default();
 
         let mut top_toolbar = TopToolbar::new().with_config(
@@ -3732,6 +3733,15 @@ impl DemoApp {
                         size = true;
                     }
                 }
+                egui_charts::widget::ChartEvent::LinkClick { link, .. } => {
+                    // Any typed text can be a link; open web addresses only.
+                    let web = link.split_once("://").is_some_and(|(scheme, _)| {
+                        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+                    });
+                    if web {
+                        ctx.open_url(egui::OpenUrl::new_tab(link));
+                    }
+                }
                 _ => {}
             }
         }
@@ -5278,6 +5288,116 @@ mod tests {
             }
             assert_eq!(app.drawing_props.is_open, settings, "{tool:?}");
             assert!(!app.settings_dialog.is_open);
+        }
+    }
+
+    /// A card linking to a demo story shows that story, and its Open row opens only web links.
+    #[test]
+    fn post_cards_show_demo_stories_and_open_only_web_links() {
+        use egui_charts::drawings::DrawingToolType as Tool;
+        use egui_charts::model::PostLink;
+        for (link, content, opens) in [
+            (
+                "https://example.com/news/AAPL-0",
+                Some((
+                    "Apple Inc. extends gains as buyers return",
+                    "Demo Wire",
+                    "AAPL rose through the morning on steady volume, recovering the losses of the \
+                     previous session. Buyers held the price above the opening range into the \
+                     afternoon.",
+                )),
+                true,
+            ),
+            ("javascript://%0aalert(1)", None, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                "2026-10-27T19:29:50Z".parse().unwrap(),
+                true,
+            );
+            settle(&mut app, &ctx);
+            let frame = |app: &mut DemoApp, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        time: Some(ctx.input(|i| i.time) + 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.chart.show(ui);
+                        app.drain_chart_events(ui.ctx());
+                    },
+                );
+                let painted = std::mem::take(&mut output.shapes);
+                let commands = std::mem::take(&mut output.platform_output.commands);
+                output.drop_without_applying_deltas();
+                (painted, commands)
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut app, vec![]);
+            app.chart
+                .drawings_mut()
+                .start_post_insertion(Tool::Tweet, PostLink::new(link));
+            let rect = app.chart.get_rendered_price_rect();
+            let pos = rect.min + rect.size() * egui::vec2(0.2, 0.3);
+            frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+            frame(&mut app, vec![button(pos, true)]);
+            frame(&mut app, vec![button(pos, false)]);
+            // The answer arrives at once and the next frame applies it; the clicks also expire.
+            let mut painted = Vec::new();
+            for _ in 0..4 {
+                painted = frame(&mut app, vec![]).0;
+            }
+            let card = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|drawing| drawing.tool_type == Tool::Tweet)
+                .and_then(|drawing| drawing.post.as_ref())
+                .expect("the placed card");
+            let shown = card.content.as_ref();
+            assert_eq!(
+                shown.map(|c| (c.title.as_str(), c.author.as_str(), c.text.as_str())),
+                content,
+                "{link}"
+            );
+            assert!(shown.is_none_or(|c| c.picture.is_none()));
+            let open = painted
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == "Open" && rect.contains(text.pos) =>
+                    {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+                    }
+                    _ => None,
+                })
+                .expect("the card's Open row");
+            let mut commands = frame(
+                &mut app,
+                vec![egui::Event::PointerMoved(open), button(open, true)],
+            )
+            .1;
+            commands.extend(frame(&mut app, vec![button(open, false)]).1);
+            assert_eq!(
+                commands.iter().any(|command| matches!(
+                    command,
+                    egui::OutputCommand::OpenUrl(url) if url.url == link && url.new_tab
+                )),
+                opens,
+                "{link}"
+            );
         }
     }
 
