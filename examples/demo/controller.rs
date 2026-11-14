@@ -83,6 +83,7 @@ use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
+    default_time_zones,
 };
 #[cfg(test)]
 use egui_charts::ui::top_toolbar::CompareAction;
@@ -3422,6 +3423,14 @@ impl DemoApp {
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
             TimeframeToolbarAction::OpenTimezoneMenu => {
+                // On own data the zone of the profile is offered too, to return to it.
+                let mut zones = default_time_zones();
+                if let Some(own) = &self.own_data
+                    && !zones.contains(&own.profile.time_zone)
+                {
+                    zones.insert(0, own.profile.time_zone.clone());
+                }
+                self.timeframe_toolbar.set_time_zones(zones);
                 self.timeframe_toolbar.state.timezone_menu_open = true;
             }
             TimeframeToolbarAction::OpenSessionMenu => {
@@ -3471,36 +3480,11 @@ impl DemoApp {
                 });
             self.timeframe_toolbar.state.session_menu_open &= open;
         }
-        if self.timeframe_toolbar.state.timezone_menu_open {
-            let mut open = true;
-            egui::Window::new("Chart timezone")
-                .collapsible(false)
-                .resizable(false)
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    // On own data the zone of the profile is offered too, to return to it.
-                    let own_zone = self
-                        .own_data
-                        .as_ref()
-                        .map(|own| own.profile.time_zone.name().to_owned());
-                    let labels = ["UTC", "America/New_York"].into_iter().chain(
-                        own_zone
-                            .as_deref()
-                            .filter(|zone| !matches!(*zone, "UTC" | "America/New_York")),
-                    );
-                    for label in labels {
-                        if ui
-                            .selectable_label(self.timeframe_toolbar.state.timezone == label, label)
-                            .clicked()
-                        {
-                            self.user_action(|app| {
-                                apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, label)
-                            });
-                            self.timeframe_toolbar.state.timezone_menu_open = false;
-                        }
-                    }
-                });
-            self.timeframe_toolbar.state.timezone_menu_open &= open;
+        let current = self.chart.chart_options().time_scale.timezone.clone();
+        if let Some(timezone) = self.timeframe_toolbar.show_timezone_menu(ctx, &current) {
+            self.user_action(|app| {
+                apply_timezone_mode(&mut app.chart, &mut app.timeframe_toolbar, timezone)
+            });
         }
     }
 
@@ -4438,6 +4422,15 @@ fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str)
     } else {
         return;
     };
+    apply_timezone_mode(chart, toolbar, timezone);
+}
+
+/// Shows the chart in `timezone` and the clock in the zone the chart resolves for it.
+fn apply_timezone_mode(
+    chart: &mut Chart,
+    toolbar: &mut TimeframeToolbar,
+    timezone: egui_charts::config::TimezoneMode,
+) {
     if chart.chart_options().time_scale.timezone != timezone {
         let mut options = chart.chart_options().clone();
         options.time_scale.timezone = timezone;
