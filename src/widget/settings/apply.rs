@@ -1387,7 +1387,8 @@ mod tests {
 
     /// A size that waits for more history than is loaded is not invalid: the chart names the
     /// bars it waits for and other settings apply. A fixed size of 0 is still rejected. Whitespace
-    /// bars do not count, so the size resolves once 14 bars with prices are loaded.
+    /// bars do not count, so the size resolves once 14 bars with prices are loaded. A changed
+    /// method resolves again at once, also while the size waits.
     #[test]
     fn settings_apply_while_a_history_derived_size_waits() {
         use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
@@ -1437,6 +1438,17 @@ mod tests {
         }
         chart.show_elements();
         assert!((chart.chart_type_params().renko_brick_size - 2.0).abs() < 1e-12);
+        // A changed method reads the loaded bars at once, also while the size waits: ATR(20)
+        // waits for 6 more bars, and ATR(5) of true ranges of 2 is 2.
+        for (period, size) in [(20, 0.0), (5, 2.0)] {
+            let params = settings.chart_type_params.as_mut().unwrap();
+            params.renko_size_method = BoxSizeMethod::Atr {
+                period,
+                multiplier: 1.0,
+            };
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert!((chart.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the

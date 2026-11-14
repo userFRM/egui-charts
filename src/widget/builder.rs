@@ -109,6 +109,7 @@ impl Chart {
             #[cfg(feature = "studies")]
             trade_profiles: Default::default(),
             pending_box_sizes: [false; 4],
+            box_sizes_read: None,
             older_bars_drawn: true,
             tracking_mode_active: false,
             mouse_in_chart: false,
@@ -488,7 +489,7 @@ impl Chart {
     /// Line Break) and of the baseline.
     ///
     /// Fixed sizes are in price units. ATR and percentage methods resolve from the loaded history
-    /// when this is called, or once enough bars arrive if history is not ready. They then stay
+    /// when this is called, or once the loaded bars give a positive size. They then stay
     /// fixed through ticks, appends, corrections and prepends. Calling this again or replacing
     /// the dataset with [`Chart::set_data`] recalculates them. A size the chart cannot use is
     /// reported on the chart. On price-based types a change
@@ -534,8 +535,25 @@ impl Chart {
         }
         self.chart_type_params = params;
         self.pending_box_sizes = pending;
-        self.chart_type_params
-            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
+        // A changed method reads the bars again, also those it was last resolved from.
+        self.box_sizes_read = None;
+        self.resolve_box_sizes();
+    }
+
+    /// Resolves the pending sizes from the main bars. A size they give no positive value stays
+    /// pending, and since an ATR reads the whole history, it is read again only once the bars
+    /// or the pending sizes change.
+    pub(super) fn resolve_box_sizes(&mut self) {
+        let bars = &self.state.data().bars;
+        let last = bars
+            .last()
+            .map(|bar| [bar.high, bar.low, bar.close].map(f64::to_bits));
+        let (revision, len) = (self.state.revision(), bars.len());
+        if self.box_sizes_read != Some((revision, len, last, self.pending_box_sizes)) {
+            self.chart_type_params
+                .resolve_sizes(bars, &mut self.pending_box_sizes);
+            self.box_sizes_read = Some((revision, len, last, self.pending_box_sizes));
+        }
     }
 
     /// Returns the parameters of the price-based chart types and of the baseline.
