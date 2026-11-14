@@ -2295,7 +2295,9 @@ fn comparisons_share_percent_ranges_with_individual_visible_references() {
             "join_main" => {
                 chart.set_series_scale(SeriesId::MAIN, SeriesScale::Left);
             }
-            _ => chart.set_data(first, Vec::new()),
+            _ => {
+                chart.set_data(first, Vec::new());
+            }
         }
         frame(&ctx, &mut chart, 0.3, vec![]);
         let range = chart.series_price_scale(second).unwrap().range();

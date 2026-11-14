@@ -5,6 +5,7 @@ use crate::model::Bar;
 
 /// One bar's trade-based delta, cumulative delta candle, and rolling totals.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TradeDeltaValue {
     /// Buy minus sell volume in this bar.
     pub delta: f64,

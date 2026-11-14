@@ -30,6 +30,7 @@ pub trait DrawingToolsRepository {
 }
 
 /// Drawing tool lookup backed by [`categories`].
+#[derive(Debug)]
 pub struct InMemoryToolsRepository;
 
 impl InMemoryToolsRepository {

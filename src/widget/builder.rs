@@ -103,6 +103,7 @@ impl Chart {
             pending_scroll_time: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
+            price_plot_double_click: false,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
             #[cfg(feature = "studies")]
@@ -642,6 +643,16 @@ pub struct ChartBuilder {
     storage: Option<Arc<dyn crate::services::Storage>>,
     #[cfg(feature = "ui")]
     study_factory: Option<crate::studies::IndicatorFactory>,
+}
+
+impl std::fmt::Debug for ChartBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartBuilder")
+            .field("symbol", &self.symbol)
+            .field("timeframe", &self.timeframe)
+            .field("chart_type", &self.chart_type)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ChartBuilder {

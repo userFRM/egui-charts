@@ -49,6 +49,7 @@ use egui::Color32;
 
 /// A phase of the Moon with a published instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MoonPhase {
     /// The Moon passes between the Earth and the Sun.
     New,
@@ -58,6 +59,7 @@ pub enum MoonPhase {
 
 /// One new or full moon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LunarPhase {
     /// Which phase.
     pub phase: MoonPhase,

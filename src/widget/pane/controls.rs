@@ -280,14 +280,16 @@ impl Chart {
             .or_else(|| self.series_pane(SeriesId::MAIN));
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
+        let [drawn_above, drawn_below] =
+            [false, true].map(|down| self.drawn_neighbour(pane_idx, down));
         child.menu_button("...", |ui| {
             let members = self.pane_series(id);
             let editable = members.iter().all(|member| {
                 !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member)
             });
             for (label, enabled, command) in [
-                ("Move pane up", above.is_some(), 0),
-                ("Move pane down", below.is_some(), 1),
+                ("Move pane up", drawn_above.is_some(), 0),
+                ("Move pane down", drawn_below.is_some(), 1),
                 (
                     if collapsed {
                         "Expand pane"
@@ -353,8 +355,9 @@ impl Chart {
             self.begin_user_action();
         }
         match action {
-            Some(0) => self.pane_layout.panes.swap(pane_idx, pane_idx - 1),
-            Some(1) => self.pane_layout.panes.swap(pane_idx, pane_idx + 1),
+            // Hidden panes in between keep their place next to the panes not moved.
+            Some(0) => self.pane_layout.panes[drawn_above.unwrap()..=pane_idx].rotate_right(1),
+            Some(1) => self.pane_layout.panes[pane_idx..=drawn_below.unwrap()].rotate_left(1),
             Some(2) => self.pane_layout.panes[pane_idx].collapsed = Some(!collapsed),
             Some(3 | 4) => {
                 let target = if action == Some(3) {
@@ -383,6 +386,17 @@ impl Chart {
         if action.is_some() {
             self.end_user_action();
             ui.ctx().request_repaint();
+        }
+    }
+
+    /// The index of the nearest pane drawn below or above the pane at `at`.
+    fn drawn_neighbour(&self, at: usize, down: bool) -> Option<usize> {
+        let panes = &self.pane_layout.panes;
+        let drawn = |idx: &usize| self.pane_drawn(&panes[*idx]);
+        if down {
+            (at + 1..panes.len()).find(drawn)
+        } else {
+            (0..at).rev().find(drawn)
         }
     }
 
@@ -424,14 +438,24 @@ impl Chart {
                 continue;
             }
             let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-            if response.dragged() && !collapsed && !upper_collapsed {
-                let delta = response.drag_delta().y.clamp(
-                    40.0 - upper.height(),
-                    (rect.height() - 40.0).max(40.0 - upper.height()),
+            // Heights follow the whole drag from the press, so movement past a limit is kept.
+            if response.drag_started() {
+                ui.data_mut(|data| data.insert_temp(response.id, (upper.height(), rect.height())));
+            }
+            if response.dragged()
+                && !collapsed
+                && !upper_collapsed
+                && let Some(((upper_height, height), total)) = ui
+                    .data(|data| data.get_temp::<(f32, f32)>(response.id))
+                    .zip(response.total_drag_delta())
+            {
+                let delta = total.y.clamp(
+                    40.0 - upper_height,
+                    (height - 40.0).max(40.0 - upper_height),
                 );
                 // The other panes keep their heights: these two exchange pixels.
-                self.pane_layout.panes[upper_idx].height = Some(upper.height() + delta);
-                self.pane_layout.panes[idx].height = Some(rect.height() - delta);
+                self.pane_layout.panes[upper_idx].height = Some(upper_height + delta);
+                self.pane_layout.panes[idx].height = Some(height - delta);
                 ui.ctx().request_repaint();
             }
             if response.double_clicked() && !self.pane_collapse_click(ui.ctx()) {
@@ -556,7 +580,16 @@ mod tests {
 
     #[test]
     fn pointer_command_double_click_collapses_and_restores_the_pointed_pane() {
-        for location in ["plot", "header", "axis", "price", "moved-price", "disabled"] {
+        for location in [
+            "plot",
+            "header",
+            "axis",
+            "price",
+            "moved-price",
+            "disabled",
+            "maximized",
+            "maximized-price",
+        ] {
             for modifiers in [
                 Modifiers::CTRL.plus(Modifiers::COMMAND),
                 Modifiers::MAC_CMD.plus(Modifiers::COMMAND),
@@ -565,6 +598,9 @@ mod tests {
                 let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
                 let study = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
                 let study_pane = chart.series_pane(study).unwrap();
+                if location.starts_with("maximized") {
+                    chart.add_indicator(Box::new(crate::studies::RSI::new(7)));
+                }
                 if location == "price" {
                     chart.add_indicator(Box::new(crate::studies::RSI::new(7)));
                     for pane in &mut chart.pane_layout.panes {
@@ -576,11 +612,14 @@ mod tests {
                 if location == "moved-price" {
                     chart.move_series_to_pane(SeriesId::MAIN, study_pane);
                 }
-                let id = if location == "price" || location == "moved-price" {
+                let id = if location.ends_with("price") {
                     chart.main_series_pane()
                 } else {
                     study_pane
                 };
+                if location.starts_with("maximized") {
+                    chart.pane_layout.maximized = Some(id);
+                }
                 let screen_height = std::cell::Cell::new(600.0);
                 let mut time = 0.0;
                 let mut frame = |chart: &mut Chart, events| {
@@ -615,9 +654,14 @@ mod tests {
                     .unwrap();
                 let height = chart.pane_height(id).unwrap();
                 let stretch = chart.pane_stretch_factor(id).unwrap();
+                // Left of the first bar the price pane's plot has no series to hit.
+                let first_bar = chart.get_chart_mapping().idx_to_x(0);
                 let click = |rect: Rect| match location {
                     "header" => rect.left_top() + egui::vec2(30.0, 10.0),
                     "axis" => rect.right_center() - egui::vec2(10.0, 0.0),
+                    "maximized-price" => {
+                        Pos2::new((rect.left() + first_bar) / 2.0, rect.center().y)
+                    }
                     _ => rect.center(),
                 };
                 let pos = click(chart.pane_layout.panes[at].rect);
@@ -637,6 +681,23 @@ mod tests {
                     );
                 }
                 frame(&mut chart, vec![]);
+                if location.starts_with("maximized") {
+                    // There it is the plain double-click: one step that brings back every pane.
+                    assert_eq!(chart.pane_layout.maximized, None, "{modifiers:?}");
+                    assert_eq!(chart.pane_layout.panes.len(), 3, "{location}");
+                    assert!(
+                        chart
+                            .pane_layout
+                            .panes
+                            .iter()
+                            .all(|pane| pane.rect.height() > 24.0),
+                        "{modifiers:?}"
+                    );
+                    assert!(chart.undo());
+                    assert_eq!(chart.pane_layout.maximized, Some(id));
+                    assert!(!chart.can_undo());
+                    continue;
+                }
                 if location == "disabled" {
                     assert_eq!(chart.pane_height(id), Some(height));
                     assert_eq!(chart.pane_layout.maximized, None);
@@ -713,6 +774,47 @@ mod tests {
                     "{location} {modifiers:?}"
                 );
             }
+        }
+    }
+
+    /// The move entries of a pane's menu pass the hidden panes next to it.
+    #[test]
+    fn move_pane_entries_skip_hidden_panes() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        for hide_rsi in [false, true] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0; 20], &[110.0; 20]);
+            let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            let macd = chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+            let [rsi_pane, macd_pane] = [rsi, macd].map(|id| chart.series_pane(id).unwrap());
+            let (hidden, pane, expected) = if hide_rsi {
+                (rsi, macd_pane, [macd_pane, PaneId::MAIN, rsi_pane])
+            } else {
+                (macd, rsi_pane, [rsi_pane, PaneId::MAIN, macd_pane])
+            };
+            chart.set_series_visible(hidden, false);
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .build_ui_state(
+                    |ui, chart: &mut Chart| {
+                        let rect = ui.max_rect();
+                        let at = chart.pane_layout.panes.iter().position(|p| p.id == pane);
+                        chart.pane_actions(ui, at.unwrap(), pane, rect, rect, false);
+                    },
+                    chart,
+                );
+            harness.hover_at(egui::pos2(400.0, 300.0));
+            harness.run();
+            harness.get_by_label("...").click();
+            harness.run();
+            let down = harness.get_by_label("Move pane down");
+            assert!(down.accesskit_node().is_disabled(), "{hide_rsi}");
+            harness.get_by_label("Move pane up").click();
+            harness.run();
+            assert_eq!(harness.state().panes(), expected, "{hide_rsi}");
         }
     }
 
