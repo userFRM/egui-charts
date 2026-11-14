@@ -68,6 +68,8 @@ pub struct SettingsDialog {
     sound_preview: Option<(String, f32)>,
     /// Heatmap, book, individual orders and bubbles offered by the host.
     order_flow_layers: [bool; 4],
+    /// Whether the host's feed answers analyst price targets for the chart's instrument.
+    price_targets_offered: bool,
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
 }
@@ -178,6 +180,7 @@ impl SettingsDialog {
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
+            price_targets_offered: true,
             opened_font_family: None,
         }
     }
@@ -198,27 +201,31 @@ impl SettingsDialog {
         }
     }
 
-    /// Restrict Order flow controls to services explicitly declared for the chart's instrument.
+    /// Restrict Order flow controls and the Analyst price targets setting to services explicitly
+    /// declared for the chart's instrument
+    /// ([`FeedService::PriceTargets`](crate::model::FeedService::PriceTargets) for the targets).
     /// Pass [`Chart::feed_capabilities`](crate::Chart::feed_capabilities) and
     /// [`Chart::instrument`](crate::Chart::instrument) again when they change. A missing instrument
-    /// or a non-positive, non-finite or missing tick size hides the tab. Before the first call,
-    /// all layers are offered. Hidden controls retain their saved values.
+    /// hides both; a non-positive, non-finite or missing tick size hides the Order flow tab only.
+    /// Before the first call, everything is offered. Hidden controls retain their saved values.
     pub fn set_feed_capabilities(
         &mut self,
         capabilities: Option<&crate::data::FeedCapabilities>,
         instrument: Option<&crate::model::Instrument>,
     ) {
         use crate::model::FeedService;
-        let declares = |service| {
+        let declared = |service| {
             instrument.is_some_and(|instrument| {
-                instrument
-                    .tick_size
-                    .is_some_and(|tick| tick.is_finite() && tick > 0.0)
-                    && capabilities
-                        .unwrap_or(&crate::data::FeedCapabilities::default())
-                        .declares(service, instrument)
+                capabilities
+                    .unwrap_or(&crate::data::FeedCapabilities::default())
+                    .declares(service, instrument)
             })
         };
+        // The tick size gates Order flow only: targets are prices from the feed.
+        let ticked = instrument
+            .and_then(|instrument| instrument.tick_size)
+            .is_some_and(|tick| tick.is_finite() && tick > 0.0);
+        let declares = |service| ticked && declared(service);
         let depth = declares(FeedService::Depth);
         self.order_flow_layers = [
             depth || declares(FeedService::DepthHistory),
@@ -226,6 +233,7 @@ impl SettingsDialog {
             depth && declares(FeedService::OrderDepth),
             declares(FeedService::Trades) || declares(FeedService::LiveTrades),
         ];
+        self.price_targets_offered = declared(FeedService::PriceTargets);
         if !self.order_flow_layers.iter().any(|available| *available)
             && self.active_tab == SettingsTab::OrderFlow
         {
@@ -1603,37 +1611,56 @@ mod tests {
             Depth,
             DepthHistory,
             OrderDepth,
+            PriceTargets,
         ]);
-        for (services, tick, expected) in [
-            (None, Some(0.25), [true, true, true, true]),
+        for (services, tick, expected, targets) in [
+            (None, Some(0.25), [true, true, true, true], true),
             (
                 Some(vec![LiveTrades]),
                 Some(0.25),
                 [false, false, false, true],
+                false,
             ),
-            (Some(vec![Trades]), Some(0.25), [false, false, false, true]),
-            (Some(vec![Depth]), Some(0.25), [true, true, false, false]),
+            (
+                Some(vec![Trades]),
+                Some(0.25),
+                [false, false, false, true],
+                false,
+            ),
+            (
+                Some(vec![Depth]),
+                Some(0.25),
+                [true, true, false, false],
+                false,
+            ),
             (
                 Some(vec![DepthHistory]),
                 Some(0.25),
                 [true, false, false, false],
+                false,
             ),
             (
                 Some(vec![Depth, OrderDepth]),
                 Some(0.25),
                 [true, true, true, false],
+                false,
             ),
-            (Some(vec![OrderDepth]), Some(0.25), [false; 4]),
-            (Some(vec![]), Some(0.25), [false; 4]),
-            (Some(vec![Depth]), None, [false; 4]),
-            (Some(vec![Depth]), Some(0.0), [false; 4]),
-            (Some(vec![Depth]), Some(f64::NAN), [false; 4]),
+            (Some(vec![OrderDepth]), Some(0.25), [false; 4], false),
+            (Some(vec![]), Some(0.25), [false; 4], false),
+            (Some(vec![Depth]), None, [false; 4], false),
+            (Some(vec![Depth]), Some(0.0), [false; 4], false),
+            (Some(vec![Depth]), Some(f64::NAN), [false; 4], false),
+            (Some(vec![PriceTargets]), Some(0.25), [false; 4], true),
+            (Some(vec![PriceTargets]), None, [false; 4], true),
         ] {
             let ctx = Context::default();
             let theme = Theme::light();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut dialog = SettingsDialog::new();
-            dialog.open(ChartSettingsState::default());
+            dialog.open(ChartSettingsState {
+                show_price_targets: true,
+                ..Default::default()
+            });
             let mut instrument = Instrument::new("A");
             instrument.services = services;
             instrument.tick_size = tick;
@@ -1652,15 +1679,23 @@ mod tests {
                         dialog.show(ui.ctx(), &theme);
                     },
                 );
-                let tab = output.shapes.iter().any(|shape| {
-                    matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.text() == "Order flow")
-                });
+                let shown = |label: &str| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == label)
+                    })
+                };
+                let (tab, offered) = (shown("Order flow"), shown("Analyst price targets"));
                 output.drop_without_applying_deltas();
                 if pass == 2 {
                     assert_eq!(tab, expected.iter().any(|available| *available));
+                    assert_eq!(offered, targets, "price targets");
                 }
             }
+            assert!(
+                dialog.settings.show_price_targets,
+                "a hidden setting keeps its value"
+            );
             // Existing overlay configs define fallback behaviour for these values.
             dialog.settings.order_flow.heatmap.full_intensity_size = Some(0.0);
             dialog.settings.order_flow.volume_bubbles.grouping =
@@ -1689,14 +1724,17 @@ mod tests {
             dialog.active_tab = SettingsTab::OrderFlow;
             dialog.set_feed_capabilities(Some(&feed), None);
             assert_eq!(dialog.active_tab, SettingsTab::Symbol);
+            assert!(!dialog.price_targets_offered);
         }
         let mut dialog = SettingsDialog::new();
         assert_eq!(dialog.order_flow_layers, [true; 4]);
+        assert!(dialog.price_targets_offered);
         let instrument = Instrument::new("A")
             .with_tick_size(0.25)
             .with_services([Depth]);
         dialog.set_feed_capabilities(None, Some(&instrument));
         assert_eq!(dialog.order_flow_layers, [true, true, false, false]);
+        assert!(!dialog.price_targets_offered);
         dialog.set_feed_capabilities(
             Some(&FeedCapabilities::new().with_services([])),
             Some(&instrument),
@@ -1704,6 +1742,11 @@ mod tests {
         assert_eq!(dialog.order_flow_layers, [false; 4]);
         dialog.set_feed_capabilities(None, Some(&Instrument::new("A").with_tick_size(0.25)));
         assert_eq!(dialog.order_flow_layers, [false; 4]);
+        dialog.set_feed_capabilities(
+            None,
+            Some(&Instrument::new("A").with_services([PriceTargets])),
+        );
+        assert!(dialog.price_targets_offered);
     }
 
     #[test]
