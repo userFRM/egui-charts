@@ -338,9 +338,16 @@ impl ExecutionRanges {
             (self.built, self.approximated, self.mixed) = (None, None, false);
             return None;
         };
-        // The bar holding the first trade is left out: the trades from it on replace its OHLC.
-        let open = clock.bar_open(*first);
-        let before = history.partition_point(|bar| clock.bar_open(bar.time) < open);
+        // The bar holding the first trade is left out: the trades from it on replace its OHLC. A
+        // trade-based bar opens at its first trade, so the last one open by then holds it.
+        let before = if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            history
+                .partition_point(|bar| bar.time <= *first)
+                .saturating_sub(1)
+        } else {
+            let open = clock.bar_open(*first);
+            history.partition_point(|bar| clock.bar_open(bar.time) < open)
+        };
         let approximated =
             (before > 0).then(|| range_bars(&history[..before], history_revision, params));
         let unchanged = match (&approximated, &self.approximated) {
@@ -1021,6 +1028,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A bar of a trade-based interval opens at its first trade, so the held trades can start
+    /// inside a bar that opens before them, as after the oldest held trades are dropped. That bar
+    /// is left out of the approximation: its rise to 104 after the first held trade is drawn once,
+    /// from the trades.
+    #[test]
+    fn range_bars_leave_the_trade_based_bar_of_the_first_trade_to_the_trades() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let at = |second| start + Duration::seconds(second);
+        // Bars of three trades: 99, 99, 100; 100, 100, 101; 101, 101, 104; then 104, 105.
+        let history = [
+            (0, 99.0, 100.0, 99.0, 100.0),
+            (3, 100.0, 101.0, 100.0, 101.0),
+            (6, 101.0, 104.0, 101.0, 104.0),
+            (9, 104.0, 105.0, 104.0, 105.0),
+        ]
+        .map(|(second, open, high, low, close)| Bar::new(at(second), open, high, low, close, 3.0));
+        // The trades from the second one of the third bar on.
+        let trades = [(7, 101.0), (8, 104.0), (9, 104.0), (10, 105.0)]
+            .map(|(second, price)| crate::model::Tick::new(at(second), price, 1.0, None));
+        let params = ChartTypeParams {
+            range_size: 1.0,
+            ..Default::default()
+        };
+        let clock = crate::model::BarClock::new("3t".parse().unwrap());
+        let (bars, _) = ExecutionRanges::default()
+            .bars(&params, &history, 0, &clock, 0, trades.iter(), None)
+            .unwrap();
+        // The first two bars close range bars at 100 and 101, and the trades at 102 to 105.
+        let closes: Vec<_> = bars.iter().map(|bar| bar.close).collect();
+        assert_eq!(closes, [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]);
     }
 
     #[test]
