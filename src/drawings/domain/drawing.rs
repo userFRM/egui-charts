@@ -9,10 +9,10 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
-    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
+    FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
+    LineMeasurements, NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize,
+    PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -252,6 +252,10 @@ pub struct Drawing {
     /// Lines, labels, zone fill and border of position tools.
     #[serde(default)]
     pub position_style: PositionStyle,
+    /// Text popup of a pin and glyph disc of a signpost. Drawings saved without it show their
+    /// text and no glyph, as new ones do.
+    #[serde(default)]
+    pub marker: AnnotationMarker,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
@@ -596,6 +600,7 @@ impl Drawing {
             position_target_color: None,
             position_stop_color: None,
             position_style: PositionStyle::default(),
+            marker: AnnotationMarker::default(),
             fib_config: matches!(
                 tool_type,
                 DrawingToolType::FibonacciRetracement

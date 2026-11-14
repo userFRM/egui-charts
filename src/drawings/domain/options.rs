@@ -6,7 +6,8 @@
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`],
-//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]).
+//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]), and the marker settings of pins
+//! and signposts ([`AnnotationMarker`]).
 
 use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
@@ -1132,6 +1133,40 @@ impl NoteTextStyle {
     /// Whether the font size lies in 1 to 256 points.
     pub fn is_valid(&self) -> bool {
         (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
+/// What a pin and a signpost show at their marker: a pin's text popup, and the glyph a signpost
+/// can carry on a coloured disc below its text. Other tools ignore these settings. A new drawing
+/// shows a pin's text and leaves a signpost's glyph off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnnotationMarker {
+    /// Whether a pin shows its text in a popup while it is selected or under the pointer.
+    pub show_text: bool,
+    /// Glyph on a signpost's disc: an emoji, or the id of a bundled icon or sticker.
+    pub glyph: String,
+    /// Whether a signpost carries the disc and its glyph.
+    pub show_glyph: bool,
+    /// Colour of a signpost's disc; `None` takes the drawing colour.
+    pub glyph_color: Option<[u8; 4]>,
+}
+
+impl Default for AnnotationMarker {
+    fn default() -> Self {
+        Self {
+            show_text: true,
+            glyph: "🙂".into(),
+            show_glyph: false,
+            glyph_color: None,
+        }
+    }
+}
+
+impl AnnotationMarker {
+    /// Whether the glyph is named, in at most 32 bytes.
+    pub fn is_valid(&self) -> bool {
+        (1..=32).contains(&self.glyph.len())
     }
 }
 
