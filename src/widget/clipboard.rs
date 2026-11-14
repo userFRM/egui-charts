@@ -99,7 +99,10 @@ impl Chart {
 
     /// Paste study clipboard text from [`Self::copy_indicator`], on this chart or another, as
     /// one undoable addition, and return the new study's id. `factory` creates the study by its
-    /// name. Hands a study pasted beyond the [study cap](Self::set_study_limit) back in
+    /// name. Text copied on an earlier release is restored as a
+    /// [`StudyTemplate`](crate::studies::StudyTemplate) with the same name, inputs and styles is,
+    /// so the study draws what it drew when it was copied. Hands a study pasted beyond the
+    /// [study cap](Self::set_study_limit) back in
     /// [`crate::studies::StudyError::StudyLimitReached`]. Rejects other text, a name
     /// `factory` does not know, and inputs or styles the study does not accept, before changing
     /// the chart. Study output references need host remapping and are rejected; hosts restore
@@ -111,7 +114,7 @@ impl Chart {
         text: &str,
         factory: &crate::studies::IndicatorFactory,
     ) -> Result<SeriesId, crate::studies::StudyError> {
-        use crate::studies::{Indicator, RefusedStudy, StudyError};
+        use crate::studies::{RefusedStudy, StudyError};
         let json = text
             .strip_prefix(STUDY_PREFIX)
             .ok_or(StudyError::NotClipboard)?;
@@ -127,15 +130,16 @@ impl Chart {
                 reason: "reads another study's output, which needs remapping before paste".into(),
             });
         }
-        let mut study = crate::studies::ConfiguredStudy::new(
-            factory
-                .create_registered(&copied.name)
-                .ok_or_else(|| StudyError::UnknownStudy(copied.name.clone()))?,
-        );
-        study.apply_settings(&copied.inputs, copied.settings)?;
+        // Built as a saved template is, so text copied on an earlier release draws what it drew.
+        let mut study = crate::studies::StudyTemplate {
+            name: copied.name,
+            inputs: copied.inputs,
+            settings: copied.settings,
+            visible: true,
+            scale: Some(copied.scale),
+        }
+        .create_with(factory)?;
         study.set_overlay(copied.overlay);
-        study.set_scale(copied.scale);
-        let study: Box<dyn Indicator> = Box::new(study);
         if self.study_limit_reached() {
             return Err(StudyError::StudyLimitReached(RefusedStudy::new(study)));
         }
@@ -149,7 +153,8 @@ mod tests {
     use crate::widget::test_frames;
 
     /// A copied study pastes onto another chart with its inputs, styles, interval visibility,
-    /// placement and scale, as one undoable addition.
+    /// placement and scale, as one undoable addition, and text copied on an earlier release is
+    /// upgraded as a saved template is.
     #[test]
     fn copied_studies_paste_with_their_settings() {
         let mut source = test_frames::chart(&[100.0], &[110.0]);
@@ -210,6 +215,24 @@ mod tests {
             target.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
             before
         );
+        // Copied before its output could be chosen, a majority rule drew the signed direction,
+        // and pastes drawing it, as a template saved then restores.
+        let rule = source.add_indicator(Box::new(crate::studies::MajorityRule::new(10)));
+        let text = source.copy_indicator(rule).unwrap();
+        let mut copied: serde_json::Value =
+            serde_json::from_str(text.strip_prefix(super::STUDY_PREFIX).unwrap()).unwrap();
+        copied["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|input| input[0] != "mode");
+        let older = format!("{}{copied}", super::STUDY_PREFIX);
+        let pasted = target.paste_indicator(&older, &factory).unwrap();
+        let mode = find(&target, pasted)
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "mode")
+            .map(|input| input.value);
+        assert_eq!(mode, Some(crate::studies::InputValue::Choice(1)));
     }
 
     /// Clipboard paste maps times into the destination before offsetting, keeps properties,

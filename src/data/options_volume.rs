@@ -53,7 +53,7 @@ impl<T> Snapshot<T> {
 
 /// A feed's options snapshots for one underlying and expiry query. Cheap to clone.
 /// Only the latest snapshot is retained, so updates cannot accumulate between frames.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct OptionsVolumeSink(Weak<Snapshot<Arc<[OptionsVolume]>>>);
 
 impl OptionsVolumeSink {

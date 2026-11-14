@@ -8,8 +8,7 @@
 
 use super::time_formatter::TimeFormatter;
 use super::timescale_marks::{
-    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,
-    keep_spaced_by,
+    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkWeight, keep_spaced_by,
 };
 use crate::model::Bar;
 use chrono::{DateTime, Duration, Utc};
@@ -48,6 +47,14 @@ use chrono::{DateTime, Duration, Utc};
 pub struct CustomHorizontalScale<K> {
     keys: Vec<K>,
     format: Box<dyn Fn(&K) -> String + Send + Sync>,
+}
+
+impl<K> std::fmt::Debug for CustomHorizontalScale<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomHorizontalScale")
+            .field("keys", &self.keys.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<K: Ord> CustomHorizontalScale<K> {
@@ -108,14 +115,12 @@ impl<K: Ord + Send + Sync> HorizontalScale for CustomHorizontalScale<K> {
         let marks = points
             .iter()
             .filter_map(|&(time, index)| {
-                Some(TickMark {
+                Some(TickMark::new(
                     time,
                     index,
-                    label: (self.format)(self.key(time)?),
-                    mark_type: TickMarkType::Time,
-                    weight: TickMarkWeight::new(1),
-                    bold: false,
-                })
+                    TickMarkWeight::new(1),
+                    (self.format)(self.key(time)?),
+                ))
             })
             .collect();
         keep_spaced_by(
@@ -415,13 +420,13 @@ fn weighted_marks(
 ) -> Vec<TickMark> {
     let marks = points
         .iter()
-        .map(|&(time, index)| TickMark {
-            time,
-            mark_type: TickMarkType::Time,
-            weight: TickMarkWeight::new(weight(time_key(time))),
-            label: String::new(),
-            index,
-            bold: false,
+        .map(|&(time, index)| {
+            TickMark::new(
+                time,
+                index,
+                TickMarkWeight::new(weight(time_key(time))),
+                String::new(),
+            )
         })
         .collect();
     let mut kept = keep_spaced_by(
