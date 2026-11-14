@@ -749,8 +749,9 @@ impl DemoApp {
             grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
             drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
+            // Filled from the chart's bindings each time it opens.
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
-                commands::quick_search_commands(),
+                Vec::new(),
             ),
             sample_scene: None,
             sample_study: Default::default(),
@@ -1277,16 +1278,17 @@ impl DemoApp {
 
     // --- selection / context helpers --------------------------------------
 
+    /// The chart settings as the dialog shows them, with the settings the demo keeps itself.
+    fn chart_settings_state(&self) -> ChartSettingsState {
+        let mut state = ChartSettingsState::from_chart(&self.chart);
+        state.alerts = self.settings_state.alerts.clone();
+        state.trading = self.trading.display.clone();
+        state.adjust_for_dividends = self.timeframe_toolbar.state.adjust_for_dividends;
+        state
+    }
+
     fn open_chart_settings_dialog(&mut self) {
-        let (alerts, trading) = (
-            self.settings_state.alerts.clone(),
-            self.trading.display.clone(),
-        );
-        self.settings_state = ChartSettingsState::from_chart(&self.chart);
-        self.settings_state.alerts = alerts;
-        self.settings_state.trading = trading;
-        self.settings_state.adjust_for_dividends =
-            self.timeframe_toolbar.state.adjust_for_dividends;
+        self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
         self.settings_dialog.open(self.settings_state.clone());
@@ -2329,7 +2331,7 @@ impl DemoApp {
                 }
                 self.compare_dialog.open();
             }
-            TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
+            TopToolbarAction::OpenQuickSearch => self.open_quick_search(),
             TopToolbarAction::OpenIndicators => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
@@ -4120,7 +4122,6 @@ impl DemoApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        use egui_charts::config::KeyboardAction as A;
         use egui_charts::widget::ShortcutRequest;
         self.chart.dispatch_shortcuts(ctx);
         self.sync_chart_history();
@@ -4136,96 +4137,103 @@ impl DemoApp {
                     self.interval_entry = Some(text);
                     self.interval_focus = true;
                 }
-                ShortcutRequest::Action(action) => match action {
-                    A::OpenQuickSearch => self.quick_search.open(),
-                    A::ShowKeyboardHelp => self.keyboard_shortcuts.toggle(),
-                    A::OpenIndicatorSearch => {
-                        self.indicator_dialog.open_for_chart(&self.chart, None);
-                    }
-                    A::OpenSymbolSearch => self
-                        .symbol_search
-                        .open_with_selected_query(self.chart.symbol().to_owned()),
-                    A::OpenIntervalSearch => {
-                        self.interval_entry = Some(String::new());
-                        self.interval_focus = true;
-                    }
-                    A::GoToDate => self.date_picker.open(),
-                    A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
-                    A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
-                    A::OpenLayout => self.handle_layout_action(
-                        egui_charts::ui::top_toolbar::LayoutAction::OpenLayout,
-                    ),
-                    A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
-                    A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
-                        let session =
-                            if self.timeframe_toolbar.state.session_type == SessionType::RTH {
-                                SessionType::ETH
-                            } else {
-                                SessionType::RTH
-                            };
-                        self.timeframe_toolbar.set_session(session);
-                        self.stop_replay();
-                        self.apply_session();
-                    }
-                    A::CreateAlert => {
-                        let mapping = self.chart.get_chart_mapping();
-                        if let Some(pos) = ctx
-                            .pointer_hover_pos()
-                            .filter(|pos| mapping.rect.contains(*pos))
-                        {
-                            if ctx
-                                .layer_id_at(pos)
-                                .is_some_and(|layer| layer.order == egui::Order::Background)
-                            {
-                                let price = mapping.y_to_price(pos.y);
-                                if price.is_finite() {
-                                    self.quick_price_alert(self.chart.symbol().to_owned(), price);
-                                }
-                            }
-                        } else {
-                            self.open_alert(None);
-                        }
-                    }
-                    A::MaximizeChart => {
-                        self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen)
-                    }
-                    A::CopyDrawing => match self.chart.copy_selected_drawings() {
-                        Ok(Some(text)) => {
-                            ctx.copy_text(text.clone());
-                            self.copied_drawing = Some(text);
-                            self.copied_study = None;
-                        }
-                        Ok(None) => {
-                            if let Some(egui_charts::widget::ChartElementId::Indicator(id)) =
-                                self.chart.selected_element()
-                            {
-                                self.copy_study(ctx, id);
-                            }
-                        }
-                        Err(error) => {
-                            self.toasts
-                                .error(format!("Could not copy drawings: {error}"));
-                        }
-                    },
-                    A::PasteDrawing => self.paste_drawing(),
-                    A::CycleChartFocus | A::CycleChartFocusBack => {
-                        let count = self
-                            .layout
-                            .mode
-                            .chart_count()
-                            .min(self.extra_charts.len() + 1);
-                        let delta = if action == A::CycleChartFocus {
-                            1
-                        } else {
-                            count - 1
-                        };
-                        self.activate_chart_slot((self.layout_slot + delta) % count);
-                        self.layout.set_active(self.layout_slot);
-                    }
-                    _ => {}
-                },
+                ShortcutRequest::Action(action) => self.handle_shortcut_action(ctx, action),
                 _ => {}
             }
+        }
+    }
+
+    /// Runs a key binding the chart leaves to the host, as its key press would.
+    fn handle_shortcut_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: egui_charts::config::KeyboardAction,
+    ) {
+        use egui_charts::config::KeyboardAction as A;
+        match action {
+            A::OpenQuickSearch => self.open_quick_search(),
+            A::ShowKeyboardHelp => self.keyboard_shortcuts.toggle(),
+            A::OpenIndicatorSearch => {
+                self.indicator_dialog.open_for_chart(&self.chart, None);
+            }
+            A::OpenSymbolSearch => self
+                .symbol_search
+                .open_with_selected_query(self.chart.symbol().to_owned()),
+            A::OpenIntervalSearch => {
+                self.interval_entry = Some(String::new());
+                self.interval_focus = true;
+            }
+            A::GoToDate => self.date_picker.open(),
+            A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+            A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
+            A::OpenLayout => {
+                self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
+            }
+            A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+            A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
+                let session = if self.timeframe_toolbar.state.session_type == SessionType::RTH {
+                    SessionType::ETH
+                } else {
+                    SessionType::RTH
+                };
+                self.timeframe_toolbar.set_session(session);
+                self.stop_replay();
+                self.apply_session();
+            }
+            A::CreateAlert => {
+                let mapping = self.chart.get_chart_mapping();
+                if let Some(pos) = ctx
+                    .pointer_hover_pos()
+                    .filter(|pos| mapping.rect.contains(*pos))
+                {
+                    if ctx
+                        .layer_id_at(pos)
+                        .is_some_and(|layer| layer.order == egui::Order::Background)
+                    {
+                        let price = mapping.y_to_price(pos.y);
+                        if price.is_finite() {
+                            self.quick_price_alert(self.chart.symbol().to_owned(), price);
+                        }
+                    }
+                } else {
+                    self.open_alert(None);
+                }
+            }
+            A::MaximizeChart => self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen),
+            A::CopyDrawing => match self.chart.copy_selected_drawings() {
+                Ok(Some(text)) => {
+                    ctx.copy_text(text.clone());
+                    self.copied_drawing = Some(text);
+                    self.copied_study = None;
+                }
+                Ok(None) => {
+                    if let Some(egui_charts::widget::ChartElementId::Indicator(id)) =
+                        self.chart.selected_element()
+                    {
+                        self.copy_study(ctx, id);
+                    }
+                }
+                Err(error) => {
+                    self.toasts
+                        .error(format!("Could not copy drawings: {error}"));
+                }
+            },
+            A::PasteDrawing => self.paste_drawing(),
+            A::CycleChartFocus | A::CycleChartFocusBack => {
+                let count = self
+                    .layout
+                    .mode
+                    .chart_count()
+                    .min(self.extra_charts.len() + 1);
+                let delta = if action == A::CycleChartFocus {
+                    1
+                } else {
+                    count - 1
+                };
+                self.activate_chart_slot((self.layout_slot + delta) % count);
+                self.layout.set_active(self.layout_slot);
+            }
+            _ => {}
         }
     }
 
@@ -6976,6 +6984,9 @@ mod tests {
             "Yield curve",
             "Primitives and custom series",
             "Sample study editor",
+            "Undo",
+            "Take a snapshot",
+            "Toggle percent scale",
         ]
         .into_iter()
         .flat_map(|query| {
@@ -6991,7 +7002,11 @@ mod tests {
             app.live.set_paused(true);
             if matches!(
                 query,
-                "RSI" | "Volatility smile" | "Yield curve" | "Primitives and custom series"
+                "RSI"
+                    | "Volatility smile"
+                    | "Yield curve"
+                    | "Primitives and custom series"
+                    | "Undo"
             ) {
                 app.chart.user_action(|chart| {
                     let dm = chart.drawings_mut();
@@ -7096,6 +7111,12 @@ mod tests {
                 "Trend Line" => assert_eq!(
                     app.chart.drawings().active_tool(),
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
+                ),
+                "Undo" => assert!(app.chart.drawings().drawings.is_empty()),
+                "Take a snapshot" => assert!(app.screenshot_requested.is_some()),
+                "Toggle percent scale" => assert_eq!(
+                    app.chart.state().price_scale().options().mode,
+                    egui_charts::scales::PriceScaleMode::Percentage
                 ),
                 "Sample backtest" => {
                     let output = ctx.run_ui(RawInput::default(), |ui| {
