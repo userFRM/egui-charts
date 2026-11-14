@@ -1,0 +1,16 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+---
+<StarlightPage frontmatter={{
+  title: 'Page not found',
+  template: 'splash',
+  editUrl: false,
+  prev: false,
+  next: false,
+  pagefind: false,
+  hero: {
+    title: '404',
+    tagline: 'This page could not be found. Check the address or return to the guide.',
+    actions: [{ text: 'Back to the guide', link: '/egui-charts/docs/', icon: 'right-arrow' }],
+  },
+}} />

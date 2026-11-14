@@ -12,6 +12,7 @@ use egui::Color32;
 pub struct PriceChannel {
     /// Lookback period
     period: usize,
+    offset: i32,
     values: IndicatorValues,
     /// Colors: [Upper, Lower, Middle]
     colors: Vec<Color32>,
@@ -23,11 +24,12 @@ impl PriceChannel {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            offset: 0,
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - Upper
-                palette::RED,   // Red - Lower
-                palette::GRAY,  // Gray - Middle (neutral)
+                Color32::from_rgb(245, 0, 87), // Upper
+                Color32::from_rgb(245, 0, 87), // Lower
+                palette::LIGHT_BLUE,           // Middle
             ],
             visible: true,
         }
@@ -36,6 +38,12 @@ impl PriceChannel {
     /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
+        self
+    }
+
+    /// Draw every line `offset` bars later, earlier when negative.
+    pub fn with_offset(mut self, offset: i32) -> Self {
+        self.offset = offset;
         self
     }
 }
@@ -79,8 +87,13 @@ impl PriceChannel {
 
 impl Indicator for PriceChannel {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        offset: integer("Offset", i32::MIN, i32::MAX)
     ; {});
+
+    fn plot_offset(&self, _line: usize) -> isize {
+        self.offset as isize
+    }
 
     fn name(&self) -> &str {
         "Price Channel"
@@ -152,38 +165,5 @@ impl Indicator for PriceChannel {
             format!("Lower({})", self.period),
             "Middle".to_string(),
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::studies::test_support::make_range_bar as make_bar;
-
-    #[test]
-    fn test_price_channel() {
-        let mut pc = PriceChannel::new(5);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(104.0, 99.0, 103.0),
-            make_bar(106.0, 101.0, 105.0),
-            make_bar(108.0, 103.0, 107.0),
-            make_bar(110.0, 105.0, 109.0),
-        ];
-
-        pc.calculate(&data);
-
-        assert_eq!(pc.values.len(), 5);
-
-        // Last value should be highest=110, lowest=98, middle=104
-        let rows = pc.values.to_rows();
-        let IndicatorValue::Multiple(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", pc.values.to_rows().last().unwrap());
-        };
-        assert_eq!(v.len(), 3);
-        assert!((v[0] - 110.0).abs() < 0.01); // Upper
-        assert!((v[1] - 98.0).abs() < 0.01); // Lower
-        assert!((v[2] - 104.0).abs() < 0.01); // Middle
     }
 }

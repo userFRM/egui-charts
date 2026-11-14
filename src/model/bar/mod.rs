@@ -11,15 +11,15 @@ mod levels;
 mod patterns;
 
 // Re-export main types
-#[cfg(feature = "widget")]
-pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use bar_data::BarData;
-pub(crate) use levels::{bar_level_keys, level_grid};
+pub(crate) use levels::{bar_level_keys, level_grid, level_key};
 pub use patterns::CandlePatterns;
 
 #[cfg(feature = "widget")]
 mod time;
 #[cfg(feature = "widget")]
-pub(crate) use time::{index_at, time_at};
+pub(crate) use time::{
+    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
+};

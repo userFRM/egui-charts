@@ -30,7 +30,9 @@
 //!   Chop Zone.
 //! - The conventional floor-trader pivot points with Tom DeMark's and Nick Stott's Camarilla levels,
 //!   from the previous period of UTC dates; the time-weighted mean of ohlc4 and Berkowitz, Logue and
-//!   Noser's volume-weighted mean of hlc3 since an anchor bar.
+//!   Noser's volume-weighted mean of hlc3 since an anchor bar, with bands at one, two and three
+//!   volume-weighted population standard deviations of hlc3 since that bar, or multiples of a
+//!   percentage of the mean.
 //! - Time-study rows run on hand-built series in calendar time: 24-hour volume over the bars opening
 //!   in the last 24 hours; relative volume at time as the cumulative or single-bar volume over its
 //!   mean at the same offset into the previous periods (the last earlier bar of a period at that
@@ -45,6 +47,13 @@
 //!   conventional zone rule (a gap of at least a percentage of the 14-bar mean range, closed or
 //!   shrunk by the first bar to enter it), and RSI divergences by comparing consecutive Wilder RSI
 //!   pivots with the price at the same bars.
+//! - The simple average of the source or the exponential average seeded with the mean of the first
+//!   values for the Keltner middle line, with bands of Wilder's average true range, the bar's true
+//!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
+//!   line's length; the simple averages of the highs and of the lows for the MA Channel; and
+//!   separate upper and lower residual deviations for the regression channel.
+//! - McGinley for the McGinley Dynamic; Appel's MACD over simple averages; Wilder's true range under
+//!   simple, exponential and weighted averages.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -66,20 +75,24 @@
 //! Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
 //! and the Volatility Stop starts at the first close in an uptrend and uses the bar's true range as its
-//! band until its ATR has a full length.
+//! band until its ATR has a full length. The McGinley Dynamic starts at the first close; a
+//! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
+//! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
+//! their mean; a Chandelier Exit value needs a full lookback window.
 
 use crate::model::Bar;
 use crate::studies::{
-    ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
-    BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
-    ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DEMA, DirectionalMovement,
-    DonchianChannels, EMA, ElderRay, Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud,
-    Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
-    MassIndex, MedianPrice, MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR,
-    ParkinsonVol, PercentB, PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA,
-    StandardDeviation, Stochastic, SuperTrend, TEMA, TRIX, TrueRange, TypicalPrice,
-    UltimateOscillator, VWMA, VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels,
-    WeightedClose, WilliamsR, ZeroTrendVol,
+    ADX, ATR, AccumulationDistribution, Aroon, AtrSmoothing, AwesomeOscillator, BalanceOfPower,
+    BollingerBands, BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility,
+    ChandeMomentumOscillator, ChandelierExit, ChoppinessIndex, CommoditySelectionIndex,
+    CoppockCurve, DEMA, DirectionalMovement, DonchianChannels, EMA, ElderRay, EnvelopeAverage,
+    Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud, Indicator, IndicatorValue,
+    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MassIndex, MedianPrice,
+    MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB,
+    PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation,
+    Stochastic, SuperTrend, TEMA, TRIX, TrueRange, TypicalPrice, UltimateOscillator, VWMA,
+    VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels, WeightedClose, WilliamsR,
+    ZeroTrendVol,
 };
 use crate::studies::{
     AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
@@ -90,6 +103,7 @@ use crate::studies::{
     BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
 use crate::studies::{Gaps, PivotPointsHighLow, RsiDivergence, WilliamsFractals};
+use crate::studies::{KeltnerBand, MAChannel, McGinleyDynamic, OscillatorAverage};
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
     SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
@@ -331,6 +345,125 @@ fn fixture() -> Vec<Bar> {
         .collect()
 }
 
+/// Ratios have price degree zero; CSI has degree one through ATR. Rescaling a price or volume
+/// unit must not change which bars have values, including the studies that read these outputs.
+#[test]
+fn small_range_studies_are_invariant_to_price_and_volume_units() {
+    // Unequal moves avoid ambiguous directional ties introduced by rescaling binary floats.
+    let bars: Vec<_> = (0..600)
+        .map(|i| {
+            let p = 20.0 + (i as f64 * 0.31).sin() * 3.0 + i as f64 * 0.005;
+            Bar::new(
+                Utc.timestamp_opt(1_700_000_000 + i * 300, 0).unwrap(),
+                p - 0.13,
+                p + 0.51,
+                p - 0.73,
+                p,
+                100.0 + (i % 37) as f64,
+            )
+        })
+        .collect();
+    let factory = crate::studies::IndicatorFactory::new();
+    let mut failures = Vec::new();
+    for (name, price_degree) in [
+        ("Stochastic", 0),
+        ("Williams %R", 0),
+        ("UO", 0),
+        ("CCI", 0),
+        ("ADX", 0),
+        ("DMI", 0),
+        ("ADX Breakout", 0),
+        ("CSI", 1),
+        ("StochRSI", 0),
+        ("ROC", 0),
+        ("BBW", 0),
+        ("52W HL%", 0),
+        ("MFI", 0),
+        ("Technical Ratings", 0),
+        ("VWAP", 1),
+        ("AVWAP", 1),
+        ("VWAP Auto Anchored", 1),
+    ] {
+        let mut data = bars.clone();
+        if name == "52W HL%" {
+            for (i, bar) in data.iter_mut().enumerate() {
+                bar.time = bars[0].time + chrono::Duration::days(i as i64 * 4);
+            }
+        }
+        let mut base = factory.create(name).unwrap();
+        base.calculate(&data);
+        assert!(
+            (0..data.len()).any(|bar| base.values().value(0, bar).is_some()),
+            "{name}"
+        );
+        for (price_scale, volume_scale) in [(1e-12_f64, 1.0), (1e-17, 1.0), (1e12, 1.0)]
+            .into_iter()
+            .chain((price_degree == 1).then_some((1.0, 1e-14)))
+        {
+            let scaled: Vec<_> = data
+                .iter()
+                .map(|b| Bar {
+                    open: b.open * price_scale,
+                    high: b.high * price_scale,
+                    low: b.low * price_scale,
+                    close: b.close * price_scale,
+                    volume: b.volume * volume_scale,
+                    ..b.clone()
+                })
+                .collect();
+            let mut study = factory.create(name).unwrap();
+            study.calculate(&scaled);
+            let factor = price_scale.powi(price_degree);
+            for line in 0..base.line_count() {
+                for bar in 0..data.len() {
+                    let want = base.values().value(line, bar);
+                    let got = study.values().value(line, bar).map(|v| v / factor);
+                    let ok = match (want, got) {
+                        (Some(w), Some(g)) => (g - w).abs() <= 1e-6 * w.abs() + 1e-9,
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    if !ok {
+                        failures.push(format!("{name} line {line}, price {price_scale}, volume {volume_scale}, bar {bar}: {got:?}, expected {want:?}"));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // Direct rational calculations at bar 100 of the quarter-tick fixture, every price in units
+    // of 1e-12 so that its ranges sit below the former absolute floors: the 14-bar high/low
+    // range gives K = 200/9 and R = K - 100; CCI uses the last 20 typical prices.
+    let bars: Vec<_> = fixture()
+        .into_iter()
+        .map(|b| Bar {
+            open: b.open * 1e-12,
+            high: b.high * 1e-12,
+            low: b.low * 1e-12,
+            close: b.close * 1e-12,
+            ..b
+        })
+        .collect();
+    for (mut study, want) in [
+        (
+            Box::new(WilliamsR::default()) as Box<dyn Indicator>,
+            -700.0 / 9.0,
+        ),
+        (Box::new(Stochastic::new(14, 1, 1)), 200.0 / 9.0),
+        (Box::new(CCI::default()), -62000.0 / 759.0),
+        (Box::new(RateOfChange::new(14)), -100.0 / 77.0),
+    ] {
+        study.calculate(&bars);
+        assert!((study.values().value(0, 100).unwrap() - want).abs() < 1e-9);
+    }
+    let mut roc = RateOfChange::new(1);
+    let zero = [0.0, 2.0, 4.0].map(|p| Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, 1.0));
+    roc.calculate(&zero);
+    assert_eq!(roc.values().value(0, 1), None);
+    assert_eq!(roc.values().value(0, 2), Some(100.0));
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
 /// The colour bands of the Chop Zone (0 steepest rise to 8 steepest fall) and the trend of the
 /// Volatility Stop on the fixture, computed independently from the same definitions as the
 /// expected rows, one character per bar, `-` where the bar has no colour.
@@ -403,16 +536,46 @@ fn staple_studies_match_published_definitions() {
         ("ZeroTrend(20)", Box::new(ZeroTrendVol::default())),
         ("Parkinson(20)", Box::new(ParkinsonVol::default())),
         ("NetVolume", Box::new(NetVolume::default())),
-        ("SMA(20)", Box::new(SMA::default())),
-        ("EMA(12)", Box::new(EMA::default())),
-        ("WMA(20)", Box::new(WMA::default())),
-        ("RSI(14)", Box::new(RSI::default())),
+        ("SMA(20)", Box::new(SMA::new(20))),
+        ("EMA(12)", Box::new(EMA::new(12))),
+        ("WMA(20)", Box::new(WMA::new(20))),
+        ("RSI(14)", Box::new(RSI::new(14))),
         ("StochRSI(14,14,3,3)", Box::new(StochasticRSI::default())),
         ("MACD(12,26,9)", Box::new(MACD::default())),
+        (
+            "MACD(12,26,9,SMA,SMA)",
+            Box::new(
+                MACD::new(12, 26, 9)
+                    .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple),
+            ),
+        ),
+        (
+            "MACD(12,26,9,SMA,EMA)",
+            Box::new(
+                MACD::new(12, 26, 9)
+                    .with_averages(OscillatorAverage::Simple, OscillatorAverage::Exponential),
+            ),
+        ),
         ("BB(20,2)", Box::new(BollingerBands::default())),
         ("ATR(14)", Box::new(ATR::default())),
+        (
+            "ATR(14,SMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Simple)),
+        ),
+        (
+            "ATR(14,EMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Exponential)),
+        ),
+        (
+            "ATR(14,WMA)",
+            Box::new(ATR::new(14).with_smoothing(AtrSmoothing::Weighted)),
+        ),
         ("ADX(14)", Box::new(ADX::default())),
         ("DMI(14)", Box::new(DirectionalMovement::default())),
+        (
+            "DMI(14,20)",
+            Box::new(DirectionalMovement::new(14).with_smoothing(20)),
+        ),
         (
             "CSI(14,50,3000,25)",
             Box::new(
@@ -425,13 +588,29 @@ fn staple_studies_match_published_definitions() {
         ("CCI(20)", Box::new(CCI::default())),
         ("MFI(14)", Box::new(MoneyFlowIndex::default())),
         ("Keltner(20,10,2)", Box::new(KeltnerChannels::default())),
+        (
+            "Keltner(20,10,2,SMA,HL2)",
+            Box::new(
+                KeltnerChannels::default()
+                    .with_average(OscillatorAverage::Simple)
+                    .with_source(crate::model::PriceSource::HL2),
+            ),
+        ),
+        (
+            "Keltner(20,10,2,TR)",
+            Box::new(KeltnerChannels::default().with_band(KeltnerBand::TrueRange)),
+        ),
+        (
+            "Keltner(20,10,2,Range)",
+            Box::new(KeltnerChannels::default().with_band(KeltnerBand::Range)),
+        ),
         ("LinReg(14)", Box::new(LinearRegression::default())),
         (
             "LinRegSlope(14)",
             Box::new(LinearRegressionSlope::default()),
         ),
         ("Aroon(14)", Box::new(Aroon::default())),
-        ("HMA(20)", Box::new(HMA::default())),
+        ("HMA(20)", Box::new(HMA::new(20))),
         ("HMA(21)", Box::new(HMA::new(21))),
         ("VWMA(20)", Box::new(VWMA::default())),
         ("CMF(20)", Box::new(ChaikinMoneyFlow::default())),
@@ -442,9 +621,13 @@ fn staple_studies_match_published_definitions() {
             "PSAR(0.01,0.03,0.12)",
             Box::new(ParabolicSAR::new(0.01, 0.03, 0.12)),
         ),
-        ("ROC(14)", Box::new(RateOfChange::default())),
+        ("ROC(14)", Box::new(RateOfChange::new(14))),
         ("StdDev(20)", Box::new(StandardDeviation::default())),
         ("Donchian(20)", Box::new(DonchianChannels::default())),
+        (
+            "Chandelier(22,14,3)",
+            Box::new(ChandelierExit::new(22, 3.0).with_atr_period(14)),
+        ),
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
@@ -469,14 +652,25 @@ fn staple_studies_match_published_definitions() {
         ("ElderRay(13)", Box::new(ElderRay::default())),
         ("Vortex(14)", Box::new(VortexIndicator::default())),
         ("Chop(14)", Box::new(ChoppinessIndex::default())),
-        ("TRIX(15,9)", Box::new(TRIX::default())),
+        ("TRIX(15,9)", Box::new(TRIX::new(15))),
         ("Mass(9,25)", Box::new(MassIndex::default())),
         ("%B(20,2)", Box::new(PercentB::default())),
         ("BBW(20,2)", Box::new(BollingerBandsWidth::default())),
-        ("Env(20,2.5,SMA)", Box::new(Envelopes::default())),
-        ("Env(20,2.5,EMA)", Box::new(Envelopes::new(20, 2.5, "EMA"))),
+        (
+            "Env(20,2.5,SMA)",
+            Box::new(Envelopes::new(20, 2.5, EnvelopeAverage::Simple)),
+        ),
+        (
+            "Env(20,2.5,EMA)",
+            Box::new(Envelopes::new(20, 2.5, EnvelopeAverage::Exponential)),
+        ),
+        (
+            "MAChannel(20,10,3,-2)",
+            Box::new(MAChannel::new(20, 10).with_offsets(3, -2)),
+        ),
         ("CV(10,10)", Box::new(ChaikinVolatility::default())),
-        ("CMO(14)", Box::new(ChandeMomentumOscillator::default())),
+        ("CMO(14)", Box::new(ChandeMomentumOscillator::new(14))),
+        ("MD(14)", Box::new(McGinleyDynamic::new(14))),
         ("Coppock(14,11,10)", Box::new(CoppockCurve::default())),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
         ("Alligator(13,8,5)", Box::new(WilliamsAlligator::default())),
@@ -778,6 +972,19 @@ fn staple_studies_match_published_definitions() {
             },
         ),
         (
+            "LinRegChannel-asym-hand",
+            Box::new(
+                crate::studies::LinearRegressionChannel::new(3, 2.0).with_multipliers(2.0, 1.0),
+            ) as Box<dyn Indicator>,
+            {
+                let mut series = ties.clone();
+                for (bar, c) in series.iter_mut().zip([1.0, 4.0, 2.0, 4.0]) {
+                    bar.close = c;
+                }
+                series
+            },
+        ),
+        (
             "KST-hand",
             Box::new(KnowSureThing::new().with_params([1; 4], [2; 4], 2)) as Box<dyn Indicator>,
             doubling,
@@ -923,6 +1130,13 @@ fn staple_studies_match_published_definitions() {
     let mut monthly = PivotPoints::new().with_method(PivotMethod::Woodie);
     monthly.set_timeframe(crate::model::Timeframe::Day1);
     let auto = |anchor| Box::new(VwapAutoAnchored::new().with_anchor(anchor));
+    let mut auto_percent = VwapAutoAnchored::new();
+    for (id, value) in [
+        ("percentage_bands", crate::studies::InputValue::Toggle(true)),
+        ("band_multiplier", crate::studies::InputValue::Number(1.5)),
+    ] {
+        auto_percent.set_input(id, value).unwrap();
+    }
     studies.extend([
         (
             "Pivots-Woodie-auto-daily",
@@ -957,6 +1171,8 @@ fn staple_studies_match_published_definitions() {
         ("AutoVWAP-HH", auto(AutoAnchor::HighestHigh), bars.clone()),
         ("AutoVWAP-LL", auto(AutoAnchor::LowestLow), bars.clone()),
         ("AutoVWAP-HV", auto(AutoAnchor::HighestVolume), bars.clone()),
+        // Bands at 1.5, 3 and 4.5 percent of the VWAP.
+        ("AutoVWAP-pct", Box::new(auto_percent), bars.clone()),
     ]);
     let available = |name: &str| match name {
         "RVOL-chicago" | "Sessions-default" => cfg!(feature = "timezones"),
@@ -1324,6 +1540,35 @@ fn regression_channel_refits_the_last_n_bars_on_update() {
     };
     assert!((lines[1] - 8.0 / 3.0).abs() < 1e-12);
     assert_eq!(open.correlation(), Some(0.0));
+}
+
+/// Each MA Channel offset draws its own line that many bars later, or earlier when negative.
+#[test]
+fn ma_channel_draws_each_line_its_own_bars_later() {
+    let bars: Vec<_> = [(2.0, 1.0), (4.0, 1.0), (6.0, 4.0), (8.0, 4.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (high, low))| {
+            Bar::new(
+                Utc.timestamp_opt(i as i64, 0).unwrap(),
+                low,
+                high,
+                low,
+                low,
+                1.0,
+            )
+        })
+        .collect();
+    let mut study = MAChannel::new(2, 3).with_offsets(1, -1);
+    study.calculate(&bars);
+    // Upper means 3, 5 and 7 on bars 1 to 3; lower means 2 and 3 on bars 2 and 3.
+    let drawn = |line, bars| {
+        (0..bars)
+            .map(|bar| study.plot_value(line, bar))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(drawn(0, 5), [None, None, Some(3.0), Some(5.0), Some(7.0)]);
+    assert_eq!(drawn(1, 4), [None, Some(2.0), Some(3.0), None]);
 }
 
 /// The configurable cross, triple and ribbon presets are reachable by their catalogue names.

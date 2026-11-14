@@ -1,0 +1,131 @@
+---
+title: Series
+---
+
+import Example from '../../components/Example.astro';
+import source from '../../../../../examples/docs/scenes/series.rs?raw';
+
+A series is a named set of values with its own identity, renderer and display
+settings. The chart starts with a main bar series. You can add other bar series
+and studies without recreating the chart. Your application supplies history and
+streaming data; the library stores, aligns and draws it.
+
+## Data
+
+Every bar series stores [`Bar`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html)
+values keyed by UTC open time. Use
+[`Bar::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.new)
+for OHLCV,
+[`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
+for a scalar, and
+[`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace)
+for an empty time slot. Missing points and zero values mean different things.
+See [data shapes](data-model.mdx) and the [input table](chart-types.mdx#inputs-for-every-main-chart-type).
+
+Keep history oldest first with one bar per open time. `set_data` sorts and
+deduplicates, retaining the last duplicate; `update` merges by open time, including
+older corrections. On a chart built with a feed, these operations match bars to
+the feed interval's slots. Invalid ordinary bars are dropped and counted in
+[`Chart::feed_state`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.feed_state).
+For asynchronous loading and streaming, implement the [datafeed contract](data.mdx).
+
+## Renderer
+
+[`Chart::set_chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type)
+chooses the main renderer. Added bar series choose their renderer through
+[`SeriesOptions::chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.chart_type).
+The [chart types page](chart-types.mdx) classifies every main type and lists the
+restrictions on added series.
+
+Try the [candles and bars](/egui-charts/docs/series/candles-and-bars/), [line](/egui-charts/docs/series/line/),
+[area](/egui-charts/docs/series/area/), [baseline](/egui-charts/docs/series/baseline/),
+[histogram](/egui-charts/docs/series/histogram/) and [transform](/egui-charts/docs/chart-types/transforms/) examples.
+
+## Style
+
+For the main series, edit a copy of
+[`Chart::chart_type_params`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.chart_type_params)
+and apply it with
+[`set_chart_type_params`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type_params).
+[`ChartTypeStyles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html)
+keeps independent styles for line, area, baseline, candles and bars across renderer
+changes. Main candle colours and dimensions live in
+[`Chart::config_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.config_mut).
+Apply the [theme](theming.mdx) before overriding its configuration colours.
+
+For an added series, retain its
+[`SeriesOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html)
+and replace them with
+[`Chart::set_series_options`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_options).
+These have a smaller style surface than the main series: colours, line width,
+baseline style, column base and scale assignment.
+[`Bar::colors`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#structfield.colors)
+overrides supported colours for one point.
+
+[`SeriesStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.SeriesStyle.html)
+controls last-value labels, price lines, base lines and autoscale participation.
+Use [`Chart::series_style_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_style_mut)
+with a series id. Scale and pane placement are separate: see
+[`SeriesScale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.SeriesScale.html),
+[`Chart::set_series_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_scale)
+and [`Chart::move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane).
+
+## Identity
+
+[`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html#associatedconstant.MAIN)
+addresses the initial main series. Retain the
+[`SeriesId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html)
+returned by `add_series`; a title, symbol or vector position is not its identity.
+Changing data or options keeps that id. Studies also have series ids, but their
+values are computed: `set_data` and `update` accept bar-series ids only. See
+[studies](studies.mdx) for their lifecycle.
+
+## Lifecycle
+
+Create the chart once and call `show` on each frame. This running scene adds a
+reference line, sets its history, then replaces its last value at the same
+timestamp. It reuses the 120 deterministic OHLC bars from [your first chart](first-chart.mdx).
+
+<Example scene="series" title="Candles with a host-fed reference line"
+  task="Pan and inspect both series. The reference line has its own data and id."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn lifecycle\b[^]*?\n\}/)[0]} />
+
+The setup is compiled from [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
+Each operation has a separate purpose:
+
+| Operation | Behaviour |
+| --- | --- |
+| [`add_series(options)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_series) | Creates an empty host-fed bar series and returns its id. |
+| [`set_data(id, bars)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data) | Replaces that series' complete history. |
+| [`update(id, bar)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update) | Replaces a matching bar, appends a newer bar or inserts an older correction. |
+| [`set_series_options(id, options)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_options) | Replaces an added bar series' display settings without replacing its data. |
+| [`set_series_visible(id, visible)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_visible) | Hides or shows a series without unloading it. Hidden series do not contribute to autoscale. |
+| [`remove_series(id)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_series) | Removes the series; returns false if the id is absent. Stop feeding the removed id. |
+
+For example, after receiving the `id` in the scene above:
+
+```rust
+let mut options = chart.series()
+    .find(|(current, _)| *current == id).unwrap().1.clone();
+options.width = 3.0;
+assert!(chart.set_series_options(id, options));
+assert!(chart.set_series_visible(id, false));
+assert!(chart.set_series_visible(id, true));
+assert!(chart.remove_series(id));
+assert!(!chart.remove_series(id));
+```
+
+Use [`Chart::bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.bars)
+to inspect retained data and
+[`Chart::drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
+for [`ChartEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html)
+notifications such as `SeriesAdded`, `DataUpdated` and `SeriesRemoved`.
+Removing `MAIN` pauses its feed and retains the time axis for the remaining
+series and drawings. Use
+[`set_main_series_visible(false)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_main_series_visible)
+to hide it while keeping its data and feed active, so it can be shown again.
+
+`add_series` does not start a feed. A chart already connected to your datafeed can
+use [`Chart::add_feed_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_feed_series)
+to request the symbol in `SeriesOptions::name`. Your host still supplies the
+history and stream. Without a connected feed, it behaves as a plain host-fed series.

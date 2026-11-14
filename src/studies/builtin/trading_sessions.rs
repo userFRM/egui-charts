@@ -14,6 +14,11 @@
 //! highlight. Like any session highlight it needs intraday bars: on intervals of a day or
 //! longer the study has no value.
 //!
+//! Each session can be drawn as a box from its high to its low, labelled with its name, range and
+//! average price (the mean of its closes), and crossed by lines at its open, close and average
+//! price. An overnight session is one session across midnight, and one lasting the whole day
+//! ends at its start time. Bars with a price that is not finite do not count.
+//!
 //! # Example
 //! ```
 //! use chrono::{TimeZone, Utc};
@@ -36,9 +41,10 @@ use crate::model::local_time;
 use crate::model::{Bar, BarClock, TimezoneId};
 use crate::studies::palette;
 use crate::studies::stepper::update_window;
-use crate::studies::{Indicator, IndicatorValues};
-use chrono::{NaiveTime, Timelike};
+use crate::studies::{Indicator, IndicatorValues, LabelPlacement, StudyLabel, StudyZone};
+use chrono::{NaiveDate, NaiveTime, TimeDelta, Timelike};
 use egui::Color32;
+use std::ops::Range;
 
 /// Background highlight of up to three trading sessions on intraday charts.
 ///
@@ -58,6 +64,54 @@ pub struct TradingSessions {
     values: IndicatorValues,
     colors: [Color32; 3],
     visible: bool,
+    boxes: bool,
+    name_labels: bool,
+    range_labels: bool,
+    average_labels: bool,
+    open_lines: bool,
+    close_lines: bool,
+    average_lines: bool,
+    /// The instrument's decimals and those of the study's presentation settings.
+    precision: Option<usize>,
+    label_precision: Option<usize>,
+    /// Sorted by first bar, then slot, as `study_zones` and `labels` are.
+    sessions: Vec<SessionSummary>,
+    study_zones: Vec<StudyZone>,
+    labels: Vec<StudyLabel>,
+    /// The session each slot was building before the last of `source_len` bars, when known.
+    before_last: Option<[Option<SessionSummary>; 3]>,
+    source_len: usize,
+}
+
+/// One session of one slot on one day.
+#[derive(Clone)]
+struct SessionSummary {
+    slot: usize,
+    day: NaiveDate,
+    bars: Range<usize>,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    close_sum: f64,
+    closes: usize,
+}
+
+/// The exchange time zones of the default sessions, each with the standard-time offset in hours
+/// that stands in for it without `timezones`.
+const ZONES: [(&str, i32); 3] = [
+    ("Asia/Tokyo", 9),
+    ("Europe/London", 0),
+    ("America/New_York", -5),
+];
+
+/// The time zone named `name` or, without `timezones`, the offset that stands in for the zone
+/// of a default session, so that a template saved with `timezones` loads without it.
+fn zone(name: &str) -> Option<TimezoneId> {
+    TimezoneId::named(name).or_else(|| {
+        let (_, hours) = ZONES.into_iter().find(|(zone, _)| *zone == name)?;
+        TimezoneId::fixed_offset(hours * 3600)
+    })
 }
 
 impl TradingSessions {
@@ -65,10 +119,6 @@ impl TradingSessions {
     /// its exchange time zone. Without `timezones`, these use fixed standard-time offsets
     /// of +09:00, +00:00 and -05:00. Override them with [`with_session`](Self::with_session).
     pub fn new() -> Self {
-        let zone = |name, hours| {
-            TimezoneId::named(name)
-                .unwrap_or_else(|| TimezoneId::fixed_offset(hours * 3600).unwrap())
-        };
         let tint =
             |color: Color32| Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 38);
         Self {
@@ -76,24 +126,35 @@ impl TradingSessions {
             show: [true; 3],
             start: [9 * 60, 8 * 60 + 30, 9 * 60 + 30],
             end: [15 * 60, 16 * 60 + 30, 16 * 60],
-            zones: [
-                zone("Asia/Tokyo", 9),
-                zone("Europe/London", 0),
-                zone("America/New_York", -5),
-            ],
+            zones: ZONES.map(|(name, _)| zone(name).unwrap()),
             daily: false,
             values: IndicatorValues::new(),
             colors: [
                 tint(palette::BLUE),
-                tint(palette::DEEP_ORANGE),
-                tint(palette::GREEN),
+                tint(palette::WARM_ORANGE),
+                tint(palette::TEAL),
             ],
             visible: true,
+            boxes: true,
+            name_labels: true,
+            range_labels: false,
+            average_labels: false,
+            open_lines: false,
+            close_lines: false,
+            average_lines: false,
+            precision: None,
+            label_precision: None,
+            sessions: Vec::new(),
+            study_zones: Vec::new(),
+            labels: Vec::new(),
+            before_last: None,
+            source_len: 0,
         }
     }
 
     /// Replaces session `slot` (0, 1 or 2; others are ignored) with `name`, open from `start`
-    /// to `end` in `zone`. Seconds are dropped.
+    /// to `end` in `zone`. Seconds are dropped, and the name is kept on one line, without control
+    /// characters or surrounding spaces, as the study inputs hold it.
     pub fn with_session(
         mut self,
         slot: usize,
@@ -104,7 +165,8 @@ impl TradingSessions {
     ) -> Self {
         if slot < 3 {
             let minutes = |time: NaiveTime| (time.hour() * 60 + time.minute()) as usize;
-            self.names[slot] = name.into();
+            let name: String = name.into();
+            self.names[slot] = name.replace(char::is_control, " ").trim().to_owned();
             self.start[slot] = minutes(start);
             self.end[slot] = minutes(end);
             self.zones[slot] = zone;
@@ -119,9 +181,234 @@ impl TradingSessions {
         }
         self
     }
+
+    /// Whether each session is drawn as a box from its high to its low over its bars. On by
+    /// default.
+    pub fn with_boxes(mut self, boxes: bool) -> Self {
+        self.boxes = boxes;
+        self
+    }
+
+    /// Which labels each session carries above its box: its name (on by default), its range
+    /// (high minus low) and its average price, the mean of its closes.
+    pub fn with_labels(mut self, names: bool, ranges: bool, averages: bool) -> Self {
+        self.name_labels = names;
+        self.range_labels = ranges;
+        self.average_labels = averages;
+        self
+    }
+
+    /// Which lines cross each session: at its open, its close and its average price. Off by
+    /// default.
+    pub fn with_lines(mut self, opens: bool, closes: bool, averages: bool) -> Self {
+        self.open_lines = opens;
+        self.close_lines = closes;
+        self.average_lines = averages;
+        self
+    }
 }
 
 impl TradingSessions {
+    /// Whether a time of day, in seconds after midnight, lies in session `slot`.
+    fn inside(&self, slot: usize, second: u32) -> bool {
+        let (start, end) = (self.start[slot] as u32 * 60, self.end[slot] as u32 * 60);
+        match start.cmp(&end) {
+            std::cmp::Ordering::Less => (start..end).contains(&second),
+            std::cmp::Ordering::Greater => second >= start || second < end,
+            std::cmp::Ordering::Equal => true,
+        }
+    }
+
+    /// The sessions of `slot` in `data` from bar `first` on, each day's from its start time,
+    /// continuing `current`, the session the bars before `first` were building. Returns the
+    /// session the bars before the last were building.
+    fn scan(
+        &self,
+        slot: usize,
+        data: &[Bar],
+        first: usize,
+        mut current: Option<SessionSummary>,
+        out: &mut Vec<SessionSummary>,
+    ) -> Option<SessionSummary> {
+        let mut before_last = None;
+        let start = TimeDelta::minutes(self.start[slot] as i64);
+        for (at, bar) in data.iter().enumerate().skip(first) {
+            if at + 1 == data.len() {
+                before_last = current.clone();
+            }
+            if ![bar.open, bar.high, bar.low, bar.close]
+                .iter()
+                .all(|price| price.is_finite())
+            {
+                continue;
+            }
+            let local = local_time(self.zones[slot].clone(), bar.time);
+            if !self.inside(slot, local.num_seconds_from_midnight()) {
+                continue;
+            }
+            let day = local
+                .checked_sub_signed(start)
+                .map_or(local.date(), |time| time.date());
+            match &mut current {
+                Some(session) if session.day == day => {
+                    session.bars.end = at + 1;
+                    session.high = session.high.max(bar.high);
+                    session.low = session.low.min(bar.low);
+                    session.close = bar.close;
+                    session.close_sum += bar.close;
+                    session.closes += 1;
+                }
+                _ => {
+                    out.extend(current.take());
+                    current = Some(SessionSummary {
+                        slot,
+                        day,
+                        bars: at..at + 1,
+                        open: bar.open,
+                        high: bar.high,
+                        low: bar.low,
+                        close: bar.close,
+                        close_sum: bar.close,
+                        closes: 1,
+                    });
+                }
+            }
+        }
+        out.extend(current);
+        before_last
+    }
+
+    /// Writes the zones and label of `session`.
+    fn emit(&mut self, session: &SessionSummary) {
+        let average = session.close_sum / session.closes as f64;
+        let plot = 3 + session.slot;
+        let line = |price: f64, plot: usize| StudyZone {
+            bars: session.bars.clone(),
+            top: price,
+            bottom: price,
+            plot,
+        };
+        if self.boxes {
+            self.study_zones.push(StudyZone {
+                bars: session.bars.clone(),
+                top: session.high,
+                bottom: session.low,
+                plot,
+            });
+        }
+        if self.open_lines {
+            self.study_zones.push(line(session.open, plot));
+        }
+        if self.close_lines {
+            self.study_zones.push(line(session.close, plot));
+        }
+        if self.average_lines {
+            self.study_zones.push(line(average, 6 + session.slot));
+        }
+        let precision = self.label_precision.or(self.precision);
+        let price = |value: f64| crate::scales::StudyFormat::Price.format(value, precision);
+        let mut lines = Vec::new();
+        if self.name_labels && !self.names[session.slot].is_empty() {
+            lines.push(self.names[session.slot].clone());
+        }
+        if self.range_labels {
+            lines.push(format!("Range: {}", price(session.high - session.low)));
+        }
+        if self.average_labels {
+            lines.push(format!("Avg: {}", price(average)));
+        }
+        if !lines.is_empty() {
+            self.labels.push(StudyLabel {
+                bar: session.bars.start,
+                price: session.high,
+                text: lines.join("\n"),
+                placement: LabelPlacement::AboveRight,
+                plot: session.slot,
+            });
+        }
+    }
+
+    /// Brings the sessions up to date. Each slot resumes the session its bars before `from` were
+    /// building: the one kept before the last bar when only that bar changed, else its latest
+    /// session that ends by `from`, after reading again the bars of one that reaches past it.
+    fn update_sessions(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.source_len).min(data.len());
+        // The chart follows an update with `update(data, len)`, which must keep `before_last`.
+        if from == data.len() && from == self.source_len {
+            return;
+        }
+        let before_last = self
+            .before_last
+            .take()
+            .filter(|_| from + 1 == self.source_len);
+        self.source_len = data.len();
+        if self.daily {
+            self.sessions.clear();
+            self.study_zones.clear();
+            self.labels.clear();
+            return;
+        }
+        // Per slot, the bar to read from and the session the bars before it were building.
+        let started = self
+            .sessions
+            .partition_point(|session| session.bars.start < from);
+        let resume: [_; 3] = std::array::from_fn(|slot| {
+            if let Some(before_last) = &before_last {
+                return (from, before_last[slot].clone());
+            }
+            if !self.show[slot] {
+                return (from, None);
+            }
+            let mut latest = self.sessions[..started]
+                .iter()
+                .rev()
+                .filter(|session| session.slot == slot);
+            match (latest.next(), latest.next()) {
+                (Some(last), previous) if last.bars.end > from => {
+                    (last.bars.start, previous.cloned())
+                }
+                (last, _) => (from, last.cloned()),
+            }
+        });
+        // Sessions of a slot from the one it resumes on are written again.
+        let cut = |slot: usize| {
+            let (first, current) = &resume[slot];
+            current
+                .as_ref()
+                .map_or(*first, |session| session.bars.start)
+        };
+        let first = cut(0).min(cut(1)).min(cut(2));
+        let keep = self
+            .sessions
+            .partition_point(|session| session.bars.start < first);
+        let mut tail = self.sessions.split_off(keep);
+        tail.retain(|session| session.bars.start < cut(session.slot));
+        let kept = self.labels.partition_point(|label| label.bar < first);
+        self.labels.truncate(kept);
+        let per_session = [
+            self.boxes,
+            self.open_lines,
+            self.close_lines,
+            self.average_lines,
+        ]
+        .iter()
+        .filter(|shown| **shown)
+        .count();
+        self.study_zones.truncate(keep * per_session);
+        let mut before_last: [_; 3] = Default::default();
+        for (slot, (first, current)) in resume.into_iter().enumerate() {
+            if self.show[slot] {
+                before_last[slot] = self.scan(slot, data, first, current, &mut tail);
+            }
+        }
+        self.before_last = (from < data.len()).then_some(before_last);
+        tail.sort_by_key(|session| (session.bars.start, session.slot));
+        for session in &tail {
+            self.emit(session);
+        }
+        self.sessions.append(&mut tail);
+    }
+
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::missing(data.len());
         if !data.is_empty() {
@@ -132,16 +419,10 @@ impl TradingSessions {
             return values;
         }
         for slot in (0..3).filter(|&slot| self.show[slot]) {
-            let (start, end) = (self.start[slot] as u32 * 60, self.end[slot] as u32 * 60);
             let zone = &self.zones[slot];
             for (i, bar) in data.iter().enumerate() {
                 let second = local_time(zone.clone(), bar.time).num_seconds_from_midnight();
-                let inside = match start.cmp(&end) {
-                    std::cmp::Ordering::Less => (start..end).contains(&second),
-                    std::cmp::Ordering::Greater => second >= start || second < end,
-                    std::cmp::Ordering::Equal => true,
-                };
-                if inside {
+                if self.inside(slot, second) {
                     values.set_value(slot, i, 1.0);
                 }
             }
@@ -156,18 +437,162 @@ impl Default for TradingSessions {
     }
 }
 
+/// The ordinal of each session in input labels, in lower and upper case.
+const SLOTS: [(&str, &str); 3] = [("first", "First"), ("second", "Second"), ("third", "Third")];
+
 impl Indicator for TradingSessions {
-    crate::studies::inputs::study_inputs!(self;
-        show[0]: toggle("Show first session"),
-        start[0]: length("First session start, minutes after midnight", 0, 1439),
-        end[0]: length("First session end, minutes after midnight", 0, 1439),
-        show[1]: toggle("Show second session"),
-        start[1]: length("Second session start, minutes after midnight", 0, 1439),
-        end[1]: length("Second session end, minutes after midnight", 0, 1439),
-        show[2]: toggle("Show third session"),
-        start[2]: length("Third session start, minutes after midnight", 0, 1439),
-        end[2]: length("Third session end, minutes after midnight", 0, 1439)
-    ; {});
+    /// Each session shows or not, and has a name, a start and an end in minutes after midnight,
+    /// and a time zone that [`TimezoneId::named`] reads. The toggles after them apply to every
+    /// session; its average price is the mean of its closes.
+    fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+        use crate::studies::{InputKind, InputValue, StudyInput};
+        let defaults = Self::default();
+        let mut inputs = Vec::with_capacity(22);
+        for (slot, (lower, upper)) in SLOTS.into_iter().enumerate() {
+            let input = |field: &str, label: String, value, default, kind| {
+                StudyInput::new(format!("{field} [{slot}]"), label, value, kind)
+                    .with_default(default)
+            };
+            let minutes = InputKind::Length(0, 1439);
+            inputs.extend([
+                input(
+                    "show",
+                    format!("Show {lower} session"),
+                    InputValue::Toggle(self.show[slot]),
+                    InputValue::Toggle(defaults.show[slot]),
+                    InputKind::Toggle,
+                ),
+                input(
+                    "name",
+                    format!("{upper} session name"),
+                    InputValue::Text(self.names[slot].clone()),
+                    InputValue::Text(defaults.names[slot].clone()),
+                    InputKind::Text,
+                ),
+                input(
+                    "start",
+                    format!("{upper} session start, minutes after midnight"),
+                    InputValue::Length(self.start[slot]),
+                    InputValue::Length(defaults.start[slot]),
+                    minutes.clone(),
+                ),
+                input(
+                    "end",
+                    format!("{upper} session end, minutes after midnight"),
+                    InputValue::Length(self.end[slot]),
+                    InputValue::Length(defaults.end[slot]),
+                    minutes,
+                ),
+                input(
+                    "zone",
+                    format!("{upper} session time zone"),
+                    InputValue::Text(self.zones[slot].name().to_owned()),
+                    InputValue::Text(defaults.zones[slot].name().to_owned()),
+                    InputKind::Text,
+                ),
+            ]);
+        }
+        for (id, label, value, default) in [
+            ("boxes", "Show session boxes", self.boxes, defaults.boxes),
+            (
+                "name_labels",
+                "Show session names",
+                self.name_labels,
+                defaults.name_labels,
+            ),
+            (
+                "range_labels",
+                "Show session ranges",
+                self.range_labels,
+                defaults.range_labels,
+            ),
+            (
+                "average_labels",
+                "Show session average prices",
+                self.average_labels,
+                defaults.average_labels,
+            ),
+            (
+                "open_lines",
+                "Show session open lines",
+                self.open_lines,
+                defaults.open_lines,
+            ),
+            (
+                "close_lines",
+                "Show session close lines",
+                self.close_lines,
+                defaults.close_lines,
+            ),
+            (
+                "average_lines",
+                "Show session average lines",
+                self.average_lines,
+                defaults.average_lines,
+            ),
+        ] {
+            inputs.push(
+                StudyInput::new(id, label, InputValue::Toggle(value), InputKind::Toggle)
+                    .with_default(InputValue::Toggle(default)),
+            );
+        }
+        inputs
+    }
+
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), crate::studies::StudyError> {
+        use crate::studies::InputValue;
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+        if !schema.accepts(&value) {
+            return Err(crate::studies::StudyError::invalid_input(id));
+        }
+        let option = match id {
+            "boxes" => Some(&mut self.boxes),
+            "name_labels" => Some(&mut self.name_labels),
+            "range_labels" => Some(&mut self.range_labels),
+            "average_labels" => Some(&mut self.average_labels),
+            "open_lines" => Some(&mut self.open_lines),
+            "close_lines" => Some(&mut self.close_lines),
+            "average_lines" => Some(&mut self.average_lines),
+            _ => None,
+        };
+        if let (Some(option), InputValue::Toggle(on)) = (option, &value) {
+            *option = *on;
+            self.calculate(&[]);
+            return Ok(());
+        }
+        // Every other id is `field [slot]`, as the schema lookup confirmed.
+        let (field, slot) = id
+            .split_once(" [")
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+        let slot: usize = slot
+            .trim_end_matches(']')
+            .parse()
+            .map_err(|_| crate::studies::StudyError::UnknownInput(id.into()))?;
+        match (field, value) {
+            ("show", InputValue::Toggle(show)) => self.show[slot] = show,
+            ("name", InputValue::Text(name)) => self.names[slot] = name,
+            ("start", InputValue::Length(minutes)) => self.start[slot] = minutes,
+            ("end", InputValue::Length(minutes)) => self.end[slot] = minutes,
+            ("zone", InputValue::Text(name)) => {
+                self.zones[slot] =
+                    zone(&name).ok_or_else(|| crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "names no known time zone".into(),
+                    })?;
+            }
+            _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn name(&self) -> &str {
         "Trading Sessions"
@@ -177,7 +602,18 @@ impl Indicator for TradingSessions {
         "Trading Sessions - Background highlight of the Tokyo, London and New York sessions"
     }
 
+    /// Boxes and session lines use plots 3 to 8, past the three outputs and in their colours at
+    /// full opacity: the highlight's tint would leave a box edge at 15% and its fill near 2%.
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        if (3..9).contains(&line) {
+            return crate::studies::PlotStyle {
+                color: self.colors[line % 3].to_opaque(),
+                width: if line < 6 { 1.0 } else { 2.0 },
+                pattern: crate::model::LineStyle::Solid,
+                plot_type: crate::studies::PlotType::Line,
+                visible: true,
+            };
+        }
         crate::studies::PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
@@ -185,6 +621,11 @@ impl Indicator for TradingSessions {
             plot_type: crate::studies::PlotType::BackgroundColor,
             visible: true,
         }
+    }
+
+    /// A session's box and lines take the visibility of its output.
+    fn plot_output(&self, line: usize) -> usize {
+        line % 3
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -205,6 +646,7 @@ impl Indicator for TradingSessions {
             |data| self.compute(data),
         );
         self.values = values;
+        self.update_sessions(data, from);
     }
 
     fn is_incremental(&self) -> bool {
@@ -218,6 +660,33 @@ impl Indicator for TradingSessions {
         let changed = daily != self.daily;
         self.daily = daily;
         changed
+    }
+
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let precision = instrument
+            .and_then(crate::scales::instrument_price_precision)
+            .map(usize::from);
+        let changed = precision != self.precision;
+        self.precision = precision;
+        changed
+    }
+
+    fn zones(&self) -> &[StudyZone] {
+        &self.study_zones
+    }
+
+    fn zones_cover_whole_bars(&self) -> bool {
+        true
+    }
+
+    fn labels(&self) -> &[StudyLabel] {
+        &self.labels
+    }
+
+    /// The study's own values are whole numbers, so its presentation settings hold 0 decimals by
+    /// default, which says nothing about prices. Any other setting applies.
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.label_precision = precision.filter(|&decimals| decimals != 0);
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -248,5 +717,288 @@ impl Indicator for TradingSessions {
 
     fn line_names(&self) -> Vec<String> {
         self.names.to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    type Row = (u32, u32, f64, f64, f64, f64);
+    type ZoneRow = (Range<usize>, f64, f64, usize);
+    // (name, study, zones, text of the label)
+    type Case<'a> = (&'a str, Box<dyn Indicator>, Vec<ZoneRow>, Option<&'a str>);
+
+    /// The one session "Name" from `start` to `end` hours, UTC, over bars of (day, hour, open,
+    /// high, low, close) of January 2024.
+    fn study(name: &str, start: u32, end: u32) -> TradingSessions {
+        let time = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        TradingSessions::new()
+            .with_session(0, name, time(start), time(end), TimezoneId::utc())
+            .with_shown(1, false)
+            .with_shown(2, false)
+    }
+
+    fn bars(rows: &[Row]) -> Vec<Bar> {
+        rows.iter()
+            .map(|&(day, hour, open, high, low, close)| {
+                let time = Utc.with_ymd_and_hms(2024, 1, day, hour, 0, 0).unwrap();
+                Bar::new(time, open, high, low, close, 1.0)
+            })
+            .collect()
+    }
+
+    fn zones(study: &dyn Indicator) -> Vec<ZoneRow> {
+        let zones = study.zones().iter();
+        zones
+            .map(|zone| (zone.bars.clone(), zone.top, zone.bottom, zone.plot))
+            .collect()
+    }
+
+    /// Session bars 1, 2 and 3, 12:00 being past its end: high 13, low 8.5, range 4.5, open 10,
+    /// close 9 and average (11 + 12.5 + 9) / 3 = 10.8333.
+    const DAY: &[Row] = &[
+        (15, 8, 10.0, 11.0, 9.0, 10.0),
+        (15, 9, 10.0, 12.0, 9.5, 11.0),
+        (15, 10, 11.0, 13.0, 10.0, 12.5),
+        (15, 11, 12.5, 12.8, 8.5, 9.0),
+        (15, 12, 9.0, 10.0, 8.0, 9.5),
+    ];
+
+    #[test]
+    fn a_session_draws_its_box_labels_and_lines_each_with_its_own_toggle() {
+        let average = 32.5 / 3.0;
+        let square = (1..4, 13.0, 8.5, 3);
+        let open = (1..4, 10.0, 10.0, 3);
+        let close = (1..4, 9.0, 9.0, 3);
+        let mean = (1..4, average, average, 6);
+        let all = || {
+            study("Test", 9, 12)
+                .with_labels(true, true, true)
+                .with_lines(true, true, true)
+        };
+        let mut tick = all();
+        let instrument = crate::model::Instrument::new("X").with_tick_size(0.001);
+        tick.set_instrument(Some(&instrument));
+        // The style tab's default of 0 decimals for the study's own values keeps the prices.
+        let mut styled = crate::studies::ConfiguredStudy::new(Box::new(all()));
+        styled.apply_settings(&[], styled.settings()).unwrap();
+        let mut set = crate::studies::ConfiguredStudy::new(Box::new(all()));
+        let mut settings = set.settings();
+        settings.precision = Some(3);
+        set.apply_settings(&[], settings).unwrap();
+        let mut unboxed = study("Test", 9, 12);
+        unboxed
+            .set_input("boxes", crate::studies::InputValue::Toggle(false))
+            .unwrap();
+        let all_text = "Test\nRange: 4.50\nAvg: 10.83";
+        let all_zones = vec![square.clone(), open.clone(), close.clone(), mean.clone()];
+        let rows: Vec<Case> = vec![
+            (
+                "defaults",
+                Box::new(study("Test", 9, 12)),
+                vec![square.clone()],
+                Some("Test"),
+            ),
+            ("all", Box::new(all()), all_zones.clone(), Some(all_text)),
+            (
+                "no box",
+                Box::new(all().with_boxes(false)),
+                vec![open.clone(), close.clone(), mean.clone()],
+                Some(all_text),
+            ),
+            (
+                "no box, through the input",
+                Box::new(unboxed),
+                Vec::new(),
+                Some("Test"),
+            ),
+            (
+                "no labels",
+                Box::new(all().with_labels(false, false, false)),
+                all_zones.clone(),
+                None,
+            ),
+            (
+                "range only",
+                Box::new(all().with_labels(false, true, false)),
+                all_zones.clone(),
+                Some("Range: 4.50"),
+            ),
+            (
+                "no lines",
+                Box::new(all().with_lines(false, false, false)),
+                vec![square.clone()],
+                Some(all_text),
+            ),
+            (
+                "open line only",
+                Box::new(all().with_boxes(false).with_lines(true, false, false)),
+                vec![open.clone()],
+                Some(all_text),
+            ),
+            (
+                "instrument decimals",
+                Box::new(tick),
+                all_zones.clone(),
+                Some("Test\nRange: 4.500\nAvg: 10.833"),
+            ),
+            (
+                "default style precision",
+                Box::new(styled),
+                all_zones.clone(),
+                Some(all_text),
+            ),
+            (
+                "style precision",
+                Box::new(set),
+                all_zones.clone(),
+                Some("Test\nRange: 4.500\nAvg: 10.833"),
+            ),
+        ];
+        let data = bars(DAY);
+        for (name, mut study, want_zones, want_text) in rows {
+            study.calculate(&data);
+            assert_eq!(zones(study.as_ref()), want_zones, "{name}");
+            let labels = study.labels();
+            assert_eq!(labels.first().map(|l| l.text.as_str()), want_text, "{name}");
+            if let Some(label) = labels.first() {
+                assert_eq!(labels.len(), 1, "{name}");
+                assert_eq!(
+                    (label.bar, label.price, label.placement, label.plot),
+                    (1, 13.0, LabelPlacement::AboveRight, 0),
+                    "{name}"
+                );
+            }
+        }
+
+        let mut daily = all();
+        daily.set_bar_clock(&BarClock::new(crate::model::Timeframe::Day1));
+        daily.calculate(&data);
+        assert!(daily.zones().is_empty() && daily.labels().is_empty());
+    }
+
+    /// Session bars 1 to 4 across midnight: high 13, low 9 and average 45.6 / 4 = 11.4. The two
+    /// bars after 02:00 are outside it, and the next night's bar opens another session.
+    #[test]
+    fn an_overnight_session_is_one_session_across_midnight() {
+        let data = bars(&[
+            (15, 21, 1.0, 50.0, 1.0, 1.0),
+            (15, 22, 10.0, 11.0, 9.0, 10.5),
+            (15, 23, 10.5, 12.0, 10.0, 11.5),
+            (16, 0, 11.5, 11.8, 10.2, 11.0),
+            (16, 1, 11.0, 13.0, 10.8, 12.6),
+            (16, 2, 1.0, 50.0, 1.0, 1.0),
+            (16, 3, 1.0, 50.0, 1.0, 1.0),
+            (16, 22, 20.0, 21.0, 19.0, 20.0),
+        ]);
+        let mut night = study("Night", 22, 2).with_labels(true, true, true);
+        night.calculate(&data);
+        assert_eq!(zones(&night), [(1..5, 13.0, 9.0, 3), (7..8, 21.0, 19.0, 3)]);
+        assert_eq!(night.labels()[0].text, "Night\nRange: 4.00\nAvg: 11.40");
+    }
+
+    /// Hiding a session's output in the style tab hides its box and lines with its highlight.
+    #[test]
+    fn a_hidden_output_hides_its_box_and_lines() {
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(TradingSessions::new()));
+        let mut settings = study.settings();
+        settings.plots[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        let visible: Vec<_> = (3..9).map(|line| study.plot_style(line).visible).collect();
+        assert_eq!(visible, [false, true, true, false, true, true]);
+    }
+
+    /// Hourly bars from 08:00 on the 15th to 10:00 on the 16th, sessions 08:00 to 16:00 and 14:00
+    /// to 21:00. The latest second session, bars 6 to 12, overlaps the finished first session,
+    /// bars 0 to 7, which a new bar must not start again from bar 6.
+    #[test]
+    fn a_new_bar_leaves_a_finished_session_that_overlaps_another() {
+        let time = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let data: Vec<Bar> = (0..27)
+            .map(|hour| {
+                let time =
+                    Utc.with_ymd_and_hms(2024, 1, 15, 8, 0, 0).unwrap() + TimeDelta::hours(hour);
+                Bar::new(time, 1.5, 2.0, 1.0, 1.5, 1.0)
+            })
+            .collect();
+        let mut sessions = study("First", 8, 16)
+            .with_session(1, "Second", time(14), time(21), TimezoneId::utc())
+            .with_shown(1, true);
+        sessions.calculate(&data[..26]);
+        sessions.update(&data, 26);
+        assert_eq!(
+            zones(&sessions),
+            [
+                (0..8, 2.0, 1.0, 3),
+                (6..13, 2.0, 1.0, 4),
+                (24..27, 2.0, 1.0, 3)
+            ]
+        );
+    }
+
+    /// A bar that does not count does not split a session, even when it is the newest when the
+    /// next bar arrives, and joins its session once corrected, even after the session's last bar
+    /// and before the next session.
+    #[test]
+    fn a_session_continues_past_a_bar_without_prices() {
+        let mut data = bars(DAY);
+        let next = data.pop().unwrap();
+        let mut sessions = study("Test", 9, 13);
+        data[3] = Bar::whitespace(data[3].time);
+        sessions.calculate(&data);
+        assert_eq!(zones(&sessions), [(1..3, 13.0, 9.5, 3)]);
+        data.push(next);
+        sessions.update(&data, 4);
+        assert_eq!(zones(&sessions), [(1..5, 13.0, 8.0, 3)]);
+
+        let mut data = bars(&[
+            (15, 9, 10.0, 11.0, 9.0, 10.0),
+            (15, 10, 10.0, 11.0, 9.0, 10.0),
+            (15, 11, 10.0, 11.0, 9.0, 10.0),
+            (16, 9, 10.0, 11.0, 9.0, 10.0),
+        ]);
+        let corrected = Bar::new(data[2].time, 10.0, 20.0, 9.0, 10.0, 1.0);
+        for at in [1, 2] {
+            data[at] = Bar::whitespace(data[at].time);
+        }
+        let mut sessions = study("Test", 9, 12);
+        sessions.calculate(&data);
+        assert_eq!(
+            zones(&sessions),
+            [(0..1, 11.0, 9.0, 3), (3..4, 11.0, 9.0, 3)]
+        );
+        data[2] = corrected;
+        sessions.update(&data, 2);
+        assert_eq!(
+            zones(&sessions),
+            [(0..3, 20.0, 9.0, 3), (3..4, 11.0, 9.0, 3)]
+        );
+    }
+
+    /// An update of the last bar reads that bar, not every bar since the oldest session still
+    /// open, so 30 of them on 22 hours of 5-second bars take less than one calculation.
+    #[test]
+    fn a_last_bar_update_reads_only_that_bar() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 15, 0, 0, 0).unwrap();
+        let mut data: Vec<Bar> = (0..15_840)
+            .map(|i| {
+                let close = 100.0 + (i as f64 / 50.0).sin();
+                let time = start + TimeDelta::seconds(5 * i);
+                Bar::new(time, close, close + 0.5, close - 0.5, close, 1.0)
+            })
+            .collect();
+        let mut sessions = TradingSessions::new();
+        let calculation = std::time::Instant::now();
+        sessions.calculate(&data);
+        let calculation = calculation.elapsed();
+        let last = data.len() - 1;
+        let updates = std::time::Instant::now();
+        for tick in 0..30 {
+            data[last].close = 100.0 + tick as f64 / 100.0;
+            sessions.update(&data, last);
+        }
+        assert!(updates.elapsed() < calculation, "{:?}", updates.elapsed());
     }
 }

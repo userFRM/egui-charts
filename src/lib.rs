@@ -1,3 +1,20 @@
+// Without the widget these items are not built; point their links at the feature table.
+#![cfg_attr(
+    not(feature = "widget"),
+    doc = "
+[`Chart`]: crate#feature-flags
+[`Chart::show`]: crate#feature-flags
+[`ChartBuilder::with_feed`]: crate#feature-flags
+[`guide`]: crate#feature-flags
+[`widget`]: crate#feature-flags
+[`config`]: crate#feature-flags
+[`theme`]: crate#feature-flags
+[`styles`]: crate#feature-flags
+[`localization`]: crate#feature-flags
+[`theme::apply_to_egui`]: crate#feature-flags
+[`localization::set_translator`]: crate#feature-flags
+"
+)]
 //! Interactive financial charts for [egui](https://docs.rs/egui), using your historical and streaming data.
 //!
 //! [`Chart`] provides price and volume panes, pan and zoom, crosshairs and live bar
@@ -11,7 +28,7 @@
 //! Enable `widget` for a chart without application UI or built-in studies:
 //!
 //! ```toml
-//! egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
+//! egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget"] }
 //! ```
 //!
 //! Create the chart once with bars ordered from oldest to newest, then call
@@ -54,6 +71,7 @@
 //! | [`scales`] | Price ranges, coordinate mapping, axis ticks and label formatting |
 //! | [`config`] | Chart appearance and interaction options |
 //! | [`services`] | Host storage, symbol search, quotes, alerts, signals and broker contracts |
+//! | `strategies` | Strategies that trade on closed bars and the backtest engine that runs them |
 //! | [`theme`], [`tokens`], [`styles`] | Theme presets, design tokens and UI styling helpers |
 //! | `ui`, `ui_kit` | Chart controls and reusable UI components placed in the host's layout |
 //! | `icons` | Embedded SVG icons |
@@ -62,7 +80,7 @@
 //!
 //! # Feature flags
 //!
-//! The defaults are `ui`, `locales` and `timezones`. With `default-features = false`,
+//! The defaults are `ui`, `locales`, `timezones`, `csv` and `png-export`. With `default-features = false`,
 //! the data model, scales, feed and service contracts, tokens and study extension
 //! points are available without an egui dependency.
 //!
@@ -72,11 +90,22 @@
 //! | `drawings` | via `ui` | Drawing tools, interaction, undo and persistence; enables `widget` |
 //! | `studies` | via `ui` | Built-in studies, `IndicatorFactory` and study templates; usable without egui |
 //! | `alert-engine` | off | `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it; needs no egui |
-//! | `icons` | via `ui` | Embedded SVG icons and their image loaders; enables `widget` |
-//! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies` and `drawings` |
+//! | `detectors` | off | `services::OrderFlowDetectors`, a `Signals` service that finds order-flow events in the trades and depth the host feeds it; needs no egui |
+//! | `strategies` | off | `strategies::Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`; needs no egui |
+//! | `icons` | via `ui` | Embedded SVG icons and their pixel-aligned loader; enables `widget` |
+//! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies`, `drawings`, `csv` and `png-export` |
 //! | `locales` | on | Localized month and weekday names and AM/PM markers through chrono; otherwise English |
 //! | `timezones` | on | IANA zones and daylight-saving rules through chrono-tz; otherwise UTC, system local time and fixed offsets |
+//! | `csv` | on | CSV import/export for bars, strategy reports and chart data; enabled by `ui` |
+//! | `png-export` | on | CPU PNG export and image textures embedded in SVG export; enables `widget`, enabled by `ui` |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme` |
+//!
+//! Without default features, enable `csv` to use CSV methods; JSON I/O stays available.
+//! Enable `png-export` for PNG methods and textured SVG output. Without it, SVG
+//! exports text and vector geometry and returns `ExportError::Unsupported` for image
+//! textures; renderer frames from `Chart::export_image` remain available.
+//! With `icons` alone, the chart installs only its embedded icon loader. General SVG
+//! images require `ui` or an image loader installed by the host.
 //!
 //! # Application integration
 //!
@@ -114,6 +143,7 @@
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
 #![warn(missing_debug_implementations)]
+#![warn(unnameable_types)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]
@@ -148,6 +178,10 @@ pub mod studies;
 pub mod config;
 pub mod data;
 pub mod services;
+#[cfg(feature = "strategies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "strategies")))]
+#[warn(missing_docs)]
+pub mod strategies;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
 
@@ -228,6 +262,18 @@ pub struct SiteStudiesDoctests;
 #[cfg(all(doctest, feature = "ui"))]
 #[doc = include_str!("../docs/site/src/content/docs/theming.mdx")]
 pub struct SiteThemingDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/time-zones.mdx")]
+pub struct SiteTimeZonesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/accessibility.mdx")]
+pub struct SiteAccessibilityDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/migration.mdx")]
+pub struct SiteMigrationDoctests;
 
 #[cfg(all(doctest, feature = "ui"))]
 #[doc = include_str!("../docs/study-data.md")]

@@ -135,7 +135,7 @@ impl Chart {
             return;
         };
         let origin = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(last.close));
-        let end_x = coords.idx_to_x(0) + horizon as f32 * coords.bar_spacing;
+        let end_x = coords.index_to_x(horizon);
         let theme = ui.active_theme();
         let painter = ui.painter().with_clip_rect(coords.rect);
         let mut levels = [

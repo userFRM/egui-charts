@@ -1,6 +1,15 @@
 //! A replaceable strategy report, independent of chart navigation and host storage.
 
+pub(crate) mod inputs;
+#[cfg(feature = "strategies")]
+mod optimisation;
 mod plot;
+#[cfg(feature = "strategies")]
+mod properties;
+#[cfg(feature = "strategies")]
+mod tester;
+#[cfg(feature = "strategies")]
+pub use tester::{StrategyHistoryRequest, StrategyTester, StrategyTesterAction};
 #[cfg(test)]
 mod tests;
 

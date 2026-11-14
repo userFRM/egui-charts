@@ -1,0 +1,1396 @@
+//! Tooltip Renderers
+//!
+//! Provides three tooltip variants:
+//! - Floating: Classic tooltip that follows cursor position
+//! - Tracking: Fixed horizontal bar at top of chart showing OHLC data
+//! - Magnifier: Circular zoom lens for detailed data inspection
+
+use super::super::{ChartMapping, RenderContext, StyleColors};
+use crate::chart::rendering::axes::semibold;
+use crate::config::{TooltipMode, TooltipOptions};
+use crate::localization as l10n;
+use crate::model::{Bar, Instrument, percent_change};
+use crate::scales::price_decimals;
+use crate::scales::{
+    DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
+    instrument_price_precision,
+};
+use crate::styles::typography::font_size;
+use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
+use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
+
+/// Host number formatters shared by legends and tooltips. Missing entries retain the
+/// renderer's instrument precision and built-in formatting. Prices use instrument units;
+/// percentages use percentage points, so `5.0` means 5%.
+#[derive(Clone, Copy, Default)]
+pub struct ValueFormatters<'a> {
+    /// OHLC prices and absolute changes.
+    pub price: Option<&'a dyn PriceFormatter>,
+    /// Volume values.
+    pub volume: Option<&'a dyn PriceFormatter>,
+    /// Percentage changes.
+    pub percentage: Option<&'a dyn PriceFormatter>,
+}
+
+impl std::fmt::Debug for ValueFormatters<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValueFormatters").finish_non_exhaustive()
+    }
+}
+
+/// One visible study plot's value at the selected bar. Missing or warming-up values stay absent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StudyValue {
+    /// Host-formatted text, when supplied by the chart. `None` uses the units and precision.
+    pub formatted: Option<String>,
+    /// Study title.
+    pub study: String,
+    /// Plot title within the study.
+    pub plot: String,
+    /// Finite value at the selected index, or `None` for a gap.
+    pub value: Option<f64>,
+    /// Number of decimal places used by the study's legend.
+    pub precision: usize,
+    /// Value units used by this study.
+    pub format: crate::scales::StudyFormat,
+    /// Plot colour.
+    pub color: egui::Color32,
+}
+
+impl StudyValue {
+    /// Study and plot caption, omitting a repeated single-plot title.
+    pub fn label(&self) -> String {
+        if self.plot.is_empty() || self.plot == self.study {
+            self.study.clone()
+        } else {
+            format!("{}: {}", self.study, self.plot)
+        }
+    }
+
+    /// Value at the study's precision, or the missing-value marker.
+    pub fn formatted_value(&self) -> String {
+        if let Some(formatted) = &self.formatted {
+            return formatted.clone();
+        }
+        self.value.filter(|value| value.is_finite()).map_or_else(
+            || "∅".to_owned(),
+            |value| self.format.format(value, Some(self.precision)),
+        )
+    }
+}
+
+/// Renders tooltip based on configured mode
+pub fn render_tooltip_with_options(
+    context: &RenderContext,
+    hover_pos: Pos2,
+    candle: &Bar,
+    previous_close: Option<f64>,
+    options: &TooltipOptions,
+    colors: &StyleColors,
+    price_scale: &PriceMap,
+    coords: &ChartMapping,
+    visible_data: &[Bar],
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    studies: &[StudyValue],
+    instrument: Option<&Instrument>,
+    formatters: ValueFormatters<'_>,
+) {
+    match options.mode {
+        TooltipMode::Floating => {
+            // The held crosshair's vertical line snaps to the bar's centre, and the card follows it.
+            let hover_pos = coords
+                .local_idx_at_x(hover_pos.x, visible_data.len())
+                .filter(|_| options.on_long_press)
+                .map_or(hover_pos, |local| {
+                    Pos2::new(coords.idx_to_x(coords.start_idx + local), hover_pos.y)
+                });
+            render_floating_tooltip(
+                context.painter,
+                hover_pos,
+                context.rect,
+                coords.bar_spacing,
+                candle,
+                previous_close,
+                options,
+                colors.bar_color(candle.close >= candle.open),
+                scale,
+                bar_seconds,
+                studies,
+                instrument,
+                formatters,
+            );
+        }
+        TooltipMode::Tracking => {
+            render_tracking_tooltip(
+                context.painter,
+                context.rect,
+                candle,
+                options,
+                scale,
+                bar_seconds,
+                studies,
+                instrument,
+                formatters,
+            );
+        }
+        TooltipMode::Magnifier => {
+            render_magnifier_tooltip(
+                context,
+                hover_pos,
+                candle,
+                options,
+                price_scale,
+                coords,
+                visible_data,
+            );
+        }
+    }
+}
+
+/// Renders the floating tooltip: a label and value grid in the top corner of `price_rect`
+/// on the side away from the pointer, so it never covers the hovered bar.
+/// The `instrument`'s symbol heads the grid.
+/// Held values use time, OHLC and total volume instead of the hover change row;
+/// optional study rows follow these values. Their card sits beside the bar centred at
+/// `hover_pos.x`, 15 px from that line or clear of the `bar_spacing` slot when it is wider, on
+/// the right unless only the left has room, with its top at the pointer and values in semibold.
+pub fn render_floating_tooltip(
+    painter: &Painter,
+    hover_pos: Pos2,
+    price_rect: Rect,
+    bar_spacing: f32,
+    candle: &Bar,
+    previous_close: Option<f64>,
+    options: &TooltipOptions,
+    value_color: egui::Color32,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    studies: &[StudyValue],
+    instrument: Option<&Instrument>,
+    formatters: ValueFormatters<'_>,
+) {
+    let options = &options.resolved(painter.ctx());
+    let price = |price: f64| {
+        let decimals = instrument.and_then(instrument_price_precision).map_or_else(
+            || price_decimals(price).min(options.price_precision),
+            usize::from,
+        );
+        formatters.price.map_or_else(
+            || DefaultPriceFormatter::with_precision(decimals).format(price),
+            |formatter| formatter.format(price),
+        )
+    };
+    let mut rows = Vec::new();
+
+    if options.show_time || options.on_long_press {
+        rows.push(("Time", scale.format_crosshair(candle.time, bar_seconds)));
+    }
+
+    if options.show_ohlc {
+        rows.push(("Open", price(candle.open)));
+        rows.push(("High", price(candle.high)));
+        rows.push(("Low", price(candle.low)));
+        rows.push(("Close", price(candle.close)));
+    }
+
+    if options.show_change && !options.on_long_press {
+        let reference = previous_close.unwrap_or(candle.open);
+        let change = candle.close - reference;
+        let change_pct = percent_change(reference, candle.close);
+        let absolute = formatters.price.map_or_else(
+            || {
+                format!(
+                    "{change:+.*}",
+                    instrument
+                        .and_then(instrument_price_precision)
+                        .map_or(2, usize::from)
+                )
+            },
+            |formatter| formatter.format_change(change),
+        );
+        let percent = formatters.percentage.map_or_else(
+            || format!("{change_pct:+.2}%"),
+            |formatter| formatter.format(change_pct),
+        );
+        rows.push(("Change", format!("{absolute} ({percent})")));
+    }
+    if options.show_volume {
+        let volume = VolumeFormatter {
+            precision: instrument
+                .and_then(|instrument| instrument.volume_decimals)
+                .map_or(2, usize::from),
+        }
+        .format(candle.volume);
+        rows.push((
+            "Vol",
+            formatters
+                .volume
+                .map_or(volume, |formatter| formatter.format(candle.volume)),
+        ));
+    }
+
+    let mut rows: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| (l10n::text(painter.ctx(), label), value, value_color))
+        .collect();
+    rows.extend(studies.iter().map(|study| {
+        (
+            study.label(),
+            study.formatted_value(),
+            // A fully transparent colour holds no RGB, so it has no opaque form.
+            if study.color.a() == 0 {
+                options.text_color
+            } else {
+                study.color.to_opaque()
+            },
+        )
+    }));
+
+    if rows.is_empty() {
+        return;
+    }
+    if let Some(instrument) = instrument {
+        rows.insert(0, (instrument.symbol.clone(), String::new(), value_color));
+    }
+
+    let theme = painter.ctx().active_theme();
+    let font_id = FontId::proportional(font_size(options.font_size));
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value, color)| {
+            (
+                painter.layout_no_wrap(label, font_id.clone(), options.text_color),
+                if options.on_long_press {
+                    painter.layout_job(egui::text::LayoutJob::single_section(
+                        value,
+                        semibold(font_id.clone(), color),
+                    ))
+                } else {
+                    painter.layout_no_wrap(value, font_id.clone(), color)
+                },
+            )
+        })
+        .collect();
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| label.size().x)
+        .fold(0.0, f32::max);
+    let value_width = rows
+        .iter()
+        .map(|(_, value)| value.size().x)
+        .fold(0.0, f32::max);
+    let row_gap = if options.on_long_press {
+        6.0
+    } else {
+        theme.spacing.xs
+    };
+    let line_height = rows[0].0.size().y + row_gap;
+    let padding = if options.on_long_press {
+        14.0
+    } else {
+        theme.spacing.lg
+    };
+    let inset = theme.spacing.lg;
+    let mut bounds = price_rect.shrink(inset);
+    let (on_left, clearance) = if options.on_long_press {
+        let clearance = (bar_spacing / 2.0).max(15.0);
+        let width = label_width + theme.spacing.lg + value_width + 2.0 * padding;
+        let room = bounds.right() - hover_pos.x - clearance;
+        (
+            room < width && hover_pos.x - clearance - bounds.left() > room,
+            clearance,
+        )
+    } else {
+        (hover_pos.x > price_rect.center().x, inset)
+    };
+    if on_left {
+        bounds.max.x = bounds.max.x.min(hover_pos.x - clearance);
+    } else {
+        bounds.min.x = bounds.min.x.max(hover_pos.x + clearance);
+    }
+    if !bounds.is_positive() {
+        return;
+    }
+    let padding = padding.min(bounds.width() / 8.0).min(bounds.height() / 8.0);
+    let gap = theme.spacing.lg.min(bounds.width() / 8.0);
+    let content_width = (bounds.width() - 2.0 * padding - gap).max(0.0);
+    let value_width = value_width.min(content_width * 0.65);
+    let label_width = label_width.min(content_width - value_width);
+    let fit = |galley: std::sync::Arc<egui::Galley>, width| {
+        let mut job = (*galley.job).clone();
+        job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+        painter.layout_job(job)
+    };
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| (fit(label, label_width), fit(value, value_width)))
+        .collect();
+    let size = Vec2::new(
+        label_width + gap + value_width + 2.0 * padding,
+        (rows.len() as f32 * line_height - row_gap + 2.0 * padding).min(bounds.height()),
+    );
+    // The held card keeps to the line, the hover card to the far corner.
+    let x = if on_left != options.on_long_press {
+        bounds.left()
+    } else {
+        bounds.right() - size.x
+    };
+    let y = if options.on_long_press {
+        hover_pos.y.min(bounds.bottom() - size.y).max(bounds.top())
+    } else {
+        bounds.top()
+    };
+    let tooltip_rect = Rect::from_min_size(Pos2::new(x, y), size);
+    if options.on_long_press {
+        painter.add(
+            egui::Shadow {
+                offset: [0, 2],
+                blur: 8,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(40),
+            }
+            .as_shape(tooltip_rect, theme.radius.sm),
+        );
+    }
+
+    let border_color = if candle.close >= candle.open {
+        options.border_color_bullish
+    } else {
+        options.border_color_bearish
+    };
+    painter.rect_filled(tooltip_rect, theme.radius.sm, options.background_color);
+    painter.rect_stroke(
+        tooltip_rect,
+        theme.radius.sm,
+        Stroke::new(1.0, border_color),
+        StrokeKind::Inside,
+    );
+
+    // Labels left-aligned, values right-aligned. Overflow stays within the readout.
+    let painter =
+        painter.with_clip_rect(tooltip_rect.shrink(padding).intersect(painter.clip_rect()));
+    let values_right = tooltip_rect.max.x - padding;
+    for (i, (label, value)) in rows.into_iter().enumerate() {
+        let y = tooltip_rect.min.y + padding + i as f32 * line_height;
+        if y + label.size().y.max(value.size().y) > tooltip_rect.bottom() - padding {
+            break;
+        }
+        if !label.text().is_empty() {
+            painter.galley(
+                Pos2::new(tooltip_rect.min.x + padding, y),
+                label,
+                options.text_color,
+            );
+        }
+        if !value.text().is_empty() {
+            painter.galley(
+                Pos2::new(values_right - value.size().x, y),
+                value,
+                options.text_color,
+            );
+        }
+    }
+}
+
+/// Renders tracking tooltip as horizontal bar at top of chart
+/// Shows: SYMBOL  O: xxx  H: xxx  L: xxx  C: xxx  Vol: xxx  (+x.xx%)
+pub fn render_tracking_tooltip(
+    painter: &Painter,
+    chart_rect: Rect,
+    candle: &Bar,
+    options: &TooltipOptions,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    studies: &[StudyValue],
+    instrument: Option<&Instrument>,
+    formatters: ValueFormatters<'_>,
+) {
+    let options = &options.resolved(painter.ctx());
+    let bar_height = options.tracking_bar_height;
+    let bar_rect = Rect::from_min_size(chart_rect.min, Vec2::new(chart_rect.width(), bar_height));
+
+    let painter = painter.with_clip_rect(
+        bar_rect
+            .intersect(chart_rect)
+            .intersect(painter.clip_rect()),
+    );
+    // Draw bar background
+    painter.rect_filled(bar_rect, 0.0, options.tracking_bar_background);
+
+    // Build tracking text
+    let precision = instrument
+        .and_then(instrument_price_precision)
+        .map_or(options.price_precision.min(4), usize::from);
+    let mut parts: Vec<String> = instrument
+        .map(|instrument| instrument.symbol.clone())
+        .into_iter()
+        .collect();
+
+    if options.show_time {
+        parts.push(scale.format_crosshair(candle.time, bar_seconds));
+    }
+
+    if options.show_ohlc {
+        for (label, value) in [
+            ("O: {value}", candle.open),
+            ("H: {value}", candle.high),
+            ("L: {value}", candle.low),
+            ("C: {value}", candle.close),
+        ] {
+            let value = formatters.price.map_or_else(
+                || format!("{value:.precision$}"),
+                |formatter| formatter.format(value),
+            );
+            parts.push(l10n::format_text(
+                painter.ctx(),
+                label,
+                &[("value", value.as_str())],
+            ));
+        }
+    }
+
+    if options.show_volume {
+        let volume = formatters.volume.map_or_else(
+            || {
+                VolumeFormatter {
+                    precision: instrument
+                        .and_then(|instrument| instrument.volume_decimals)
+                        .map_or(2, usize::from),
+                }
+                .format(candle.volume)
+            },
+            |formatter| formatter.format(candle.volume),
+        );
+        parts.push(l10n::format_text(
+            painter.ctx(),
+            "Vol: {volume}",
+            &[("volume", volume.as_str())],
+        ));
+    }
+
+    parts.extend(
+        studies
+            .iter()
+            .map(|study| format!("{}: {}", study.label(), study.formatted_value())),
+    );
+
+    if options.show_change {
+        let change_pct = percent_change(candle.open, candle.close);
+        let sign = if change_pct >= 0.0 { "+" } else { "" };
+        let chart = painter.ctx().active_theme().chart;
+        let change_color = if change_pct >= 0.0 {
+            chart.candle_up
+        } else {
+            chart.candle_down
+        };
+
+        // Draw change separately with color
+        let main_text = parts.join("   ");
+        let change_text = formatters.percentage.map_or_else(
+            || format!("({sign}{change_pct:.2}%)"),
+            |formatter| format!("({})", formatter.format(change_pct)),
+        );
+
+        let font_id = FontId::proportional(font_size(options.font_size));
+        let text_y = bar_rect.center().y;
+
+        // Draw main text
+        let main_right = if main_text.is_empty() {
+            bar_rect.min.x + 10.0
+        } else {
+            painter
+                .text(
+                    Pos2::new(bar_rect.min.x + 10.0, text_y),
+                    egui::Align2::LEFT_CENTER,
+                    &main_text,
+                    font_id.clone(),
+                    options.text_color,
+                )
+                .max
+                .x
+        };
+
+        // Draw change text with color
+        painter.text(
+            Pos2::new(main_right + 15.0, text_y),
+            egui::Align2::LEFT_CENTER,
+            &change_text,
+            font_id,
+            change_color,
+        );
+
+        return;
+    }
+
+    // If no change display, just show combined text
+    let text = parts.join("   ");
+    if text.is_empty() {
+        return;
+    }
+    let font_id = FontId::proportional(font_size(options.font_size));
+
+    painter.text(
+        Pos2::new(bar_rect.min.x + 10.0, bar_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &text,
+        font_id,
+        options.text_color,
+    );
+}
+
+/// Clips a wick or body edge to the circle using its nearest point on the line.
+fn lens_line(
+    painter: &Painter,
+    center: Pos2,
+    radius: f32,
+    [start, end]: [Pos2; 2],
+    stroke: Stroke,
+) {
+    let direction = end - start;
+    let length_sq = direction.length_sq();
+    if length_sq == 0.0 {
+        return;
+    }
+    let nearest = (center - start).dot(direction) / length_sq;
+    let distance_sq = (start + direction * nearest).distance_sq(center);
+    if distance_sq > radius * radius {
+        return;
+    }
+    let span = ((radius * radius - distance_sq) / length_sq).sqrt();
+    let from = (nearest - span).max(0.0);
+    let to = (nearest + span).min(1.0);
+    if from < to {
+        painter.line_segment([start + direction * from, start + direction * to], stroke);
+    }
+}
+
+/// Intersects the lens polygon with the four sides of a filled candle body.
+fn lens_body(circle: &[Pos2], body: Rect) -> Vec<Pos2> {
+    let mut points = circle.to_vec();
+    for (axis, edge, sign) in [
+        (0, body.left(), 1.0),
+        (0, body.right(), -1.0),
+        (1, body.top(), 1.0),
+        (1, body.bottom(), -1.0),
+    ] {
+        let input = std::mem::take(&mut points);
+        let Some(mut previous) = input.last().copied() else {
+            break;
+        };
+        for current in input {
+            let inside = (current[axis] - edge) * sign >= 0.0;
+            let was_inside = (previous[axis] - edge) * sign >= 0.0;
+            if inside != was_inside {
+                let t = (edge - previous[axis]) / (current[axis] - previous[axis]);
+                points.push(previous + (current - previous) * t);
+            }
+            if inside {
+                points.push(current);
+            }
+            previous = current;
+        }
+    }
+    points
+}
+
+/// Renders magnifier tooltip as circular zoom lens
+/// Shows enlarged view of candles around cursor position
+pub fn render_magnifier_tooltip(
+    context: &RenderContext,
+    hover_pos: Pos2,
+    _candle: &Bar,
+    options: &TooltipOptions,
+    price_scale: &PriceMap,
+    coords: &ChartMapping,
+    visible_data: &[Bar],
+) {
+    let chart = context.painter.ctx().active_theme().chart;
+    // A zoom or size of 0, NaN or infinity would make the lens span unboundedly many bars or none.
+    let zoom = if options.magnifier_zoom.is_nan() {
+        0.1
+    } else {
+        options.magnifier_zoom.clamp(0.1, 100.0)
+    };
+    let size = options
+        .magnifier_size
+        .max(0.0)
+        .min(context.rect.width().min(context.rect.height()));
+    let radius = size / 2.0;
+
+    // Pos magnifier (centered on cursor, but kept in bounds)
+    let mut center = hover_pos;
+    if center.x - radius < context.rect.min.x {
+        center.x = context.rect.min.x + radius;
+    }
+    if center.x + radius > context.rect.max.x {
+        center.x = context.rect.max.x - radius;
+    }
+    if center.y - radius < context.rect.min.y {
+        center.y = context.rect.min.y + radius;
+    }
+    if center.y + radius > context.rect.max.y {
+        center.y = context.rect.max.y - radius;
+    }
+
+    // Draw magnifier background (dark circle)
+    context
+        .painter
+        .circle_filled(center, radius, chart.bg_tooltip);
+
+    // Calculate visible range in the magnifier
+    // The magnifier shows a zoomed view centered on the hover position
+    let src_width = size / zoom;
+
+    // Enlarges the chart about the cursor, so prices land where the chart's own scale puts them.
+    let price_to_mag_y =
+        |price: f64| center.y + (price_scale.price_to_y(price) - hover_pos.y) * zoom;
+
+    // The painter clips rectangles only; clip candle geometry to the lens as well.
+    let clip_rect = Rect::from_center_size(center, Vec2::splat(size));
+    let painter = context.painter.with_clip_rect(clip_rect);
+    let candle_radius = (radius - DESIGN_TOKENS.stroke.hairline / 2.0).max(0.0);
+    let circle: Vec<_> = (0..64)
+        .map(|i| {
+            let angle = std::f32::consts::TAU * i as f32 / 64.0;
+            center + Vec2::angled(angle) * candle_radius
+        })
+        .collect();
+
+    // Draw zoomed candles
+    let zoomed_bar_spacing = coords.bar_spacing * zoom;
+    let candle_width = zoomed_bar_spacing * 0.7;
+
+    let first = coords
+        .x_to_idx(hover_pos.x - src_width / 2.0 - coords.bar_spacing)
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    let end = coords
+        .x_to_idx(hover_pos.x + src_width / 2.0 + coords.bar_spacing)
+        .saturating_add(1)
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    for (local_idx, bar) in visible_data.iter().enumerate().take(end).skip(first) {
+        let bar_x = center.x + (coords.idx_to_x(coords.start_idx + local_idx) - hover_pos.x) * zoom;
+
+        // Skip if outside magnifier bounds
+        if bar_x < clip_rect.min.x - candle_width || bar_x > clip_rect.max.x + candle_width {
+            continue;
+        }
+
+        let open_y = price_to_mag_y(bar.open);
+        let close_y = price_to_mag_y(bar.close);
+        let high_y = price_to_mag_y(bar.high);
+        let low_y = price_to_mag_y(bar.low);
+
+        let is_bullish = bar.close >= bar.open;
+        let candle_color = if is_bullish {
+            chart.candle_up
+        } else {
+            chart.candle_down
+        };
+
+        // Draw wick
+        lens_line(
+            &painter,
+            center,
+            candle_radius,
+            [Pos2::new(bar_x, high_y), Pos2::new(bar_x, low_y)],
+            Stroke::new(DESIGN_TOKENS.stroke.hairline, candle_color),
+        );
+
+        // Draw body
+        let body_top = open_y.min(close_y);
+        let body_bottom = open_y.max(close_y);
+        let body_height = (body_bottom - body_top).max(1.0);
+
+        let body_rect = Rect::from_min_size(
+            Pos2::new(bar_x - candle_width / 2.0, body_top),
+            Vec2::new(candle_width, body_height),
+        );
+
+        if is_bullish {
+            let corners = [
+                body_rect.left_top(),
+                body_rect.right_top(),
+                body_rect.right_bottom(),
+                body_rect.left_bottom(),
+            ];
+            for i in 0..4 {
+                lens_line(
+                    &painter,
+                    center,
+                    candle_radius,
+                    [corners[i], corners[(i + 1) % 4]],
+                    Stroke::new(DESIGN_TOKENS.stroke.hairline, candle_color),
+                );
+            }
+        } else {
+            let points = lens_body(&circle, body_rect);
+            if points.len() >= 3 {
+                painter.add(egui::Shape::convex_polygon(
+                    points,
+                    candle_color,
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+
+    context.painter.circle_stroke(
+        center,
+        radius,
+        Stroke::new(DESIGN_TOKENS.stroke.thick, chart.axis_text_secondary),
+    );
+
+    // Draw crosshair in center of magnifier
+    let crosshair_color = chart.crosshair_line;
+    context.painter.line_segment(
+        [
+            Pos2::new(center.x, center.y - radius * 0.3),
+            Pos2::new(center.x, center.y + radius * 0.3),
+        ],
+        Stroke::new(DESIGN_TOKENS.stroke.hairline, crosshair_color),
+    );
+    context.painter.line_segment(
+        [
+            Pos2::new(center.x - radius * 0.3, center.y),
+            Pos2::new(center.x + radius * 0.3, center.y),
+        ],
+        Stroke::new(DESIGN_TOKENS.stroke.hairline, crosshair_color),
+    );
+
+    // Draw zoom indicator
+    let zoom_text = format!("{zoom:.1}x");
+    context.painter.text(
+        Pos2::new(center.x, center.y + radius - 12.0),
+        egui::Align2::CENTER_BOTTOM,
+        &zoom_text,
+        FontId::proportional(context.painter.ctx().active_theme().text.tiny),
+        chart.axis_text_secondary,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
+    use chrono::{TimeZone, Utc};
+
+    const HOVER: Pos2 = Pos2::new(400.0, 250.0);
+
+    /// Empty titles and optional readouts never submit text with non-finite bounds.
+    #[test]
+    fn chart_readouts_have_finite_shape_bounds() {
+        fn check(shape: &egui::Shape) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(check),
+                egui::Shape::Noop => {}
+                // egui gives invisible control frames no visual bounds.
+                egui::Shape::Rect(rect)
+                    if shape.visual_bounding_rect() == Rect::NOTHING
+                        && rect.fill == egui::Color32::TRANSPARENT
+                        && rect.stroke.is_empty() =>
+                {
+                    assert!(rect.rect.is_finite());
+                }
+                _ => assert!(
+                    shape.visual_bounding_rect().is_finite(),
+                    "non-finite bounds: {shape:?}"
+                ),
+            }
+        }
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for symbol in [None, Some("SAMPLE")] {
+                for (mode, change_only) in [
+                    (TooltipMode::Floating, false),
+                    (TooltipMode::Tracking, false),
+                    (TooltipMode::Tracking, true),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let bars = (0..500)
+                        .map(|i| {
+                            Bar::new(
+                                chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0)
+                                    .unwrap(),
+                                100.0,
+                                110.0,
+                                90.0,
+                                105.0,
+                                1000.0,
+                            )
+                        })
+                        .collect();
+                    let mut chart =
+                        crate::widget::Chart::new(crate::model::BarData::from_bars(bars));
+                    if let Some(symbol) = symbol {
+                        chart.set_symbol(symbol);
+                    }
+                    let mut options = chart.chart_options().clone();
+                    options.tooltip.mode = mode;
+                    if mode == TooltipMode::Tracking {
+                        // The volume study's rows would keep the tracking text from being empty.
+                        chart.config_mut().show_volume = false;
+                        options.tooltip.show_ohlc = false;
+                        options.tooltip.show_time = false;
+                        options.tooltip.show_volume = false;
+                        options.tooltip.show_indicators = false;
+                        options.tooltip.show_change = change_only;
+                    }
+                    chart.set_chart_options(options);
+                    for hover in [None, Some(HOVER)] {
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    Vec2::new(800.0, 600.0),
+                                )),
+                                events: hover.map_or_else(
+                                    || vec![egui::Event::PointerGone],
+                                    |pos| vec![egui::Event::PointerMoved(pos)],
+                                ),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                            },
+                        );
+                        let shapes = std::mem::take(&mut output.shapes);
+                        output.drop_without_applying_deltas();
+                        assert!(shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text().starts_with("O "))));
+                        if hover.is_some() && mode == TooltipMode::Floating {
+                            assert!(shapes.iter().any(|shape| matches!(&shape.shape,
+                                egui::Shape::Text(text) if text.galley.text() == "Open")));
+                        }
+                        shapes.iter().for_each(|shape| check(&shape.shape));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Both tooltip modes translate value labels instead of looking up finished English.
+    #[test]
+    fn readouts_reach_the_translator() {
+        let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let options = TooltipOptions {
+            show_time: false,
+            ..Default::default()
+        };
+        for tracking in [true, false] {
+            let ctx = egui::Context::default();
+            crate::localization::mark_keys(&ctx);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                if tracking {
+                    render_tracking_tooltip(
+                        ui.painter(),
+                        plot,
+                        &bar,
+                        &options,
+                        &scale,
+                        60,
+                        &[],
+                        None,
+                        ValueFormatters::default(),
+                    );
+                } else {
+                    render_floating_tooltip(
+                        ui.painter(),
+                        HOVER,
+                        plot,
+                        10.0,
+                        &bar,
+                        None,
+                        &options,
+                        egui::Color32::GREEN,
+                        &scale,
+                        60,
+                        &[],
+                        None,
+                        ValueFormatters::default(),
+                    );
+                }
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert!(!texts.is_empty());
+            for text in &texts {
+                assert!(
+                    !text.chars().any(|c| c.is_ascii_alphabetic()),
+                    "tracking {tracking}: {text}"
+                );
+            }
+            if !tracking {
+                assert_eq!(texts.iter().filter(|text| text.as_str() == "~").count(), 6);
+            }
+        }
+    }
+
+    /// Readout text keeps the plot's colour while removing its rendering opacity, and a plot
+    /// without any colour falls back to the theme's text colour.
+    #[test]
+    fn study_readouts_paint_translucent_plot_colors_opaque() {
+        let options = TooltipOptions {
+            text_color: egui::Color32::from_rgb(10, 20, 30),
+            ..Default::default()
+        };
+        for (plot, expected) in [
+            (
+                egui::Color32::from_rgba_unmultiplied(255, 0, 0, 0x99),
+                egui::Color32::from_rgb(255, 0, 0),
+            ),
+            (egui::Color32::TRANSPARENT, options.text_color),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
+            let study = StudyValue {
+                formatted: None,
+                study: "Study".into(),
+                plot: "Plot".into(),
+                value: Some(12.5),
+                precision: 2,
+                format: crate::scales::StudyFormat::Fixed(2),
+                color: plot,
+            };
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                render_floating_tooltip(
+                    ui.painter(),
+                    HOVER,
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
+                    10.0,
+                    &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
+                    None,
+                    &options,
+                    egui::Color32::GREEN,
+                    &crate::scales::TimeFormatterBuilder::new().build(),
+                    60,
+                    std::slice::from_ref(&study),
+                    None,
+                    ValueFormatters::default(),
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let color = shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "12.50" => {
+                    Some(text.galley.job.sections[0].format.color)
+                }
+                _ => None,
+            });
+            assert_eq!(color, Some(expected), "plot colour {plot:?}");
+        }
+    }
+
+    /// The floating, held and tracking readouts lead with the instrument's symbol, and the
+    /// symbol follows a change of instrument.
+    #[test]
+    fn readouts_lead_with_the_instrument_symbol() {
+        let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(800.0, 300.0));
+        let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        for (instrument, held, tracking, expected) in [
+            (Some("SAMPLE"), false, false, Some("SAMPLE")),
+            (Some("OTHER"), false, false, Some("OTHER")),
+            (Some("SAMPLE"), true, false, Some("SAMPLE")),
+            (Some("SAMPLE"), false, true, Some("SAMPLE")),
+            (None, false, false, None),
+        ] {
+            let instrument = instrument.map(Instrument::new);
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                if tracking {
+                    render_tracking_tooltip(
+                        ui.painter(),
+                        plot,
+                        &bar,
+                        &TooltipOptions::default(),
+                        &scale,
+                        3600,
+                        &[],
+                        instrument.as_ref(),
+                        ValueFormatters::default(),
+                    );
+                } else {
+                    render_floating_tooltip(
+                        ui.painter(),
+                        Pos2::new(plot.left() + 100.0, plot.center().y),
+                        plot,
+                        10.0,
+                        &bar,
+                        None,
+                        &TooltipOptions {
+                            on_long_press: held,
+                            ..Default::default()
+                        },
+                        egui::Color32::GREEN,
+                        &scale,
+                        3600,
+                        &[],
+                        instrument.as_ref(),
+                        ValueFormatters::default(),
+                    );
+                }
+            });
+            let first = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            let first = first.unwrap_or_default();
+            match expected {
+                Some(symbol) => assert!(first.starts_with(symbol), "{first:?}"),
+                None => assert!(!first.contains("SAMPLE"), "{first:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn study_readouts_fit_narrow_plots() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [160.0, 320.0, 800.0] {
+                for (fraction, held, tracking) in [
+                    (0.25, false, false),
+                    (0.75, false, false),
+                    (0.25, true, false),
+                    (0.75, true, false),
+                    (0.5, false, true),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(width, 300.0));
+                    let pointer = Pos2::new(plot.left() + width * fraction, plot.center().y);
+                    let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+                    let studies = vec![
+                        StudyValue {
+                            formatted: None,
+                            format: crate::scales::StudyFormat::Fixed(2),
+                            study: "A very long study caption with several input parameters".into(),
+                            plot: "Signal".into(),
+                            value: Some(1234.567),
+                            precision: 3,
+                            color: egui::Color32::RED,
+                        };
+                        12
+                    ];
+                    let mut output = ctx.run_ui(Default::default(), |ui| {
+                        if tracking {
+                            render_tracking_tooltip(
+                                ui.painter(),
+                                plot,
+                                &bar,
+                                &TooltipOptions::default(),
+                                &crate::scales::TimeFormatterBuilder::new().build(),
+                                3600,
+                                &studies,
+                                None,
+                                ValueFormatters::default(),
+                            );
+                            return;
+                        }
+                        render_floating_tooltip(
+                            ui.painter(),
+                            pointer,
+                            plot,
+                            10.0,
+                            &bar,
+                            None,
+                            &TooltipOptions {
+                                on_long_press: held,
+                                show_time: !held,
+                                ..Default::default()
+                            },
+                            egui::Color32::GREEN,
+                            &crate::scales::TimeFormatterBuilder::new().build(),
+                            3600,
+                            &studies,
+                            None,
+                            ValueFormatters::default(),
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    if held {
+                        let labels: Vec<_> = shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                                _ => None,
+                            })
+                            .step_by(2)
+                            .take(6)
+                            .collect();
+                        assert_eq!(labels, ["Time", "Open", "High", "Low", "Close", "Vol"]);
+                    }
+                    let mut labels = 0;
+                    for shape in shapes {
+                        match shape.shape {
+                            egui::Shape::Text(text) => {
+                                let visible = Rect::from_min_size(text.pos, text.galley.size())
+                                    .intersect(shape.clip_rect);
+                                if visible.is_positive() {
+                                    assert!(
+                                        plot.contains_rect(visible),
+                                        "text escapes plot at {width}: {visible:?}"
+                                    );
+                                    labels += 1;
+                                }
+                            }
+                            egui::Shape::Rect(panel) if panel.stroke.width == 1.0 => {
+                                assert!(
+                                    plot.contains_rect(panel.rect),
+                                    "tooltip escapes plot at {width}: {:?}",
+                                    panel.rect
+                                );
+                                assert!(
+                                    !panel.rect.x_range().contains(pointer.x),
+                                    "tooltip covers hovered bar"
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert!(labels > 0);
+                }
+            }
+        }
+    }
+
+    /// The held card follows the vertical line at the bar's centre, not the pointer: 15 px to its
+    /// right, to its left when the right has no room, and past a wide bar. Its top is the pointer's
+    /// unless that leaves the plot. Values are semibold and labels regular.
+    #[test]
+    fn held_values_sit_beside_the_vertical_line() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let map = PriceMap::new(
+            PriceTransform {
+                mode: PriceScaleMode::Normal,
+                base: 0.0,
+            },
+            PriceRange::new(0.0, 20.0),
+            0.0,
+            500.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: egui::Color32::GREEN,
+            bearish: egui::Color32::RED,
+            text: egui::Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let options = TooltipOptions {
+            mode: TooltipMode::Floating,
+            on_long_press: true,
+            ..Default::default()
+        };
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        // A bar's centre is at 800 - (last - index + 0.5) * spacing - 1 px.
+        for (spacing, last, pointer, left, right, top) in [
+            // Bar 40 at 404.
+            (10.0, 79, (402.0, 250.0), Some(419.0), None, Some(250.0)),
+            // Bar 0 at 4.
+            (10.0, 79, (5.0, 250.0), Some(19.0), None, Some(250.0)),
+            // Bar 78 at 784, with no room on the right.
+            (10.0, 79, (785.0, 250.0), None, Some(769.0), Some(250.0)),
+            // Bar 6 at 409, half of its 60 px slot being wider than 15 px.
+            (60.0, 12, (400.0, 250.0), Some(439.0), None, Some(250.0)),
+            // Bar 12 at 769, likewise on the left.
+            (60.0, 12, (770.0, 250.0), None, Some(739.0), Some(250.0)),
+            // A pointer low in the plot keeps the card above the 8 px inset.
+            (10.0, 79, (402.0, 490.0), Some(419.0), None, None),
+        ] {
+            let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+            let bars = vec![bar; last + 1];
+            let coords = ChartMapping::new(rect, spacing, 0, last, 0.0, map);
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                render_tooltip_with_options(
+                    &RenderContext::new(ui.painter(), rect),
+                    Pos2::new(pointer.0, pointer.1),
+                    &bars[0],
+                    None,
+                    &options,
+                    &colors,
+                    &map,
+                    &coords,
+                    &bars,
+                    &scale,
+                    60,
+                    &[],
+                    None,
+                    ValueFormatters::default(),
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let card = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(card) if card.stroke.width == 1.0 => Some(card.rect),
+                    _ => None,
+                })
+                .expect("a held card");
+            let case = format!("{spacing} {pointer:?}: {card:?}");
+            let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+            assert!(left.is_none_or(|left| close(card.left(), left)), "{case}");
+            assert!(
+                right.is_none_or(|right| close(card.right(), right)),
+                "{case}"
+            );
+            assert!(
+                top.map_or(close(card.bottom(), 492.0), |top| close(card.top(), top)),
+                "{case}"
+            );
+            let weights: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(
+                        !text.galley.job.sections[0]
+                            .format
+                            .coords
+                            .as_ref()
+                            .is_empty(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(weights.len(), 12, "{case}");
+            for row in weights.chunks(2) {
+                assert_eq!(row, [false, true], "{case}");
+            }
+        }
+    }
+
+    /// The shapes the lens paints over 80 bars on a logarithmic scale, cursor at `HOVER`.
+    fn lens_shapes(options: &TooltipOptions) -> Vec<egui::epaint::ClippedShape> {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let transform = PriceTransform {
+            mode: PriceScaleMode::Logarithmic,
+            base: 0.0,
+        };
+        let range = PriceRange::new(10f64.ln(), 10_000f64.ln());
+        let map = PriceMap::new(transform, range, 0.0, 500.0, false);
+        let p = map.y_to_price(HOVER.y);
+        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let bars = (0..80)
+            .map(|i| {
+                let (open, close) = if i % 2 == 0 {
+                    (p, p)
+                } else {
+                    (p * 1.8, p / 1.8)
+                };
+                Bar::new(t, open, p * 2.0, p / 2.0, close, 1.0)
+            })
+            .collect::<Vec<_>>();
+        let coords = ChartMapping::new(rect, 10.0, 0, 79, 0.0, map);
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
+            render_magnifier_tooltip(
+                &RenderContext::new(&painter, rect),
+                HOVER,
+                &bars[0],
+                options,
+                &map,
+                &coords,
+                &bars,
+            );
+        });
+        let shapes = output.shapes.clone();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// The lens magnifies the chart about the cursor: on a logarithmic scale a wick
+    /// from half to twice the price under the cursor is centred on the lens, and
+    /// every wick, body edge and fill stays inside its circular boundary.
+    #[test]
+    fn magnifier_centres_and_clips_candles_on_a_log_scale() {
+        for (size, zoom) in [(120.0, 2.0), (240.0, 4.0)] {
+            let shapes = lens_shapes(&TooltipOptions {
+                magnifier_size: size,
+                magnifier_zoom: zoom,
+                ..Default::default()
+            });
+            assert!(
+                shapes.iter().any(|shape| match &shape.shape {
+                    egui::Shape::Rect(body) => body.fill != egui::Color32::TRANSPARENT,
+                    egui::Shape::Path(body) => body.fill != egui::Color32::TRANSPARENT,
+                    _ => false,
+                }),
+                "a filled candle body in the lens"
+            );
+            // Bar 40 is at 800 - (79 - 40 + 0.5) * 10 - 1 = 404.
+            let wick_x = HOVER.x + 4.0 * zoom;
+            let wick = shapes
+                .iter()
+                .find_map(|c| match &c.shape {
+                    egui::Shape::LineSegment { points, .. }
+                        if points[0].x == wick_x
+                            && points[1].x == wick_x
+                            && (points[0].y - points[1].y).abs() > 50.0 =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .expect("a wick in the lens");
+            let mid = (wick[0].y + wick[1].y) / 2.0;
+            assert!((mid - HOVER.y).abs() < 0.5, "wick {wick:?}");
+            // log(2) / log(1000) * 500 * zoom exceeds either lens radius.
+            // The circle equation gives the wick endpoints at its offset from the cursor.
+            let radius = size / 2.0 - DESIGN_TOKENS.stroke.hairline / 2.0;
+            let extent = (radius * radius - (4.0 * zoom).powi(2)).sqrt();
+            assert!((wick[0].y - (HOVER.y - extent)).abs() < 0.01);
+            assert!((wick[1].y - (HOVER.y + extent)).abs() < 0.01);
+            for shape in &shapes {
+                let points: &[Pos2] = match &shape.shape {
+                    egui::Shape::LineSegment { points, .. } => points,
+                    egui::Shape::Path(path) => &path.points,
+                    egui::Shape::Rect(body) => {
+                        for corner in [body.rect.left_top(), body.rect.right_bottom()] {
+                            assert!(corner.distance(HOVER) <= size / 2.0 + 0.01, "body {body:?}");
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                };
+                assert!(
+                    points
+                        .iter()
+                        .all(|point| point.distance(HOVER) <= size / 2.0 + 0.01),
+                    "size {size}, zoom {zoom}: {points:?}"
+                );
+            }
+        }
+    }
+
+    /// A zoom of 0 or NaN neither hangs the frame nor paints non-finite geometry.
+    #[test]
+    fn degenerate_magnifier_zoom_draws_finite_lens() {
+        for zoom in [f32::NAN, 0.0] {
+            for c in lens_shapes(&TooltipOptions::magnifier_with_zoom(zoom)) {
+                if let egui::Shape::LineSegment { points, .. } = &c.shape {
+                    assert!(
+                        points.iter().all(|p| p.is_finite()),
+                        "zoom {zoom}: {points:?}"
+                    );
+                }
+            }
+        }
+    }
+}

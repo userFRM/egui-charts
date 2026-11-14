@@ -38,14 +38,19 @@ fn range_grid(low: f64, high: f64, tick: f64) -> f64 {
     if level_span > 0.0 { level_span } else { 1.0 }
 }
 
-/// Grid key of a price; the f64 division saturates instead of overflowing.
-fn level_key(price: f64, grid: f64) -> i64 {
-    (price / grid).round() as i64
+/// Row of a price on rows of `row_ticks` ticks of `tick`: its nearest tick, grouped downwards, so
+/// a row holds the ticks from a multiple of `row_ticks` up to the next, as footprint levels do.
+/// The f64 arithmetic saturates instead of overflowing.
+pub(crate) fn level_key(price: f64, tick: f64, row_ticks: u64) -> i64 {
+    ((price / tick).round() / row_ticks as f64).floor() as i64
 }
 
-/// Grid keys of a bar's low and high, or `None` for a non-finite or inverted bar.
-pub(crate) fn bar_level_keys(bar: &Bar, grid: f64) -> Option<(i64, i64)> {
-    let (low, high) = (level_key(bar.low, grid), level_key(bar.high, grid));
+/// Row keys of a bar's low and high, or `None` for a non-finite or inverted bar.
+pub(crate) fn bar_level_keys(bar: &Bar, tick: f64, row_ticks: u64) -> Option<(i64, i64)> {
+    let (low, high) = (
+        level_key(bar.low, tick, row_ticks),
+        level_key(bar.high, tick, row_ticks),
+    );
     (bar.low.is_finite() && bar.high.is_finite() && bar.low <= bar.high).then_some((low, high))
 }
 

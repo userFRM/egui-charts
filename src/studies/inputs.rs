@@ -1,48 +1,6 @@
 //! Typed input schemas for built-in and host studies.
 
-use crate::model::{PriceSource, Timeframe};
-use egui::Color32;
-
-/// A price series or an output of another study on the chart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum StudySource {
-    /// A field or average of fields of the input bars.
-    Price(PriceSource),
-    /// A stable chart study id and its zero-based output column, without plot displacement.
-    Study {
-        /// Source series identifier assigned by the chart.
-        id: usize,
-        /// Zero-based plot index within the source study.
-        plot: usize,
-    },
-}
-
-/// A study input's current value.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum InputValue {
-    /// A bar count or nonnegative integer parameter.
-    Length(usize),
-    /// A signed integer parameter.
-    Integer(i32),
-    /// A finite numeric parameter.
-    Number(f64),
-    /// Index in the input's choices.
-    Choice(usize),
-    /// An enabled or disabled input.
-    Toggle(bool),
-    /// A price field or another study's output.
-    Source(StudySource),
-    /// An RGBA colour.
-    Color(Color32),
-    /// A calculation interval; `None` follows the chart.
-    Timeframe(Option<Timeframe>),
-    /// A host-resolved symbol; an empty string follows the chart.
-    Symbol(String),
-    /// Text the study parses itself, such as a date and time.
-    Text(String),
-}
+pub use crate::model::{InputValue, StudySource};
 
 /// The accepted values of a study input.
 #[derive(Clone, Debug)]
@@ -84,6 +42,9 @@ pub struct StudyInput {
     pub default: InputValue,
     /// Accepted values, used to build the editor.
     pub kind: InputKind,
+    /// The choice input this one applies with and the choices it applies to. An editor hides it
+    /// under the other choices and keeps its value. `None` always shows it.
+    pub shown_when: Option<(String, Vec<usize>)>,
 }
 
 impl StudyInput {
@@ -100,6 +61,7 @@ impl StudyInput {
             default: value.clone(),
             value,
             kind,
+            shown_when: None,
         }
     }
 
@@ -107,6 +69,22 @@ impl StudyInput {
     pub fn with_default(mut self, value: InputValue) -> Self {
         self.default = value;
         self
+    }
+
+    /// Show this input only while the choice input `id` holds one of `choices`.
+    pub fn shown_when(mut self, id: impl Into<String>, choices: impl Into<Vec<usize>>) -> Self {
+        self.shown_when = Some((id.into(), choices.into()));
+        self
+    }
+
+    /// Whether an editor listing `inputs`, this one among them, shows this input.
+    pub fn is_shown(&self, inputs: &[StudyInput]) -> bool {
+        self.shown_when.as_ref().is_none_or(|(id, choices)| {
+            inputs.iter().any(|input| {
+                input.id == *id
+                    && matches!(input.value, InputValue::Choice(choice) if choices.contains(&choice))
+            })
+        })
     }
 
     /// Check a value against this input's schema. Setters must also validate values.
@@ -231,20 +209,22 @@ macro_rules! input_assign {
 
 #[cfg(feature = "studies")]
 macro_rules! study_inputs {
-    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*)),+ $(,)? ; $after:block) => {
+    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*) $(if $choice:ident in $shown:expr)?),+ $(,)? ; $($changed:ident =>)? $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
             let defaults = Self::default();
             vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
-                .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)),+]
+                .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)
+                $(.shown_when(stringify!($choice), $shown))?),+]
         }
 
-        fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), &'static str> {
-            let schema = $this.inputs().into_iter().find(|input| input.id == id).ok_or("unknown study input")?;
-            if !schema.accepts(&value) { return Err("study input is outside its accepted values"); }
+        fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {
+            let schema = $this.inputs().into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+            if !schema.accepts(&value) { return Err(crate::studies::StudyError::invalid_input(id)); }
             match id {
                 $(stringify!($field $([$index])?) => { $this.$field $([$index])? = crate::studies::inputs::input_assign!(value, $kind($($args),*)); }),+
-                _ => return Err("unknown study input"),
+                _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
             }
+            $(let $changed = id;)?
             $after
             $this.calculate(&[]);
             Ok(())

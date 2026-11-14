@@ -11,6 +11,8 @@
 //! - Advanced: TPO
 
 mod area;
+mod bar;
+mod candle;
 mod candlestick;
 mod heikin_ashi;
 mod helpers;
@@ -22,8 +24,13 @@ mod range;
 pub mod tpo;
 pub(crate) mod volume;
 
+pub use bar::render_ohlc_bar;
+pub use candle::render_candle;
+
 use crate::theme::ThemeExt;
 pub use heikin_ashi::HeikinAshiCache;
+pub(crate) use heikin_ashi::rising as heikin_rising;
+pub(crate) use helpers::prev_close;
 pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
@@ -89,7 +96,28 @@ pub fn render_chart_type(
     let price_rect = ctx.price_ctx.rect;
     let painter = ctx.price_ctx.painter;
 
-    if let Some(message) = params.type_params.invalid(chart_type) {
+    use crate::localization::{format_text, text};
+    let egui_ctx = painter.ctx();
+    let message = match params.type_params.invalid(chart_type) {
+        Some(reason) => Some(text(egui_ctx, reason)),
+        // A size derived from history waits for it, or the loaded bars give it no positive value.
+        None => params.type_params.bars_needed(chart_type).map(|count| {
+            let loaded = ctx.full_data.iter().filter(|bar| !bar.is_whitespace());
+            match count {
+                _ if loaded.take(count).count() >= count => text(
+                    egui_ctx,
+                    "The size cannot be calculated from the loaded bars",
+                ),
+                1 => text(egui_ctx, "Waiting for 1 bar of history to size the chart"),
+                _ => format_text(
+                    egui_ctx,
+                    "Waiting for {count} bars of history to size the chart",
+                    &[("count", count.to_string())],
+                ),
+            }
+        }),
+    };
+    if let Some(message) = message {
         painter.text(
             price_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -124,25 +152,7 @@ pub fn render_chart_type(
             );
         }
         ChartType::Heikin => {
-            candlestick::render_heikin_ashi(
-                ctx.price_ctx,
-                ctx.volume_ctx,
-                ctx.price_scale,
-                ctx.colors,
-                ctx.visible_data,
-                ctx.full_data,
-                ctx.revision,
-                ctx.heikin_ashi,
-                ctx.start_idx,
-                params.bar_width(),
-                params.wick_width(),
-                params.show_volume(),
-                params.max_volume(),
-                params.chart_rect_min_x(),
-                &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
-            );
+            heikin_ashi::render(ctx, params, &idx_to_coord);
         }
         ChartType::Bars => {
             candlestick::render_ohlc_bars(
@@ -151,6 +161,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
@@ -176,8 +187,7 @@ pub fn render_chart_type(
                 params.max_volume(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                &params.type_params.styles.hollow,
             );
         }
         ChartType::VolumeCandles => {
@@ -187,14 +197,14 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
                 params.max_volume(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                &params.type_params.styles.volume_candles,
             );
         }
 
@@ -279,10 +289,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
                 &params.type_params.styles.hlc_area,
-                params.price_source(),
             );
         }
         ChartType::Columns => {
@@ -302,6 +309,7 @@ pub fn render_chart_type(
                 params.bullish_color(),
                 params.bearish_color(),
                 params.type_params.columns_base,
+                params.type_params.styles.columns.price_source,
             );
         }
         ChartType::Baseline => {
@@ -335,10 +343,10 @@ pub fn render_chart_type(
                 params.max_volume(),
                 ctx.colors,
                 ctx.price_scale,
+                ctx.price_formatter,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                &params.type_params.styles.high_low,
             );
         }
         ChartType::Range => {
@@ -424,11 +432,30 @@ pub fn render_chart_type(
                 ctx.revision,
                 ctx.price_scale,
                 &tpo_config,
+                ctx.tick_size,
                 ctx.clock,
                 &idx_to_coord,
                 params.chart_rect_min_x(),
                 params.bullish_color(),
                 params.bearish_color(),
+            );
+            line::render_line(
+                painter,
+                ctx.volume_ctx,
+                ctx.visible_data,
+                ctx.start_idx,
+                false,
+                params.max_volume(),
+                ctx.colors,
+                ctx.price_scale,
+                params.chart_rect_min_x(),
+                &idx_to_coord,
+                &crate::model::LinePlotStyle {
+                    color: painter.ctx().active_theme().ui.accent,
+                    width: crate::tokens::DESIGN_TOKENS.stroke.hairline,
+                    ..Default::default()
+                },
+                crate::model::PriceSource::Close,
             );
         }
     }
@@ -436,9 +463,10 @@ pub fn render_chart_type(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Bar, BarData, ChartType, LineStyle};
+    use crate::model::{Bar, BarData, ChartType, ChartTypeParams, LineStyle, Timeframe};
     use crate::widget::Chart;
     use egui::{Color32, Context, RawInput, Rect, Shape, pos2, vec2};
+    use std::collections::BTreeSet;
 
     #[test]
     fn chart_type_styles_paint_and_survive_switching_and_serialization() {
@@ -470,6 +498,8 @@ mod tests {
         styles.line.style = LineStyle::Dashed;
         styles.step_line.style = LineStyle::Dotted;
         styles.marker_radius = 8.0;
+        styles.area.marker_radius = 8.0;
+        styles.baseline.marker_radius = 8.0;
         styles.area.top_fill = Color32::from_rgba_unmultiplied(255, 0, 0, 200);
         styles.area.bottom_fill = Color32::from_rgba_unmultiplied(0, 0, 255, 40);
         styles.baseline.above_fill = Color32::from_rgba_unmultiplied(255, 255, 0, 100);
@@ -536,7 +566,10 @@ mod tests {
             if kind != ChartType::Candles {
                 assert!(has_line, "{kind:?} ignored its line style");
             }
-            if kind == ChartType::LineWithMarkers {
+            if matches!(
+                kind,
+                ChartType::LineWithMarkers | ChartType::Area | ChartType::Baseline
+            ) {
                 assert_eq!(markers, 4);
             }
             if kind == ChartType::Area {
@@ -579,6 +612,111 @@ mod tests {
     }
 
     #[test]
+    fn tpo_chart_type_draws_the_display_of_its_params() {
+        let time = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        let bars = (0..8)
+            .map(|i| {
+                let low = 100.0 + f64::from(i);
+                Bar::new(
+                    time + chrono::Duration::minutes(i64::from(i) * 30),
+                    low + 0.25,
+                    low + 1.0,
+                    low,
+                    low + 0.75,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.config_mut().show_volume = false;
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let single_print = crate::tokens::DESIGN_TOKENS.semantic.tpo.single_print;
+        let mut draw = |params: ChartTypeParams| {
+            chart.set_chart_type_params(params);
+            let ctx = Context::default();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            let letters: BTreeSet<String> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(text)
+                        if text.galley.text().len() == 1
+                            && text.galley.text().chars().all(|c| c.is_ascii_uppercase()) =>
+                    {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let captions = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Mid"))
+                .count();
+            let highlights = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == single_print))
+                .count();
+            let texts = |wanted: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == wanted))
+                    .count()
+            };
+            let rotation = (texts("Rotation"), texts("+14"));
+            output.drop_without_applying_deltas();
+            (
+                letters.into_iter().collect::<String>(),
+                captions,
+                highlights,
+                rotation,
+            )
+        };
+
+        // Settings saved before the options existed keep the blocks and midpoint they were saved
+        // with.
+        let saved = serde_json::from_str::<ChartTypeParams>("{}").unwrap();
+        assert_eq!(draw(saved.clone()), (String::new(), 1, 0, (0, 0)));
+        // A new chart letters its blocks and leaves the midpoint off.
+        assert_eq!(
+            draw(ChartTypeParams::default()),
+            ("ABCDEFGH".to_owned(), 0, 0, (0, 0))
+        );
+        // Eight half-hour bars of one session are the periods A to H.
+        let lettered = ChartTypeParams {
+            tpo_letters: true,
+            ..saved.clone()
+        };
+        assert_eq!(draw(lettered).0, "ABCDEFGH");
+        let (_, captions, highlights, _) = draw(ChartTypeParams {
+            tpo_midpoint: true,
+            tpo_single_prints: true,
+            ..saved.clone()
+        });
+        assert_eq!(captions, 1);
+        assert!(highlights > 0);
+        // Each of the seven periods after the first rises a row at both ends.
+        let statistics = draw(ChartTypeParams {
+            tpo_statistics: true,
+            ..saved
+        });
+        assert_eq!(statistics.3, (1, 1));
+    }
+
+    #[test]
     fn a_line_breaks_at_whitespace_and_takes_the_colour_of_the_bar_it_starts_at() {
         let red = Color32::RED;
         let mut bars: Vec<Bar> = (0..6)
@@ -615,5 +753,142 @@ mod tests {
                 (solid(style.color), vec![40.0, 50.0]),
             ]
         );
+    }
+
+    #[test]
+    fn area_and_baseline_point_markers_follow_each_series_points_and_visibility() {
+        use crate::model::{BarColors, BaselineLevel};
+        use crate::widget::{SeriesId, SeriesOptions};
+
+        let bars: Vec<_> = [70.0, 30.0, f64::NAN, 50.0, f64::NAN, 100.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i as i64);
+                if value.is_nan() {
+                    Bar::whitespace(time)
+                } else {
+                    let mut bar = Bar::from_value(time, value);
+                    bar.colors = Some(Box::new(BarColors {
+                        color: (i == 0).then_some(Color32::GOLD),
+                        top_line: (i == 0).then_some(Color32::CYAN),
+                        bottom_line: (i == 1).then_some(Color32::MAGENTA),
+                        ..Default::default()
+                    }));
+                    bar
+                }
+            })
+            .collect();
+        for kind in [ChartType::Area, ChartType::Baseline] {
+            for inverted in [false, true] {
+                for (radius, added_radius, main_visible, added_visible) in [
+                    (0.0, None, true, true),
+                    (4.0, Some(7.0), true, true),
+                    (4.0, Some(0.0), true, true),
+                    (0.0, Some(7.0), true, true),
+                    (-1.0, Some(-2.0), true, true),
+                    (f32::NAN, Some(f32::NAN), true, true),
+                    (f32::INFINITY, Some(f32::INFINITY), true, true),
+                    (4.0, Some(7.0), false, true),
+                    (4.0, Some(7.0), true, false),
+                ] {
+                    let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+                    chart.config_mut().show_volume = false;
+                    chart.set_chart_type(kind);
+                    let mut params = chart.chart_type_params().clone();
+                    params.baseline = BaselineLevel::Price(50.0);
+                    params.styles.area.marker_radius = radius;
+                    params.styles.baseline.marker_radius = radius;
+                    let area_color = params.styles.area.line.color;
+                    let above_color = params.styles.baseline.above.color;
+                    chart.set_chart_type_params(params);
+                    let added = chart.add_series(SeriesOptions {
+                        chart_type: kind,
+                        color: area_color,
+                        up_color: above_color,
+                        marker_radius: added_radius,
+                        ..Default::default()
+                    });
+                    chart.set_data(added, bars.clone());
+                    chart.set_series_visible(SeriesId::MAIN, main_visible);
+                    chart.set_series_visible(added, added_visible);
+                    let scale = chart.series_price_scale_mut(SeriesId::MAIN).unwrap();
+                    scale.set_range(0.0, 100.0);
+                    scale.options_mut().invert_scale = inverted;
+                    let output = Context::default().run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                pos2(0.0, 0.0),
+                                vec2(600.0, 400.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    let rect = chart.get_rendered_price_rect();
+                    let shapes = output.shapes.clone();
+                    output.drop_without_applying_deltas();
+                    for (id, radius, visible) in [
+                        (SeriesId::MAIN, radius, main_visible),
+                        (added, added_radius.unwrap_or(0.0), added_visible),
+                    ] {
+                        let circles: Vec<_> = shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                Shape::Circle(circle)
+                                    if circle.radius == radius
+                                        && circle.fill != Color32::TRANSPARENT =>
+                                {
+                                    assert_eq!(shape.clip_rect, rect);
+                                    Some((circle.center, circle.fill))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let expected: Vec<_> = if visible && radius.is_finite() && radius > 0.0 {
+                            // In a 0..100 range, 70 is 30% down the pane and 30 is 70% down;
+                            // inversion swaps them. Isolated points at 50 and 100 sit halfway
+                            // and on the pane edge, where the marker is clipped in half.
+                            [(0, 70.0_f32), (1, 30.0), (3, 50.0), (5, 100.0)]
+                                .into_iter()
+                                .map(|(i, value)| {
+                                    let fraction = if inverted {
+                                        value / 100.0
+                                    } else {
+                                        1.0 - value / 100.0
+                                    };
+                                    let point = pos2(
+                                        chart.index_to_x(i as f64).unwrap(),
+                                        rect.top() + rect.height() * fraction,
+                                    );
+                                    let color = match (kind, i) {
+                                        (ChartType::Area, 0) => Color32::GOLD,
+                                        (ChartType::Area, _) => area_color,
+                                        (_, 0) => Color32::CYAN,
+                                        (_, 1) => Color32::MAGENTA,
+                                        _ => above_color,
+                                    };
+                                    (point, color)
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        assert_eq!(circles.len(), expected.len(), "{kind:?}, {id:?}, {radius}");
+                        for ((point, color), (expected_point, expected_color)) in
+                            circles.iter().zip(expected)
+                        {
+                            assert!(
+                                point.distance(expected_point) < 0.001,
+                                "{kind:?}, {id:?}: {point:?} != {expected_point:?}"
+                            );
+                            assert_eq!(*color, expected_color);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

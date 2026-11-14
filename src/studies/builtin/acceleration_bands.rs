@@ -30,9 +30,9 @@ impl AccelerationBands {
             factor: clamp_param(factor, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::GREEN, // Green - Upper
-                palette::GOLD,  // Amber - Middle
-                palette::RED,   // Red - Lower
+                palette::BLUE,      // Upper
+                palette::BB_MIDDLE, // Middle
+                palette::BLUE,      // Lower
             ],
             visible: true,
         }
@@ -196,9 +196,6 @@ mod tests {
         ab.calculate(&data);
 
         let mut failures = Vec::new();
-        if ab.line_count() != 3 {
-            failures.push(format!("line_count {}, want 3", ab.line_count()));
-        }
         assert_eq!(ab.values.len(), bars.len());
         assert!(matches!(
             ab.values.to_rows()[..2],

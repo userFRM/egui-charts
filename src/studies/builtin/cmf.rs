@@ -49,7 +49,7 @@ impl ChaikinMoneyFlow {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            positive_color: palette::GREEN,
+            positive_color: palette::DARK_GREEN,
             negative_color: palette::RED,
             visible: true,
         }

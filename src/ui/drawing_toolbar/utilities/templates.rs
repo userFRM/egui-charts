@@ -1,6 +1,6 @@
 //! Drawing template management UI.
 //!
-//! Provides the visibility flyout rows and name dialog for saving
+//! Provides standalone host menu rows and a name dialog for saving
 //! and loading drawing templates.
 
 use crate::localization as l10n;

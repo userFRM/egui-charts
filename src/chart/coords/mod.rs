@@ -13,12 +13,14 @@ use egui::{Pos2, Rect};
 /// - Prices ↔ Y screen coordinates
 ///
 /// Share the mapping with overlays and hit tests to keep them aligned with the pane.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ChartMapping {
+    /// Numeric row positions shared with the time scale; `None` keeps ordinal spacing.
+    pub numeric_positions: Option<crate::model::NumericPositions>,
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Spacing between bars in egui logical points.
+    /// Points per ordinal slot, or per initial mean numeric key gap.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
@@ -32,6 +34,17 @@ pub struct ChartMapping {
 }
 
 impl ChartMapping {
+    /// Automatic bar widths share the closest numeric key slots without changing coordinates.
+    pub(crate) fn bar_spacing_for_width(&self) -> f32 {
+        self.numeric_positions
+            .as_ref()
+            .map_or(self.bar_spacing, |positions| {
+                let right = self.base_idx as f64 + self.right_offset + 0.5;
+                let left = right - f64::from(self.rect.width() - 1.0) / f64::from(self.bar_spacing);
+                self.bar_spacing * positions.min_gap(left, right) as f32
+            })
+    }
+
     /// Create a new ChartMapping with all parameters.
     pub fn new(
         rect: Rect,
@@ -42,6 +55,7 @@ impl ChartMapping {
         price: PriceMap,
     ) -> Self {
         Self {
+            numeric_positions: None,
             rect,
             bar_spacing,
             start_idx,
@@ -60,7 +74,16 @@ impl ChartMapping {
     /// This is the canonical formula used everywhere.
     #[inline]
     pub fn idx_to_x(&self, bar_idx: usize) -> f32 {
-        let delta_from_right = (self.base_idx as f64 - bar_idx as f64) + self.right_offset;
+        self.index_to_x(bar_idx as f64)
+    }
+
+    /// Convert a fractional row index to X, including numeric sample positions.
+    pub fn index_to_x(&self, index: f64) -> f32 {
+        let position = self
+            .numeric_positions
+            .as_ref()
+            .map_or(index, |positions| positions.position(index));
+        let delta_from_right = (self.base_idx as f64 - position) + self.right_offset;
         (f64::from(self.rect.min.x) + f64::from(self.rect.width())
             - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
             - 1.0) as f32
@@ -99,7 +122,10 @@ impl ChartMapping {
         let relative_x = f64::from(x) - f64::from(self.rect.min.x);
         let delta_from_right =
             (f64::from(self.rect.width()) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
-        self.base_idx as f64 + (self.right_offset - delta_from_right)
+        let position = self.base_idx as f64 + (self.right_offset - delta_from_right);
+        self.numeric_positions
+            .as_ref()
+            .map_or(position, |positions| positions.index(position))
     }
 
     /// Check if an X coordinate is within the visible chart bounds.
@@ -132,10 +158,10 @@ impl ChartMapping {
         Some((global_idx as usize) - self.start_idx)
     }
 
-    /// Calculate the bar width based on spacing.
+    /// Calculate the bar width based on spacing, capped by the closest numeric keys in view.
     #[inline]
     pub fn bar_width(&self) -> f32 {
-        (self.bar_spacing * 0.6).max(1.0)
+        (self.bar_spacing_for_width() * 0.6).max(1.0)
     }
 
     // =========================================================================
@@ -190,8 +216,11 @@ impl ChartMapping {
     ///
     /// Only the x mapping and the bounds checks follow the new rect: `price`
     /// still maps onto its own pane.
-    pub fn with_rect(self, rect: Rect) -> Self {
-        Self { rect, ..self }
+    pub fn with_rect(&self, rect: Rect) -> Self {
+        Self {
+            rect,
+            ..self.clone()
+        }
     }
 }
 
@@ -233,6 +262,9 @@ mod tests {
             200.0,
         );
 
+        // x = 100 + 800 - (100 + 5 - 75 + 0.5) * 10 - 1 = 594.
+        assert_eq!(mapping.idx_to_x(75), 594.0);
+        assert_eq!(mapping.x_to_idx(594.0), 75);
         // Test roundtrip for several indices
         for idx in [50, 75, 100, 105] {
             let x = mapping.idx_to_x(idx);
@@ -244,7 +276,7 @@ mod tests {
                 base_idx: 999_999,
                 bar_spacing: 200.0,
                 right_offset,
-                ..mapping
+                ..mapping.clone()
             };
             assert_eq!(large.idx_to_x(index), 800.0);
             assert_eq!(large.x_to_idx(800.0), index);
@@ -293,32 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn test_local_idx_at_x_resolves_bar_under_cursor() {
-        // 6 visible bars [50..=55], anchored so the data fills the rect.
-        let mapping = mapping(
-            Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
-            10.0, // bar_spacing
-            50,   // start_idx
-            55,   // base_idx (last visible bar)
-            0.0,  // right_offset
-            100.0,
-            200.0,
-        );
-        let visible_len = 6;
-
-        // Hovering the exact x of each bar resolves to that local index.
-        for local in 0..visible_len {
-            let global = mapping.start_idx + local;
-            let x = mapping.idx_to_x(global);
-            assert_eq!(
-                mapping.local_idx_at_x(x, visible_len),
-                Some(local),
-                "x {x} for global {global} should map to local {local}"
-            );
-        }
-    }
-
-    #[test]
     fn test_local_idx_at_x_edges_and_empty() {
         let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
@@ -346,30 +352,20 @@ mod tests {
             None
         );
 
-        // The first and last bars resolve to clamped endpoints, never out of range.
-        let first_x = mapping.idx_to_x(mapping.start_idx);
-        let last_x = mapping.idx_to_x(mapping.start_idx + visible_len - 1);
-        assert_eq!(mapping.local_idx_at_x(first_x, visible_len), Some(0));
-        assert_eq!(
-            mapping.local_idx_at_x(last_x, visible_len),
-            Some(visible_len - 1)
-        );
-    }
-
-    #[test]
-    fn test_local_idx_at_x_degenerate_spacing() {
-        // Zero bar spacing has no inverse; resolution declines rather than dividing
-        // by zero.
-        let mapping = mapping(
-            Rect::from_min_size(Pos2::new(0.0, 0.0), egui::Vec2::new(800.0, 400.0)),
-            0.0,
-            0,
-            5,
-            0.0,
-            100.0,
-            200.0,
-        );
-        assert_eq!(mapping.local_idx_at_x(400.0, 6), None);
+        for local in 0..visible_len {
+            let x = mapping.idx_to_x(mapping.start_idx + local);
+            assert_eq!(
+                mapping.local_idx_at_x(x, visible_len),
+                Some(local),
+                "local {local}"
+            );
+        }
+        // Zero spacing has no inverse.
+        let degenerate = ChartMapping {
+            bar_spacing: 0.0,
+            ..mapping
+        };
+        assert_eq!(degenerate.local_idx_at_x(400.0, visible_len), None);
     }
 
     #[test]
@@ -384,6 +380,9 @@ mod tests {
             200.0,
         );
 
+        // 175 is three quarters of the way up a 400-point axis: 450 - 300 = 150.
+        assert_eq!(mapping.price_to_y(175.0), 150.0);
+        assert_eq!(mapping.y_to_price(150.0), 175.0);
         // Test roundtrip for several prices
         for price in [100.0, 125.0, 150.0, 175.0, 200.0] {
             let y = mapping.price_to_y(price);

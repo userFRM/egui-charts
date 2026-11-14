@@ -10,11 +10,15 @@ pub(crate) fn projection_rect(
     if projection.bars.start >= projection.bars.end {
         return None;
     }
-    let x =
-        |index: f64| coords.idx_to_x(index as usize) + index.fract() as f32 * coords.bar_spacing;
     let rect = egui::Rect::from_two_pos(
-        egui::pos2(x(projection.bars.start), price_to_y(projection.top)),
-        egui::pos2(x(projection.bars.end), price_to_y(projection.bottom)),
+        egui::pos2(
+            coords.index_to_x(projection.bars.start),
+            price_to_y(projection.top),
+        ),
+        egui::pos2(
+            coords.index_to_x(projection.bars.end),
+            price_to_y(projection.bottom),
+        ),
     );
     (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
@@ -35,10 +39,20 @@ pub(crate) fn paint(
         let color = study
             .plot_color(projection.plot, projection.bars.start as usize)
             .unwrap_or(style.color);
-        painter.rect_filled(rect, 0.0, color.gamma_multiply(0.2));
+        painter.rect_filled(rect, 0.0, study.projection_fill_color(projection));
         let stroke = egui::Stroke::new(style.width, color);
-        painter.line_segment([rect.left_top(), rect.right_top()], stroke);
-        painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
-        painter.line_segment([rect.right_top(), rect.right_bottom()], stroke);
+        for [start, end] in [
+            [rect.left_top(), rect.right_top()],
+            [rect.left_bottom(), rect.right_bottom()],
+            [rect.right_top(), rect.right_bottom()],
+        ] {
+            if let Some((dash, gap)) = style.pattern.dash_pattern() {
+                crate::painting::dashed_line::draw_dashed_line(
+                    painter, start, end, stroke, dash, gap,
+                );
+            } else {
+                painter.line_segment([start, end], stroke);
+            }
+        }
     }
 }

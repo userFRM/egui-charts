@@ -3,6 +3,10 @@
 //! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news,
 //! the event calendars, the screener, hotlists, notifications, chats and the products launcher.
 
+use crate::scales::{CurrencyFormatter, PriceFormatter};
+use egui::text::TextFormat;
+use egui::{Color32, FontId};
+
 pub mod alerts_panel;
 pub mod calendar;
 pub mod chats;
@@ -13,12 +17,15 @@ pub mod market_heatmap;
 pub mod news;
 pub mod notifications;
 pub mod object_tree;
+#[cfg(feature = "detectors")]
+pub mod order_flow;
 pub mod products;
 pub mod screener;
 pub mod symbol_details;
 pub mod time_and_sales;
 pub mod watchlist;
 
+pub use crate::ui::trading::DepthPanel;
 pub use alerts_panel::*;
 pub use calendar::*;
 pub use chats::*;
@@ -28,11 +35,66 @@ pub use market_heatmap::*;
 pub use news::*;
 pub use notifications::*;
 pub use object_tree::*;
+#[cfg(feature = "detectors")]
+pub use order_flow::*;
 pub use products::*;
 pub use screener::*;
 pub use symbol_details::*;
 pub use time_and_sales::*;
 pub use watchlist::*;
+
+/// Height shared by market data rows.
+const ROW_HEIGHT: f32 = 26.0;
+
+/// Height of a panel header row, which fits its title and action buttons.
+const HEADER_HEIGHT: f32 = 40.0;
+
+/// Text in the bundled face at `weight`, such as 700 for bold.
+fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
+    let mut format = TextFormat::simple(FontId::proportional(size), color);
+    format.coords.push("wght", weight);
+    format
+}
+
+/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
+fn signed(value: f64, decimals: usize) -> String {
+    let text = grouped(value, decimals);
+    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
+        format!("+{text}")
+    } else {
+        text
+    }
+}
+
+/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
+fn grouped(value: f64, decimals: usize) -> String {
+    if !value.is_finite() {
+        return "-".to_owned();
+    }
+    CurrencyFormatter::new("", decimals).format(value)
+}
+
+/// Format price with decimals chosen by its magnitude, so a negative price
+/// keeps the decimals of the positive price of the same size
+fn format_price(price: f64, decimals: Option<u8>) -> String {
+    if !price.is_finite() {
+        return "\u{2014}".to_owned();
+    }
+    let decimals = decimals.unwrap_or_else(|| price_decimals(price));
+    format!("{:.*}", usize::from(decimals), price)
+}
+
+/// Decimals of a price label without instrument precision, chosen by the price's magnitude
+fn price_decimals(price: f64) -> u8 {
+    match price.abs() {
+        m if m >= 10000.0 => 0,
+        m if m >= 1000.0 => 1,
+        m if m >= 10.0 => 2,
+        m if m >= 1.0 => 4,
+        m if m >= 0.001 => 6,
+        _ => 8,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -78,11 +140,12 @@ mod tests {
                     "watchlist",
                     "details",
                     "tape",
+                    "tape_combined",
                     "hotlist",
                     "screener",
                     "news",
                 ] {
-                    let tape = panel == "tape";
+                    let tape = matches!(panel, "tape" | "tape_combined");
                     let ctx = egui::Context::default();
                     apply_to_egui(&ctx, &theme);
                     let symbol = "EXCHANGE:LONG_SYMBOL_NAME";
@@ -113,6 +176,7 @@ mod tests {
                     details.set_feed(std::sync::Arc::new(Feed));
                     details.poll(&ctx);
                     let mut trades = TimeAndSalesPanel::default();
+                    trades.combine_fills = panel == "tape_combined";
                     trades.config.price_decimals = Some(2);
                     trades.push(Tick::new(
                         "2026-10-23T12:34:55Z".parse().unwrap(),
@@ -126,6 +190,14 @@ mod tests {
                         123456.0,
                         Some(OrderSide::Buy),
                     ));
+                    if trades.combine_fills {
+                        trades.push(Tick::new(
+                            "2026-10-23T12:34:56Z".parse().unwrap(),
+                            123456789.12,
+                            0.0,
+                            Some(OrderSide::Buy),
+                        ));
+                    }
                     trades.filters = vec![
                         TradeSizeFilter {
                             min_size: 1.0,
@@ -223,13 +295,14 @@ mod tests {
                         .filter(|(text, _)| {
                             if tape {
                                 matches!(text.as_str(), "12:34:56" | "123456789.12" | "123.46K")
+                                    || (panel == "tape_combined" && text == "2")
                             } else {
                                 [symbol, "123,456.789", "+23,456.789", "+23.46%"]
                                     .contains(&text.as_str())
                             }
                         })
                         .collect();
-                    assert_eq!(row.len(), if tape { 3 } else { 4 }, "{texts:?}");
+                    assert_eq!(row.len(), if panel == "tape" { 3 } else { 4 }, "{texts:?}");
                     // The last match, so a symbol's name wins over its mark's initial.
                     let bounds = |label: &str| {
                         texts
@@ -264,6 +337,45 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
+        for (value, decimals, price, change) in [
+            (43237.45, 2, "43,237.45", "+43,237.45"),
+            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
+            (863.83, 2, "863.83", "+863.83"),
+            (100000.5, 1, "100,000.5", "+100,000.5"),
+            (0.000123, 6, "0.000123", "+0.000123"),
+            (-0.0, 2, "0.00", "0.00"),
+            (-0.001, 2, "0.00", "0.00"),
+            (0.001, 2, "0.00", "0.00"),
+            (f64::INFINITY, 2, "-", "-"),
+            (f64::NAN, 2, "-", "-"),
+        ] {
+            assert_eq!(grouped(value, decimals), price);
+            assert_eq!(signed(value, decimals), change);
+        }
+    }
+
+    #[test]
+    fn test_format_price() {
+        assert_eq!(format_price(0.0, None), "0.00000000");
+        assert_eq!(format_price(f64::NAN, Some(2)), "\u{2014}");
+        assert_eq!(format_price(50000.0, None), "50000");
+        assert_eq!(format_price(1234.5, None), "1234.5");
+        assert_eq!(format_price(99.99, None), "99.99");
+        assert_eq!(format_price(1.2345, None), "1.2345");
+        assert_eq!(format_price(0.001234, None), "0.001234");
+        assert_eq!(format_price(-37.63, None), "-37.63");
+        for (price, decimals, expected) in [
+            (50000.25, 2, "50000.25"),
+            (-37.625, 3, "-37.625"),
+            (0.0, 2, "0.00"),
+            (1.2345, 4, "1.2345"),
+        ] {
+            assert_eq!(format_price(price, Some(decimals)), expected);
         }
     }
 }

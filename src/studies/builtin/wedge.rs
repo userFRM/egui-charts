@@ -131,9 +131,9 @@ impl<const RISING: bool> Wedge<RISING> {
                 rows: Vec::new(),
             },
             colors: if RISING {
-                [palette::RED, palette::GREEN, palette::RED]
+                [palette::GREEN, palette::GREEN, palette::RED]
             } else {
-                [palette::RED, palette::GREEN, palette::GREEN]
+                [palette::RED, palette::RED, palette::GREEN]
             },
             visible: true,
         }
@@ -313,8 +313,8 @@ impl<const RISING: bool> Indicator for Wedge<RISING> {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line],
-            width: 1.0,
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
+            width: if line < 2 { 2.0 } else { 1.0 },
             pattern: crate::model::LineStyle::Solid,
             plot_type: match line {
                 0 | 1 => crate::studies::PlotType::Line,

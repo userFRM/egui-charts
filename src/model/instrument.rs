@@ -1,7 +1,7 @@
 //! Instrument metadata reported by a feed or a search service.
 
 use super::{Timeframe, TimezoneId};
-use chrono::{NaiveDate, NaiveTime, Weekday};
+use chrono::{NaiveDate, NaiveTime, TimeDelta, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// Symbol type categories for instrument classification.
@@ -66,6 +66,53 @@ impl std::fmt::Display for SymbolType {
     }
 }
 
+/// An optional service of a [`Datafeed`](crate::data::Datafeed), listed in
+/// [`FeedCapabilities::services`](crate::data::FeedCapabilities::services) and [`Instrument::services`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FeedService {
+    /// [`Datafeed::trades`](crate::data::Datafeed::trades).
+    Trades,
+    /// [`Datafeed::depth_history`](crate::data::Datafeed::depth_history).
+    DepthHistory,
+    /// [`Datafeed::options_volume`](crate::data::Datafeed::options_volume).
+    OptionsVolume,
+    /// [`Datafeed::option_expiries`](crate::data::Datafeed::option_expiries) and
+    /// [`Datafeed::option_chain`](crate::data::Datafeed::option_chain).
+    OptionChain,
+    /// [`Datafeed::option_exposure`](crate::data::Datafeed::option_exposure).
+    OptionExposure,
+    /// [`Datafeed::metrics`](crate::data::Datafeed::metrics) and
+    /// [`Datafeed::metric_history`](crate::data::Datafeed::metric_history).
+    Metrics,
+    /// [`Datafeed::price_targets`](crate::data::Datafeed::price_targets).
+    PriceTargets,
+    /// [`Datafeed::financials`](crate::data::Datafeed::financials).
+    Financials,
+    /// [`Datafeed::symbol_details`](crate::data::Datafeed::symbol_details).
+    SymbolDetails,
+    /// [`Datafeed::news`](crate::data::Datafeed::news).
+    News,
+    /// [`Datafeed::calendar`](crate::data::Datafeed::calendar).
+    Calendar,
+    /// [`Datafeed::screen`](crate::data::Datafeed::screen).
+    Screener,
+    /// [`Datafeed::hotlist`](crate::data::Datafeed::hotlist).
+    Hotlist,
+    /// Live executions through [`Sink::push_tick`](crate::data::Sink::push_tick).
+    LiveTrades,
+    /// Aggressor classification in [`Tick::side`](super::Tick::side) of supplied executions.
+    TradeSides,
+    /// Best bid and ask through [`Sink::push_quote`](crate::data::Sink::push_quote).
+    BestBidAsk,
+    /// Price-level depth through [`Sink::push_depth_snapshot`](crate::data::Sink::push_depth_snapshot)
+    /// and [`Sink::push_depth_delta`](crate::data::Sink::push_depth_delta).
+    Depth,
+    /// Individual resting orders through [`Sink::push_order_snapshot`](crate::data::Sink::push_order_snapshot)
+    /// and [`Sink::push_order_event`](crate::data::Sink::push_order_event).
+    OrderDepth,
+}
+
 /// What a feed or a search service reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
 /// fields left out stay unknown.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,17 +124,23 @@ pub struct Instrument {
     pub description: Option<String>,
     /// Exchange or venue, such as "NASDAQ".
     pub exchange: Option<String>,
-    /// URI of the symbol's mark, such as a company logo, for egui's installed image loaders.
-    /// Symbol choosers show the symbol's initial while it is unknown, loading or unreadable.
+    /// URI of the symbol's logo for egui's installed image loaders; supply a square image. The
+    /// legend and symbol choosers draw it in a circle, and the symbol's first letter or digit
+    /// while it is unknown, loading or unreadable. A prefixed symbol such as `VENUE:ABC` shows V.
     pub logo: Option<String>,
     /// URI of the exchange's mark, for egui's installed image loaders. Symbol search shows the
     /// exchange name alone while it is unknown, loading or unreadable.
     pub exchange_logo: Option<String>,
     /// Country of the listing, as an ISO 3166-1 alpha-2 code such as "US".
     pub country: Option<String>,
+    /// Company sector reported by the host, such as "Technology".
+    pub sector: Option<String>,
+    /// Data provider for this listing; independent of its exchange. Keep the feed lookup key in
+    /// [`symbol`](Self::symbol), using distinct keys when the provider changes the feed request.
+    pub source: Option<String>,
     /// Root shared by related instruments, such as "ES" for the contracts of a futures root or
     /// one security listed on several exchanges. Symbol search lists the first instrument of a
-    /// root and offers the others under it.
+    /// root and offers the others under it, keeping the futures of each exchange apart.
     pub root: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
@@ -99,7 +152,9 @@ pub struct Instrument {
     pub price_decimals: Option<u8>,
     /// Decimals of volume readouts, including abbreviated K/M/B values.
     pub volume_decimals: Option<u8>,
-    /// Currency of prices, such as "USD".
+    /// Currency of prices, such as "USD". A code that mixes upper and lower case names a minor
+    /// unit and matches only itself, such as "GBp" for pence against "GBP"; other codes match
+    /// regardless of case.
     pub currency: Option<String>,
     /// Host-supplied price unit, such as "USD/barrel"; no conversion is performed.
     pub unit: Option<String>,
@@ -115,8 +170,22 @@ pub struct Instrument {
     /// interval. Pass the list to `ui::top_toolbar::TimeframeSelector::set_supported_timeframes`
     /// so that the interval picker offers only these.
     pub supported_timeframes: Option<Vec<Timeframe>>,
+    /// Optional services supplied for this symbol, narrowing the feed's
+    /// [`services`](crate::data::FeedCapabilities::services). `None` defers to the feed's list;
+    /// an empty list supplies none. Use [`FeedCapabilities::declares`](crate::data::FeedCapabilities::declares)
+    /// to require explicit confirmation from either list while respecting both.
+    pub services: Option<Vec<FeedService>>,
     /// How current the feed's data is. The legend marks delayed and end-of-day data.
     pub data_status: Option<DataStatus>,
+    /// Whether the feed supplies dividend-adjusted history when
+    /// [`HistoryRequest::adjusted`](crate::data::HistoryRequest::adjusted) is set.
+    pub dividend_adjustment: bool,
+    /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
+    /// length. A study whose source follows the chart, or a fixed range or anchored drawing
+    /// without executions, reads the shortest suggested interval shorter than the chart's that
+    /// serves its length. Empty, the default, suggests none; profiles then spread each chart
+    /// bar's volume over its range.
+    pub profile_resolutions: Vec<ProfileResolution>,
 }
 
 impl Instrument {
@@ -129,6 +198,8 @@ impl Instrument {
             logo: None,
             exchange_logo: None,
             country: None,
+            sector: None,
+            source: None,
             root: None,
             symbol_type: None,
             tick_size: None,
@@ -141,8 +212,26 @@ impl Instrument {
             session: None,
             native_timeframes: None,
             supported_timeframes: None,
+            services: None,
             data_status: None,
+            dividend_adjustment: false,
+            profile_resolutions: Vec::new(),
         }
+    }
+
+    /// Futures roots belong to a venue; other roots gather listings across venues and providers.
+    pub(crate) fn search_group(&self) -> Option<(&str, Option<SymbolType>, Option<&str>)> {
+        Some((
+            self.root.as_deref()?,
+            self.symbol_type,
+            if self.symbol_type == Some(SymbolType::Futures) {
+                self.exchange
+                    .as_deref()
+                    .or_else(|| self.symbol.split_once(':').map(|(venue, _)| venue))
+            } else {
+                None
+            },
+        ))
     }
 
     /// Sets [`description`](Self::description).
@@ -178,6 +267,18 @@ impl Instrument {
     /// Sets [`country`](Self::country).
     pub fn with_country(mut self, country: impl Into<String>) -> Self {
         self.country = Some(country.into());
+        self
+    }
+
+    /// Sets [`sector`](Self::sector).
+    pub fn with_sector(mut self, sector: impl Into<String>) -> Self {
+        self.sector = Some(sector.into());
+        self
+    }
+
+    /// Sets [`source`](Self::source).
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
         self
     }
 
@@ -253,10 +354,87 @@ impl Instrument {
         self
     }
 
+    /// Sets [`services`](Self::services).
+    pub fn with_services(mut self, services: impl IntoIterator<Item = FeedService>) -> Self {
+        self.services = Some(services.into_iter().collect());
+        self
+    }
+
+    /// Sets [`dividend_adjustment`](Self::dividend_adjustment).
+    pub fn with_dividend_adjustment(mut self, adjustment: bool) -> Self {
+        self.dividend_adjustment = adjustment;
+        self
+    }
+
     /// Sets [`data_status`](Self::data_status).
     pub fn with_data_status(mut self, status: DataStatus) -> Self {
         self.data_status = Some(status);
         self
+    }
+
+    /// Sets [`profile_resolutions`](Self::profile_resolutions).
+    pub fn with_profile_resolutions(
+        mut self,
+        resolutions: impl IntoIterator<Item = ProfileResolution>,
+    ) -> Self {
+        self.profile_resolutions = resolutions.into_iter().collect();
+        self
+    }
+}
+
+/// Whether two currency codes name the same currency. A code that mixes upper and lower case
+/// names a minor unit, such as `GBp` for pence, and matches only itself; other codes match
+/// regardless of ASCII case, so `gbp` is `GBP`.
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) fn same_currency(a: &str, b: &str) -> bool {
+    let mixed = |code: &str| {
+        code.bytes().any(|c| c.is_ascii_lowercase()) && code.bytes().any(|c| c.is_ascii_uppercase())
+    };
+    if mixed(a) || mixed(b) {
+        a == b
+    } else {
+        a.eq_ignore_ascii_case(b)
+    }
+}
+
+/// A bar interval a feed suggests for volume profile studies and drawings, for profiles up to a length.
+/// Report them in [`Instrument::profile_resolutions`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ProfileResolution {
+    /// Interval of the bars whose volume the profile distributes.
+    pub timeframe: Timeframe,
+    /// The longest profile this interval serves, from the open of the profile's first chart
+    /// bar to the close of its last. `None` serves profiles of any length.
+    pub max_span: Option<TimeDelta>,
+}
+
+impl ProfileResolution {
+    /// Suggests `timeframe` for profiles up to `max_span` long, or of any length for `None`.
+    pub fn new(timeframe: Timeframe, max_span: Option<TimeDelta>) -> Self {
+        Self {
+            timeframe,
+            max_span,
+        }
+    }
+
+    /// The shortest time interval shorter than `interval` that serves `span`, from the open of
+    /// the profile's first bar to the close of its last.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(crate) fn suggested(
+        resolutions: &[Self],
+        interval: Timeframe,
+        span: TimeDelta,
+    ) -> Option<Timeframe> {
+        resolutions
+            .iter()
+            .filter(|hint| {
+                !hint.timeframe.is_trade_based()
+                    && hint.timeframe.duration_ms() < interval.duration_ms()
+                    && hint.max_span.is_none_or(|max| span <= max)
+            })
+            .min_by_key(|hint| hint.timeframe.duration_ms())
+            .map(|hint| hint.timeframe)
     }
 }
 
@@ -273,7 +451,7 @@ pub enum DataStatus {
 }
 
 /// Trading hours: the windows in which an instrument trades.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Session {
     /// Regular windows. With no regular or extended windows, the session is always open, apart
@@ -330,7 +508,7 @@ impl Session {
 }
 
 /// The hours of one trading date, in place of its weekly windows and holiday.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SessionOverride {
     /// The trading date, named by the day on which the windows close, as in
@@ -371,7 +549,7 @@ impl SessionOverride {
 }
 
 /// One window of a [`SessionOverride`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct OverrideWindow {
     /// Exchange time.
@@ -388,7 +566,7 @@ impl OverrideWindow {
 }
 
 /// One trading window, repeated on each of `days`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SessionWindow {
     /// Trading days, named by the day on which the window closes.

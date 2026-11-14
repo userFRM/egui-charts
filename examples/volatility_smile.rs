@@ -6,6 +6,7 @@
 //!
 //! The horizontal axis is a [`PriceHorizontalScale`]: each bar's time holds a strike encoded with
 //! [`key_time`], so the axis, the crosshair, the marker and the price line all work by strike.
+//! Irregular strike gaps retain their numeric proportions without placeholder rows.
 //! The volatilities are generated sample data, not market data.
 
 use egui_charts::ChartType;
@@ -75,9 +76,10 @@ impl VolatilitySmile {
     }
 }
 
-/// One value per strike from 3,800 to 5,200 in steps of 25, for an expiry `days` away.
+/// Strikes from 3,800 to 5,200, 25 apart near the forward and 100 apart in the wings.
 fn smile(days: f64) -> Vec<Bar> {
     (0..=56)
+        .filter(|step| (16..=40).contains(step) || step % 4 == 0)
         .map(|step| 3800.0 + 25.0 * f64::from(step))
         .filter_map(|strike| {
             Some(Bar::from_value(

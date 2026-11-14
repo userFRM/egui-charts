@@ -2,13 +2,53 @@
 
 use egui::Ui;
 
+use crate::drawings::FolderSync;
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::{IconButton, buttons::ButtonSize};
 
 use super::item_row::render_item_row;
 use super::source_tree::matches_filter;
 use super::{ObjectTreeAction, ObjectTreeConfig, ObjectTreeState, SourceItem, SourceType};
+
+/// The drag payload of a folder row: the folder's path.
+struct FolderDrag(Vec<String>);
+
+/// The outermost folders whose drawings are all selected, leaving out those that contain
+/// `target`, which stay; their fully selected subfolders are taken instead.
+pub(super) fn selected_folders(
+    state: &ObjectTreeState,
+    sources: &[SourceItem],
+    target: &[String],
+) -> Vec<Vec<String>> {
+    let mut selected: Vec<Vec<String>> = Vec::new();
+    // Tree order puts a folder ahead of its descendants.
+    for path in &state.folders {
+        if target.starts_with(path) || selected.iter().any(|outer| path.starts_with(outer)) {
+            continue;
+        }
+        let mut members = sources
+            .iter()
+            .filter(|s| s.is_drawing() && s.folder.starts_with(path))
+            .peekable();
+        if members.peek().is_some() && members.all(|s| state.is_selected(s.id)) {
+            selected.push(path.clone());
+        }
+    }
+    selected
+}
+
+/// The folders `path` can move under: not itself, a descendant or its current parent.
+fn move_targets<'a>(
+    state: &'a ObjectTreeState,
+    path: &'a [String],
+) -> impl Iterator<Item = &'a Vec<String>> {
+    state.folders.iter().filter(move |candidate| {
+        !candidate.starts_with(path) && candidate.as_slice() != &path[..path.len() - 1]
+    })
+}
 
 pub(super) fn matches_folder_filter(
     path: &[String],
@@ -63,8 +103,15 @@ pub(super) fn render_folders(
             .collect();
         let visible = members.iter().any(|s| s.visible);
         let locked = !members.is_empty() && members.iter().all(|s| s.locked);
+        let selected = !members.is_empty() && members.iter().all(|s| state.is_selected(s.id));
+        let sync = members.first().and_then(|s| s.folder_sync);
+        let can_group = sources
+            .iter()
+            .any(|s| s.is_drawing() && state.is_selected(s.id));
         ui.push_id(&path, |ui| {
-            ui.horizontal(|ui| {
+            let background = ui.painter().add(egui::Shape::Noop);
+            let mut highlight = None;
+            let row = ui.horizontal(|ui| {
                 ui.add_space(
                     ((path.len() - 1) as f32 * config.indent_width)
                         .min((ui.available_width() - 120.0).max(0.0)),
@@ -91,23 +138,103 @@ pub(super) fn render_folders(
                         |ui| {
                             ui.set_min_size(label_size);
                             ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(path.last().unwrap()).strong(),
-                                )
-                                .sense(egui::Sense::click())
+                                egui::Label::new({
+                                    let name = egui::RichText::new(path.last().unwrap()).strong();
+                                    if selected {
+                                        name.color(ui.visuals().selection.stroke.color)
+                                    } else {
+                                        name
+                                    }
+                                })
+                                .sense(if config.enable_drag_drop {
+                                    egui::Sense::click_and_drag()
+                                } else {
+                                    egui::Sense::click()
+                                })
+                                .selectable(false)
                                 .truncate(),
                             )
                         },
                     )
                     .inner;
                 label.clone().on_hover_text(path.join(" / "));
+                if label.clicked() {
+                    action = if ui.input(|i| i.modifiers.ctrl) && config.enable_multi_select {
+                        ObjectTreeAction::AddFolderToSelection(path.clone())
+                    } else {
+                        ObjectTreeAction::SelectFolder(path.clone())
+                    };
+                }
+                if config.enable_drag_drop {
+                    label.dnd_set_drag_payload(FolderDrag(path.clone()));
+                    let dragged = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx());
+                    if dragged.as_ref().is_some_and(|drag| drag.0 == path) {
+                        highlight = Some(ui.visuals().widgets.noninteractive.fg_stroke.color);
+                    } else if dragged.as_ref().is_some_and(|drag| {
+                        move_targets(state, &drag.0).any(|target| *target == path)
+                    }) && label.contains_pointer()
+                    {
+                        highlight = Some(ui.active_theme().ui.accent);
+                    }
+                    if let Some(drag) = label.dnd_release_payload::<FolderDrag>()
+                        && move_targets(state, &drag.0).any(|target| *target == path)
+                    {
+                        action = ObjectTreeAction::MoveFolder(drag.0.clone(), path.clone());
+                    }
+                }
                 if config.enable_context_menu {
                     label.context_menu(|ui| {
                         if ui
-                            .button(l10n::text(ui.ctx(), "New subfolder with selected drawings"))
+                            .add_enabled(
+                                can_group,
+                                egui::Button::new(l10n::text(
+                                    ui.ctx(),
+                                    "New subfolder with selected drawings",
+                                )),
+                            )
                             .clicked()
                         {
                             state.creating_folder = Some(path.clone());
+                            ui.close();
+                        }
+                        ui.menu_button(l10n::text(ui.ctx(), "Move to folder"), |ui| {
+                            let root = (path.len() > 1).then(Vec::new);
+                            let targets: Vec<_> = root
+                                .into_iter()
+                                .chain(move_targets(state, &path).cloned())
+                                .collect();
+                            for target in targets {
+                                let title = if target.is_empty() {
+                                    l10n::text(ui.ctx(), "Root")
+                                } else {
+                                    target.join(" / ")
+                                };
+                                if ui.button(title).clicked() {
+                                    action = ObjectTreeAction::MoveFolder(path.clone(), target);
+                                    ui.close();
+                                }
+                            }
+                        });
+                        ui.separator();
+                        // A nested folder shows the mode of its top-level folder, which it follows.
+                        ui.add_enabled_ui(path.len() == 1, |ui| {
+                            for (mode, title) in [
+                                (None, "Follow layout setting"),
+                                (Some(FolderSync::Chart), "This chart only"),
+                                (Some(FolderSync::Layout), "All charts in layout"),
+                            ] {
+                                if ui
+                                    .selectable_label(sync == mode, l10n::text(ui.ctx(), title))
+                                    .clicked()
+                                {
+                                    action = ObjectTreeAction::SetFolderSync(path.clone(), mode);
+                                    ui.close();
+                                }
+                            }
+                        });
+                        ui.separator();
+                        if ui.button(l10n::text(ui.ctx(), "Delete folder")).clicked() {
+                            action = ObjectTreeAction::DeleteFolder(path.clone());
                             ui.close();
                         }
                     });
@@ -146,6 +273,22 @@ pub(super) fn render_folders(
                     }
                 });
             });
+            let mut rect = row.response.rect;
+            rect.set_right(ui.max_rect().right());
+            if selected {
+                ui.painter().set(
+                    background,
+                    egui::Shape::rect_filled(rect, 0.0, ui.visuals().selection.bg_fill),
+                );
+            }
+            if let Some(color) = highlight {
+                ui.painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, color),
+                    egui::StrokeKind::Inside,
+                );
+            }
         });
         if collapsed {
             continue;
@@ -160,6 +303,38 @@ pub(super) fn render_folders(
                     action = next;
                 }
             }
+        }
+    }
+    // Dropped here, a nested folder leaves its parents.
+    if let Some(drag) = egui::DragAndDrop::payload::<FolderDrag>(ui.ctx())
+        && drag.0.len() > 1
+    {
+        let (rect, zone) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), config.row_height),
+            egui::Sense::hover(),
+        );
+        let title = l10n::text(ui.ctx(), "Move to root");
+        zone.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &title));
+        let color = if zone.contains_pointer() {
+            ui.active_theme().ui.accent
+        } else {
+            ui.visuals().widgets.noninteractive.fg_stroke.color
+        };
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, color),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            title,
+            egui::FontId::proportional(ui.active_theme().text.label),
+            color,
+        );
+        if zone.dnd_release_payload::<FolderDrag>().is_some() {
+            action = ObjectTreeAction::MoveFolder(drag.0.clone(), Vec::new());
         }
     }
     action

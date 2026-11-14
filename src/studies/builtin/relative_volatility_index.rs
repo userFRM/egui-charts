@@ -44,6 +44,7 @@ pub struct RelativeVolatilityIndex {
     values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
+    fill_color: Color32,
     visible: bool,
 }
 
@@ -61,7 +62,8 @@ impl RelativeVolatilityIndex {
             length: length.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::DEEP_PURPLE,
+            color: palette::PURPLE,
+            fill_color: palette::PURPLE.gamma_multiply_u8(26),
             visible: true,
         }
     }
@@ -74,6 +76,10 @@ impl Default for RelativeVolatilityIndex {
 }
 
 impl Indicator for RelativeVolatilityIndex {
+    fn level_fill_color(&self) -> Color32 {
+        self.fill_color
+    }
+
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
             crate::model::PriceSource::Close,
@@ -146,12 +152,15 @@ impl Indicator for RelativeVolatilityIndex {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        vec![self.color, self.fill_color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if let Some(&color) = colors.first() {
             self.color = color;
+            self.fill_color = colors.get(1).copied().unwrap_or_else(|| {
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
+            });
         }
     }
 
@@ -162,7 +171,7 @@ impl Indicator for RelativeVolatilityIndex {
             range: Some((0.0, 100.0)),
             levels: vec![
                 (80.0, gray, "Upper Band"),
-                (50.0, gray, "Middle Band"),
+                (50.0, gray.gamma_multiply_u8(128), "Middle Band"),
                 (20.0, gray, "Lower Band"),
             ],
             fill_between_levels: true,

@@ -70,7 +70,7 @@ impl Default for TimezoneId {
 }
 
 impl FromStr for TimezoneId {
-    type Err = &'static str;
+    type Err = super::ParseError;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         if name == "UTC" {
@@ -95,10 +95,14 @@ impl FromStr for TimezoneId {
                 if hours < 24 && minutes < 60 && seconds < 60 {
                     let offset = hours * 3600 + minutes * 60 + seconds;
                     return Self::fixed_offset(if bytes[0] == b'-' { -offset } else { offset })
-                        .ok_or("Invalid fixed time zone offset");
+                        .ok_or_else(|| super::ParseError::new("time zone", name, "a fixed offset reads +HH:MM or -HH:MM, optionally with :SS, below 24 hours"));
                 }
             }
-            return Err("Invalid fixed time zone offset");
+            return Err(super::ParseError::new(
+                "time zone",
+                name,
+                "a fixed offset reads +HH:MM or -HH:MM, optionally with :SS, below 24 hours",
+            ));
         }
         #[cfg(feature = "timezones")]
         if let Ok(zone) = name.parse::<chrono_tz::Tz>() {
@@ -107,7 +111,15 @@ impl FromStr for TimezoneId {
                 zone: Zone::Named(zone),
             });
         }
-        Err("Unknown time zone or timezones feature disabled")
+        Err(super::ParseError::new(
+            "time zone",
+            name,
+            if cfg!(feature = "timezones") {
+                "unknown IANA time zone"
+            } else {
+                "named time zones need the timezones feature"
+            },
+        ))
     }
 }
 

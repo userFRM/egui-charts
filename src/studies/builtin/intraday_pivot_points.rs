@@ -13,7 +13,8 @@
 //! # Output
 //!
 //! Eleven lines, `[P, R1, S1, R2, S2, R3, S3, R4, S4, R5, S5]`, constant within a block. A line is
-//! not drawn across the change from one block to the next. Overlay indicator. The default is
+//! not drawn across the change from one block to the next. Each level is labelled with its name,
+//! and optionally its price, at its left or right end. Overlay indicator. The default is
 //! Traditional pivots from 60-minute blocks.
 //!
 //! # Example
@@ -40,10 +41,12 @@
 //! ```
 
 use super::anchor_period::ExchangeDays;
-use super::pivot_points::{PivotMethod, PivotPoints};
+use super::pivot_points::{
+    LevelLabels, PivotLabelSide, PivotMethod, PivotPoints, refresh_level_labels,
+};
 use crate::model::{Bar, Instrument};
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyLabel};
 use chrono::{DateTime, NaiveDate, Utc};
 use egui::Color32;
 
@@ -58,6 +61,13 @@ pub struct IntradayPivotPoints {
     /// One per line: P, then R1, S1 through R5, S5.
     colors: Vec<Color32>,
     visible: bool,
+    show_labels: bool,
+    show_prices: bool,
+    label_side: PivotLabelSide,
+    /// The instrument's decimals and those of the study's presentation settings.
+    precision: Option<usize>,
+    label_precision: Option<usize>,
+    labels: Vec<StudyLabel>,
 }
 
 #[derive(Clone)]
@@ -92,12 +102,32 @@ impl IntradayPivotPoints {
             stepper: Stepper::default(),
             colors: PivotPoints::new().colors(),
             visible: true,
+            show_labels: true,
+            show_prices: false,
+            label_side: PivotLabelSide::Left,
+            precision: None,
+            label_precision: None,
+            labels: Vec::new(),
         }
     }
 
     /// The level formulas.
     pub fn with_method(mut self, method: PivotMethod) -> Self {
         self.method = method;
+        self
+    }
+
+    /// Whether each level is labelled with its name (P, R1, S1 and so on) and with its price.
+    /// Names only by default.
+    pub fn with_labels(mut self, names: bool, prices: bool) -> Self {
+        self.show_labels = names;
+        self.show_prices = prices;
+        self
+    }
+
+    /// The end of each level its label sits at; the left end by default.
+    pub fn with_label_side(mut self, side: PivotLabelSide) -> Self {
+        self.label_side = side;
         self
     }
 }
@@ -112,7 +142,10 @@ impl Default for IntradayPivotPoints {
 impl Indicator for IntradayPivotPoints {
     crate::studies::inputs::study_inputs!(self;
         method: choice("Type", [PivotMethod::Traditional, PivotMethod::Fibonacci, PivotMethod::Woodie, PivotMethod::Classic, PivotMethod::DM, PivotMethod::Camarilla]),
-        minutes: length("Source period (minutes)", 1, 1440)
+        minutes: length("Source period (minutes)", 1, 1440),
+        show_labels: toggle("Show Labels"),
+        show_prices: toggle("Show Prices"),
+        label_side: choice("Labels Position", [PivotLabelSide::Left, PivotLabelSide::Right])
     ; {});
 
     fn name(&self) -> &str {
@@ -166,6 +199,13 @@ impl Indicator for IntradayPivotPoints {
                 }
                 IndicatorValue::Multiple(state.levels.to_vec())
             });
+        let options = LevelLabels {
+            names: self.show_labels,
+            prices: self.show_prices,
+            side: self.label_side,
+            precision: self.label_precision.or(self.precision),
+        };
+        refresh_level_labels(&mut self.labels, &self.values, from, options);
     }
 
     fn is_incremental(&self) -> bool {
@@ -173,7 +213,20 @@ impl Indicator for IntradayPivotPoints {
     }
 
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-        self.days.set(instrument)
+        let precision = instrument
+            .and_then(crate::scales::instrument_price_precision)
+            .map(usize::from);
+        let changed = precision != self.precision;
+        self.precision = precision;
+        self.days.set(instrument) | changed
+    }
+
+    fn labels(&self) -> &[StudyLabel] {
+        &self.labels
+    }
+
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.label_precision = precision;
     }
 
     /// Transparent on the first bar of a block, so the change of level is not drawn.

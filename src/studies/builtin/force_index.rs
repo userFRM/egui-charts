@@ -1,6 +1,5 @@
 use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -25,7 +24,7 @@ impl ForceIndex {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::UP, // Teal
+            color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }

@@ -3,19 +3,19 @@ title: Historical and streaming data
 ---
 
 Choose the simplest path that fits your source: supply bars directly, or attach a
-`Datafeed` for asynchronous history and live subscriptions. The host owns credentials,
+[`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) for asynchronous history and live subscriptions. The host owns credentials,
 connections, retries and data acquisition.
 
 ## Bars already in memory
 
-Create a `Chart` from `BarData`. Replace history with `set_data`, or send forming
-bars through `update`. The [first chart](first-chart.mdx#replace-history-or-update-the-last-bar)
+Create a [`Chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html) from [`BarData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarData.html). Replace history with [`set_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data), or send forming
+bars through [`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update). The [first chart](first-chart.mdx#replace-history-or-update-the-last-bar)
 shows both. Keep timestamps ordered and give a forming bar the same opening time
 on each update.
 
 ## Page history through a feed
 
-Only `Datafeed::history` is required. This in-memory adapter returns the newest
+Only [`Datafeed::history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#tymethod.history) is required. This in-memory adapter returns the newest
 requested bars strictly before the request boundary, in chronological order:
 
 ```rust
@@ -35,30 +35,30 @@ impl Datafeed for InMemory {
 }
 ```
 
-Pass an `Arc` of your feed to `ChartBuilder::with_feed`. The chart calls feed
-methods from `show` on the UI thread. Return promptly; a worker or browser task
-can answer `Reply` later. Set `end_of_history` only when no earlier page remains.
+Pass an `Arc` of your feed to [`ChartBuilder::with_feed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartBuilder.html#method.with_feed). The chart calls feed
+methods from [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show) on the UI thread. Return promptly; a worker or browser task
+can answer [`Reply`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Reply.html) later. Set [`end_of_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryPage.html#structfield.end_of_history) only when no earlier page remains.
 The chart asks for older pages as the viewport reaches the start of loaded history.
-A request covers `[since, before)`: `since` is inclusive and set when the chart needs
-bars back to a time it does not hold, `before` is exclusive. A window with no bars,
-such as a weekend, answers `HistoryPage::with_continue_before` to say where older
+A request covers `[since, before)`: [`since`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryRequest.html#structfield.since) is inclusive and set when the chart needs
+bars back to a time it does not hold, [`before`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryRequest.html#structfield.before) is exclusive. A window with no bars,
+such as a weekend, answers [`HistoryPage::with_continue_before`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryPage.html#method.with_continue_before) to say where older
 bars continue; an empty page without it ends history. Trade and depth pages work the same way.
 
 ## Stream through the subscription sink
 
-Implement `subscribe` and retain its `Subscription::sink` in your producer. Push
-forming bars with `push_bar`, or executions with `push_tick` to build bars using
+Implement [`subscribe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.subscribe) and retain its [`Subscription::sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Subscription.html#structfield.sink) in your producer. Push
+forming bars with [`push_bar`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_bar), or executions with [`push_tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_tick) to build bars using
 the selected interval. The sink wakes the chart when data arrives. For execution
 history and book data, continue with [order flow](../../../../order-flow.md).
 
-Stop producing when `Sink::is_active` becomes false. Symbol and interval changes
-end the old subscription. Implement `unsubscribe` when your backend needs explicit
+Stop producing when [`Sink::is_active`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.is_active) becomes false. Symbol and interval changes
+end the old subscription. Implement [`unsubscribe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.unsubscribe) when your backend needs explicit
 cleanup. Never wait for a worker that may be waking the chart from inside
-`unsubscribe`: dropping a chart may happen while an egui context lock is held.
+[`unsubscribe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.unsubscribe): dropping a chart may happen while an egui context lock is held.
 
 ## Surface failures in your application
 
-Read `Chart::feed_state` for loading, failures and rejected updates. Feed methods
+Read [`Chart::feed_state`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.feed_state) for loading, failures and rejected updates. Feed methods
 return failures through the reply rather than blocking a frame. Your host decides
 how to retry or present a disconnected source.
 

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-example-state="loading">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>egui-charts | Guide example</title>
+    <style>
+        :root { color-scheme: light; background: #fff; color: #485463; }
+        :root[data-theme="dark"] { color-scheme: dark; background: #000; color: #b4becb; }
+        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+        canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; }
+        canvas:focus-visible { outline: 2px solid #2962ff !important; outline-offset: -2px; }
+        #loading { position: absolute; inset: 0; display: grid; place-content: center; padding: 1rem; font: 1rem system-ui; }
+        :root[data-example-state="ready"] #loading { display: none; }
+    </style>
+    <script>
+        const root = document.documentElement;
+        const params = new URLSearchParams(location.search);
+        root.dataset.scene = params.get('scene') ?? 'first-chart';
+        const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+        const requestedTheme = params.get('theme');
+        const fixedTheme = ['light', 'dark'].includes(requestedTheme) ? requestedTheme : null;
+        const syncTheme = () => { root.dataset.theme = fixedTheme ?? (systemTheme.matches ? 'dark' : 'light'); };
+        syncTheme();
+        if (!fixedTheme) systemTheme.addEventListener('change', syncTheme);
+        // Let Tab leave the chart instead of entering eframe's internal focus cycle.
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Tab') event.stopImmediatePropagation();
+        }, true);
+        const failed = () => {
+            root.dataset.exampleState = 'error';
+            document.getElementById('loading').textContent = 'The example could not load. Read the chart setup in the guide.';
+        };
+        addEventListener('error', failed);
+        addEventListener('unhandledrejection', failed);
+    </script>
+</head>
+<body>
+    <p id="loading" role="status">Loading chart example…</p>
+    <canvas id="example_canvas" tabindex="0" aria-label="Sample candlestick chart. Drag to pan, scroll to zoom, Tab to leave."></canvas>
+    <link data-trunk rel="rust" data-cargo-profile-release="wasm-release" data-wasm-opt="z" data-integrity="none">
+    <link data-trunk rel="copy-file" href="../demo/LICENSE-fonts.txt">
+</body>
+</html>

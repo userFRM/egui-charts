@@ -1,7 +1,8 @@
 //! Reusable drawing properties without geometry or record identity.
 
 /// Drawing properties without anchors or record identity. Apply to an existing drawing of the
-/// same type; its coordinates, name, notes, layer and persistence identity stay intact.
+/// same type; its coordinates, closed outline, name, notes, layer, post link and persistence identity
+/// stay intact.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct DrawingTemplate {
@@ -18,13 +19,16 @@ impl DrawingTemplate {
         settings.created_at = None;
         settings.notes = None;
         settings.label = None;
+        settings.post = None;
         settings.points.clear();
         settings.chart_points.clear();
         settings.level_ys.clear();
         settings.screen_anchor = None;
+        settings.text_zoom_spacing = None;
         settings.pane = None;
         settings.group = None;
         settings.folder.clear();
+        settings.folder_sync.clear();
         settings.selectable = true;
         settings.saveable = true;
         settings.listed = true;
@@ -40,10 +44,10 @@ impl DrawingTemplate {
         {
             return Err("Select a drawing of the template's type");
         }
-        if !self.settings.stroke_width.is_finite()
-            || self.settings.stroke_width <= 0.0
-            || !self.settings.font_size.is_finite()
-            || self.settings.font_size <= 0.0
+        // The checks a saved drawing passes on load, as defaults come from saved settings.
+        if crate::drawings::persistence::drawing_to_stored(&self.settings, |_| 0)
+            .invalid_field()
+            .is_some()
         {
             return Err("Invalid drawing template dimensions");
         }
@@ -53,17 +57,21 @@ impl DrawingTemplate {
             created_at: drawing.created_at,
             notes: drawing.notes.clone(),
             label: drawing.label.clone(),
+            post: drawing.post.clone(),
             points: drawing.points.clone(),
             chart_points: drawing.chart_points.clone(),
             level_ys: drawing.level_ys.clone(),
             completed: drawing.completed,
             screen_anchor: drawing.screen_anchor,
+            text_zoom_spacing: drawing.text_zoom_spacing,
             pane: drawing.pane,
             group: drawing.group.clone(),
             folder: drawing.folder.clone(),
+            folder_sync: drawing.folder_sync.clone(),
             selectable: drawing.selectable,
             saveable: drawing.saveable,
             listed: drawing.listed,
+            closed: drawing.closed,
             z_order: drawing.z_order,
             ..self.settings.clone()
         };

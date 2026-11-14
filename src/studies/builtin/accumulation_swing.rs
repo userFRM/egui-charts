@@ -35,7 +35,7 @@ impl AccumulationSwingIndex {
             limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::UP, // Teal
+            color: palette::LIGHT_BLUE, // Teal
             visible: true,
         }
     }
@@ -203,12 +203,12 @@ mod tests {
 
         assert_eq!(asi.values.len(), 3);
 
-        // In uptrend, ASI should increase
-        let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
-            (&asi.values.to_rows()[1], &asi.values.to_rows()[2])
-        else {
-            panic!("no values: {:?}", &asi.values.to_rows()[1..]);
-        };
-        assert!(v2 > v1, "ASI should increase in uptrend");
+        // Wilder SI by hand, limit 100: K=3 on both moves. R=17/4, then 9/2;
+        // numerators 13/4, then 7/2. SI=50*numerator/R*K/100 gives 39/34,
+        // then 7/6, accumulated to 118/51 after the initial zero.
+        for (bar, want) in [0.0, 39.0 / 34.0, 118.0 / 51.0].into_iter().enumerate() {
+            let got = asi.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
     }
 }

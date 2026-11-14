@@ -29,7 +29,7 @@ impl CoppockCurve {
             short_roc: 11,
             wma_period: 10,
             values: IndicatorValues::new(),
-            color: palette::PURPLE,
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }

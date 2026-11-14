@@ -32,9 +32,9 @@
 //! // Before modifying a drawing, record its old state
 //! history.push_modify(1, drawings[0].clone());
 //!
-//! // After deleting a drawing
+//! // After deleting a drawing, record the list index it was taken from
 //! let removed = drawings.remove(0);
-//! history.push_delete(removed);
+//! history.push_delete(removed, 0);
 //! assert!(history.can_undo());
 //! ```
 
@@ -43,24 +43,31 @@ use std::collections::HashSet;
 
 /// Command representing a reversible drawing operation
 #[derive(Debug, Clone)]
-pub enum DrawingCommand {
+pub(crate) enum DrawingCommand {
     /// Drawings owned by one bulk edit, including their list order.
     Snapshot {
-        /// Drawings at this side of the bulk edit, in their original list order.
-        drawings: Vec<Drawing>,
+        /// Drawings at this side of the bulk edit, in list order, each with its list index.
+        drawings: Vec<(usize, Drawing)>,
         /// Drawings owned by this edit; later host loads remain independent of it.
         ids: Vec<usize>,
     },
     /// A drawing was added
     Add(Drawing),
     /// A drawing was deleted
-    Delete(Drawing),
+    Delete {
+        /// The deleted drawing
+        drawing: Drawing,
+        /// List index the drawing was taken from, where undo puts it back
+        index: usize,
+    },
     /// Several drawing layers changed as one operation.
     Reorder {
         /// Drawing the user moved.
         id: usize,
         /// Previous layers of every affected drawing.
         layers: Vec<(usize, i32)>,
+        /// Previous edit time of the drawing the user moved.
+        modified_at: Option<i64>,
     },
     /// A drawing was modified
     Modify {
@@ -73,25 +80,24 @@ pub enum DrawingCommand {
 
 impl DrawingCommand {
     /// Get the drawing ID affected by this command
-    pub fn drawing_id(&self) -> usize {
+    pub(crate) fn drawing_id(&self) -> usize {
         match self {
             DrawingCommand::Snapshot { ids, .. } => ids.first().copied().unwrap_or(0),
-            DrawingCommand::Add(d) => d.id,
-            DrawingCommand::Delete(d) => d.id,
+            DrawingCommand::Add(d) | DrawingCommand::Delete { drawing: d, .. } => d.id,
             DrawingCommand::Modify { id, .. } | DrawingCommand::Reorder { id, .. } => *id,
         }
     }
 
     /// Shift the bar indices at or after `from` for bars inserted in front of them
-    pub fn shift_bar_indices(&mut self, from: f32, delta: f32) {
+    pub(crate) fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         match self {
             DrawingCommand::Snapshot { drawings, .. } => {
-                for drawing in drawings {
+                for (_, drawing) in drawings {
                     drawing.shift_bar_indices(from, delta);
                 }
             }
             DrawingCommand::Reorder { .. } => {}
-            DrawingCommand::Add(d) | DrawingCommand::Delete(d) => {
+            DrawingCommand::Add(d) | DrawingCommand::Delete { drawing: d, .. } => {
                 d.shift_bar_indices(from, delta);
             }
             DrawingCommand::Modify { old_state, .. } => {
@@ -118,18 +124,38 @@ impl HistoryService {
         for command in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
             match command {
                 DrawingCommand::Snapshot { drawings, .. } => {
-                    for drawing in drawings {
+                    for (_, drawing) in drawings {
                         drawing.chart_points.iter_mut().for_each(&mut *visit);
                     }
                 }
                 DrawingCommand::Add(drawing)
-                | DrawingCommand::Delete(drawing)
+                | DrawingCommand::Delete { drawing, .. }
                 | DrawingCommand::Modify {
                     old_state: drawing, ..
                 } => {
                     drawing.chart_points.iter_mut().for_each(&mut *visit);
                 }
                 DrawingCommand::Reorder { .. } => {}
+            }
+        }
+    }
+
+    /// Makes every recorded state of drawing `id` saveable, so that an undo or redo brings it back
+    /// as a drawing that is saved.
+    pub(crate) fn keep_saveable(&mut self, id: usize) {
+        for command in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
+            match command {
+                DrawingCommand::Snapshot { drawings, .. } => {
+                    for (_, drawing) in drawings.iter_mut().filter(|(_, d)| d.id == id) {
+                        drawing.saveable = true;
+                    }
+                }
+                DrawingCommand::Add(drawing)
+                | DrawingCommand::Delete { drawing, .. }
+                | DrawingCommand::Modify {
+                    old_state: drawing, ..
+                } if drawing.id == id => drawing.saveable = true,
+                _ => {}
             }
         }
     }
@@ -144,7 +170,8 @@ impl HistoryService {
         }
     }
 
-    /// Create with custom max stack size
+    /// Create a history that keeps at most `max_size` undo steps, dropping the oldest first;
+    /// `0` keeps every step.
     pub fn with_max_size(max_size: usize) -> Self {
         Self {
             undo_stack: Vec::with_capacity(max_size.min(100)),
@@ -154,10 +181,11 @@ impl HistoryService {
         }
     }
 
-    /// Record the drawings owned by a bulk edit, as one undo step.
-    pub fn push_snapshot(&mut self, drawings: Vec<Drawing>) {
+    /// Record the drawings a bulk edit changes or removes, each with its list index before the
+    /// edit, as one undo step. Undo restores only these drawings.
+    pub fn push_snapshot(&mut self, drawings: Vec<(usize, Drawing)>) {
         if !drawings.is_empty() {
-            let ids = drawings.iter().map(|drawing| drawing.id).collect();
+            let ids = drawings.iter().map(|(_, drawing)| drawing.id).collect();
             self.push_command(DrawingCommand::Snapshot { drawings, ids });
         }
     }
@@ -182,9 +210,40 @@ impl HistoryService {
         self.push_command(DrawingCommand::Add(drawing));
     }
 
-    /// Record that a drawing was deleted
-    pub fn push_delete(&mut self, drawing: Drawing) {
-        self.push_command(DrawingCommand::Delete(drawing));
+    /// Removes the newest undo step if it added drawing `id`, returning whether it did.
+    pub(crate) fn pop_add(&mut self, id: usize) -> bool {
+        let last = matches!(self.undo_stack.last(), Some(DrawingCommand::Add(d)) if d.id == id);
+        if last {
+            self.undo_stack.pop();
+        }
+        last
+    }
+
+    /// Folds a text placement's lone edit or deletion into its original add, if both are still
+    /// the most recent commands. Other intervening operations retain their own undo steps.
+    pub(crate) fn merge_text_placement(
+        &mut self,
+        id: usize,
+        edit: &mut Self,
+        drawing: Option<&Drawing>,
+    ) -> bool {
+        let added = matches!(self.undo_stack.as_slice(), [DrawingCommand::Add(d)] if d.id == id);
+        let edited = matches!(edit.undo_stack.as_slice(), [DrawingCommand::Modify { id: changed, .. }] if *changed == id)
+            || matches!(edit.undo_stack.as_slice(), [DrawingCommand::Delete { drawing, .. }] if drawing.id == id);
+        if !added || !edited {
+            return false;
+        }
+        self.clear();
+        if let Some(drawing) = drawing {
+            self.push_add(drawing.clone());
+        }
+        edit.clear();
+        true
+    }
+
+    /// Record that a drawing was deleted from list index `index`
+    pub fn push_delete(&mut self, drawing: Drawing, index: usize) {
+        self.push_command(DrawingCommand::Delete { drawing, index });
     }
 
     /// Record that a drawing was modified
@@ -193,8 +252,17 @@ impl HistoryService {
     }
 
     /// Record a layer move, including the neighbours whose layers changed.
-    pub(crate) fn push_reorder(&mut self, id: usize, layers: Vec<(usize, i32)>) {
-        self.push_command(DrawingCommand::Reorder { id, layers });
+    pub(crate) fn push_reorder(
+        &mut self,
+        id: usize,
+        layers: Vec<(usize, i32)>,
+        modified_at: Option<i64>,
+    ) {
+        self.push_command(DrawingCommand::Reorder {
+            id,
+            layers,
+            modified_at,
+        });
     }
 
     /// Push a command to the undo stack
@@ -229,23 +297,31 @@ impl HistoryService {
                     ids,
                 });
             }
-            DrawingCommand::Reorder { id, mut layers } => {
-                for (id, layer) in &mut layers {
-                    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
-                        std::mem::swap(&mut drawing.z_order, layer);
-                    }
-                }
-                self.redo_stack.push(DrawingCommand::Reorder { id, layers });
+            DrawingCommand::Reorder {
+                id,
+                mut layers,
+                mut modified_at,
+            } => {
+                swap_layers(drawings, id, &mut layers, &mut modified_at);
+                self.redo_stack.push(DrawingCommand::Reorder {
+                    id,
+                    layers,
+                    modified_at,
+                });
             }
-            DrawingCommand::Add(drawing) => {
-                // Undo add = remove the drawing
-                drawings.retain(|d| d.id != drawing.id);
+            DrawingCommand::Add(mut drawing) => {
+                // Undo add = remove the drawing, keeping it as it is now for redo: it has taken
+                // on state since it was recorded, such as what its first display adopts.
+                if let Some(at) = drawings.iter().position(|d| d.id == drawing.id) {
+                    drawing = drawings.remove(at);
+                }
                 self.redo_stack.push(DrawingCommand::Add(drawing));
             }
-            DrawingCommand::Delete(drawing) => {
-                // Undo delete = restore the drawing
-                drawings.push(drawing.clone());
-                self.redo_stack.push(DrawingCommand::Delete(drawing));
+            DrawingCommand::Delete { drawing, index } => {
+                // Undo delete = restore the drawing at its list index
+                drawings.insert(index.min(drawings.len()), drawing.clone());
+                self.redo_stack
+                    .push(DrawingCommand::Delete { drawing, index });
             }
             DrawingCommand::Modify { id, old_state } => {
                 // Undo modify = restore old state
@@ -282,23 +358,31 @@ impl HistoryService {
                     ids,
                 });
             }
-            DrawingCommand::Reorder { id, mut layers } => {
-                for (id, layer) in &mut layers {
-                    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
-                        std::mem::swap(&mut drawing.z_order, layer);
-                    }
-                }
-                self.undo_stack.push(DrawingCommand::Reorder { id, layers });
+            DrawingCommand::Reorder {
+                id,
+                mut layers,
+                mut modified_at,
+            } => {
+                swap_layers(drawings, id, &mut layers, &mut modified_at);
+                self.undo_stack.push(DrawingCommand::Reorder {
+                    id,
+                    layers,
+                    modified_at,
+                });
             }
             DrawingCommand::Add(drawing) => {
                 // Redo add = add the drawing back
                 drawings.push(drawing.clone());
                 self.undo_stack.push(DrawingCommand::Add(drawing));
             }
-            DrawingCommand::Delete(drawing) => {
-                // Redo delete = remove the drawing
-                drawings.retain(|d| d.id != drawing.id);
-                self.undo_stack.push(DrawingCommand::Delete(drawing));
+            DrawingCommand::Delete { drawing, mut index } => {
+                // Redo delete = remove the drawing, recording where it was
+                if let Some(at) = drawings.iter().position(|d| d.id == drawing.id) {
+                    drawings.remove(at);
+                    index = at;
+                }
+                self.undo_stack
+                    .push(DrawingCommand::Delete { drawing, index });
             }
             DrawingCommand::Modify { id, old_state } => {
                 // Redo modify = apply the modification again
@@ -379,7 +463,7 @@ impl HistoryService {
         self.undo_stack.last().map(|cmd| match cmd {
             DrawingCommand::Snapshot { .. } => "Edit Drawings",
             DrawingCommand::Add(_) => "Add Drawing",
-            DrawingCommand::Delete(_) => "Delete Drawing",
+            DrawingCommand::Delete { .. } => "Delete Drawing",
             DrawingCommand::Modify { .. } => "Modify Drawing",
             DrawingCommand::Reorder { .. } => "Reorder Drawings",
         })
@@ -390,29 +474,54 @@ impl HistoryService {
         self.redo_stack.last().map(|cmd| match cmd {
             DrawingCommand::Snapshot { .. } => "Edit Drawings",
             DrawingCommand::Add(_) => "Add Drawing",
-            DrawingCommand::Delete(_) => "Delete Drawing",
+            DrawingCommand::Delete { .. } => "Delete Drawing",
             DrawingCommand::Modify { .. } => "Modify Drawing",
             DrawingCommand::Reorder { .. } => "Reorder Drawings",
         })
     }
 }
 
-// Keep independent drawings and their list positions outside the bulk command's history.
-fn restore_snapshot(live: &mut Vec<Drawing>, before: Vec<Drawing>, ids: &[usize]) -> Vec<Drawing> {
-    let mut before = before.into_iter();
-    let mut current = Vec::new();
-    let mut restored = Vec::new();
-    let mut insert_at = 0;
-    for drawing in live.drain(..) {
-        if ids.contains(&drawing.id) {
-            current.push(drawing);
-            restored.extend(before.next());
-            insert_at = restored.len();
-        } else {
-            restored.push(drawing);
+/// Takes a layer move through an undo or redo: each drawing's layer and the moved drawing's edit
+/// time change places with those recorded.
+fn swap_layers(
+    drawings: &mut [Drawing],
+    moved: usize,
+    layers: &mut [(usize, i32)],
+    modified_at: &mut Option<i64>,
+) {
+    for (id, layer) in layers {
+        if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
+            std::mem::swap(&mut drawing.z_order, layer);
         }
     }
-    restored.splice(insert_at..insert_at, before);
+    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == moved) {
+        std::mem::swap(&mut drawing.modified_at, modified_at);
+    }
+}
+
+// Keep independent drawings and their list positions outside the bulk command's history.
+// Owned drawings still listed are restored in place; the others go back to their recorded
+// list index, clamped, and the drawings taken out keep theirs for the inverse command.
+fn restore_snapshot(
+    live: &mut Vec<Drawing>,
+    mut before: Vec<(usize, Drawing)>,
+    ids: &[usize],
+) -> Vec<(usize, Drawing)> {
+    let mut current = Vec::new();
+    let mut restored = Vec::new();
+    for (index, drawing) in live.drain(..).enumerate() {
+        if !ids.contains(&drawing.id) {
+            restored.push(drawing);
+            continue;
+        }
+        if let Some(at) = before.iter().position(|(_, old)| old.id == drawing.id) {
+            restored.push(before.remove(at).1);
+        }
+        current.push((index, drawing));
+    }
+    for (index, drawing) in before {
+        restored.insert(index.min(restored.len()), drawing);
+    }
     *live = restored;
     current
 }
@@ -432,35 +541,44 @@ mod tests {
         d
     }
 
-    /// The live set as sorted (id, stroke width) pairs, so a test sees which
-    /// drawings exist and which state each one is in.
+    /// The live list as (id, stroke width, z-order), in list order, so a test sees which
+    /// drawings exist, which state each one is in and which is on top among equal z-orders.
     fn state(drawings: &[Drawing]) -> Vec<(usize, f32, i32)> {
-        let mut state: Vec<_> = drawings
+        drawings
             .iter()
             .map(|d| (d.id, d.stroke_width, d.z_order))
-            .collect();
-        state.sort_by_key(|&(id, _, _)| id);
-        state
+            .collect()
     }
 
-    /// Undo of each command returns the live set to its state before the
-    /// action, redo returns it to the state after, and the redone command can
+    /// Undo of each command returns the live list to its state and order before
+    /// the action, redo returns it to the state after, and the redone command can
     /// be undone again.
     #[test]
     fn undo_and_redo_restore_each_command() {
         type Record = fn(&mut HistoryService);
-        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 6] = [
+        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 7] = [
             (
                 "partial bulk edit",
                 vec![drawing(2, 9.0), drawing(1, 2.0)],
                 vec![drawing(2, 9.0), drawing(1, 8.0)],
-                |h| h.push_snapshot(vec![drawing(1, 2.0)]),
+                |h| h.push_snapshot(vec![(1, drawing(1, 2.0))]),
             ),
             (
                 "bulk edit and order",
                 vec![drawing(1, 2.0), drawing(2, 3.0)],
                 vec![drawing(2, 8.0)],
-                |h| h.push_snapshot(vec![drawing(1, 2.0), drawing(2, 3.0)]),
+                |h| h.push_snapshot(vec![(0, drawing(1, 2.0)), (1, drawing(2, 3.0))]),
+            ),
+            (
+                "paste",
+                vec![drawing(2, 1.0), drawing(3, 1.0)],
+                vec![drawing(2, 1.0), drawing(3, 1.0), drawing(1, 1.0)],
+                |h| {
+                    h.push_command(DrawingCommand::Snapshot {
+                        drawings: Vec::new(),
+                        ids: vec![1],
+                    })
+                },
             ),
             (
                 "reorder",
@@ -475,19 +593,19 @@ mod tests {
                         ..drawing(2, 1.0)
                     },
                 ],
-                |h| h.push_reorder(1, vec![(1, 0), (2, 0)]),
+                |h| h.push_reorder(1, vec![(1, 0), (2, 0)], None),
             ),
             (
                 "add",
                 vec![drawing(2, 1.0)],
-                vec![drawing(1, 1.0), drawing(2, 1.0)],
+                vec![drawing(2, 1.0), drawing(1, 1.0)],
                 |h| h.push_add(drawing(1, 1.0)),
             ),
             (
                 "delete",
-                vec![drawing(1, 1.0), drawing(2, 1.0)],
-                vec![drawing(2, 1.0)],
-                |h| h.push_delete(drawing(1, 1.0)),
+                vec![drawing(2, 1.0), drawing(1, 1.0), drawing(3, 1.0)],
+                vec![drawing(2, 1.0), drawing(3, 1.0)],
+                |h| h.push_delete(drawing(1, 1.0), 1),
             ),
             (
                 "modify",
@@ -511,15 +629,6 @@ mod tests {
 
             assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo id");
             assert_eq!(state(&drawings), state(&before), "{name}: after undo");
-            if matches!(name, "bulk edit and order" | "partial bulk edit") {
-                assert_eq!(
-                    drawings
-                        .iter()
-                        .map(|drawing| drawing.id)
-                        .collect::<Vec<_>>(),
-                    before.iter().map(|drawing| drawing.id).collect::<Vec<_>>()
-                );
-            }
             assert_eq!(history.redo(&mut drawings), Some(1), "{name}: redo id");
             assert_eq!(state(&drawings), state(&after), "{name}: after redo");
             assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo again");

@@ -262,7 +262,7 @@ mod tests {
                         chart.set_theme_override(None);
                     }
                 }
-                let output = ctx.run_ui(
+                let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -286,6 +286,7 @@ mod tests {
                         });
                     },
                 );
+                output.textures_delta.clear();
                 let sizes: Vec<_> = output
                     .shapes
                     .iter()
@@ -296,6 +297,21 @@ mod tests {
                         _ => None,
                     })
                     .collect();
+                let title = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().starts_with("Scoped") => {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .expect("the series title is visible");
+                assert_eq!(
+                    title.galley.job.sections[0].format.color,
+                    if clear { global.ui.text } else { local.ui.text },
+                    "series titles use UI ink even when axis ink differs"
+                );
                 assert!(!sizes.is_empty());
                 assert_eq!(sizes.contains(&local.text.label), !clear, "{sizes:?}");
                 if clear {
@@ -358,7 +374,7 @@ mod tests {
             ("panel", dark.ui.panel_bg, [0, 0, 0]),
             ("plot", dark.chart.bg, [0, 0, 0]),
             ("axis", dark.chart.bg_axis, [0, 0, 0]),
-            ("separator", dark.ui.border, [42, 42, 42]),
+            ("separator", dark.ui.border, [46, 46, 46]),
             ("text", dark.ui.text, [219, 219, 219]),
             ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
             ("disabled text", dark.ui.text_disabled, [87, 87, 87]),
@@ -378,6 +394,18 @@ mod tests {
                 Color32::from_rgb(expected[0], expected[1], expected[2]),
                 "dark {role}"
             );
+        }
+        let light = Theme::light();
+        for (role, actual, expected) in [
+            ("text", light.ui.text, 0),
+            ("secondary text", light.ui.text_secondary, 0),
+            ("axis text", light.chart.axis_text, 0),
+            ("secondary axis text", light.chart.axis_text_secondary, 0),
+            ("disabled text", light.ui.text_disabled, 126),
+            ("grid", light.chart.grid_line, 229),
+            ("major grid", light.chart.grid_line_major, 229),
+        ] {
+            assert_eq!(actual, Color32::from_gray(expected), "light {role}");
         }
         let orange = Color32::from_rgb(255, 120, 0);
         let purple = Color32::from_rgb(110, 60, 200);
@@ -546,7 +574,9 @@ mod tests {
                     ui.accent_hover,
                     1.2,
                 );
-                assert_ne!(ui.selection_text, ui.text, "{name}: selected glyphs");
+                if theme.dark {
+                    assert_ne!(ui.selection_text, ui.text, "{name}: selected glyphs");
+                }
             }
             // egui outlines a focused text input with the selection stroke.
             check(

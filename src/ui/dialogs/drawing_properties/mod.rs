@@ -9,7 +9,8 @@
 //!
 //! Open with [`DrawingPropertiesDialog::open_for_chart`] and call
 //! [`DrawingPropertiesDialog::show_and_apply`] each frame to apply validated edits in the library.
-//! Hosts handle Delete and Clone intents and persist [`crate::drawings::DrawingManager::tool_defaults`].
+//! Hosts persist [`crate::drawings::DrawingManager::tool_defaults`] and may attach storage to
+//! [`DrawingPropertiesDialog::templates`]. Delete and Clone are in the drawing context menu.
 
 mod actions;
 mod config;
@@ -121,19 +122,31 @@ mod tests {
             (Tool::FibonacciExtension, "Fibonacci levels"),
             (Tool::FibonacciChannel, "Fibonacci levels"),
             (Tool::FibonacciWedge, "Fibonacci levels"),
+            (Tool::FibonacciTimeZones, "Fibonacci levels"),
+            (Tool::FibonacciSpeedFan, "Fibonacci levels"),
+            (Tool::TrendBasedFibTime, "Fibonacci levels"),
+            (Tool::FibonacciCircles, "Fibonacci levels"),
+            (Tool::FibonacciSpeedResistanceArcs, "Fibonacci levels"),
             (Tool::Pitchfork, "Pitchfork levels"),
             (Tool::SchiffPitchfork, "Pitchfork levels"),
             (Tool::ModifiedSchiffPitchfork, "Pitchfork levels"),
             (Tool::InsidePitchfork, "Pitchfork levels"),
-            (Tool::GannBox, "Price divisions"),
-            (Tool::GannSquare, "Price divisions"),
-            (Tool::GannFixed, "Price divisions"),
-            (Tool::LongPos, "Size by"),
-            (Tool::ShortPos, "Size by"),
+            (Tool::Pitchfan, "Pitchfork levels"),
+            (Tool::GannBox, "Price levels"),
+            (Tool::GannSquare, "Price levels"),
+            (Tool::GannFixed, "Price levels"),
+            (Tool::GannFan, "Fan lines"),
+            (Tool::LongPos, "Entry price"),
+            (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
+            (Tool::AnchoredVWAP, "Band 1"),
             (Tool::RegressionTrend, "Deviations"),
-            (Tool::ParallelChannel, "Show middle line"),
+            (Tool::ElliottImpulse, "Degree"),
+            (Tool::ElliottCorrection, "Degree"),
+            (Tool::ElliottTriangle, "Degree"),
+            (Tool::ElliottDoubleCombo, "Degree"),
+            (Tool::ElliottTripleCombo, "Degree"),
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -174,7 +187,13 @@ mod tests {
                 let narrow = egui::Context::default();
                 crate::theme::apply_to_egui(&narrow, &theme);
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 640.0));
-                let tabs = if tool == Tool::FibonacciRetracement {
+                let tabs = if matches!(
+                    tool,
+                    Tool::FibonacciRetracement
+                        | Tool::FibonacciExtension
+                        | Tool::FibonacciChannel
+                        | Tool::FibonacciWedge
+                ) {
                     PropertiesTab::all().to_vec()
                 } else {
                     vec![PropertiesTab::Inputs]
@@ -208,14 +227,14 @@ mod tests {
                             if let egui::Shape::Text(text) = &shape.shape
                                 && matches!(
                                     text.galley.job.text.as_str(),
-                                    "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
+                                    "Ok" | "Cancel" | "Template"
                                 )
                             {
                                 let bounds =
                                     egui::Rect::from_min_size(text.pos, text.galley.size());
                                 if matches!(
                                     text.galley.job.text.as_str(),
-                                    "Apply" | "Cancel" | "Clone" | "Delete"
+                                    "Ok" | "Cancel" | "Template"
                                 ) {
                                     footer.push(bounds);
                                 }
@@ -303,6 +322,14 @@ mod tests {
         chart.drawings_mut().drawings[0].visible = false;
         dialog.open_for_chart(&chart, DrawingId(7));
         dialog.props.line_width = 4.0;
+        let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+        let menu = texts
+            .iter()
+            .find(|(text, _)| text == "Template")
+            .unwrap()
+            .1
+            .center();
+        click(&mut dialog, &mut chart, &ctx, menu);
         let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
         let save = texts
             .iter()

@@ -1,8 +1,9 @@
 //! What the terminal's controls emit: each component's own action, unchanged.
 
 use egui_charts::model::Instrument;
+use egui_charts::services::ConflictChoice;
 use egui_charts::ui::context_menu::ChartContextAction;
-use egui_charts::ui::dialogs::{AlertDialogAction, DrawingPropertiesAction};
+use egui_charts::ui::dialogs::{AlertDialogAction, DataTableAction, DrawingPropertiesAction};
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
 use egui_charts::ui::export::ExportResponse;
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
@@ -18,7 +19,7 @@ use egui_charts::ui::widget_bar::{
     AlertPanelAction, CalendarAction, HotlistsAction, NewsAction, NotificationsAction,
     ProductsAction, ScreenerAction, WatchlistAction, WidgetBarAction,
 };
-use egui_charts::widget::ShortcutRequest;
+use egui_charts::widget::{ImageRequest, ShortcutRequest};
 
 /// What a terminal control emitted: the component's own action, unchanged.
 ///
@@ -27,6 +28,9 @@ use egui_charts::widget::ShortcutRequest;
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum Action {
+    /// The id of a quick search entry registered by
+    /// [`Terminal::add_command`](super::Terminal::add_command).
+    Command(String),
     /// The top toolbar.
     TopToolbar(TopToolbarAction),
     /// The drawing toolbar.
@@ -41,6 +45,10 @@ pub enum Action {
     ChartMenu(ChartContextAction),
     /// A key the chart hands to its host, from `Chart::take_shortcut_requests`.
     Shortcut(ShortcutRequest),
+    /// An image drawing of the active chart waiting for its picture. The terminal opens no
+    /// file chooser; answer with `terminal.chart_mut().set_drawing_image(..)` while the same
+    /// chart slot is active.
+    Image(ImageRequest),
     /// The layout menu.
     Layout(LayoutAction),
     /// The floating replay control.
@@ -61,6 +69,8 @@ pub enum Action {
     AlertDialog(AlertDialogAction),
     /// The alerts panel.
     Alerts(AlertPanelAction),
+    /// The loaded chart data table.
+    DataTable(DataTableAction),
     /// The export dialog.
     Export(ExportResponse),
     /// The go-to-date picker.
@@ -85,4 +95,9 @@ pub enum Action {
     BrokerPicker(BrokerPickerAction),
     /// The strategy report panel.
     StrategyReport(StrategyReportAction),
+    /// The dialog that settles settings another window or device changed.
+    StorageConflict(ConflictChoice),
+    /// The dialog that settles the drawings of a symbol, named first, that another window or
+    /// device changed.
+    DrawingsConflict(String, ConflictChoice),
 }

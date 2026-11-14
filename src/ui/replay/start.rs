@@ -1,8 +1,10 @@
 //! Start selection intents; the host supplies history, randomness and saved sessions.
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::ui_kit::{buttons::Button, modal::Modal};
 use chrono::{DateTime, NaiveDate, Utc};
+use egui::{Painter, Pos2, Rect, Stroke, Vec2, pos2};
 
 /// A replay start requested by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -13,6 +15,8 @@ pub enum ReplayStartAction {
     None,
     /// Select the start by clicking a chart bar.
     SelectBar,
+    /// Ask for a start date, as [`ReplayStartPicker`] does.
+    SelectDate,
     /// First available source bar.
     First,
     /// A random source bar selected by the host.
@@ -23,7 +27,7 @@ pub enum ReplayStartAction {
     Resume,
 }
 
-/// Start selection dialog shared by hosts of the replay controller.
+/// Date entry dialog shared by hosts of the replay controller.
 #[derive(Default)]
 pub struct ReplayStartPicker {
     /// Whether the dialog is open.
@@ -32,36 +36,21 @@ pub struct ReplayStartPicker {
 }
 
 impl ReplayStartPicker {
-    /// Opens start selection with an optional initial UTC date.
+    /// Opens date entry with an optional initial UTC date.
     pub fn open(&mut self, date: Option<DateTime<Utc>>) {
         self.date = date.map_or_else(String::new, |time| time.format("%Y-%m-%d").to_string());
         self.is_open = true;
     }
 
-    /// Shows start choices. Resume is enabled only when the host has a saved session.
-    pub fn show(&mut self, ctx: &egui::Context, can_resume: bool) -> ReplayStartAction {
+    /// Shows date entry, and returns [`ReplayStartAction::Date`] once the user confirms one.
+    pub fn show(&mut self, ctx: &egui::Context) -> ReplayStartAction {
         if !self.is_open {
             return ReplayStartAction::None;
         }
         let mut action = ReplayStartAction::None;
-        Modal::new("replay_start", "Start replay")
+        Modal::new("replay_start", "Select date")
             .width(360.0)
             .show(ctx, &mut self.is_open, |ui| {
-                ui.label(l10n::text(
-                    ui.ctx(),
-                    "Choose where to begin. Playback starts paused.",
-                ));
-                ui.add_space(8.0);
-                for (label, choice) in [
-                    ("Select a bar on the chart", ReplayStartAction::SelectBar),
-                    ("First available bar", ReplayStartAction::First),
-                    ("Random bar", ReplayStartAction::Random),
-                ] {
-                    if Button::new(label).secondary().show(ui).clicked() {
-                        action = choice;
-                    }
-                }
-                ui.separator();
                 ui.label(l10n::text(ui.ctx(), "Date (UTC, YYYY-MM-DD)"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.date).desired_width(ui.available_width()),
@@ -79,19 +68,73 @@ impl ReplayStartPicker {
                 {
                     action = ReplayStartAction::Date(date);
                 }
-                ui.separator();
-                if Button::new("Resume saved session")
-                    .secondary()
-                    .enabled(can_resume)
-                    .show(ui)
-                    .clicked()
-                {
-                    action = ReplayStartAction::Resume;
-                }
             });
         if action != ReplayStartAction::None {
             self.is_open = false;
         }
         action
+    }
+}
+
+/// Paints the hint of bar selection: a vertical line through `plot` at the bar under the pointer,
+/// with scissors at the pointer's height, marking where the replay cuts the history.
+pub fn paint_start_line(painter: &Painter, plot: Rect, pointer: Pos2) {
+    let theme = painter.ctx().active_theme();
+    let color = theme.ui.accent;
+    // A plot shorter than the mark centres it. Its bounds then meet, and where f32 rounds the
+    // plot's height they cross by an ulp, which `clamp` would panic on.
+    let half = (plot.height() / 2.0).min(12.0);
+    let center = pos2(
+        pointer.x,
+        pointer.y.max(plot.top() + half).min(plot.bottom() - half),
+    );
+    painter.vline(center.x, plot.y_range(), Stroke::new(1.0, color));
+    painter.circle_filled(center, 11.0, theme.chart.bg);
+    let stroke = Stroke::new(1.5, color);
+    for side in [-1.0, 1.0] {
+        let handle = center + Vec2::new(side * 3.0, 4.5);
+        painter.circle_stroke(handle, 2.25, stroke);
+        painter.line_segment(
+            [
+                handle + Vec2::new(0.0, -2.0),
+                center + Vec2::new(-side * 3.0, -8.0),
+            ],
+            stroke,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A price pane shorter than the scissors still gets the line through the bar under the
+    /// pointer, with the scissors centred on it.
+    #[test]
+    fn start_line_on_a_plot_shorter_than_its_mark() {
+        for (top, height, marked) in [
+            (100.0, 0.0, None),
+            (100.0, 20.0, Some(pos2(150.0, 110.0))),
+            // Edges between pixels near the top of the window: f32 rounds the height up.
+            (1.6, 5.6, None),
+        ] {
+            let plot = Rect::from_min_size(pos2(0.0, top), Vec2::new(300.0, height));
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                paint_start_line(ui.painter(), plot, pos2(150.0, 101.0));
+            });
+            if let Some(marked) = marked {
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::LineSegment { points, .. }
+                        if points[0].x == marked.x && points[1].x == marked.x
+                )));
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::Circle(circle) if circle.center == marked
+                )));
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 }

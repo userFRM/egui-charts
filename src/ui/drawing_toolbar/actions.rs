@@ -25,11 +25,25 @@ use crate::drawings::DrawingToolType;
 pub enum DrawingToolbarAction {
     /// No action taken
     None,
+    /// Show or hide the left tools. Hosts save `ToolbarState::preferences` and omit the
+    /// containing side panel when hidden, keeping a restore control outside that panel.
+    /// `show_with_action` still renders floating favourites without reserving side-panel space.
+    SetToolbarVisible(bool),
+    /// Save whether subsequent bulk removal includes locked drawings.
+    SetLockedDrawingRemoval(bool),
+    /// Resolved bulk removal after the host calls `RemoveMenu::request` and, if needed,
+    /// `RemoveMenu::show_confirmation`. Apply both groups in one chart history operation.
+    RemoveDrawings {
+        /// Include locked drawings only after the user explicitly chooses it.
+        include_locked: bool,
+        /// Also remove editable studies, leaving price series and host account data intact.
+        include_indicators: bool,
+    },
     /// A drawing tool was selected
     SelectTool(DrawingToolType),
     /// Set cursor type (Cross, Dot, Arrow, Magic)
     SetCursorType(CursorType),
-    /// Magnet mode toggled
+    /// Magnet mode toggled, from a click on the magnet or its Off row
     ToggleMagnet,
     /// Stay-in-drawing mode toggled
     ToggleStayInDrawingMode,
@@ -53,7 +67,14 @@ pub enum DrawingToolbarAction {
     RemoveAllIndicators,
     /// Remove all studies (indicators + overlays)
     RemoveAllStudies,
-    /// Change magnet type (Weak/Strong/OHLC)
+    /// Hide drawings, indicators, positions and orders at once. A host applies it as it
+    /// applies `HideAllDrawings`, `HideAllIndicators`, `HideAllPoss` and `HideAllOrders` with
+    /// the visibility selected in `ToolbarState`, in one undo step.
+    HideAll,
+    /// Remove all drawings and all indicators at once. A host applies it as it applies
+    /// `RemoveAllDrawings` and `RemoveAllIndicators`, in one undo step.
+    RemoveDrawingsAndIndicators,
+    /// Change magnet type (Weak/Strong)
     SetMagnetType(MagnetType),
     /// Include or exclude visible study plots from drawing magnet targets.
     /// Hosts set `DrawingManagerOptions::snap_to_indicators` to this value.

@@ -71,7 +71,7 @@ impl StochasticRSI {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             k_color: palette::BLUE,
-            d_color: palette::RED,
+            d_color: palette::ORANGE,
             visible: true,
         }
     }
@@ -149,11 +149,7 @@ impl Indicator for StochasticRSI {
                     state.loss =
                         (state.loss * (self.rsi_period - 1) as f64 + loss) / self.rsi_period as f64;
                 }
-                let rsi = if state.loss.abs() < 1e-10 {
-                    100.0
-                } else {
-                    100.0 - 100.0 / (1.0 + state.gain / state.loss)
-                };
+                let rsi = super::rsi::from_averages(state.gain, state.loss);
                 state.rsi.push_back(rsi);
                 if state.rsi.len() > self.stoch_period {
                     state.rsi.pop_front();
@@ -181,7 +177,7 @@ impl Indicator for StochasticRSI {
                     state.d.pop_front();
                 }
                 if state.d.len() < self.smooth_d {
-                    return IndicatorValue::None;
+                    return IndicatorValue::Multiple(vec![k * 100.0, f64::NAN]);
                 }
                 let d = state.d.iter().sum::<f64>() / self.smooth_d as f64;
                 if k.is_nan() || d.is_nan() {
@@ -210,6 +206,27 @@ impl Indicator for StochasticRSI {
         }
         if colors.len() > 1 {
             self.d_color = colors[1];
+        }
+    }
+
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::LIGHT_BLUE.gamma_multiply_u8(26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (80.0, palette::MUTED, "Overbought"),
+                (20.0, palette::MUTED, "Oversold"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+            ],
+            fill_between_levels: true,
         }
     }
 

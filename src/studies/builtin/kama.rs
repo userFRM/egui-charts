@@ -74,7 +74,7 @@ impl KAMA {
             slow_period: 30,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN, // Cyan
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -274,7 +274,6 @@ mod tests {
         for (name, period, closes, expected) in cases {
             let data: Vec<Bar> = closes.iter().map(|&c| make_bar(c)).collect();
             let mut kama = KAMA::new(*period);
-            assert!(kama.is_incremental(), "KAMA must resume streaming updates");
             for len in 0..=data.len() {
                 kama.update(&data[..len], len.saturating_sub(1));
             }

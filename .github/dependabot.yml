@@ -6,10 +6,11 @@ updates:
     directories:
       - "/"
       - "/examples/demo"
+      - "/examples/docs"
       - "/terminal"
       - "/docs/capture"
       - "/fuzz"
-    # Lockfile updates only. The demo, terminal, capture and fuzz crates lock the library's dependencies
+    # Lockfile updates only. The demo, guide examples, terminal, capture and fuzz crates lock the library's dependencies
     # too, so a requirement raised in one manifest breaks the others' --locked builds until
     # they move in the same change; breaking upgrades need code changes and are done by hand.
     versioning-strategy: lockfile-only

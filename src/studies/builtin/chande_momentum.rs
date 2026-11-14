@@ -22,7 +22,7 @@ impl ChandeMomentumOscillator {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::PURPLE,
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -36,7 +36,7 @@ impl ChandeMomentumOscillator {
 
 impl Default for ChandeMomentumOscillator {
     fn default() -> Self {
-        Self::new(14)
+        Self::new(9)
     }
 }
 

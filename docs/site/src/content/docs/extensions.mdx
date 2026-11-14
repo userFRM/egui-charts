@@ -1,0 +1,181 @@
+---
+title: Primitives and rendering extensions
+---
+
+import Example from '../../components/Example.astro';
+import source from '../../../../../examples/docs/scenes/extensions.rs?raw';
+
+Use a
+[`Primitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html)
+to draw host geometry on an existing series. Use a
+[custom series](/egui-charts/docs/extensions/custom-series/) when a study supplies values and
+your renderer replaces its normal plots. Both need only the `widget` feature;
+neither requires a change to the crate's renderer dispatch.
+For another horizontal domain, see [custom horizontal scales](horizontal-scales.mdx).
+
+## Shade sessions behind the bars
+
+The scene adapts the session highlight from the native
+[primitives example](https://github.com/userFRM/egui-charts/blob/main/examples/primitives.rs).
+It caches session boundaries when the source bars change, shades them in the
+`Below` pass, and labels each open on the time axis. This sample uses fixed
+14:30 to 21:00 UTC hours; a production host supplies the relevant exchange calendar,
+holidays and daylight-saving rules.
+
+<Example scene="primitives" title="Session shading from a primitive"
+  task="Pan across session opens and zoom in: the shading stays behind the candles and the open tags follow the time axis."
+  code={source.slice(source.indexOf('/// Shade'), source.indexOf('/// Draw each')).trim() + '\n\n' + source.slice(source.indexOf('/// Shared fixed')).trim()} />
+
+## Attach and detach
+
+[`Chart::attach_primitive(series, primitive)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.attach_primitive)
+accepts the main series, an added bar series or a study and returns an
+[`Option<PrimitiveId>`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveId.html).
+An absent series returns `None` and drops the supplied primitive. Keep the ID
+when you need to remove the attachment with
+[`detach_primitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.detach_primitive);
+it returns `false` for an unknown or already detached ID.
+
+The primitive follows its series' pane and price scale, including pane moves.
+Its drawing hooks run while that series is visible. Implement only the hooks
+you need; all have defaults that do nothing. `Primitive` requires `Send`.
+
+| Hook | When it runs | What to keep there |
+| --- | --- | --- |
+| [`attached`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.attached) | Once, on the first frame after attachment | The series ID and a cloned egui context if host work needs to request a repaint |
+| [`data_changed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.data_changed) | After attachment and before drawing a frame whose source bars changed | Cached domain geometry; bars are oldest first, and a study receives the main bars it computes from |
+| [`detached`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.detached) | On detachment after the attachment hook ran, including series removal | Release resources owned by the attachment |
+
+Attach once during setup, then call `chart.show(ui)` each frame. Reattaching
+every frame would accumulate primitives. Undoing a study removal restores the
+study without its primitive attachments, so the host must recreate those.
+
+## Pane decorations
+
+[`Chart::attach_pane_primitive(pane, primitive)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.attach_pane_primitive)
+attaches a
+[`PanePrimitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.PanePrimitive.html)
+to an existing pane instead of a series. It returns `None` for an unknown pane and
+drops the primitive. The decoration stays while the pane exists, including an
+empty retained pane and a chart without loaded bars, and is detached once on the
+next frame after the pane is removed. `detach_primitive` removes it earlier.
+
+It draws and hit tests in the same passes as a series primitive, clipped to the
+pane's plot, but its
+[`PanePrimitiveView`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PanePrimitiveView.html)
+has no price scale, and it cannot add axis labels or autoscale margins.
+
+## Draw passes and coordinates
+
+[`draw`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw)
+receives a painter clipped to the pane's plot, a
+[`PrimitiveView`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html)
+and a [`PrimitivePass`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html).
+Choose the pass explicitly to avoid drawing the same geometry three times:
+
+| Pass | Position |
+| --- | --- |
+| [`Below`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Below) | Above the pane background, grid and sessions; behind its series and studies |
+| [`Series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Series) | Above series and studies; below drawings |
+| [`Above`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Above) | Above series, studies and drawings; still below the main pane's crosshair and legend |
+
+Several attachments draw in attachment order within a pass. Override
+[`draw_background`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_background)
+to paint a backdrop: every background in a pass draws before any `draw`, so a later
+attachment's backdrop never covers an earlier attachment's foreground.
+`draw_background_merged` receives the merge factor like `draw_merged`. Read geometry from
+the current view instead of caching screen coordinates across pan, zoom or resize:
+
+- [`view.visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#structfield.visible)
+  is the visible index range into `view.bars`.
+- [`index_to_x`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#method.index_to_x)
+  maps a fractional index to screen points; whole indices are bar centres.
+  [`time_to_x`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#method.time_to_x)
+  interpolates times and returns `None` without bars.
+- [`view.mapping`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#structfield.mapping)
+  gives the plot rectangle, bar spacing and the series' vertical mapping.
+  [`price_to_y`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/coords/struct.ChartMapping.html#method.price_to_y)
+  maps prices on that scale, respecting its mode and inversion.
+
+The session rectangle starts half a bar before its opening bar's centre and
+ends half a bar before the closing time, so its edges align with bar boundaries.
+For dense custom geometry, override
+[`draw_merged`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_merged)
+and visit aligned source ranges with
+[`point_groups`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#method.point_groups).
+The default calls `draw` without aggregating your payload.
+
+## Axes and autoscale
+
+Return [`TimeAxisLabel`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.TimeAxisLabel.html)
+values from
+[`time_axis_labels`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.time_axis_labels),
+as this scene does, or
+[`PriceAxisLabel`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PriceAxisLabel.html)
+values from
+[`price_axis_labels`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.price_axis_labels).
+The chart places tags at their price or time, chooses readable text against their
+fill, draws a short tick at the plot edge, and omits price tags off the scale or
+without room. Time tags suppress underlying axis labels they cover.
+
+Set `text_color` to choose the text and tick colour, and `tick_visible` to `false`
+to omit the tick. Set `fixed_coordinate` to pin a tag instead: its centre is that
+many UI points from the top of the pane's price axis, or from the left edge of the
+shared time axis, whatever the price or time. A fixed tag is not moved to fit, is
+clipped at the axis edges, and paints above the automatic tags, with later fixed
+tags on top. A non-finite offset omits the tag.
+
+For other axis geometry, use
+[`draw_price_axis`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_price_axis)
+or [`draw_time_axis`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_time_axis);
+their painters are clipped to the supplied axis rectangle and draw behind labels.
+The time axis is shared: in time-axis hooks, a study-pane primitive's vertical
+mapping is the main pane's mapping. Use time or x there, rather than its study's y.
+
+[`autoscale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.autoscale)
+returns an optional `(minimum, maximum)` in data values to widen the series'
+automatic price fit. `None` adds nothing. It does not change a manual range.
+The [custom-series scene](/egui-charts/docs/extensions/custom-series/) includes zero so
+that lollipop stems remain inside their pane's automatic range.
+
+Graphics of a fixed pixel size need room that does not scale with prices. Override
+[`autoscale_info`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.autoscale_info)
+to return an
+[`AutoscaleInfo`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleInfo.html):
+the price range plus
+[`AutoscaleMargins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleMargins.html)
+`top` and `bottom`, in logical pixels. A series does the same through
+[`AutoscaleProvider::with_margins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleProvider.html#method.with_margins).
+Each pane and scale keeps the largest request at each screen edge and adds it to
+the scale's fractional margins, so the clearance holds after a resize or a price
+change. Independent overlay studies fit the prices without the margins. A pane
+too short for the request keeps its ordinary fit.
+
+## Hit testing and host actions
+
+[`hit_test`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.hit_test)
+receives the pointer in egui screen points and the current view. Return a
+[`CursorIcon`](https://docs.rs/egui/0.37.0/egui/enum.CursorIcon.html) for a hit,
+or `None` to let testing continue. Reuse the drawing geometry so the hit area
+follows pan and zoom. Drawings have priority, then attached primitives, then
+built-in series and studies.
+
+Override
+[`hit_test_result`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.hit_test_result)
+to identify an individual object. It returns a
+[`PrimitiveHit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveHit.html)
+with the cursor, an optional object id, host data, a distance in UI points and a draw
+pass. Among custom hits, a later pass wins, then the shorter distance. Equal hits keep
+ordinary primitives ahead of series renderers, the latest attachment first. When series
+backgrounds group foregrounds in attachment order, equal hits follow reverse attachment
+order across primitives and renderers. The winner is reported as
+`ChartPointer::primitive_hit` in hover, click and double-click events.
+Without an override, `hit_test` supplies a cursor-only hit on the series pass.
+
+A normal attachment reports
+[`PointerTarget::Primitive(id)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.Primitive)
+in chart pointer events. Read events with
+[`drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
+after `show` and use them for host actions; a hit test chooses a target and cursor,
+it does not execute an application command. A custom series' renderer instead
+targets its study, as the [next guide](/egui-charts/docs/extensions/custom-series/) explains.

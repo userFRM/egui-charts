@@ -44,10 +44,11 @@ mod time;
 mod trading;
 
 pub use action::Action;
+pub use panels::MarketPanels;
 pub use services::{ExportContents, ExportFile};
 
 use egui_charts::data::Datafeed;
-use egui_charts::model::{StrategyReport, Timeframe};
+use egui_charts::model::Timeframe;
 use egui_charts::services::{
     Alerts, Broker, Chats, Marks, Notification, Notifications, Quotes, SettingsStore, Signals,
     Storage, SymbolSearch,
@@ -98,33 +99,25 @@ pub struct Terminal {
     hidden: HashSet<Control>,
     settings: Option<SettingsStore>,
     /// Entries for the notifications panel, taken by the panel when it is shown.
-    #[allow(dead_code, reason = "the notifications panel takes the entries")]
     notices: Vec<Notification>,
     /// What each chart slot reported this frame, by slot.
     chart_events: Vec<(usize, ChartEvent)>,
     /// The side panel on show.
-    #[allow(dead_code, reason = "the side panels read the open panel")]
     panel: Option<core::SidePanel>,
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
-    strategy_report: Option<StrategyReport>,
     drawings: drawings::State,
     studies: studies::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     time: time::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     alerts: alerts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     panels: panels::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
     commands: commands::State,
 }
 
@@ -184,7 +177,6 @@ impl Terminal {
             chart_events: Vec::new(),
             panel: None,
             replay_active: false,
-            strategy_report: None,
             drawings: Default::default(),
             studies: Default::default(),
             time: Default::default(),
@@ -221,11 +213,39 @@ impl Terminal {
         self
     }
 
-    /// Keeps drawings, settings, layouts and templates in `service`.
+    /// Keeps drawings, settings, layouts and templates in `service`. Before the application
+    /// closes, wait until [`flush_storage`](Self::flush_storage) returns `true`, or edits still
+    /// being written are lost.
     pub fn with_storage(mut self, service: Arc<dyn Storage>) -> Self {
         self.settings = Some(SettingsStore::new(service.clone()));
         self.services.storage = Some(service);
         self
+    }
+
+    /// Writes changed drawings and settings now and retries failed writes, taking in the answers
+    /// storage gave already without waiting for others. Returns `true` once storage has
+    /// acknowledged the drawings of every chart and the settings, and at once without
+    /// [`with_storage`](Self::with_storage).
+    ///
+    /// Dropping the terminal does this once without waiting, so a write queued behind an
+    /// unanswered one is lost. To keep every edit, a host waits for `true` before it lets the
+    /// application close: when the window is asked to close
+    /// ([`egui::ViewportInfo::close_requested`]), it cancels with
+    /// [`egui::ViewportCommand::CancelClose`] and keeps showing the terminal, calling this every
+    /// frame. Bound the wait: a storage that keeps failing, drawings or settings that could not be
+    /// read and a storage conflict the user has not settled keep it `false`.
+    pub fn flush_storage(&mut self) -> bool {
+        let mut flushed = true;
+        if self.settings.is_some() {
+            let current = self.user_settings();
+            if let Some(settings) = &mut self.settings {
+                flushed &= settings.flush(&current);
+            }
+        }
+        for chart in &mut self.charts {
+            flushed &= chart.flush_stored_drawings();
+        }
+        flushed
     }
 
     /// Keeps and evaluates alerts through `service`.
@@ -271,12 +291,16 @@ impl Terminal {
         self
     }
 
-    /// Offers `formats` in the export dialog and hands each finished export to `save`. Without
-    /// it, exports go to the clipboard only.
+    /// Offers `formats` in the export dialog, beside copying to the clipboard, and hands each
+    /// finished export to `save`. Without it, chart images and data go to the clipboard and
+    /// alert-log exports are returned to the host as unhandled actions. The host returns an
+    /// error message if saving or opening fails, and opens the saved image when
+    /// [`ExportFile::open`] is true. Errors are shown as toasts and in the open export dialog;
+    /// the action remains handled.
     pub fn with_file_export(
         mut self,
         formats: &'static [ExportFormat],
-        save: impl FnMut(ExportFile) + 'static,
+        save: impl FnMut(ExportFile) -> Result<(), String> + 'static,
     ) -> Self {
         self.services.export_formats = formats;
         self.services.save = Some(Box::new(save));
@@ -341,11 +365,6 @@ impl Terminal {
         &mut self.top_toolbar
     }
 
-    /// Shows `report` in the strategy report panel, or closes it with `None`.
-    pub fn set_strategy_report(&mut self, report: Option<StrategyReport>) {
-        self.strategy_report = report;
-    }
-
     /// Passes `action` along the groups until one performs it, and returns what is left.
     /// A group that takes an action only in its own state comes before the group that performs
     /// the default. Host entries are always left for the host.
@@ -374,22 +393,18 @@ impl Terminal {
 }
 
 impl Drop for Terminal {
-    /// Writes changed settings, as an application does when it exits.
+    /// Writes changed settings and drawings without waiting for storage, as an application does
+    /// when it exits; [`Terminal::flush_storage`] lets the host wait.
     fn drop(&mut self) {
-        if self.settings.is_some() {
-            let current = self.user_settings();
-            if let Some(settings) = &mut self.settings {
-                settings.flush(&current);
-            }
-        }
+        self.flush_storage();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame, key};
+    use super::test_support::{self, MemoryStorage, SIZE, TestFeed, click, frame};
     use super::*;
-    use egui::{Key, Modifiers, vec2};
+    use egui::vec2;
     use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
     use egui_charts::ui::top_toolbar::TopToolbarAction;
     use egui_charts::widget::ShortcutRequest;
@@ -438,17 +453,201 @@ mod tests {
                 assert!(returned.is_empty());
             }
         }
-        // Host entries and actions no group performs go back to the host, run or emitted.
+        // Unhandled actions go back to the host; profile edits already applied by the menu do not.
         let mut terminal = Terminal::new(Arc::new(TestFeed)).with_symbol("AAPL");
         frame(&mut terminal, SIZE, vec![]);
-        for action in [
-            Action::TopToolbar(TopToolbarAction::Host("x".into())),
-            Action::Shortcut(ShortcutRequest::SymbolSearch("A".into())),
+        use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
+        let menu = |action| Action::ChartMenu(ChartContextAction::Chart(action));
+        for (action, handled) in [
+            (
+                Action::TopToolbar(TopToolbarAction::Host("x".into())),
+                false,
+            ),
+            (
+                Action::Shortcut(ShortcutRequest::SymbolSearch("A".into())),
+                true,
+            ),
+            (menu(ContextMenuAction::MergeTradeProfilePrevious), true),
+            (menu(ContextMenuAction::MergeTradeProfileNext), true),
+            (menu(ContextMenuAction::SplitTradeProfile), true),
         ] {
-            assert!(terminal.run(action).is_some());
+            assert_eq!(terminal.run(action).is_none(), handled);
         }
-        let help = frame(&mut terminal, SIZE, vec![key(Key::F1, Modifiers::NONE)]).actions;
-        assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));
+    }
+
+    #[test]
+    fn export_errors_are_shown_without_returning_handled_actions() {
+        use egui_charts::ui::widget_bar::panels::alerts_panel::AlertPanelAction;
+        use std::{cell::Cell, rc::Rc};
+
+        for (size, dark) in [
+            (SIZE, false),
+            (SIZE, true),
+            (vec2(480.0, 640.0), false),
+            (vec2(480.0, 640.0), true),
+        ] {
+            for outcome in [None, Some(Ok(())), Some(Err("Permission denied"))] {
+                let calls = Rc::new(Cell::new(0));
+                let mut terminal = Terminal::new(Arc::new(TestFeed))
+                    .with_symbol("AAPL")
+                    .with_alerts(Arc::new(egui_charts::services::AlertEngine::new()));
+                if let Some(outcome) = outcome {
+                    let calls = calls.clone();
+                    terminal = terminal.with_file_export(&[ExportFormat::Csv], move |file| {
+                        calls.set(calls.get() + 1);
+                        assert_eq!(file.name, "alerts.csv");
+                        assert!(file.path.is_none());
+                        assert!(!file.open);
+                        assert!(matches!(file.contents, ExportContents::Text(csv) if csv == "time,symbol\n"));
+                        outcome.map_err(str::to_owned)
+                    });
+                }
+                test_support::frame_with(&mut terminal, size, vec![], |input| {
+                    input.system_theme = Some(if dark {
+                        egui::Theme::Dark
+                    } else {
+                        egui::Theme::Light
+                    });
+                });
+                terminal.emit(Action::Alerts(AlertPanelAction::ExportLog(
+                    "time,symbol\n".into(),
+                )));
+                let screen = frame(&mut terminal, size, vec![]);
+                assert_eq!(terminal.theme.dark, dark);
+                assert_eq!(calls.get(), usize::from(outcome.is_some()));
+                if outcome.is_none() {
+                    assert!(
+                        matches!(screen.actions.as_slice(), [Action::Alerts(AlertPanelAction::ExportLog(csv))] if csv == "time,symbol\n")
+                    );
+                } else {
+                    assert!(screen.actions.is_empty());
+                }
+                // A newly opened toast gets its final position on the next frame.
+                let screen = frame(&mut terminal, size, vec![]);
+                let failed = outcome.is_some_and(|result| result.is_err());
+                assert_eq!(terminal.toasts.len(), usize::from(failed));
+                if failed {
+                    assert_eq!(
+                        terminal.toasts.toasts()[0].message,
+                        "Export failed: Permission denied"
+                    );
+                    let pos = screen.text_at("Dismiss").expect("visible error toast");
+                    assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(pos));
+                }
+                assert_eq!(calls.get(), usize::from(outcome.is_some()));
+            }
+        }
+    }
+
+    /// Guards #1100 and #1463: two windows change the settings or the drawings of a symbol, the
+    /// later write is refused, and the user's choice in the dialog settles it.
+    #[test]
+    fn a_storage_conflict_asks_the_user_and_settles_it_as_chosen() {
+        use egui_charts::drawings::persistence::DrawingStorage;
+        use egui_charts::services::{StoreKind, UserSettings};
+        let name = |dark: bool| Some(if dark { "dark" } else { "light" }.to_owned());
+        let start = |storage: &Arc<MemoryStorage>| {
+            let mut terminal = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage.clone());
+            // The bars a drawing's anchors need.
+            for _ in 0..6 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            terminal
+        };
+        let draw = |terminal: &mut Terminal, price| {
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(10.0, price)];
+            line.completed = true;
+            terminal
+                .chart_mut()
+                .user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
+        };
+        for button in ["Keep both", "Reload", "Overwrite"] {
+            let storage = Arc::new(MemoryStorage::default());
+            let (mut mine, mut theirs) = (start(&storage), start(&storage));
+            draw(&mut theirs, 190.0);
+            for _ in 0..2 {
+                frame(&mut theirs, SIZE, vec![]);
+            }
+            draw(&mut mine, 170.0);
+            let screen = (0..20)
+                .map(|_| frame(&mut mine, SIZE, vec![]))
+                .find(|screen| screen.text_at(button).is_some())
+                .expect("the dialog asks");
+            assert!(screen.text_at("Drawings changed elsewhere").is_some());
+            click(&mut mine, SIZE, screen.text_at(button).unwrap());
+            // Only a kept copy is offered, to load or discard.
+            let screens: Vec<_> = (0..5).map(|_| frame(&mut mine, SIZE, vec![])).collect();
+            let offered = screens
+                .iter()
+                .any(|screen| screen.text_at("Load").is_some());
+            assert_eq!(offered, button == "Keep both", "{button}");
+            assert_eq!(screens[4].text_at(button), None);
+            let prices = |name: &str| {
+                let json = storage.get(StoreKind::Drawings, name)?;
+                let (stored, _) = DrawingStorage::from_json(&json).unwrap();
+                Some(
+                    stored
+                        .drawings()
+                        .iter()
+                        .map(|drawing| drawing.points[0].price)
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let (stored, copy) = match button {
+                "Keep both" => (vec![190.0], Some(vec![170.0])),
+                "Reload" => (vec![190.0], None),
+                _ => (vec![170.0], None),
+            };
+            assert_eq!(prices("AAPL"), Some(stored.clone()), "{button}");
+            assert_eq!(prices("AAPL (local copy)"), copy, "{button}");
+            let shown: Vec<_> = mine
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .map(|drawing| drawing.chart_points[0].price)
+                .collect();
+            assert_eq!(shown, stored, "{button}");
+        }
+        for button in ["Keep both", "Reload", "Overwrite"] {
+            let storage = Arc::new(MemoryStorage::default());
+            let (mut mine, mut theirs) = (start(&storage), start(&storage));
+            let dark = mine.theme.dark;
+            // The other window switches the theme and writes it a second later.
+            theirs.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
+            for _ in 0..12 {
+                frame(&mut theirs, SIZE, vec![]);
+            }
+            // This window chose its theme explicitly meanwhile, so its write is refused.
+            for _ in 0..2 {
+                mine.run(Action::TopToolbar(TopToolbarAction::ThemeToggle));
+            }
+            let screen = (0..20)
+                .map(|_| frame(&mut mine, SIZE, vec![]))
+                .find(|screen| screen.text_at(button).is_some())
+                .expect("the dialog asks");
+            assert!(screen.text_at("Settings changed elsewhere").is_some());
+            click(&mut mine, SIZE, screen.text_at(button).unwrap());
+            for _ in 0..3 {
+                frame(&mut mine, SIZE, vec![]);
+            }
+            assert_eq!(frame(&mut mine, SIZE, vec![]).text_at(button), None);
+            let theme = |name: &str| {
+                let json = storage.get(StoreKind::Settings, name)?;
+                UserSettings::from_json(&json).unwrap().theme
+            };
+            let (stored, copy, shown) = match button {
+                "Keep both" => (name(!dark), name(dark), !dark),
+                "Reload" => (name(!dark), None, !dark),
+                _ => (name(dark), None, dark),
+            };
+            assert_eq!(theme("settings"), stored, "{button}");
+            assert_eq!(theme("settings (local copy)"), copy, "{button}");
+            assert_eq!(mine.theme.dark, shown, "{button}");
+        }
     }
 
     #[test]

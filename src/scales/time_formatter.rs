@@ -15,6 +15,20 @@ use std::sync::Arc;
 #[cfg(test)]
 use chrono::Datelike;
 
+/// Display time and chart locale for one time-axis tick.
+#[derive(Debug, Clone, Copy)]
+pub struct TickMarkContext<'a> {
+    /// Wall-clock fields in the chart's display zone, carried in a UTC value; behind UTC, bars of
+    /// a day or longer given to a chart without a feed read in UTC unless they sit at the display
+    /// zone's midnight. This is not a UTC instant and must not be converted to a time zone again.
+    pub time: DateTime<Utc>,
+    /// Calendar or clock precision selected for this tick.
+    pub mark_type: TickMarkType,
+    /// Active chart locale, such as `"de-DE"`; `None` uses English names.
+    /// Unknown identifiers and builds without `locales` also use English names.
+    pub locale: Option<&'a str>,
+}
+
 /// Trait for custom time formatting
 /// Allows users to customize how time labels are displayed on the axis
 pub trait TimeFormatter: Send + Sync {
@@ -27,6 +41,17 @@ pub trait TimeFormatter: Send + Sync {
     /// # Returns
     /// Formatted string to display on the time axis
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String;
+
+    /// Formats one axis tick with the active chart locale and display-time fields.
+    ///
+    /// Return `None` to use the chart's normal locale and clock settings for this tick.
+    /// `Some(String::new())` keeps an empty label. The default calls [`format`](Self::format),
+    /// preserving existing formatters. Builders and the chart call this after time-zone
+    /// conversion; hidden intraday clocks still use date labels instead.
+    /// This hook does not change [`format_crosshair`](Self::format_crosshair).
+    fn format_tick(&self, context: TickMarkContext<'_>) -> Option<String> {
+        Some(self.format(context.time, context.mark_type))
+    }
 
     /// Clock-face time used to identify calendar boundaries. The returned UTC value
     /// holds local fields, not another instant.
@@ -60,9 +85,8 @@ pub trait TimeFormatter: Send + Sync {
                 self.format(time, TickMarkType::TimeWithSeconds)
             ),
             _ => format!(
-                "{label} {}{}",
-                self.format(time, TickMarkType::TimeWithSeconds),
-                time.format("%.3f")
+                "{label} {}",
+                self.format(time, TickMarkType::TimeWithMilliseconds)
             ),
         }
     }
@@ -195,6 +219,8 @@ impl Style<'_> {
             (TickMarkType::Year, _) => "%Y",
             (TickMarkType::Month, _) => "%b",
             (TickMarkType::DayOfMonth, _) => "%d",
+            (TickMarkType::TimeWithMilliseconds, true) if self.show_seconds => "%H:%M:%S%.3f",
+            (TickMarkType::TimeWithMilliseconds, false) if self.show_seconds => "%I:%M:%S%.3f %p",
             (TickMarkType::TimeWithSeconds, true) if self.show_seconds => "%H:%M:%S",
             (TickMarkType::TimeWithSeconds, false) if self.show_seconds => "%I:%M:%S %p",
             // Without seconds, second marks show the minute clock.
@@ -230,15 +256,13 @@ impl Style<'_> {
         }
         let kind = if bar_seconds >= 60 {
             TickMarkType::Time
-        } else {
+        } else if bar_seconds >= 1 {
             TickMarkType::TimeWithSeconds
+        } else {
+            TickMarkType::TimeWithMilliseconds
         };
         let clock = self.format(time, kind);
-        if bar_seconds <= 0 && self.show_seconds {
-            format!("{date} {clock}{}", time.format("%.3f"))
-        } else {
-            format!("{date} {clock}")
-        }
+        format!("{date} {clock}")
     }
 }
 
@@ -280,8 +304,7 @@ impl LocaleTimeFormatter {
 
     /// Determine default 24-hour preference for locale
     fn default_24hour_for_locale(locale: &str) -> bool {
-        // US, Canada, UK prefer 12-hour
-        !matches!(locale, "en-US" | "en-CA" | "en-GB")
+        !matches!(locale.replace('_', "-").as_str(), "en-US" | "en-CA")
     }
 
     fn style(&self) -> Style<'_> {
@@ -344,6 +367,37 @@ impl TimeFormatter for CustomTimeFormatter {
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
         Box::new(self.clone())
+    }
+}
+
+/// Keeps per-tick fallback separate from the host's crosshair formatting.
+struct TickContextFormatter {
+    formatter: Box<dyn TimeFormatter>,
+    fallback: Box<dyn TimeFormatter>,
+    locale: Option<String>,
+}
+
+impl TimeFormatter for TickContextFormatter {
+    fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
+        self.formatter
+            .format_tick(TickMarkContext {
+                time,
+                mark_type,
+                locale: self.locale.as_deref(),
+            })
+            .unwrap_or_else(|| self.fallback.format(time, mark_type))
+    }
+
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        self.formatter.format_crosshair(time, bar_seconds)
+    }
+
+    fn clone_box(&self) -> Box<dyn TimeFormatter> {
+        Box::new(Self {
+            formatter: self.formatter.clone_box(),
+            fallback: self.fallback.clone_box(),
+            locale: self.locale.clone(),
+        })
     }
 }
 
@@ -490,7 +544,9 @@ impl<T: chrono::TimeZone + Send + Sync + 'static> TimeFormatter for TimezoneAwar
         if !self.time_visible
             && matches!(
                 mark_type,
-                TickMarkType::Time | TickMarkType::TimeWithSeconds
+                TickMarkType::Time
+                    | TickMarkType::TimeWithSeconds
+                    | TickMarkType::TimeWithMilliseconds
             )
         {
             self.inner.format_crosshair(converted, 86_400)
@@ -597,12 +653,13 @@ impl TimeFormatterBuilder {
         self
     }
 
-    /// Format with `formatter` instead of the default or locale formatter.
+    /// Format with `formatter`, with per-tick access to the locale and default text.
     ///
     /// The time zone and clock visibility still apply: `formatter` receives
     /// wall-clock times in the chosen zone, and dates in place of intraday
     /// clocks when the time is hidden. Its own options replace the 24-hour,
-    /// seconds, locale and date format settings.
+    /// seconds, locale and date format settings, unless
+    /// [`format_tick`](TimeFormatter::format_tick) returns `None` for a tick.
     pub fn with_formatter(mut self, formatter: Box<dyn TimeFormatter>) -> Self {
         self.formatter = Some(formatter);
         self
@@ -616,11 +673,9 @@ impl TimeFormatterBuilder {
 
     /// Build the formatter
     pub fn build(self) -> Box<dyn TimeFormatter> {
-        let base: Box<dyn TimeFormatter> = if let Some(formatter) = self.formatter {
-            formatter
-        } else if let Some(locale) = self.locale {
+        let base: Box<dyn TimeFormatter> = if let Some(locale) = &self.locale {
             Box::new(LocaleTimeFormatter {
-                locale,
+                locale: locale.clone(),
                 use_24_hour: self.use_24_hour,
                 show_seconds: self.show_seconds,
                 date_format: self.date_format,
@@ -632,6 +687,14 @@ impl TimeFormatterBuilder {
                 date_format: self.date_format,
             }
             .into_box()
+        };
+        let base: Box<dyn TimeFormatter> = match self.formatter {
+            Some(formatter) => Box::new(TickContextFormatter {
+                formatter,
+                fallback: base,
+                locale: self.locale,
+            }),
+            None => base,
         };
 
         // UTC and system-local formatters need no storage for a selected zone.
@@ -674,19 +737,51 @@ mod tests {
             formatter.format(time, TickMarkType::TimeWithSeconds),
             "14:30:45"
         );
+
+        let twelve_hour = TimeFormatterBuilder::new()
+            .with_24_hour(false)
+            .with_seconds(false)
+            .build();
+        assert_eq!(twelve_hour.format(time, TickMarkType::Time), "02:30 PM");
     }
 
     #[test]
-    fn test_12_hour_format() {
-        let formatter = DefaultTimeFormatter {
-            use_24_hour: false,
-            ..Default::default()
+    fn fractional_crosshair_seconds_precede_the_meridiem() {
+        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap()
+            + chrono::Duration::milliseconds(123);
+        for (use_24_hour, seconds, fractional) in [
+            (true, "14:30:45", "14:30:45.123"),
+            (false, "02:30:45 PM", "02:30:45.123 PM"),
+        ] {
+            let formatter = DefaultTimeFormatter {
+                use_24_hour,
+                ..Default::default()
+            };
+            let custom = CustomTimeFormatter::new(move |time, kind| {
+                DefaultTimeFormatter {
+                    use_24_hour,
+                    ..Default::default()
+                }
+                .format(time, kind)
+            });
+            // The style and the trait default share the clock's precision and hour cycle.
+            for formatter in [&formatter as &dyn TimeFormatter, &custom] {
+                for (bar_seconds, clock) in [(0, fractional), (1, seconds)] {
+                    let label = formatter.format_crosshair(time, bar_seconds);
+                    assert!(label.ends_with(clock), "{label}");
+                }
+            }
         }
-        .clone_box();
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
-
-        let result = formatter.format(time, TickMarkType::Time);
-        assert!(result.contains("PM"));
+        let hidden_seconds = DefaultTimeFormatter {
+            use_24_hour: false,
+            show_seconds: false,
+            ..Default::default()
+        };
+        assert!(
+            hidden_seconds
+                .format_crosshair(time, 0)
+                .ends_with("02:30 PM")
+        );
     }
 
     #[test]
@@ -701,6 +796,22 @@ mod tests {
                 english
             }
         };
+        for (locale, expected) in [
+            ("en-US", "02:30 PM"),
+            ("en_US", "02:30 PM"),
+            ("en-CA", "02:30 PM"),
+            ("en_CA", "02:30 PM"),
+            ("en-GB", "14:30"),
+            ("en_GB", "14:30"),
+            ("de-DE", "14:30"),
+            ("de_DE", "14:30"),
+        ] {
+            assert_eq!(
+                LocaleTimeFormatter::new(locale).format(time, TickMarkType::Time),
+                expected,
+                "{locale}"
+            );
+        }
         let german = LocaleTimeFormatter::new("de-DE");
         assert_eq!(
             german.format(time, TickMarkType::Month),
@@ -759,33 +870,6 @@ mod tests {
 
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 12, 30, 0).unwrap();
         assert_eq!(formatter.format(time, TickMarkType::Time), "2h ago");
-    }
-
-    #[test]
-    fn test_custom_formatter() {
-        let formatter = CustomTimeFormatter::new(|time, mark_type| match mark_type {
-            TickMarkType::Year => format!("Year {}", time.year()),
-            _ => time.format("%Y-%m-%d").to_string(),
-        });
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        assert_eq!(formatter.format(time, TickMarkType::Year), "Year 2024");
-        assert_eq!(formatter.format(time, TickMarkType::Month), "2024-06-15");
-
-        let cloned = formatter.clone_box();
-        assert_eq!(cloned.format(time, TickMarkType::Year), "Year 2024");
-    }
-
-    #[test]
-    fn test_formatter_builder() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(false)
-            .with_seconds(false)
-            .build();
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert!(result.contains("PM"));
     }
 
     #[test]
@@ -878,126 +962,59 @@ mod tests {
 
     #[cfg(feature = "timezones")]
     #[test]
-    fn test_timezone_conversion_ny() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::Timezone("America/New_York".parse().unwrap()))
-            .build();
-
-        // June 15, 2024 14:30 UTC = 10:30 EDT (UTC-4)
+    fn named_zones_keep_their_clock_through_dst_and_cloning() {
+        use TickMarkType::{Time, TimeWithSeconds};
+        // UTC offsets: New York -4 in summer, -5 in winter; London +1/0; Tokyo +9.
+        for (zone, instant, kind, expected) in [
+            (TimezoneMode::nyse(), "2024-06-15T14:30:00Z", Time, "10:30"),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-03-10T06:00:00Z",
+                TimeWithSeconds,
+                "01:00:00",
+            ),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-03-10T08:00:00Z",
+                TimeWithSeconds,
+                "04:00:00",
+            ),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-11-03T05:00:00Z",
+                TimeWithSeconds,
+                "01:00:00",
+            ),
+            (
+                TimezoneMode::Exchange("America/New_York".parse().unwrap()),
+                "2024-11-03T07:00:00Z",
+                TimeWithSeconds,
+                "02:00:00",
+            ),
+            (TimezoneMode::lse(), "2024-06-15T14:30:00Z", Time, "15:30"),
+            (TimezoneMode::lse(), "2024-01-15T14:30:00Z", Time, "14:30"),
+            (TimezoneMode::jse(), "2024-06-15T14:30:00Z", Time, "23:30"),
+        ] {
+            let time = instant.parse::<DateTime<Utc>>().unwrap();
+            let formatter = TimeFormatterBuilder::new()
+                .with_24_hour(true)
+                .with_timezone(zone.clone())
+                .build();
+            for formatter in [formatter.clone_box(), formatter] {
+                assert_eq!(formatter.format(time, kind), expected, "{zone:?} {instant}");
+            }
+        }
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "10:30");
+        let formatter = TimeFormatterBuilder::new()
+            .with_timezone(TimezoneMode::nyse())
+            .build();
         assert_eq!(
             formatter.format_crosshair(time, 3600),
             "Sat 15 Jun '24 10:30"
         );
-        let fractional = time + chrono::Duration::milliseconds(123);
         assert_eq!(
-            TimeFormatterBuilder::new()
-                .with_timezone(TimezoneMode::nyse())
-                .build()
-                .format_crosshair(fractional, 0),
+            formatter.format_crosshair(time + chrono::Duration::milliseconds(123), 0),
             "Sat 15 Jun '24 10:30:00.123"
         );
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_dst_spring_forward() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(true)
-            .with_timezone(TimezoneMode::Exchange("America/New_York".parse().unwrap()))
-            .build();
-
-        // 2024 DST transition: March 10, 2:00 AM -> 3:00 AM
-        // Before DST: March 10, 2024 06:00 UTC = March 10, 2024 01:00 EST (UTC-5)
-        let before_dst = Utc.with_ymd_and_hms(2024, 3, 10, 6, 0, 0).unwrap();
-        let result_before = formatter.format(before_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_before, "01:00:00");
-
-        // After DST: March 10, 2024 08:00 UTC = March 10, 2024 04:00 EDT (UTC-4)
-        let after_dst = Utc.with_ymd_and_hms(2024, 3, 10, 8, 0, 0).unwrap();
-        let result_after = formatter.format(after_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_after, "04:00:00");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_dst_fall_back() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(true)
-            .with_timezone(TimezoneMode::Exchange("America/New_York".parse().unwrap()))
-            .build();
-
-        // 2024 DST transition: November 3, 2:00 AM -> 1:00 AM
-        // Before DST end: November 3, 2024 05:00 UTC = November 3, 2024 01:00 EDT (UTC-4)
-        let before_dst = Utc.with_ymd_and_hms(2024, 11, 3, 5, 0, 0).unwrap();
-        let result_before = formatter.format(before_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_before, "01:00:00");
-
-        // After DST end: November 3, 2024 07:00 UTC = November 3, 2024 02:00 EST (UTC-5)
-        let after_dst = Utc.with_ymd_and_hms(2024, 11, 3, 7, 0, 0).unwrap();
-        let result_after = formatter.format(after_dst, TickMarkType::TimeWithSeconds);
-        assert_eq!(result_after, "02:00:00");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_timezone_london() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::lse())
-            .build();
-
-        // June 15, 2024 14:30 UTC = 15:30 BST (UTC+1)
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "15:30");
-
-        // January 15, 2024 14:30 UTC = 14:30 GMT (UTC+0)
-        let time_winter = Utc.with_ymd_and_hms(2024, 1, 15, 14, 30, 0).unwrap();
-        let result_winter = formatter.format(time_winter, TickMarkType::Time);
-        assert_eq!(result_winter, "14:30");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_timezone_tokyo() {
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::jse())
-            .build();
-
-        // June 15, 2024 14:30 UTC = June 15, 2024 23:30 JST (UTC+9)
-        // Note: Japan doesn't use DST
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "23:30");
-    }
-
-    #[cfg(feature = "timezones")]
-    #[test]
-    fn test_timezone_clone() {
-        let formatter1 = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
-            .with_timezone(TimezoneMode::nyse())
-            .build();
-
-        // Test that clone_box works correctly
-        let formatter2 = formatter1.clone_box();
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result1 = formatter1.format(time, TickMarkType::Time);
-        let result2 = formatter2.format(time, TickMarkType::Time);
-
-        assert_eq!(result1, result2);
-        assert_eq!(result1, "10:30");
     }
 }

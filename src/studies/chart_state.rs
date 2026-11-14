@@ -47,6 +47,10 @@ pub struct ChartState {
     elements: Option<Arc<[Bar]>>,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
+    /// Shared whitespace slots when the main series has no horizontal domain.
+    fallback: Vec<Bar>,
+    /// Prefix revisions, lengths and last times represented by the fallback slots.
+    fallback_series: Vec<(u64, usize, Option<chrono::DateTime<chrono::Utc>>)>,
     /// The main series' price scale.
     price_scale: PriceScale,
     /// Stack of previous zoom snapshots for the "zoom out" button.
@@ -61,6 +65,8 @@ impl Clone for ChartState {
         Self {
             data: self.data.clone(),
             elements: self.elements.clone(),
+            fallback: self.fallback.clone(),
+            fallback_series: self.fallback_series.clone(),
             time_scale: self.time_scale.clone(),
             price_scale: self.price_scale.clone(),
             zoom_history: self.zoom_history.clone(),
@@ -78,6 +84,8 @@ impl ChartState {
         Self {
             data,
             elements: None,
+            fallback: Vec::new(),
+            fallback_series: Vec::new(),
             time_scale,
             price_scale: PriceScale::new(PriceScaleOptions::default()),
             zoom_history: Vec::new(),
@@ -144,14 +152,80 @@ impl ChartState {
         {
             self.revision = next_revision();
         }
-        self.time_scale.set_bar_cnt(self.shown().len());
+        self.sync_time_scale();
         first_changed
     }
 
     /// The series drawn on the time scale, one OHLC bar per element on price-based charts.
-    /// Indices returned by the chart hover and selection APIs refer to this series.
+    /// Indices returned by the chart hover and selection APIs refer to this series. When the
+    /// main series is empty, the widget can supply whitespace slots from added series.
     pub fn shown(&self) -> &[Bar] {
-        self.elements.as_deref().unwrap_or(&self.data.bars)
+        Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback)
+    }
+
+    /// The main series' shown bars, or the shared whitespace slots when it has none.
+    fn domain<'a>(data: &'a [Bar], elements: Option<&'a [Bar]>, fallback: &'a [Bar]) -> &'a [Bar] {
+        match elements.unwrap_or(data) {
+            [] => fallback,
+            shown => shown,
+        }
+    }
+
+    /// Points the time scale at the shown bars.
+    fn sync_time_scale(&mut self) {
+        let shown = Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback);
+        #[cfg(feature = "widget")]
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
+    }
+
+    /// Shares added-series timestamps without taking their values into the main series.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_fallback_series<'a>(
+        &mut self,
+        series: impl IntoIterator<Item = (&'a [Bar], u64)>,
+    ) {
+        let series: Vec<_> = if self.shows_fallback() {
+            series.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let keys: Vec<_> = series
+            .iter()
+            .map(|(bars, revision)| (*revision, bars.len(), bars.last().map(|bar| bar.time)))
+            .collect();
+        if self.fallback_series == keys {
+            return;
+        }
+        let times: std::collections::BTreeSet<_> = series
+            .iter()
+            .flat_map(|(bars, _)| bars.iter().map(|bar| bar.time))
+            .collect();
+        let bars: Vec<_> = times.into_iter().map(Bar::whitespace).collect();
+        let old_len = self.fallback.len();
+        let first_changed = self
+            .fallback
+            .iter()
+            .zip(&bars)
+            .position(|(old, new)| old.time != new.time)
+            .unwrap_or(old_len.min(bars.len()));
+        self.fallback = bars;
+        if first_changed < old_len.saturating_sub(1) || self.fallback.len() < old_len {
+            self.revision = next_revision();
+        }
+        self.fallback_series = keys;
+        self.sync_time_scale();
+    }
+
+    /// Whether the time scale lays out added-series slots: the main domain alone is empty, as
+    /// [`shown`](Self::shown) can already contain the fallback.
+    #[cfg(feature = "widget")]
+    pub(crate) fn shows_fallback(&self) -> bool {
+        self.elements
+            .as_deref()
+            .unwrap_or(&self.data.bars)
+            .is_empty()
     }
 
     #[cfg(feature = "widget")]
@@ -160,7 +234,7 @@ impl ChartState {
     }
 
     /// Keeps the right-edge item by time and rank when the shown series changes.
-    #[cfg(any(feature = "widget", test))]
+    #[cfg(feature = "widget")]
     pub(crate) fn set_elements(&mut self, elements: Option<Arc<[Bar]>>, follow: bool) {
         match (&self.elements, &elements) {
             (Some(old), Some(new)) if Arc::ptr_eq(old, new) => return,
@@ -187,7 +261,7 @@ impl ChartState {
             )
         });
         self.elements = elements;
-        self.time_scale.set_bar_cnt(self.shown().len());
+        self.sync_time_scale();
         match kept {
             Some((_, true)) if follow && near_live => self.time_scale.scroll_to_realtime(),
             Some(_) if follow && near_live => {}
@@ -196,110 +270,21 @@ impl ChartState {
         }
     }
 
-    /// Visible source bars, or one OHLC bar per element on a price-based chart type.
+    /// The bars of [`visible_range`](Self::visible_range): source bars, or one OHLC bar per
+    /// element on a price-based chart type.
     pub fn visible_data(&self) -> &[crate::model::Bar] {
-        if self.shown().is_empty() {
-            return &[];
-        }
-
-        let logical_range = self.time_scale.visible_logical_range();
-        log::debug!(
-            "[visible_data] logical_range: left={}, right={}",
-            logical_range.left,
-            logical_range.right
-        );
-
-        let (mut start, mut end) = logical_range.to_strict_range();
-        log::debug!("[visible_data] BEFORE clamping: start={start}, end={end}");
-
-        // Clamp to valid data range
-        let data_len = self.shown().len();
-        end = end.min(data_len);
-        start = start.min(end);
-
-        log::debug!("[visible_data] AFTER clamping: start={start}, end={end}, data_len={data_len}");
-
-        // Calculate how many bars should be visible
-        let expected_visible = self.time_scale.visible_candles();
-
-        // If we have too few bars visible (scrolled past beginning), extend the range
-        let actual_visible = end.saturating_sub(start);
-        log::debug!(
-            "[visible_data] actual_visible={actual_visible}, expected_visible={expected_visible}"
-        );
-
-        if actual_visible < expected_visible && start == 0 && data_len > 1 {
-            // We're at the beginning but don't have enough bars visible
-            // Extend end to show the expected number of bars
-            // Note: Only extend if we have more than 1 bar to avoid log spam during startup
-            let old_end = end;
-            end = expected_visible.min(data_len);
-            if end > old_end {
-                log::debug!(
-                    "[visible_data] EXTENDING RANGE: old_end={}, new_end={} (gained {} bars)",
-                    old_end,
-                    end,
-                    end - old_end
-                );
-            }
-        }
-
-        log::debug!(
-            "[visible_data] FINAL RESULT: returning bars[{}..{}] ({} bars)",
-            start,
-            end,
-            end - start
-        );
-
+        let (start, end) = self.visible_range();
         &self.shown()[start..end]
     }
 
-    /// Visible range indices, counting elements on price-based chart types and bars otherwise.
+    /// Indices of the bars in view, end exclusive, counting elements on price-based chart
+    /// types and bars otherwise. A bar the plot's edge cuts is in view. With no bar in view
+    /// the range is empty: it starts at 0 before the first bar and at the number of bars
+    /// after the last.
     pub fn visible_range(&self) -> (usize, usize) {
-        if self.shown().is_empty() {
-            return (0, 0);
-        }
-
-        let logical_range = self.time_scale.visible_logical_range();
-        let (mut start, mut end) = logical_range.to_strict_range();
-
-        log::debug!("[visible_range] BEFORE clamping: start={start}, end={end}");
-
-        // Clamp to valid data range
-        let data_len = self.shown().len();
-        end = end.min(data_len);
-        start = start.min(end);
-
-        // Calculate how many bars should be visible
-        let expected_visible = self.time_scale.visible_candles();
-
-        // If we have too few bars visible (scrolled past beginning), extend the range
-        let actual_visible = end.saturating_sub(start);
-
-        if actual_visible < expected_visible && start == 0 && data_len > 1 {
-            // We're at the beginning but don't have enough bars visible
-            // Extend end to show the expected number of bars
-            // Note: Only extend if we have more than 1 bar to avoid log spam during startup
-            let old_end = end;
-            end = expected_visible.min(data_len);
-            if end > old_end {
-                log::debug!(
-                    "[visible_range] EXTENDING RANGE: old_end={}, new_end={} (gained {} bars)",
-                    old_end,
-                    end,
-                    end - old_end
-                );
-            }
-        }
-
-        log::debug!(
-            "[visible_range] FINAL RESULT: ({}, {}) - {} bars",
-            start,
-            end,
-            end - start
-        );
-
-        (start, end)
+        let (start, end) = self.time_scale.visible_data_range().to_strict_range();
+        let end = end.min(self.shown().len());
+        (start.min(end), end)
     }
 
     /// Returns the main series' price scale.
@@ -328,12 +313,14 @@ impl ChartState {
             std::iter::empty(),
             std::iter::empty(),
         )
+        .0
     }
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
     /// `series_values` are already in scale units. `main_bars` supplies transformed visible
     /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
+    /// Returns the transform, fitted bounds in scale units and the main provider's pixel margins.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
@@ -343,7 +330,7 @@ impl ChartState {
         main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
-    ) -> PriceTransform {
+    ) -> (PriceTransform, crate::model::AutoscaleInfo) {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = main_bars.unwrap_or(&self.shown()[start..end]);
@@ -356,7 +343,8 @@ impl ChartState {
             .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
         let transform = PriceTransform::new(mode, base);
-        let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
+        // Unclamped, so that displaced values and projections past the last bar are fitted.
+        let (study_start, study_end) = self.time_scale.visible_data_range().to_strict_range();
         let study_values = indicators
             .into_iter()
             .filter(|study| {
@@ -368,10 +356,8 @@ impl ChartState {
                 #[cfg(not(feature = "drawings"))]
                 let drawing_prices = std::iter::empty();
                 #[cfg(feature = "drawings")]
-                let drawing_prices = crate::studies::plots::drawing_prices(
-                    study,
-                    study_start.max(start)..study_end.max(end),
-                );
+                let drawing_prices =
+                    crate::studies::plots::drawing_prices(study, study_start..study_end);
                 (0..study.line_count())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
@@ -388,7 +374,7 @@ impl ChartState {
                             .len()
                             .checked_add_signed(study.plot_offset(index))
                             .unwrap_or(0);
-                        (study_start.max(start)..study_end.max(end).min(available_end))
+                        (study_start..study_end.min(available_end))
                             .filter_map(move |bar| study.plot_value(index, bar))
                             .chain(std::iter::once(0.0).filter(move |_| {
                                 matches!(
@@ -404,8 +390,8 @@ impl ChartState {
                             .candles()
                             .iter()
                             .filter(|candle| {
-                                candle.bars.end > study_start.max(start)
-                                    && candle.bars.start < study_end.max(end)
+                                candle.bars.end > study_start
+                                    && candle.bars.start < study_end
                                     && study.plot_style(candle.plot).visible
                             })
                             .flat_map(|candle| [candle.bar.low, candle.bar.high]),
@@ -415,8 +401,8 @@ impl ChartState {
                             .zones()
                             .iter()
                             .filter(|zone| {
-                                zone.bars.end > study_start.max(start)
-                                    && zone.bars.start < study_end.max(end)
+                                zone.bars.end > study_start
+                                    && zone.bars.start < study_end
                                     && study.plot_style(zone.plot).visible
                             })
                             .flat_map(|zone| [zone.bottom, zone.top]),
@@ -426,15 +412,15 @@ impl ChartState {
                             .projections()
                             .iter()
                             .filter(|projection| {
-                                projection.bars.end > study_start.max(start) as f64
-                                    && projection.bars.start < study_end.max(end) as f64
+                                projection.bars.end > study_start as f64
+                                    && projection.bars.start < study_end as f64
                                     && study.plot_style(projection.plot).visible
                             })
                             .flat_map(|projection| [projection.bottom, projection.top]),
                     )
                     .chain(
                         study
-                            .volume_profiles(study_start.max(start)..study_end.max(end))
+                            .volume_profiles(study_start..study_end)
                             .into_iter()
                             .flat_map(|plot| [plot.profile.low(), plot.profile.high()]),
                     )
@@ -460,14 +446,15 @@ impl ChartState {
                         })
                 });
                 match autoscale {
-                    Some(provider) => provider.range(visible, range),
-                    None => range,
+                    Some(provider) => provider.info(visible, range),
+                    None => range.map(Into::into),
                 }
             })
             .flatten();
+        let margins = main.map_or_else(Default::default, |info| info.margins);
         let (min, max) = main
             .into_iter()
-            .flat_map(|(min, max)| [min, max])
+            .flat_map(|info| [info.price_range.0, info.price_range.1])
             .chain(study_values)
             .chain(prices)
             .map(|value| transform.to_scale(value))
@@ -478,7 +465,13 @@ impl ChartState {
             });
         self.price_scale.rebase(transform);
         self.price_scale.autoscale(min, max);
-        transform
+        (
+            transform,
+            crate::model::AutoscaleInfo {
+                price_range: (min, max),
+                margins,
+            },
+        )
     }
 
     /// Save current zoom state to history
@@ -537,6 +530,7 @@ mod tests {
 
     /// Time and rank identify the right-edge item across type changes and trimmed builds.
     #[test]
+    #[cfg(feature = "widget")]
     fn a_new_series_keeps_the_item_at_the_right_edge() {
         let bars = |minutes: &[i64]| -> Vec<Bar> {
             minutes
@@ -665,6 +659,28 @@ mod tests {
             assert!(
                 (restored - y).abs() < 0.5,
                 "{mode:?} restored: {restored}, was {y}"
+            );
+        }
+    }
+
+    /// 800 points at 8 a bar span 100 slots, so with the right edge on bar `right` the slots of
+    /// bars `right - 99` to `right` are in view: bars 0 to 30 for bar 30, and no bar for bar -50,
+    /// before the first bar, or bar 450, after the last.
+    #[test]
+    fn visible_range_holds_the_bars_on_screen_past_either_end() {
+        let bars: Vec<_> = (0..300)
+            .map(|i| Bar::from_value(Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap(), 1.0))
+            .collect();
+        let mut state = ChartState::new(BarData::from_bars(bars.clone()));
+        state.time_scale_mut().set_width(800.0);
+        state.time_scale_mut().set_bar_spacing(8.0);
+        for (right, start, end) in [(30.0, 0, 31), (-50.0, 0, 0), (450.0, 300, 300)] {
+            state.time_scale_mut().set_right_offset(right - 299.0);
+            assert_eq!(state.visible_range(), (start, end), "right edge on {right}");
+            assert_eq!(
+                state.visible_data(),
+                &bars[start..end],
+                "right edge on {right}"
             );
         }
     }

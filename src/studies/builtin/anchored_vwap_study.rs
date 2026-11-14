@@ -1,5 +1,4 @@
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -23,7 +22,7 @@ impl AnchoredVWAP {
             anchor_bar,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: vec![palette::YELLOW],
+            colors: vec![Color32::from_rgb(30, 136, 229)],
             visible: true,
         }
     }
@@ -73,7 +72,7 @@ impl Indicator for AnchoredVWAP {
                 let price = bar.typical_price();
                 state.1 += price * bar.volume;
                 state.2 += bar.volume;
-                IndicatorValue::Single(if state.2.abs() < 1e-10 {
+                IndicatorValue::Single(if state.2 == 0.0 {
                     price
                 } else {
                     state.1 / state.2

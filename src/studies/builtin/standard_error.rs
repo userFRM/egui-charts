@@ -19,7 +19,7 @@ impl StandardError {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            colors: vec![palette::TEAL],
+            colors: vec![palette::ORANGE],
             visible: true,
         }
     }

@@ -28,7 +28,7 @@ multiple-versions-include-dev = true
 # Pin exceptions to the older versions; new duplicates require review here.
 # The demo also needs getrandom 0.2 and phf 0.11 through its web dependencies.
 skip = [
-    # The SVG renderer uses 0.22; the demo HTTP image loader uses 0.23.
+    # The SVG renderer uses 0.22; the HTTP client of the demo's own-data connections uses 0.23.
     { name = "base64", version = "=0.22.1" },
     { name = "bitflags", version = "=1.3.2" },
     { name = "block2", version = "=0.5.1" },

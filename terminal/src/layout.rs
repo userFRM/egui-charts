@@ -8,11 +8,11 @@ use egui_charts::ui_kit::notifications::NotificationPanel;
 pub(super) enum Region {
     /// Above the top toolbar, such as the layout tabs.
     Top,
-    /// The left edge: the 54 point drawing toolbar panel.
+    /// The left edge: the 54 point drawing toolbar, then the dock across the remaining width.
     Left,
     /// The right edge: the 49 point widget bar and the side panel beside it.
     Right,
-    /// The bottom edge: the dock, then the 39 point bottom bar panel.
+    /// The bottom edge: the 39 point bottom bar above the dock.
     Bottom,
     /// Over the chart area, after the charts are drawn.
     Chart,
@@ -25,6 +25,17 @@ impl Terminal {
     /// it did not perform: intercepted ones, host entries (`Host` variants, host widgets) and any
     /// it has no default for, in emission order.
     pub fn show(&mut self, ui: &mut egui::Ui) -> Vec<Action> {
+        self.show_with(ui, |ui, _, chart| chart.show(ui))
+    }
+
+    /// Like [`Self::show`], with a host-selected renderer for each visible chart slot.
+    /// The callback runs every frame and must not block. It has the same contract as
+    /// [`egui_charts::widget::ChartLayout::show_with`], including detached viewports.
+    pub fn show_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        mut render: impl FnMut(&mut egui::Ui, usize, &mut egui_charts::Chart) -> egui::Response,
+    ) -> Vec<Action> {
         let ctx = ui.ctx().clone();
         if self.ctx.is_none() {
             self.first_frame(&ctx);
@@ -71,11 +82,15 @@ impl Terminal {
         self.show_region(ui, Region::Left);
         self.show_region(ui, Region::Right);
         self.show_region(ui, Region::Bottom);
+        let mut financials_shown = false;
         egui::CentralPanel::default()
             .frame(panel_frame(panel_bg))
             .show(ui, |ui| {
-                let mut slots: Vec<_> = self.charts.iter_mut().collect();
-                self.layout.show(ui, &mut slots);
+                financials_shown = self.show_financials(ui);
+                if !financials_shown {
+                    let mut slots: Vec<_> = self.charts.iter_mut().collect();
+                    self.layout.show_with(ui, &mut slots, &mut render);
+                }
             });
         if self.layout.active() != self.active {
             self.activate_slot(self.layout.active());
@@ -89,12 +104,18 @@ impl Terminal {
             );
             self.chart_events
                 .extend(chart.drain_events().map(|event| (index, event)));
+            if let Some(error) = chart.take_storage_error() {
+                self.toasts.error(error.to_string());
+            }
         }
-        self.show_region(ui, Region::Chart);
-        if let Some(action) = self.menus.show(&ctx, &mut self.charts[self.active]) {
-            self.emit(Action::ChartMenu(action));
+        if !financials_shown {
+            self.show_region(ui, Region::Chart);
+            if let Some(action) = self.menus.show(&ctx, &mut self.charts[self.active]) {
+                self.emit(Action::ChartMenu(action));
+            }
         }
         self.show_region(ui, Region::Windows);
+        self.show_storage_conflict(&ctx);
 
         self.perform_emitted(&ctx);
         self.show_notice(ui);
@@ -130,12 +151,12 @@ impl Terminal {
     }
 
     fn show_region(&mut self, ui: &mut egui::Ui, region: Region) {
+        self.panels_show(ui, region);
         self.drawings_show(ui, region);
         self.studies_show(ui, region);
         self.time_show(ui, region);
         self.replay_show(ui, region);
         self.alerts_show(ui, region);
-        self.panels_show(ui, region);
         self.trading_show(ui, region);
         self.layouts_show(ui, region);
         self.compare_show(ui, region);
@@ -149,22 +170,29 @@ impl Terminal {
         // Performing an action may emit another, which is handled in turn.
         while !self.emitted.is_empty() {
             for action in std::mem::take(&mut self.emitted) {
-                if self
-                    .intercept
-                    .as_mut()
-                    .is_some_and(|intercept| intercept(&action))
-                {
-                    self.returned.push(action);
-                } else if let Some(action) = self.perform(action) {
-                    self.returned.push(action);
-                } else {
-                    performed = true;
-                }
+                performed |= self.dispatch(action);
             }
         }
         if performed {
             ctx.request_repaint();
         }
+    }
+
+    /// Returns `action` to the host if it intercepts it, else performs it and returns what is
+    /// left. True when performed.
+    pub(super) fn dispatch(&mut self, action: Action) -> bool {
+        if self
+            .intercept
+            .as_mut()
+            .is_some_and(|intercept| intercept(&action))
+        {
+            self.returned.push(action);
+        } else if let Some(action) = self.perform(action) {
+            self.returned.push(action);
+        } else {
+            return true;
+        }
+        false
     }
 
     fn show_notice(&mut self, ui: &egui::Ui) {

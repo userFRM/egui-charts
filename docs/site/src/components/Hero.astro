@@ -1,0 +1,12 @@
+---
+import Hero from '@astrojs/starlight/components/Hero.astro';
+import LiveChart from './LiveChart.astro';
+---
+
+{Astro.url.pathname === '/egui-charts/docs/' ? <div class="landing-hero">
+  <div>
+    <a class="version-label" href="/egui-charts/docs/installation/">Rust · egui 0.37 · main</a>
+    <Hero />
+  </div>
+  <LiveChart />
+</div> : <Hero />}

@@ -66,12 +66,37 @@ pub fn render_svg_centered(
 
 /// Match visible rail ink rather than the transparent padding of each SVG viewport.
 pub(super) fn rail_icon_size(icon: &Icon) -> Vec2 {
-    if icon.name == icons::TREND_LINE.name {
+    if [icons::CROSSHAIR, icons::TREND_LINE].contains(icon) {
         Vec2::splat(29.0)
-    } else if icon.name == icons::FIB_RETRACEMENT.name {
-        Vec2::new(34.0, 27.0)
-    } else if icon.name == icons::MEASURE.name {
+    } else if icon == &icons::FIB_RETRACEMENT {
+        Vec2::splat(27.0)
+    } else if [
+        icons::ARROW,
+        icons::XABCD_PATTERN,
+        icons::LONG_POSITION,
+        icons::MEASURE,
+        icons::ZOOM_IN,
+        icons::ZOOM_OUT,
+        icons::DRAWING_KEEP,
+        icons::DRAWING_MAGNET,
+    ]
+    .contains(icon)
+    {
+        Vec2::splat(28.0)
+    } else if icon == &icons::BRUSH {
         Vec2::splat(31.0)
+    } else if icon == &icons::EMOJI_ICON {
+        Vec2::splat(25.0)
+    } else if [
+        icons::LOCK,
+        icons::UNLOCK,
+        icons::EYE,
+        icons::STAR_EMPTY,
+        icons::TRASH,
+    ]
+    .contains(icon)
+    {
+        Vec2::splat(26.0)
     } else {
         Vec2::splat(crate::tokens::DESIGN_TOKENS.sizing.toolbar.icon_size)
     }

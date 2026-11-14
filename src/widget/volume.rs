@@ -1,6 +1,6 @@
 //! Volume study layout and painting on its independent zero-based scale.
 
-use crate::chart::renderers::{ChartMapping, paint_study_plot};
+use crate::chart::rendering::{ChartMapping, paint_study_plot};
 use crate::studies::{Indicator, PlotType};
 use egui::{Painter, Pos2, Rect};
 use std::ops::Range;
@@ -58,11 +58,14 @@ pub(super) fn range(
         .filter(|(_, plot)| plot.visible)
         .map(
             |(line, plot)| match groups.filter(|groups| groups.factor() > 1) {
-                Some(groups) if plot.plot_type == PlotType::Histogram => groups.groups
-                    [groups.covering(visible.clone())]
-                .iter()
-                .filter_map(|group| values.value(line, group.peak))
-                .fold(0.0, f64::max),
+                Some(groups)
+                    if matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns) =>
+                {
+                    groups.groups[groups.covering(visible.clone())]
+                        .iter()
+                        .filter_map(|group| values.value(line, group.peak))
+                        .fold(0.0, f64::max)
+                }
                 _ => visible
                     .clone()
                     .filter_map(|bar| values.value(line, bar))
@@ -96,9 +99,9 @@ pub(super) fn paint(
         if !plot.visible {
             continue;
         }
-        let histogram = plot.plot_type == PlotType::Histogram;
+        let histogram = matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns);
         if histogram {
-            plot.width = coords.bar_spacing * factor as f32 * 0.8;
+            plot.width = coords.bar_spacing_for_width() * factor as f32 * 0.8;
         }
         let mut points = Vec::new();
         for group in visible.start / factor..visible.end.div_ceil(factor) {
@@ -138,6 +141,14 @@ pub(super) fn paint(
             paint_study_plot(&painter, &points, plot, y(0.0));
         }
     }
+    let map = crate::scales::PriceMap::new(
+        crate::scales::PriceTransform::default(),
+        crate::scales::PriceRange::new(min, max),
+        rect.top(),
+        rect.bottom(),
+        false,
+    );
+    crate::chart::indicators::plots::paint_price_lines(&painter, study, &map);
 }
 
 pub(super) fn tags(
@@ -163,6 +174,7 @@ pub(super) fn tags(
         let plot = study.plot_style(line);
         if let Some(value) = study.values().value(line, bar)
             && plot.visible
+            && study.plot_tagged(line)
             && map.range().contains(value)
         {
             let label = crate::chart::rendering::axes::named_label(
@@ -193,12 +205,18 @@ pub(super) fn tags(
 
 impl super::Chart {
     pub(super) fn shows_volume(&self) -> bool {
-        let visible = self.studies.indicators().iter().any(|study| {
-            study.is_volume()
-                && study.is_overlay()
-                && study.is_visible()
-                && (0..study.line_count()).any(|line| study.plot_style(line).visible)
-        }) || (!cfg!(feature = "studies") && self.config.show_volume);
+        let visible = self
+            .study_ids
+            .iter()
+            .zip(self.studies.indicators())
+            .any(|(id, study)| {
+                self.series_pane(*id) == Some(self.main_series_pane())
+                    && study.is_volume()
+                    && study.is_overlay()
+                    && study.is_visible()
+                    && (0..study.line_count()).any(|line| study.plot_style(line).visible)
+            })
+            || (!cfg!(feature = "studies") && self.config.show_volume);
         self.main_series_visible && self.chart_type.supports_volume() && visible
     }
 }
@@ -220,7 +238,7 @@ pub(super) fn mapping(
             rect.bottom(),
             false,
         ),
-        ..*coords
+        ..coords.clone()
     }
 }
 
@@ -229,6 +247,79 @@ mod tests {
     use crate::studies::InputValue;
     use crate::widget::test_frames::{chart, shapes};
     use egui::Context;
+
+    /// The volume study adds columns, a tag on the price axis and rows in the tooltip to a candle
+    /// chart, and none of them on the chart types that hide volume.
+    #[test]
+    fn price_based_charts_show_no_volume_tag_or_rows() {
+        use crate::model::ChartType;
+        let mut failures = Vec::new();
+        for (kind, shown) in [
+            (ChartType::Candles, true),
+            (ChartType::Renko, false),
+            (ChartType::Kagi, false),
+            (ChartType::LineBreak, false),
+            (ChartType::PointAndFigure, false),
+            (ChartType::Range, false),
+        ] {
+            let ctx = Context::default();
+            // Closes of 100, 103, 106 and 109 in turn build elements at the default sizes.
+            let mut chart = chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+            chart.set_chart_type(kind);
+            chart.config_mut().show_volume = false;
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            shapes(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let newest = chart.state.shown().len() - 1;
+            let pointer =
+                egui::Event::PointerMoved(egui::pos2(map.idx_to_x(newest), map.rect.center().y));
+            let texts = |painted: Vec<egui::Shape>| {
+                Vec::from_iter(painted.into_iter().filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some((text.pos.x, text.galley.text().to_owned())),
+                    _ => None,
+                }))
+            };
+            // The texts on the price axis and the rectangles in the volume area without a
+            // pointer, and whether the tooltip over the newest element lists a row of the study.
+            let readouts = |chart: &mut crate::widget::Chart, time| {
+                shapes(&ctx, chart, time, vec![]);
+                let painted = shapes(&ctx, chart, time + 0.1, vec![]);
+                let area = super::overlay_rect(chart.last_rendered_price_rect, chart.config());
+                let columns = painted
+                    .iter()
+                    .filter(|shape| {
+                        matches!(shape, egui::Shape::Rect(rect) if area.contains_rect(rect.rect))
+                    })
+                    .count();
+                let mut tags = texts(painted);
+                let axis = chart.last_rendered_price_rect.right();
+                tags.retain(|(x, _)| *x >= axis);
+                shapes(&ctx, chart, time + 0.2, vec![pointer.clone()]);
+                let hovered = texts(shapes(&ctx, chart, time + 0.3, vec![pointer.clone()]));
+                shapes(&ctx, chart, time + 0.4, vec![egui::Event::PointerGone]);
+                let rows = hovered.iter().any(|(_, text)| text.starts_with("Volume:"));
+                (tags, columns, rows)
+            };
+            let (tags, columns, rows) = readouts(&mut chart, 0.2);
+            assert!(!rows, "{kind:?}: no study, no rows");
+            chart.config_mut().show_volume = true;
+            let (with_volume, with_columns, rows) = readouts(&mut chart, 0.7);
+            if (with_volume != tags) != shown {
+                failures.push(format!(
+                    "{kind:?}: price axis {with_volume:?}, was {tags:?}"
+                ));
+            }
+            if (with_columns != columns) != shown {
+                failures.push(format!(
+                    "{kind:?}: {with_columns} rectangles in the volume area, was {columns}"
+                ));
+            }
+            if rows != shown {
+                failures.push(format!("{kind:?}: volume rows in the tooltip: {rows}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 
     #[test]
     fn volume_switch_and_pane_keep_volume_off_the_price_scale() {
@@ -275,6 +366,18 @@ mod tests {
                     && text.pos.x >= chart.last_rendered_price_rect.right()
             )),
             "the last column's volume is tagged on the price axis"
+        );
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.untagged_plots = (0..settings.plots.len()).collect();
+        study.apply_settings(&[], settings).unwrap();
+        let painted = shapes(&ctx, &mut chart, 1.05, vec![]);
+        assert!(
+            !painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text() == "1.00M"
+                    && text.pos.x >= chart.last_rendered_price_rect.right()
+            )),
+            "untagged volume plots leave the price axis"
         );
         assert_eq!(chart.get_chart_mapping().price.range().min, price_range.min);
         assert_eq!(chart.get_chart_mapping().price.range().max, price_range.max);
@@ -365,7 +468,7 @@ mod tests {
             );
             let study = chart.indicators().find(|(id, _)| *id == next).unwrap().1;
             let map =
-                crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping()).price;
+                crate::chart::rendering::study_mapping(study, &chart.get_chart_mapping()).price;
             assert!(map.range().min <= 0.0 && map.range().max >= 1_000_000.0);
             assert!(map.price_to_y(1_000_000.0) < map.price_to_y(0.0));
         }

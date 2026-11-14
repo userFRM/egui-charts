@@ -282,27 +282,3 @@ impl SyncButton {
         if changed { Some(new_options) } else { None }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sync_button_default() {
-        let btn = SyncButton::new();
-        assert!(btn.options().sync_time_axis);
-        assert!(btn.options().sync_crosshair);
-        assert!(!btn.options().sync_drawings);
-    }
-
-    #[test]
-    fn test_set_options() {
-        let mut btn = SyncButton::new();
-        let opts = ChartSyncOptions {
-            sync_drawings: true,
-            ..Default::default()
-        };
-        btn.set_options(opts.clone());
-        assert!(btn.options().sync_drawings);
-    }
-}

@@ -6,6 +6,14 @@
 
 use chrono::{DateTime, Utc};
 
+/// A relative bound at `scale` for floating-point comparisons.
+/// Partial closes accumulate rounding, so quantities use a `1e-9` relative bound at the original
+/// quantity's scale, or the larger of the held and filled quantities without that history.
+/// Price-distance ties use four ulps for a single step.
+pub(crate) fn rounding_tolerance(scale: f64, relative: f64) -> f64 {
+    relative * scale.abs()
+}
+
 /// Identifies an order. The broker chooses it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OrderId(
@@ -43,6 +51,12 @@ impl OrderSide {
             OrderSide::Sell => "SELL",
         }
     }
+
+    /// Whether an exit on this side reduces `position`, a signed net quantity: not once the
+    /// position is flat or on this side, as after a close or a reverse.
+    pub(crate) fn reduces(self, position: f64) -> bool {
+        position != 0.0 && (self == OrderSide::Buy) != (position > 0.0)
+    }
 }
 
 /// How an order executes. Prices are in the symbol's price units.
@@ -64,6 +78,37 @@ pub enum OrderType {
     },
 }
 
+impl OrderType {
+    /// Where an order of this type on `side` fills while the price moves from `start` to `end`,
+    /// or `None` if it does not: a market order at `start`, a limit or stop already reached at
+    /// `start` there, one the movement reaches at its price. A stop-limit order returns the
+    /// point where its stop triggered; the caller continues it from there as a limit order.
+    pub(crate) fn fill_price(&self, side: OrderSide, start: f64, end: f64) -> Option<f64> {
+        let buy = side == OrderSide::Buy;
+        let reach = |price: f64, at_or_below: bool| {
+            let reached = |at: f64| {
+                if at_or_below {
+                    at <= price
+                } else {
+                    at >= price
+                }
+            };
+            if reached(start) {
+                Some(start)
+            } else if reached(end) {
+                Some(price)
+            } else {
+                None
+            }
+        };
+        match *self {
+            OrderType::Market => Some(start),
+            OrderType::Limit(limit) => reach(limit, buy),
+            OrderType::Stop(stop) | OrderType::StopLimit { stop, .. } => reach(stop, !buy),
+        }
+    }
+}
+
 /// The role of an exit order attached to the net position in its symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositionBracket {
@@ -71,6 +116,25 @@ pub enum PositionBracket {
     TakeProfit,
     /// A protective stop exit.
     StopLoss,
+}
+
+/// A take profit that closes its own part of an order: one of
+/// [`OrderRequest::take_profit_levels`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TakeProfitLevel {
+    /// The price at which it closes [`quantity`](Self::quantity): above the entry for a buy,
+    /// below for a sell.
+    pub price: f64,
+    /// Positive, in the symbol's trading units.
+    pub quantity: f64,
+}
+
+impl TakeProfitLevel {
+    /// A take profit that closes `quantity` at `price`.
+    pub fn new(price: f64, quantity: f64) -> Self {
+        Self { price, quantity }
+    }
 }
 
 /// An order as the user or the host asks for it.
@@ -87,7 +151,13 @@ pub struct OrderRequest {
     pub order_type: OrderType,
     /// The price at which a take-profit order closes the filled quantity, for an account that
     /// accepts [brackets](Capabilities::brackets): above the entry for a buy, below for a sell.
+    /// `None` while [`take_profit_levels`](Self::take_profit_levels) are set.
     pub take_profit: Option<f64>,
+    /// Several take profits, each closing its own quantity, for an account that accepts
+    /// [take-profit levels](Capabilities::take_profit_levels), in the order given. Their
+    /// quantities add up to [`quantity`](Self::quantity). Empty for one take profit or none,
+    /// which [`take_profit`](Self::take_profit) holds.
+    pub take_profit_levels: Vec<TakeProfitLevel>,
     /// The price at which a stop-loss order closes the filled quantity, for an account that
     /// accepts [brackets](Capabilities::brackets): below the entry for a buy, above for a sell.
     pub stop_loss: Option<f64>,
@@ -112,6 +182,7 @@ impl OrderRequest {
             quantity,
             order_type,
             take_profit: None,
+            take_profit_levels: Vec::new(),
             stop_loss: None,
             time_in_force: TimeInForce::Day,
             position_bracket: None,
@@ -395,8 +466,13 @@ pub struct Capabilities {
     pub stop: bool,
     /// Accepts stop-limit orders.
     pub stop_limit: bool,
-    /// Accepts a take-profit and a stop-loss with an order.
+    /// Accepts a take-profit and a stop-loss with an order, and with [`modify`](Self::modify)
+    /// adds them to a working order.
     pub brackets: bool,
+    /// Accepts several take profits with an order, each closing its own quantity, through
+    /// [`OrderRequest::take_profit_levels`]. Needs [`brackets`](Self::brackets); without it the
+    /// order ticket offers one take profit.
+    pub take_profit_levels: bool,
     /// Closes a position with an opposite market order, so the Close and Flatten controls work.
     pub close: bool,
     /// Reverses a position with an opposite market order of twice its size, so the Reverse
@@ -406,7 +482,8 @@ pub struct Capabilities {
     /// preview an order before it is placed.
     pub preview: bool,
     /// Changes working orders through [`Broker::modify`](crate::services::Broker::modify), so
-    /// their lines on the chart can be dragged.
+    /// their lines on the chart can be dragged, and with [`brackets`](Self::brackets) exits
+    /// added to them.
     pub modify: bool,
 }
 
@@ -477,6 +554,59 @@ impl TradingRules {
             pip_value: None,
             time_in_force: vec![TimeInForce::Day],
             leverage: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_price_follows_the_side_and_the_movement() {
+        use OrderSide::{Buy, Sell};
+        let stop_limit = OrderType::StopLimit {
+            stop: 100.0,
+            limit: 101.0,
+        };
+        // (order type, side, start, end, fill)
+        let cases = [
+            (OrderType::Market, Buy, 103.0, 97.0, Some(103.0)),
+            (OrderType::Market, Sell, 97.0, 103.0, Some(97.0)),
+            // Gap: already beyond the price at the start, so filled there.
+            (OrderType::Limit(100.0), Buy, 98.0, 95.0, Some(98.0)),
+            (OrderType::Limit(100.0), Sell, 102.0, 105.0, Some(102.0)),
+            (OrderType::Stop(100.0), Buy, 102.0, 105.0, Some(102.0)),
+            (OrderType::Stop(100.0), Sell, 98.0, 95.0, Some(98.0)),
+            (stop_limit, Buy, 102.0, 105.0, Some(102.0)),
+            // Through: the movement reaches the price, so filled at it.
+            (OrderType::Limit(100.0), Buy, 103.0, 97.0, Some(100.0)),
+            (OrderType::Limit(100.0), Buy, 103.0, 100.0, Some(100.0)),
+            (OrderType::Limit(100.0), Sell, 97.0, 103.0, Some(100.0)),
+            (OrderType::Stop(100.0), Buy, 97.0, 103.0, Some(100.0)),
+            (OrderType::Stop(100.0), Sell, 103.0, 97.0, Some(100.0)),
+            (stop_limit, Buy, 97.0, 103.0, Some(100.0)),
+            (stop_limit, Sell, 103.0, 97.0, Some(100.0)),
+            // Not reached, including a movement away from the price.
+            (OrderType::Limit(100.0), Buy, 103.0, 101.0, None),
+            (OrderType::Limit(100.0), Sell, 97.0, 99.0, None),
+            (OrderType::Limit(100.0), Sell, 99.0, 97.0, None),
+            (OrderType::Stop(100.0), Buy, 97.0, 99.0, None),
+            (OrderType::Stop(100.0), Sell, 103.0, 101.0, None),
+            (stop_limit, Buy, 97.0, 99.0, None),
+            (stop_limit, Sell, 103.0, 101.0, None),
+            // A single price, as the paper account passes it.
+            (OrderType::Limit(100.0), Buy, 100.0, 100.0, Some(100.0)),
+            (OrderType::Limit(100.0), Buy, 100.5, 100.5, None),
+            (OrderType::Stop(100.0), Sell, 100.0, 100.0, Some(100.0)),
+            (OrderType::Stop(100.0), Sell, 100.5, 100.5, None),
+        ];
+        for (order_type, side, start, end, fill) in cases {
+            assert_eq!(
+                order_type.fill_price(side, start, end),
+                fill,
+                "{side:?} {order_type:?} from {start} to {end}"
+            );
         }
     }
 }

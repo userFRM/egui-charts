@@ -140,6 +140,20 @@ fn custom_controls_report_names_roles_and_states() {
         (Role::Button, "Chart Sync Options", |ui, _| {
             super::top_toolbar::components::SyncButton::new().show(ui);
         }),
+        (Role::MenuItemRadio, "2x2 Grid", |ui, selected| {
+            use crate::widget::ChartLayoutMode;
+            let current = if selected {
+                ChartLayoutMode::Four
+            } else {
+                ChartLayoutMode::Single
+            };
+            super::top_toolbar::components::ChartGridSelector::new(current).show_menu(ui);
+        }),
+        (Role::Switch, "Crosshair", |ui, selected| {
+            let mut selector = super::top_toolbar::components::ChartGridSelector::default();
+            selector.sync.sync_crosshair = selected;
+            selector.show_menu(ui);
+        }),
         (Role::Button, "Chart settings", |ui, _| {
             super::top_toolbar::components::settings_menu::SettingsMenu::new()
                 .show_btn(ui, ui.max_rect());
@@ -270,6 +284,8 @@ fn custom_controls_report_names_roles_and_states() {
                         "Stay in drawing mode",
                         "Favorite",
                         "Line tools",
+                        "2x2 Grid",
+                        "Crosshair",
                     ]
                     .contains(&label)
                     {
@@ -353,13 +369,23 @@ fn dialogs_expose_titles_and_label_their_fields() {
             "Drawing Properties",
             |ctx| {
                 let mut dialog = DrawingPropertiesDialog::new();
-                dialog.open(DrawingId(1), "Trend Line".into(), DrawingProps::default());
+                dialog.open(DrawingId(1), "Text".into(), DrawingProps::default());
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&crate::drawings::Drawing::new(
+                        1,
+                        crate::drawings::DrawingToolType::TextLabel,
+                    )),
+                ));
                 dialog.active_tab = PropertiesTab::Text;
                 dialog.show(ctx);
             },
             &[
                 (Role::MultilineTextInput, "Label"),
                 (Role::ComboBox, "Font size"),
+                (Role::CheckBox, "Bold"),
+                (Role::CheckBox, "Italic"),
+                (Role::CheckBox, "Background"),
+                (Role::CheckBox, "Border"),
             ],
         ),
         (
@@ -394,7 +420,26 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[
                 (Role::CheckBox, "Level 1 visible"),
                 (Role::SpinButton, "Level 1 ratio"),
-                (Role::TextInput, "Level 1 label"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(DrawingId(1), "Gann Box".into(), DrawingProps::default());
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&crate::drawings::Drawing::new(
+                        1,
+                        crate::drawings::DrawingToolType::GannBox,
+                    )),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::CheckBox, "Price level 1 visible"),
+                (Role::CheckBox, "Time level 1 visible"),
+                (Role::CheckBox, "Angles"),
             ],
         ),
         (
@@ -520,6 +565,22 @@ fn dialogs_expose_titles_and_label_their_fields() {
                 dialog.show(ctx);
             },
             &[(Role::ComboBox, "Line style")],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                let mut props = DrawingProps::default();
+                props.timeframe_visibility.show_on_all = false;
+                dialog.open(DrawingId(1), "Trend Line".into(), props);
+                dialog.active_tab = PropertiesTab::Visibility;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::CheckBox, "Ticks"),
+                (Role::SpinButton, "Ticks from"),
+                (Role::SpinButton, "Ticks to"),
+            ],
         ),
         (
             "Main series · Candles",
@@ -650,9 +711,8 @@ fn dialogs_expose_titles_and_label_their_fields() {
                     if english == "TEST" {
                         return Some("This identifier must stay unchanged".into());
                     }
-                    (labels.iter().any(|label| label == english)
-                        || english.starts_with("Level {0}"))
-                    .then(|| format!("Translated: {english}"))
+                    (labels.iter().any(|label| label == english) || english.contains(" {0} "))
+                        .then(|| format!("Translated: {english}"))
                 });
                 harness.run();
                 assert_eq!(

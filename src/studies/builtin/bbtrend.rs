@@ -49,13 +49,18 @@ impl BBTrend {
     /// Create a BBTrend from the lengths of its two bands and their deviation multiplier.
     /// The multiplier is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(short_length: usize, long_length: usize, multiplier: f64) -> Self {
-        let (up, down) = (palette::GREEN, palette::RED);
+        let (up, down) = (palette::TEAL, palette::RED);
         Self {
             short_length: short_length.max(1),
             long_length: long_length.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            colors: [up, up.gamma_multiply(0.5), down, down.gamma_multiply(0.5)],
+            colors: [
+                up.gamma_multiply_u8(191),
+                up.gamma_multiply_u8(128),
+                down.gamma_multiply_u8(191),
+                down.gamma_multiply_u8(128),
+            ],
             visible: true,
         }
     }
@@ -117,10 +122,12 @@ impl Indicator for BBTrend {
         let value = self.values.value(0, bar)?;
         // Bars without a value, skipped as non-finite, do not count as the previous one.
         let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
-        Some(if value > 0.0 {
-            self.colors[usize::from(!previous.is_some_and(|p| value > p))]
+        Some(if value == 0.0 {
+            self.colors[1]
+        } else if value > 0.0 {
+            self.colors[usize::from(!previous.is_some_and(|p| value >= p))]
         } else {
-            self.colors[2 + usize::from(!previous.is_some_and(|p| value < p))]
+            self.colors[2 + usize::from(!previous.is_some_and(|p| value <= p))]
         })
     }
 
@@ -218,6 +225,6 @@ mod tests {
                 colors.iter().position(|&c| c == color).unwrap()
             })
             .collect();
-        assert_eq!(slots, [1, 0, 1, 2, 2, 3, 3]);
+        assert_eq!(slots, [1, 0, 1, 2, 2, 3, 1]);
     }
 }

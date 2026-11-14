@@ -50,8 +50,10 @@ fn trade_bar_thresholds_survive_drains_and_keep_raw_fills() {
 
 /// Guards that one filter gives one answer: the book size study, the heatmap's depth columns and
 /// the ladder's book (`OrderQueue::filtered`) sum the same orders, leaving out a small order, a
-/// young one, one of an excluded participant and one whose age is unknown, and that a feed with
-/// aggregate depth only gives no value or column instead of an unfiltered one.
+/// young one, one of an excluded participant and one whose age is unknown, that a maximum age keeps
+/// the orders younger than it, so a minimum and a maximum of the same age split the orders that
+/// carry a placement time, and that a feed with aggregate depth only gives no value or column
+/// instead of an unfiltered one.
 #[test]
 fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
     use crate::data::{OrderFilter, OrderFilterUnavailable, OrderFlowInput, OrderFlowKind};
@@ -76,6 +78,7 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
     let filter = OrderFilter {
         min_size: 2.0,
         min_age: Some(TimeDelta::seconds(10)),
+        max_age: None,
         exclude_participants: vec![2],
     };
     let config = DepthHistoryConfig {
@@ -171,6 +174,13 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
         ),
         (
             OrderFilter {
+                max_age: Some(TimeDelta::seconds(1)),
+                ..Default::default()
+            },
+            Err(OrderFilterUnavailable::PlacementTimes),
+        ),
+        (
+            OrderFilter {
                 min_size: 1.0,
                 ..Default::default()
             },
@@ -178,6 +188,36 @@ fn one_order_filter_gives_book_size_heatmap_and_ladder_the_same_sizes() {
         ),
     ] {
         assert_eq!(queue.filtered("A", &filter).map(|_| ()), expected);
+    }
+
+    // A minimum and a maximum of the same age split the orders that carry a placement time: 2 s
+    // is fresh, 10 s and 30 s persistent, and the order without one is in neither.
+    let mut queue = crate::data::OrderQueue::new(Some(0.25));
+    let orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 1.0).with_placed(ago(2)),
+        RestingOrder::new(2, Buy, 99.0, 2.0).with_placed(ago(10)),
+        RestingOrder::new(3, Buy, 99.0, 4.0).with_placed(ago(30)),
+        RestingOrder::new(4, Buy, 99.0, 8.0),
+    ];
+    queue.snapshot(1, time, orders).unwrap();
+    let ten = Some(TimeDelta::seconds(10));
+    for (filter, expected) in [
+        (
+            OrderFilter {
+                max_age: ten,
+                ..Default::default()
+            },
+            vec![1.0],
+        ),
+        (
+            OrderFilter {
+                min_age: ten,
+                ..Default::default()
+            },
+            vec![6.0],
+        ),
+    ] {
+        assert_eq!(sizes(&queue.filtered("A", &filter).unwrap().bids), expected);
     }
 }
 
@@ -274,7 +314,7 @@ fn count_bars_follow_accepted_trades_across_frames() {
         let sink = inbox.subscribe("ES".into(), clock.clone(), 10_000, None);
         let mut bars = BTreeMap::new();
         let mut merged = Vec::new();
-        let mut from_ticks = std::collections::BTreeSet::new();
+        let mut from_ticks = std::collections::BTreeMap::new();
         for i in 0..(count * 2 + 1) {
             let trade =
                 tick(at(0, 5), 100.0 + (i % 3) as f64, (i % 4 + 1) as f64).with_id(i as u64);
@@ -423,6 +463,14 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary].0,
             Bar::new(boundary, 103.0, 103.0, 103.0, 103.0, 0.0)
         );
+        let mut bars = Vec::new();
+        let mut from_ticks = std::collections::BTreeMap::new();
+        super::super::merge::merge(
+            &mut bars,
+            &mut from_ticks,
+            &clock,
+            updates.bars.into_values().collect(),
+        );
         sink.push_tick(tick(boundary, 99.0, 4.0));
         sink.push_tick(tick(boundary + TimeDelta::milliseconds(1), 101.0, 5.0));
         let (_, updates) = inbox.drain().updates.pop().unwrap();
@@ -430,9 +478,16 @@ fn clock_boundaries_and_empty_intervals() {
             updates.bars[&boundary],
             (
                 Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0),
-                Origin::Live
+                Origin::TicksAfterHeartbeat(2)
             )
         );
+        super::super::merge::merge(
+            &mut bars,
+            &mut from_ticks,
+            &clock,
+            updates.bars.into_values().collect(),
+        );
+        assert_eq!(bars, [Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0)]);
     }
 }
 
@@ -750,6 +805,7 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         span: TimeDelta::seconds(span),
         bids: bids.to_vec(),
         asks: asks.to_vec(),
+        ..Default::default()
     };
     assert_eq!(
         Vec::from(updates.depth_columns),
@@ -765,4 +821,155 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         updates.depth_columns.is_empty(),
         "new settings discard pending old rows"
     );
+}
+
+/// Guards the largest order of a row: a column sampled from individual orders records, next to
+/// each row's total, the largest order the filter accepts among the row's ticks, and the same
+/// book sampled as aggregate depth records none, so no heatmap cell of it can be marked.
+#[test]
+fn order_columns_record_the_largest_accepted_order_of_each_row() {
+    use crate::data::OrderFilter;
+    use crate::model::OrderSide::{Buy, Sell};
+    let time = at(1, 0);
+    let mut orders = vec![
+        RestingOrder::new(1, Buy, 99.0, 50.0),
+        RestingOrder::new(2, Buy, 99.25, 15.0),
+        RestingOrder::new(3, Buy, 99.25, 60.0).with_participant(2),
+        RestingOrder::new(4, Sell, 99.5, 30.0),
+    ];
+    orders.extend((5..10).map(|id| RestingOrder::new(id, Buy, 99.0, 10.0)));
+    let filter = OrderFilter {
+        exclude_participants: vec![2],
+        ..Default::default()
+    };
+    let mut columns = Vec::new();
+    for sampled in [Some(filter), None] {
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
+        let config = DepthHistoryConfig {
+            ticks_per_row: 2,
+            orders: sampled,
+            ..Default::default()
+        };
+        inbox.sample_depth(sink.id, Some(config));
+        sink.push_order_snapshot(1, time, orders.clone());
+        let next = RestingOrder::new(10, Sell, 100.0, 1.0);
+        sink.push_order_event(2, time + TimeDelta::seconds(1), OrderEvent::Add(next));
+        let (_, mut updates) = inbox.drain().updates.pop().unwrap();
+        columns.push(updates.depth_columns.pop_front().unwrap());
+    }
+    // Ticks 396 (99.0) and 397 (99.25) make bid row 198, tick 398 (99.5) ask row 199.
+    let column = |bid, largest_bid_orders, largest_ask_orders| DepthColumn {
+        time,
+        span: TimeDelta::seconds(1),
+        bids: vec![(198, bid)],
+        asks: vec![(199, 30.0)],
+        largest_bid_orders,
+        largest_ask_orders,
+    };
+    // Accepted: 50 + 5 * 10 + 15 = 115, the largest 50; aggregate depth also counts the 60.
+    assert_eq!(
+        columns,
+        [
+            column(115.0, vec![50.0], vec![30.0]),
+            column(175.0, vec![], vec![])
+        ]
+    );
+}
+
+/// A whitespace bar keeps the last real close, so heartbeats after it append empty candles at that
+/// close, and without a real close they append none.
+#[test]
+fn heartbeats_after_whitespace_keep_the_last_real_close() {
+    for seeded in [true, false] {
+        let clock = BarClock::new(Timeframe::Min1);
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("ES".into(), clock.clone(), 10, None);
+        let (mut bars, mut from_ticks) = (Vec::new(), std::collections::BTreeMap::new());
+        if seeded {
+            sink.push_bar(Bar::new(at(0, 0), 109.0, 109.0, 109.0, 109.0, 1.0));
+        }
+        sink.push_bar(Bar::whitespace(at(1, 0)));
+        for minute in 2..=4 {
+            sink.advance_time(at(minute, 1));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let incoming = updates.bars.into_values().collect();
+            let merged = super::super::merge::merge(&mut bars, &mut from_ticks, &clock, incoming);
+            assert_eq!((updates.rejected, merged.rejected), (0, 0));
+        }
+        let empty = |minute| Bar::new(at(minute, 0), 109.0, 109.0, 109.0, 109.0, 0.0);
+        if seeded {
+            assert_eq!(bars[2..], [empty(2), empty(3), empty(4)]);
+        } else {
+            assert!(matches!(&bars[..], [bar] if bar.is_whitespace()));
+        }
+    }
+}
+
+/// A heartbeat opens a candle only inside the windows the subscription selected, whatever the
+/// interval, and the first one of the next session opens that session's slot at the last close.
+/// The candles are worked out by hand from a Mon-Fri 09:30-16:00 UTC session and a trade at 100.
+#[test]
+fn heartbeat_outside_the_session_opens_no_candle() {
+    use crate::model::{Session, SessionWindow, TimezoneId};
+    use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
+    use chrono::{NaiveDate, NaiveTime};
+    let time = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+    let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+    let days = [Mon, Tue, Wed, Thu, Fri];
+    let regular = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+        .with_holidays(["2024-03-14".parse::<NaiveDate>().unwrap()]);
+    let with_break = Session::new([
+        SessionWindow::new(days, hm(9, 30), hm(12, 0)),
+        SessionWindow::new(days, hm(13, 0), hm(16, 0)),
+    ]);
+    let with_premarket = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+        .with_extended_windows([SessionWindow::new(days, hm(4, 0), hm(9, 30))]);
+    #[rustfmt::skip]
+    let cases = [
+        ("after the close, overnight, on a holiday and a weekend", Timeframe::Min1,
+            regular.clone(), false, "2024-03-12T15:59:30Z",
+            vec![("2024-03-12T16:00:00Z", None),
+                ("2024-03-12T16:05:00Z", None),
+                ("2024-03-13T03:00:00Z", None),
+                ("2024-03-13T09:30:05Z", Some("2024-03-13T09:30:00Z")),
+                ("2024-03-14T10:00:00Z", None),
+                ("2024-03-16T12:00:00Z", None),
+                ("2024-03-18T09:31:00Z", Some("2024-03-18T09:31:00Z"))]),
+        ("in the break between two windows", Timeframe::Min1, with_break, false,
+            "2024-03-12T11:59:30Z",
+            vec![("2024-03-12T12:30:00Z", None),
+                ("2024-03-12T13:00:05Z", Some("2024-03-12T13:00:00Z"))]),
+        ("a daily bar on a weekend", Timeframe::Day1, regular, false, "2024-03-15T15:59:30Z",
+            vec![("2024-03-16T12:00:00Z", None),
+                ("2024-03-18T03:00:00Z", None),
+                ("2024-03-18T09:30:05Z", Some("2024-03-18T00:00:00Z"))]),
+        ("an extended window left out", Timeframe::Min1, with_premarket.clone(), false,
+            "2024-03-12T15:59:30Z",
+            vec![("2024-03-13T08:00:00Z", None),
+                ("2024-03-13T09:30:05Z", Some("2024-03-13T09:30:00Z"))]),
+        ("an extended window selected", Timeframe::Min1, with_premarket, true,
+            "2024-03-12T15:59:30Z",
+            vec![("2024-03-13T03:00:00Z", None),
+                ("2024-03-13T08:00:00Z", Some("2024-03-13T08:00:00Z"))]),
+    ];
+    for (name, timeframe, session, extended, trade, heartbeats) in cases {
+        let clock = BarClock::new(timeframe).with_session(TimezoneId::utc(), session, extended);
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("ES".into(), clock, 10, None);
+        sink.push_tick(tick(time(trade), 100.0, 1.0));
+        inbox.drain();
+        for (now, expected) in heartbeats {
+            sink.advance_time(time(now));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let opened: Vec<_> = updates.bars.into_values().map(|(bar, _)| bar).collect();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|open| Bar::new(time(open), 100.0, 100.0, 100.0, 100.0, 0.0))
+                .collect();
+            assert_eq!(opened, expected, "{name}: heartbeat at {now}");
+            // The chart's clock keeps running while the market is closed.
+            assert_eq!(updates.time, Some(time(now)), "{name}: heartbeat at {now}");
+        }
+    }
 }

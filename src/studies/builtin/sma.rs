@@ -19,7 +19,7 @@
 //!
 //! # Default colour
 //!
-//! Orange from [`palette::ORANGE`](crate::studies::palette::ORANGE).
+//! Blue from [`palette::BLUE`](crate::studies::palette::BLUE).
 //!
 //! # Example
 //!
@@ -60,7 +60,7 @@ impl SMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange for MA
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -75,7 +75,7 @@ impl SMA {
 /// Construct with the conventional default parameters.
 impl Default for SMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 
@@ -163,7 +163,7 @@ mod tests {
     /// Closes 11 to 17 give a 5-bar SMA of 13, 14 and 15, the means of 11 to 15, 12 to 16
     /// and 13 to 17.
     #[test]
-    fn matches_published_example() {
+    fn rolling_means_of_five_closes() {
         let start = Utc::now();
         let bars: Vec<Bar> = (11..=17)
             .enumerate()

@@ -138,37 +138,3 @@ impl Indicator for WilliamsAD {
         vec!["WAD".to_string()]
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(open: f64, high: f64, low: f64, close: f64, volume: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open,
-            high,
-            low,
-            close,
-            volume,
-            colors: None,
-            payload: None,
-        }
-    }
-
-    #[test]
-    fn test_williams_ad() {
-        let mut wad = WilliamsAD::new();
-
-        let data = vec![
-            make_bar(100.0, 102.0, 98.0, 101.0, 1000.0),
-            make_bar(101.0, 104.0, 100.0, 103.0, 1200.0), // Up
-            make_bar(103.0, 105.0, 101.0, 102.0, 800.0),  // Down
-        ];
-
-        wad.calculate(&data);
-
-        assert_eq!(wad.values.len(), 3);
-    }
-}

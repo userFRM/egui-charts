@@ -9,15 +9,29 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    GhostCandleScreen, GhostFeedConfig, PitchforkConfig, PositionSize, PositionSizing,
-    RegressionTrendConfig, TimeframeVisibility,
+    ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
+    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
+    NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
-use crate::model::{AlertSource, LineStyle};
+use crate::model::{AlertSource, LineStyle, PostLink};
 use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
+
+/// How a top-level object-tree folder shares its drawings with the other charts of a layout.
+///
+/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions).
+/// Charts on one drawing storage read each other's saved drawings whichever is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FolderSync {
+    /// Keep the drawings on this chart, even with layout-wide drawing sync on.
+    Chart,
+    /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
+    Layout,
+}
 
 /// A drawing on the chart
 ///
@@ -40,6 +54,8 @@ use serde::{Deserialize, Serialize};
 /// timestamps by [`persistence`](crate::drawings::persistence). A field added
 /// later needs `#[serde(default)]`, so that saved version 2 files still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// The trait impls below wrap the derived ones.
+#[serde(remote = "Self")]
 pub struct Drawing {
     /// Unique identifier for this drawing
     #[serde(skip)]
@@ -52,6 +68,11 @@ pub struct Drawing {
     /// from; `None` for a drawing never stored, which is saved with the time of the save
     #[serde(skip)]
     pub created_at: Option<i64>,
+    /// Time of the last edit, in Unix milliseconds: read from the stored record, set by the edits
+    /// of a [`DrawingManager`](crate::drawings::DrawingManager) and put back by their undo.
+    /// `None` for a drawing no edit reached, which is saved with the time of the save.
+    #[serde(skip)]
+    pub modified_at: Option<i64>,
     /// User notes, saved with the drawing and restored from its stored record
     #[serde(skip)]
     pub notes: Option<String>,
@@ -78,6 +99,13 @@ pub struct Drawing {
     /// Independent of host-defined groups. Older saved drawings start at the root.
     #[serde(default)]
     pub folder: Vec<String>,
+    /// Synchronization set on each folder of [`Self::folder`], by position; a missing entry or
+    /// `None` is unset. The outermost folder decides, as [`Self::folder_sync_mode`] reads; inner
+    /// entries wait for their folder to reach the root. Use
+    /// [`DrawingManager::move_to_folder`](crate::drawings::DrawingManager::move_to_folder) to keep
+    /// this aligned with the path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_sync: Vec<Option<FolderSync>>,
     /// Stable id of a host-registered tool; `None` uses the built-in renderer.
     #[serde(default)]
     pub custom_tool: Option<String>,
@@ -92,19 +120,19 @@ pub struct Drawing {
     /// Persistent chart coordinates (bar_idx, price) - stable across pan/zoom
     #[serde(skip)]
     pub chart_points: Vec<ChartPoint>,
-    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order
-    /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
+    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order,
+    /// or of the far corner of a fixed Gann square (empty for other tools); rebuilt with `points`
+    /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Screen position of each candle a Ghost Feed projects (empty for other tools); rebuilt with
-    /// `points` by [`Self::update_screen_coords`]
-    #[serde(skip)]
-    pub(crate) ghost_candles: Vec<GhostCandleScreen>,
-    /// Position as fractions of the pane width and height for anchored text and notes.
+    /// Position as fractions of the pane width and height for anchored text.
     /// `None` adopts the first displayed position, including for older saved drawings.
+    /// A pin saved with one takes the bar and price under it the first time a chart draws it,
+    /// and the chart then clears it.
     #[serde(default)]
     pub screen_anchor: Option<[f32; 2]>,
-    /// Drawing color as RGBA
+    /// Drawing colour as RGBA; also the text and border colour of annotations that have none of
+    /// their own.
     pub color: [u8; 4],
     /// Stroke width in pixels
     pub stroke_width: f32,
@@ -113,13 +141,21 @@ pub struct Drawing {
     pub completed: bool,
     /// Optional annotation content, preserved with the drawing. Tables use one row per line
     /// and tab-separated cells. Images use an image URI resolved by the host's egui image
-    /// loaders. Posts and ideas use the first line as author or title and the rest as body.
+    /// loaders. Posts and ideas use the first line as author or title and the rest as body,
+    /// when they have no [`post`](Self::post).
     pub text: Option<String>,
+    /// The post or idea a post or idea drawing shows: its link and the content the host
+    /// resolved it to through [`Posts`](crate::services::Posts). The content is saved with the
+    /// drawing, so it shows without asking the host again. While it is set, the card shows it
+    /// instead of [`text`](Self::text). Other tools ignore it.
+    #[serde(default)]
+    pub post: Option<PostLink>,
 
     // === Styling properties ===
     /// Line style (Solid, Dashed, Dotted)
     pub line_style: LineStyle,
-    /// Fill color for shapes - None means no fill
+    /// Fill colour of shapes and the background colour of annotation boxes. `None` leaves shapes
+    /// unfilled and gives an annotation box its tool's default colour.
     pub fill_color: Option<[u8; 4]>,
     /// Whether the drawing is locked (prevents editing/moving)
     pub locked: bool,
@@ -129,9 +165,52 @@ pub struct Drawing {
     pub font_size: f32,
     /// Font weight for text annotations
     pub font_weight: FontWeight,
-    /// Extend line to left edge
+    /// Whether annotation text is slanted. Older drawings are upright.
+    #[serde(default)]
+    pub italic: bool,
+    /// Text colour of annotations; `None` uses the tool's default, the drawing colour except on
+    /// a solid label, which takes white or black, whichever reads on its fill.
+    #[serde(default)]
+    pub text_color: Option<[u8; 4]>,
+    /// Whether an annotation draws a box behind its text, in `fill_color` or else the tool's
+    /// default: the theme's panel colour, or the drawing colour for a solid label. Older
+    /// drawings have it on.
+    #[serde(default = "enabled")]
+    pub background: bool,
+    /// Whether an annotation's box has a 1 px border. Older drawings have it on, except price
+    /// labels saved before they had a border.
+    #[serde(default = "enabled")]
+    pub border: bool,
+    /// Border colour of annotation boxes; `None` uses the drawing colour.
+    #[serde(default)]
+    pub border_color: Option<[u8; 4]>,
+    /// Whether a Text, Anchored text or Callout breaks its text into lines no wider than
+    /// `text_wrap_width`. Older drawings keep each line of their text whole.
+    #[serde(default)]
+    pub text_wrap: bool,
+    /// Widest line of wrapped text, in points.
+    #[serde(default = "default_text_wrap_width")]
+    pub text_wrap_width: f32,
+    /// Whether a Text or Anchored text grows and shrinks with the bar spacing instead of keeping
+    /// its font size at every zoom: the text, its wrap width and its box scale together. Older
+    /// drawings keep their size.
+    #[serde(default)]
+    pub text_follows_zoom: bool,
+    /// Bar spacing, in points, at which text that follows the zoom has its set font size. `None`
+    /// adopts the spacing a Text or Anchored text is first displayed at, including for older
+    /// saved drawings.
+    #[serde(default)]
+    pub text_zoom_spacing: Option<f32>,
+    /// Colour, size and emphasis of the text typed on a price note. `None` draws it as the price
+    /// beside it, in the label's text settings, as price notes saved before this setting do. Other
+    /// tools ignore it.
+    #[serde(default)]
+    pub note_text_style: Option<NoteTextStyle>,
+    /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
+    /// extends past its first anchor, whichever way it was drawn
     pub extend_left: bool,
-    /// Extend line to right edge
+    /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
+    /// extends past its second anchor, whichever way it was drawn
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -139,32 +218,78 @@ pub struct Drawing {
     pub arrow_end_style: ArrowStyle,
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
+    /// Whether a horizontal line, horizontal ray, cross line or position shows its prices as
+    /// tags on the price axis. Other drawings ignore it. Saved drawings without it show tags.
+    #[serde(default = "enabled")]
+    pub price_axis_label: bool,
+    /// Whether a vertical line or cross line shows its time as a tag on the time axis. Other
+    /// tools ignore it. Drawings saved without it show the tag.
+    #[serde(default = "enabled")]
+    pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
+    /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
+    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
+    /// line, and the reach of a vertical line. Other tools ignore these settings.
+    #[serde(default = "LineMeasurements::left_out")]
+    pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
     pub position_size: Option<PositionSize>,
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
     pub position_sizing: PositionSizing,
+    /// Statistics, account currency and quantity precision of position tools.
+    #[serde(default = "PositionReadout::legacy")]
+    pub position_readout: PositionReadout,
+    /// Target zone and level colour of position tools, whose alpha is the zone's opacity while
+    /// labels and tags stay opaque; `None` keeps the default green at 20% opacity.
+    #[serde(default)]
+    pub position_target_color: Option<[u8; 4]>,
+    /// Stop zone and level colour of position tools, whose alpha is the zone's opacity while
+    /// labels and tags stay opaque; `None` keeps the default red at 20% opacity.
+    #[serde(default)]
+    pub position_stop_color: Option<[u8; 4]>,
+    /// Lines, labels, zone fill and border of position tools.
+    #[serde(default)]
+    pub position_style: PositionStyle,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
+    /// Bands of the anchored VWAP. Older drawings use the defaults.
+    #[serde(default)]
+    pub vwap: Option<VwapConfig>,
 
-    /// Price and time divisions of Gann boxes and squares.
+    /// Levels, fan lines, arcs and background of the Gann tools; `None` draws
+    /// [`GannConfig::for_tool`].
     #[serde(default)]
     pub gann: Option<GannConfig>,
-    /// Spacing and wick of the candles a Ghost Feed projects from its path.
+    /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
-    /// Whether a parallel channel draws its dashed halfway line.
+    /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
+    /// Frame size and opacity of the image tool; `None` uses the defaults.
+    #[serde(default)]
+    pub image: Option<ImageConfig>,
+    /// Whether a polyline joins its last anchor back to its first. Clicking the first anchor
+    /// while placing a polyline closes it; older saved drawings are open.
+    #[serde(default)]
+    pub closed: bool,
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
+    /// Notation of the wave labels of the Elliott wave tools. Older drawings use the default.
+    #[serde(default)]
+    pub elliott_degree: ElliottDegree,
+
+    /// Draw mode, mirroring and flipping of a bars pattern's copy. `None` uses the defaults,
+    /// as drawings saved before this setting do.
+    #[serde(default)]
+    pub bars_pattern: Option<BarsPatternConfig>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
@@ -175,13 +300,223 @@ fn enabled() -> bool {
     true
 }
 
+fn default_text_wrap_width() -> f32 {
+    200.0
+}
+
+/// Points between neighbouring bars around screen `x`, starting the search at `bar`; `None` when
+/// the mapping does not advance. Screen coordinates are single precision, which rounds one bar's
+/// step coarsely far from the view, so the step is averaged over 64 bars and measured again
+/// nearer `x`.
+fn bar_spacing_near(bar_to_x: impl Fn(f32) -> f32, mut bar: f32, x: f32) -> Option<f32> {
+    let mut spacing = None;
+    for _ in 0..3 {
+        bar = bar.round();
+        let at = bar_to_x(bar);
+        let step = (bar_to_x(bar + 64.0) - at) / 64.0;
+        if !(step.is_finite() && step > 0.0) {
+            return None;
+        }
+        spacing = Some(step);
+        bar += (x - at) / step;
+    }
+    spacing
+}
+
+pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
+pub(super) const RED: [u8; 4] = [242, 54, 69, 255];
+pub(super) const ORANGE: [u8; 4] = [255, 152, 0, 255];
+pub(super) const GREEN: [u8; 4] = [76, 175, 80, 255];
+pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
+pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
+pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
+pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
+pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
+pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+/// `color` at `alpha` of 255.
+const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+    [color[0], color[1], color[2], alpha]
+}
+
+/// Line, fill and text defaults of a new drawing, before any default the user saved for its tool.
+struct DefaultStyle {
+    color: [u8; 4],
+    width: f32,
+    line_style: LineStyle,
+    fill: Option<[u8; 4]>,
+    font_size: f32,
+}
+
+/// A 2 px solid blue line with 14 px text and no fill, the style most tools start from.
+const LINE: DefaultStyle = DefaultStyle {
+    color: BLUE,
+    width: 2.0,
+    line_style: LineStyle::Solid,
+    fill: None,
+    font_size: 14.0,
+};
+
+/// The default style of each tool, chosen for its role: areas start filled with a light tint
+/// (20%, 15% for chart patterns, 40% for date ranges), small labels take 12 px text.
+fn default_style(tool: DrawingToolType) -> DefaultStyle {
+    use DrawingToolType as T;
+    let filled = |color: [u8; 4], alpha: u8| DefaultStyle {
+        color,
+        fill: Some(tint(color, alpha)),
+        ..LINE
+    };
+    let colored = |color: [u8; 4]| DefaultStyle { color, ..LINE };
+    match tool {
+        T::HorizontalLine | T::HorizontalRay | T::CrossLine => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
+        T::ParallelChannel => filled(BLUE, 51),
+        // The centre line and lower band take the line colour, the upper band the fill.
+        T::RegressionTrend => DefaultStyle {
+            color: RED,
+            fill: Some(tint(BLUE, 51)),
+            ..LINE
+        },
+        T::FlatTopBottom => filled(ORANGE, 51),
+        T::DisjointChannel | T::Triangle => filled(TEAL, 51),
+        T::DoubleCurve | T::ThreeDrivesPattern => colored(DEEP_PURPLE),
+        T::Rect => filled(PURPLE, 51),
+        T::RotatedRect => filled(GREEN, 51),
+        T::Circle | T::Ellipse => filled(RED, 51),
+        T::Polyline => filled(CYAN, 51),
+        T::Brush => colored(CYAN),
+        T::Arc => filled(PINK, 51),
+        T::Sector => DefaultStyle {
+            color: [156, 156, 156, 255],
+            width: 1.0,
+            fill: Some(tint(BLUE, 51)),
+            ..LINE
+        },
+        T::Highlighter => DefaultStyle {
+            color: tint(RED, 51),
+            width: 20.0,
+            ..LINE
+        },
+        T::ArrowMarker => DefaultStyle {
+            color: [30, 83, 229, 255],
+            font_size: 16.0,
+            ..LINE
+        },
+        T::ArrowMarkUp => colored(TEAL),
+        T::ArrowMarkDown => colored([204, 47, 60, 255]),
+        T::Pitchfork
+        | T::SchiffPitchfork
+        | T::ModifiedSchiffPitchfork
+        | T::InsidePitchfork
+        | T::Pitchfan => colored(RED),
+        // The colour, width and pattern of the trend line; levels have their own.
+        T::FibonacciRetracement
+        | T::FibonacciExtension
+        | T::FibonacciChannel
+        | T::TrendBasedFibTime
+        | T::FibonacciCircles
+        | T::FibonacciSpeedResistanceArcs => DefaultStyle {
+            color: GREY,
+            line_style: LineStyle::Dashed,
+            ..LINE
+        },
+        T::FibonacciTimeZones => DefaultStyle {
+            color: GREY,
+            width: 1.0,
+            line_style: LineStyle::Dashed,
+            ..LINE
+        },
+        T::FibonacciWedge | T::FibonacciSpeedFan => colored(GREY),
+        T::FibonacciSpiral => DefaultStyle {
+            color: CYAN,
+            width: 1.0,
+            ..LINE
+        },
+        T::GhostFeed => DefaultStyle {
+            color: GREY,
+            width: 1.0,
+            ..LINE
+        },
+        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        // The colour of the range tint, the same cyan as the rows of rising volume.
+        T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
+        T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
+        T::HeadAndShoulders => filled(TEAL, 38),
+        T::ABCDPattern | T::SineLine => colored(TEAL),
+        T::TrianglePattern => filled(DEEP_PURPLE, 38),
+        T::ElliottImpulse
+        | T::ElliottCorrection
+        | T::ElliottTriangle
+        | T::ElliottDoubleCombo
+        | T::ElliottTripleCombo => colored([61, 133, 198, 255]),
+        T::CyclicLines => colored([144, 202, 249, 255]),
+        T::TimeCycles => DefaultStyle {
+            color: [21, 153, 128, 255],
+            fill: Some([106, 168, 79, 128]),
+            ..LINE
+        },
+        T::Measure | T::PriceRange => DefaultStyle {
+            font_size: 12.0,
+            ..filled(BLUE, 38)
+        },
+        T::DateRange | T::DateAndPriceRange => DefaultStyle {
+            font_size: 12.0,
+            ..filled(BLUE, 102)
+        },
+        // Text boxes: the fill is the box colour, used once the background is on.
+        T::TextLabel | T::AnchoredText => DefaultStyle {
+            fill: Some(tint(BLUE, 64)),
+            ..LINE
+        },
+        T::Note => filled(BLUE, 179),
+        T::Callout => filled([0, 151, 167, 255], 179),
+        T::PriceNote | T::Signpost => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
+        T::Comment => DefaultStyle {
+            font_size: 16.0,
+            ..LINE
+        },
+        T::Table => colored([219, 219, 219, 255]),
+        T::FontIcon => DefaultStyle {
+            font_size: 40.0,
+            ..LINE
+        },
+        T::Sticker => DefaultStyle {
+            font_size: 110.0,
+            ..LINE
+        },
+        _ => LINE,
+    }
+}
+
 impl Drawing {
+    /// The synchronization this drawing follows: that of its top-level folder, or `None` when
+    /// unset or at the root.
+    pub fn folder_sync_mode(&self) -> Option<FolderSync> {
+        if self.folder.is_empty() {
+            return None;
+        }
+        self.folder_sync.first().copied().flatten()
+    }
+
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
+        let style = default_style(tool_type);
+        // Text starts without a box; switching one on shows the tinted fill and a grey border.
+        let plain_text = matches!(
+            tool_type,
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+        );
         Self {
             id,
             stored_id: None,
             created_at: None,
+            modified_at: None,
             notes: None,
             label: None,
             selectable: true,
@@ -189,54 +524,115 @@ impl Drawing {
             listed: true,
             group: None,
             folder: Vec::new(),
+            folder_sync: Vec::new(),
             tool_type,
             custom_tool: None,
             custom_settings: serde_json::Value::Null,
             points: Vec::new(),
             chart_points: Vec::new(),
             level_ys: Vec::new(),
-            ghost_candles: Vec::new(),
             screen_anchor: None,
             pane: None,
-            color: [242, 54, 69, 255], // Default red (#F23645)
-            stroke_width: 2.0,
+            color: style.color,
+            stroke_width: style.width,
             completed: false,
             text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
+            post: None,
             // Styling defaults
-            line_style: LineStyle::Solid,
-            fill_color: None,
+            line_style: style.line_style,
+            fill_color: style.fill,
             locked: false,
             visible: true,
-            font_size: if matches!(
-                tool_type,
-                DrawingToolType::FontIcon | DrawingToolType::Sticker
-            ) {
-                32.0
+            font_size: style.font_size,
+            font_weight: if tool_type == DrawingToolType::ArrowMarker {
+                FontWeight::Bold
             } else {
-                12.0
+                FontWeight::Normal
             },
-            font_weight: FontWeight::Normal,
-            extend_left: false,
-            extend_right: false,
-            arrow_start_style: ArrowStyle::None,
-            arrow_end_style: if matches!(
+            italic: false,
+            text_color: match tool_type {
+                DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
+                // Independent of the line, which can change colour without its text.
+                DrawingToolType::TrendLine
+                | DrawingToolType::Ray
+                | DrawingToolType::ExtendedLine
+                | DrawingToolType::InfoLine
+                | DrawingToolType::HorizontalLine
+                | DrawingToolType::HorizontalRay
+                | DrawingToolType::VerticalLine => Some(BLUE),
+                // As is the text of a shape, which starts in the shape's own colour.
+                DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse => {
+                    Some(style.color)
+                }
+                _ => None,
+            },
+            background: !plain_text,
+            border: !plain_text,
+            border_color: plain_text.then_some([112, 112, 112, 255]),
+            text_wrap: false,
+            text_wrap_width: default_text_wrap_width(),
+            text_follows_zoom: false,
+            text_zoom_spacing: None,
+            note_text_style: None,
+            extend_left: tool_type == DrawingToolType::ExtendedLine,
+            extend_right: matches!(
                 tool_type,
-                DrawingToolType::Arrow | DrawingToolType::ArrowMarker | DrawingToolType::Path
-            ) {
+                DrawingToolType::Ray | DrawingToolType::ExtendedLine
+            ),
+            arrow_start_style: ArrowStyle::None,
+            arrow_end_style: if matches!(tool_type, DrawingToolType::Arrow | DrawingToolType::Path)
+            {
                 ArrowStyle::Arrow
             } else {
                 ArrowStyle::None
             },
             timeframe_visibility: TimeframeVisibility::all(),
+            price_axis_label: true,
+            time_axis_label: true,
+            line_measurements: LineMeasurements::for_tool(tool_type),
             position_size: None,
             position_sizing: PositionSizing::default(),
-            fib_config: None,
-            volume_profile: None,
+            position_readout: PositionReadout::default(),
+            position_target_color: None,
+            position_stop_color: None,
+            position_style: PositionStyle::default(),
+            fib_config: matches!(
+                tool_type,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciExtension
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciWedge
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::FibonacciSpeedFan
+                    | DrawingToolType::TrendBasedFibTime
+                    | DrawingToolType::FibonacciCircles
+                    | DrawingToolType::FibonacciSpeedResistanceArcs
+                    | DrawingToolType::FibonacciSpiral
+            )
+            .then(|| FibonacciConfig::for_tool(tool_type)),
+            volume_profile: matches!(
+                tool_type,
+                DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
+            )
+            .then(VolumeProfileConfig::drawing_default),
             regression_trend: None,
-            pitchfork: None,
-            channel_midline: false,
+            vwap: None,
+            pitchfork: matches!(
+                tool_type,
+                DrawingToolType::Pitchfork
+                    | DrawingToolType::SchiffPitchfork
+                    | DrawingToolType::ModifiedSchiffPitchfork
+                    | DrawingToolType::InsidePitchfork
+                    | DrawingToolType::Pitchfan
+            )
+            .then(|| PitchforkConfig::for_tool(tool_type)),
+            elliott_degree: ElliottDegree::default(),
+            channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            image: None,
+            closed: false,
             gann: None,
             ghost_feed: None,
+            bars_pattern: None,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
@@ -250,20 +646,69 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific color
+    /// Create a new drawing with a specific line colour; fills, borders and pitchfork levels
+    /// sharing the tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
-        drawing.color = color;
+        drawing.set_line_color(color);
         drawing
+    }
+
+    /// Set the line colour and retint fills, borders and pitchfork levels sharing its current
+    /// RGB, keeping each one's opacity. Independently coloured fills, borders and levels keep
+    /// their colours.
+    pub fn set_line_color(&mut self, color: [u8; 4]) {
+        for shared in [&mut self.fill_color, &mut self.border_color] {
+            if let Some(shared) = shared
+                && shared[..3] == self.color[..3]
+            {
+                shared[..3].copy_from_slice(&color[..3]);
+            }
+        }
+        if let Some(config) = &mut self.pitchfork {
+            for level in &mut config.levels {
+                if level.color[..3] == self.color[..3] {
+                    level.color[..3].copy_from_slice(&color[..3]);
+                }
+            }
+        }
+        self.color = color;
+    }
+
+    /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
+    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    #[cfg(feature = "ui")]
+    pub(crate) fn recolor(&mut self, color: [u8; 4]) {
+        if self.tool_type == DrawingToolType::PriceLabel {
+            self.set_line_color(color);
+        } else {
+            self.color = color;
+        }
+    }
+
+    /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
+    /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%.
+    #[cfg(feature = "ui")]
+    pub(crate) fn first_fill(tool: DrawingToolType, line: [u8; 4]) -> [u8; 4] {
+        let style = default_style(tool);
+        match style.fill {
+            Some(fill) if fill[..3] != style.color[..3] => fill,
+            _ => tint(line, 51),
+        }
     }
 
     /// Create a new text label drawing
     pub fn with_text(id: usize, text: String) -> Self {
         let mut drawing = Self::new(id, DrawingToolType::TextLabel);
         drawing.text = Some(text);
-        drawing.color = [255, 255, 255, 255]; // White
         drawing.arrow_end_style = ArrowStyle::None;
         drawing
+    }
+
+    /// Whether the line colour is still the tool's default, which rendering may shade to read on
+    /// the theme, rather than one chosen for this drawing.
+    pub(crate) fn has_default_color(&self) -> bool {
+        self.color == default_style(self.tool_type).color
     }
 
     /// Update screen coordinates from chart_points using current transforms
@@ -280,40 +725,48 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
-        self.level_ys = self
-            .fib_levels()
-            .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
-            .unwrap_or_default();
-        self.ghost_candles = if self.tool_type == DrawingToolType::GhostFeed {
-            let config = self.ghost_feed.unwrap_or_default();
-            let half_width =
-                |bar: f32| (bar_to_x(bar + config.spacing as f32) - bar_to_x(bar)).abs() * 0.35;
-            config
-                .candles(&self.chart_points)
-                .into_iter()
-                .map(|c| GhostCandleScreen {
-                    x: bar_to_x(c.bar_idx + config.spacing as f32 / 2.0),
-                    half_width: half_width(c.bar_idx),
-                    open: price_to_y(c.open),
-                    high: price_to_y(c.high),
-                    low: price_to_y(c.low),
-                    close: price_to_y(c.close),
-                    rising: c.close > c.open,
-                })
-                .collect()
-        } else {
-            Vec::new()
+        if self.text_zoom_spacing.is_none()
+            && matches!(
+                self.tool_type,
+                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+            )
+            && let (Some(anchor), Some(pos)) = (self.chart_points.first(), self.points.first())
+        {
+            self.text_zoom_spacing = bar_spacing_near(&bar_to_x, anchor.bar_idx, pos.x);
+        }
+        self.level_ys = match (self.tool_type, &self.chart_points[..]) {
+            // Five of the first units in price, which a logarithmic scale does not keep linear.
+            (DrawingToolType::GannFixed, [a, b, ..]) => {
+                vec![price_to_y(
+                    a.price + (b.price - a.price) * f64::from(GANN_SQUARE_UNITS),
+                )]
+            }
+            _ => self
+                .fib_levels()
+                .map(|(_, prices)| prices.into_iter().map(&price_to_y).collect())
+                .unwrap_or_default(),
         };
     }
 
-    /// Rebuilds anchored text and note coordinates relative to the pane. Call after
+    /// The factor that scales text drawn at screen `x` from its set size: the bar spacing over
+    /// `text_zoom_spacing` for text that follows the zoom, and 1 otherwise.
+    pub(crate) fn text_zoom(&self, bar_to_x: impl Fn(f32) -> f32, x: f32) -> f32 {
+        let (true, Some(reference), Some(anchor)) = (
+            self.text_follows_zoom,
+            self.text_zoom_spacing,
+            self.chart_points.first(),
+        ) else {
+            return 1.0;
+        };
+        bar_spacing_near(bar_to_x, anchor.bar_idx, x).map_or(1.0, |spacing| spacing / reference)
+    }
+
+    /// Rebuilds anchored text coordinates relative to the pane. Call after
     /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
     /// adopt their first displayed position. Resizing preserves the width and height fractions.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
-        if !matches!(
-            self.tool_type,
-            DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
-        ) || !pane.is_finite()
+        if self.tool_type != DrawingToolType::AnchoredText
+            || !pane.is_finite()
             || pane.width() <= 0.0
             || pane.height() <= 0.0
         {
@@ -332,7 +785,7 @@ impl Drawing {
 
     /// The Fibonacci config in use and the price of each of its visible levels, for a retracement
     /// or an extension projected from its third anchor (the first anchor for legacy two-point drawings).
-    pub(crate) fn fib_levels(&self) -> Option<(FibonacciConfig, Vec<f64>)> {
+    pub(crate) fn fib_levels(&self) -> Option<(std::borrow::Cow<'_, FibonacciConfig>, Vec<f64>)> {
         let extension = match self.tool_type {
             DrawingToolType::FibonacciRetracement => false,
             DrawingToolType::FibonacciExtension => true,
@@ -341,13 +794,7 @@ impl Drawing {
         let [start, end, ..] = &self.chart_points[..] else {
             return None;
         };
-        let config = self.fib_config.clone().unwrap_or_else(|| {
-            if extension {
-                FibonacciConfig::extension_default()
-            } else {
-                FibonacciConfig::default()
-            }
-        });
+        let config = self.fibonacci_config();
         let origin = self.chart_points.get(2).unwrap_or(start).price;
         let prices = config
             .level_prices(start.price, end.price, extension, origin)
@@ -357,11 +804,14 @@ impl Drawing {
 
     /// The price levels an alert can follow at the fractional bar index `bar`, each with its
     /// level number, name and price: a line's price extended through its two anchors, the base and
-    /// parallel lines of a parallel or disjoint channel, the trend and flat lines of a flat
+    /// second lines of parallel or disjoint channels, the trend and flat lines of a flat
     /// top/bottom, a horizontal level, a rectangle's top and bottom, a position's entry, target
     /// and stop, and each visible Fibonacci retracement or extension level, numbered by its place
     /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
-    /// they are linear in price except on a logarithmic scale. Empty for other drawings, and for
+    /// they are linear in price except on a logarithmic scale.
+    /// Fork levels use two stable slots per configured level (first and second line), with
+    /// only the first slot used by a median. Regression levels require
+    /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
     /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
     /// non-positive price on a logarithmic scale.
     pub fn alert_levels(&self, bar: f64, scale: PriceScaleMode) -> Vec<(usize, String, f64)> {
@@ -403,7 +853,7 @@ impl Drawing {
                 &["Line", "Flat line"],
                 &[from_axis(along(start, end, bar)), flat.price],
             ),
-            // The second line starts at the third anchor and runs as far as the first.
+            // The second line passes through the third anchor with the opposite slope.
             (T::DisjointChannel, [start, end, from, ..]) => {
                 let rise = to_axis(end.price) - to_axis(start.price);
                 let run = f64::from(end.bar_idx - start.bar_idx);
@@ -412,11 +862,19 @@ impl Drawing {
                     &[
                         from_axis(along(start, end, bar)),
                         from_axis(
-                            to_axis(from.price) + (bar - f64::from(from.bar_idx)) * rise / run,
+                            to_axis(from.price) - (bar - f64::from(from.bar_idx)) * rise / run,
                         ),
                     ],
                 )
             }
+            (
+                T::Pitchfork
+                | T::SchiffPitchfork
+                | T::ModifiedSchiffPitchfork
+                | T::InsidePitchfork
+                | T::Pitchfan,
+                _,
+            ) => self.fork_alert_levels(bar, scale),
             (T::Rect, [a, b, ..]) => named(
                 &["Top", "Bottom"],
                 &[a.price.max(b.price), a.price.min(b.price)],
@@ -440,7 +898,9 @@ impl Drawing {
                         .enumerate()
                         .filter(|(_, level)| level.visible)
                         .zip(prices)
-                        .map(|((index, level), price)| (index, level.label.clone(), price))
+                        .map(|((index, level), price)| {
+                            (index, level.label(config.levels_as_percent), price)
+                        })
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -530,6 +990,25 @@ impl Drawing {
         }
     }
 
+    /// Keeps a second anchor on the first one's price for Time cycles, so it only sets the period,
+    /// and on the first one's bar for a Signpost, so it only sets the label's height.
+    pub(crate) fn align_second_anchor(&mut self) {
+        if self.points.len() < 2 || self.chart_points.len() < 2 {
+            return;
+        }
+        match self.tool_type {
+            DrawingToolType::TimeCycles => {
+                self.points[1].y = self.points[0].y;
+                self.chart_points[1].price = self.chart_points[0].price;
+            }
+            DrawingToolType::Signpost => {
+                self.points[1].x = self.points[0].x;
+                self.chart_points[1].bar_idx = self.chart_points[0].bar_idx;
+            }
+            _ => {}
+        }
+    }
+
     /// Add a screen point (legacy method)
     pub fn add_point(&mut self, point: egui::Pos2) {
         self.points.push(point);
@@ -543,6 +1022,17 @@ impl Drawing {
             if cp.bar_idx >= from {
                 cp.shift_bar_idx(delta);
             }
+        }
+    }
+
+    /// Index of the first anchor that moving the whole drawing moves. A bars pattern's source
+    /// anchors stay on the bars it copies, so a move takes only its copy's anchor; every other
+    /// drawing, and a bars pattern still without a copy anchor, moves all of its anchors.
+    pub(crate) fn first_moved_anchor(&self) -> usize {
+        if self.tool_type == DrawingToolType::BarsPattern && self.chart_points.len() >= 3 {
+            2
+        } else {
+            0
         }
     }
 
@@ -583,6 +1073,24 @@ impl Drawing {
     #[inline]
     pub fn is_visible_on_timeframe(&self, timeframe: &str) -> bool {
         self.visible && self.timeframe_visibility.is_visible_on(timeframe)
+    }
+
+    /// Whether drawings of `tool` can tag their price on the price axis and their time on the
+    /// time axis: horizontal lines, rays and positions their prices, vertical lines their time,
+    /// cross lines both.
+    pub(crate) fn axis_labels_of(tool: DrawingToolType) -> (bool, bool) {
+        use DrawingToolType as T;
+        match tool {
+            T::HorizontalLine | T::HorizontalRay | T::LongPos | T::ShortPos => (true, false),
+            T::VerticalLine => (false, true),
+            T::CrossLine => (true, true),
+            _ => (false, false),
+        }
+    }
+
+    /// Whether the drawing also paints its line in the chart's other panes.
+    pub(crate) fn reaches_other_panes(&self) -> bool {
+        self.tool_type == DrawingToolType::VerticalLine && self.line_measurements.across_panes
     }
 
     /// Get the z-order of this drawing
@@ -640,9 +1148,58 @@ impl Default for Drawing {
     }
 }
 
+impl Serialize for Drawing {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Drawing {
+    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
+    /// drawing's tool, which a drawing without one draws.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        GannConfig::forget_left_out();
+        LineMeasurements::forget_left_out();
+        let mut drawing = Self::deserialize(deserializer)?;
+        drawing.line_measurements.fill_left_out(drawing.tool_type);
+        if let Some(gann) = &mut drawing.gann {
+            gann.fill_left_out(drawing.tool_type);
+        }
+        Ok(drawing)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text that follows the zoom keeps the bar spacing it is first shown at and is drawn at the
+    /// ratio of the current spacing to it. The widget maps bars in double precision and hands
+    /// out single-precision coordinates, which are rounded to a quarter of a point or more four
+    /// million bars from the view, so the spacing is read near the text.
+    #[test]
+    fn text_scales_by_the_bar_spacing_it_was_sized_at() {
+        let x = |spacing: f64| move |bar: f32| ((f64::from(bar) - 4e6) * spacing) as f32;
+        let mut text = Drawing::new(1, DrawingToolType::AnchoredText);
+        text.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
+        text.update_screen_coords(x(0.73), |price| price as f32);
+        let sized_at = text.text_zoom_spacing.unwrap();
+        assert!((sized_at - 0.73).abs() < 1e-5, "{sized_at}");
+        text.update_screen_coords(x(1.46), |price| price as f32);
+        assert_eq!(text.text_zoom_spacing, Some(sized_at));
+        assert_eq!(text.text_zoom(x(1.46), 100.0), 1.0);
+
+        text.text_follows_zoom = true;
+        // Anchored text keeps the bar it was placed on, here far left of where it is drawn.
+        text.chart_points[0].bar_idx = 0.0;
+        let zoom = text.text_zoom(x(1.46), 100.0);
+        assert!((zoom - 2.0).abs() < 1e-4, "{zoom}");
+
+        let mut line = Drawing::new(2, DrawingToolType::TrendLine);
+        line.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
+        line.update_screen_coords(x(0.73), |price| price as f32);
+        assert_eq!(line.text_zoom_spacing, None);
+    }
 
     #[test]
     fn test_shift_bar_indices() {
@@ -690,8 +1247,13 @@ mod tests {
             drawing
         };
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
-        let mut config = FibonacciConfig::default();
+        let mut config = FibonacciConfig {
+            levels_as_percent: true,
+            ..FibonacciConfig::legacy()
+        };
         config.levels[1].visible = false;
+        config.levels[2].label = "100%".into();
+        config.levels[3].label.clear();
         fib.fib_config = Some(config);
         // (drawing, bar) -> (level, name, price); prices by hand.
         for (drawing, bar, scale, expected) in [
@@ -804,8 +1366,8 @@ mod tests {
                 Linear,
                 vec![(0, "Line", 130.0), (1, "Flat line", 90.0)],
             ),
-            // The second line starts at the third anchor, 50 at bar 12, and rises as the first:
-            // 2 a bar, or 4 times in 10 bars.
+            // Through 50 at bar 12, the mirrored line falls 2 per bar: 24 at bar 25.
+            // In log price it divides by 4 over 10 bars: 12.5 at bar 22.
             (
                 drawing(
                     T::DisjointChannel,
@@ -813,7 +1375,7 @@ mod tests {
                 ),
                 25.0,
                 Linear,
-                vec![(0, "Line", 130.0), (1, "Second line", 76.0)],
+                vec![(0, "Line", 130.0), (1, "Second line", 24.0)],
             ),
             (
                 drawing(
@@ -824,7 +1386,7 @@ mod tests {
                 Logarithmic,
                 vec![
                     (0, "Line", 100.0 * 4f64.powf(1.2)),
-                    (1, "Second line", 200.0),
+                    (1, "Second line", 12.5),
                 ],
             ),
             (

@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
-export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Terminal', 'Builder API'] as const;
-export const statuses = ['done', 'partial', 'missing'] as const;
+export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Options', 'Terminal', 'Builder API'] as const;
+export const statuses = ['verified', 'unverified', 'incomplete', 'missing'] as const;
 type Status = typeof statuses[number];
 export type Feature = {
   area: typeof areas[number];
@@ -11,6 +11,7 @@ export type Feature = {
   status: Status;
   provided_by: 'library' | 'host';
   source: string;
+  issues: string;
 };
 
 export const slug = (area: string) => area.toLowerCase().replaceAll(' ', '-');
@@ -33,7 +34,7 @@ function parseFeatures(csv: string): Feature[] {
   }
   if (quoted) throw new Error('Unclosed feature CSV field');
   if (field || row.length) rows.push([...row, field]);
-  const columns = ['area', 'group', 'feature', 'status', 'provided_by', 'source'];
+  const columns = ['area', 'group', 'feature', 'status', 'provided_by', 'source', 'issues'];
   if (rows.shift()?.join(',') !== columns.join(',')) throw new Error('Invalid feature CSV columns');
   const identities = new Set<string>();
   return rows.map((values) => {
@@ -42,7 +43,8 @@ function parseFeatures(csv: string): Feature[] {
     if (values.length !== columns.length || !areas.includes(feature.area) ||
         !statuses.includes(feature.status) || !['library', 'host'].includes(feature.provided_by) ||
         !feature.group || !feature.feature || identities.has(identity) ||
-        (feature.status === 'missing' && feature.source)) {
+        (feature.status === 'missing' && feature.source) ||
+        (feature.issues && !/^[1-9]\d*(;[1-9]\d*)*$/.test(feature.issues))) {
       throw new Error(`Invalid or duplicate feature: ${identity}`);
     }
     for (const source of feature.source ? feature.source.split(';') : []) {
@@ -57,14 +59,15 @@ function parseFeatures(csv: string): Feature[] {
 
 export function counts(features: Feature[]) {
   return {
-    done: features.filter((feature) => feature.status === 'done').length,
-    partial: features.filter((feature) => feature.status === 'partial').length,
+    verified: features.filter((feature) => feature.status === 'verified').length,
+    unverified: features.filter((feature) => feature.status === 'unverified').length,
+    incomplete: features.filter((feature) => feature.status === 'incomplete').length,
     missing: features.filter((feature) => feature.status === 'missing').length,
     total: features.length,
   };
 }
 export const percentage = (features: Feature[]) =>
-  (features.length ? counts(features).done / features.length * 100 : 0).toFixed(1);
+  (features.length ? counts(features).verified / features.length * 100 : 0).toFixed(1);
 export const features = parseFeatures(readFileSync(`${root}/${path}`, 'utf8'));
 
 type Box = { x: number; y: number; width: number; height: number };

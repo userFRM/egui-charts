@@ -1,6 +1,5 @@
 use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -28,7 +27,7 @@ impl ChaikinVolatility {
             roc_period: roc_period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::DEEP_ORANGE,
+            color: Color32::from_rgb(171, 71, 188),
             visible: true,
         }
     }

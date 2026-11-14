@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 
 use super::{AccountEvent, Broker, Events};
 use crate::data::{FeedError, Reply};
+use crate::model::rounding_tolerance;
 use crate::model::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
     OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
@@ -21,9 +22,12 @@ use crate::model::{
 /// fills and history use the source bar's time. Only good-till-cancelled orders are supported;
 /// the account has no trading-session calendar. Market orders fill at the last price; limit and
 /// stop orders fill at the first price that reaches them, a limit at that price or better;
-/// a triggered stop-limit works on as a limit order. An order's take profit and stop loss become
-/// exit orders once it fills, and when one exit fills the other is cancelled. Each symbol has
-/// one net position with its average
+/// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
+/// exit orders once it fills, for the quantity the fill opened: take-profit levels each close their
+/// own quantity, the first ones first when the fill opened less than the order's quantity, as after
+/// closing an opposite position. When a take profit fills, the stop loss shrinks by its quantity
+/// and is cancelled once nothing is left; when the stop loss fills, the take profits are cancelled.
+/// Each symbol has one net position with its average
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
 /// the leverage as margin, and a working order the same for its quantity at its price. Each fill
@@ -72,8 +76,9 @@ struct State {
     working: Vec<Order>,
     finished: Vec<Order>,
     executions: Vec<Execution>,
-    /// Every bracket exit and its paired exit, if any.
-    exits: HashMap<OrderId, Option<OrderId>>,
+    /// Every bracket exit, and the exits of the same order it acts on when it fills: a take
+    /// profit's stop loss, which it shrinks, and a stop loss's take profits, which it cancels.
+    exits: HashMap<OrderId, Vec<OrderId>>,
     positions: HashMap<String, Position>,
     last: HashMap<String, f64>,
     balance_history: Vec<BalanceChange>,
@@ -97,7 +102,10 @@ fn describe(request: &OrderRequest) -> String {
 
 impl PaperAccount {
     /// An empty account holding `balance` in `currency`, without leverage or commission.
-    /// Panics if the starting balance is not finite.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `balance` is NaN or infinite.
     pub fn new(currency: impl Into<String>, balance: f64) -> Self {
         assert!(balance.is_finite(), "starting balance must be finite");
         let state = State {
@@ -232,6 +240,7 @@ impl State {
                 stop: true,
                 stop_limit: true,
                 brackets: true,
+                take_profit_levels: true,
                 close: true,
                 reverse: true,
                 preview: false,
@@ -307,15 +316,13 @@ impl State {
             return Ok(());
         }
         let last = self.last[&request.symbol];
-        let buy = request.side == OrderSide::Buy;
-        let limit_reached = |limit| if buy { last <= limit } else { last >= limit };
-        let stop_reached = |stop| if buy { last >= stop } else { last <= stop };
-        let immediate = match request.order_type {
-            OrderType::Market => true,
-            OrderType::Limit(limit) => limit_reached(limit),
-            OrderType::Stop(stop) => stop_reached(stop),
-            OrderType::StopLimit { stop, limit } => stop_reached(stop) && limit_reached(limit),
-        };
+        let reached =
+            |order_type: OrderType| order_type.fill_price(request.side, last, last).is_some();
+        let immediate = reached(request.order_type)
+            && match request.order_type {
+                OrderType::StopLimit { limit, .. } => reached(OrderType::Limit(limit)),
+                _ => true,
+            };
         if immediate && after.abs() < held.abs() {
             return Ok(());
         }
@@ -382,7 +389,13 @@ impl State {
                 position.average_price = price;
             }
         }
-        position.quantity = held + signed;
+        let remaining = held + signed;
+        position.quantity =
+            if remaining.abs() <= rounding_tolerance(held.abs().max(signed.abs()), 1e-9) {
+                0.0
+            } else {
+                remaining
+            };
         self.value(terms, &mut position);
         if position.quantity != 0.0 {
             self.positions
@@ -425,8 +438,27 @@ impl State {
         if held != 0.0 && position.quantity == 0.0 {
             self.log(format!("Position {} closed", request.symbol));
         }
-        if let Some(Some(other)) = self.exits.remove(&id) {
-            self.cancel_working(&other);
+        if let Some(partners) = self.exits.remove(&id) {
+            for other in partners {
+                if let Some(list) = self.exits.get_mut(&other) {
+                    list.retain(|exit| *exit != id);
+                }
+                let working = self.working.iter_mut().find(|order| order.id == other);
+                match working {
+                    Some(stop_loss)
+                        if request.position_bracket == Some(PositionBracket::TakeProfit)
+                            && stop_loss.request.quantity - request.quantity
+                                > rounding_tolerance(stop_loss.request.quantity, 1e-9) =>
+                    {
+                        stop_loss.request.quantity -= request.quantity;
+                        let stop_loss = stop_loss.clone();
+                        self.push(AccountEvent::Order(stop_loss));
+                    }
+                    _ => {
+                        self.cancel_working(&other);
+                    }
+                }
+            }
         }
         // Exits may only reduce the remaining position, including after a manual close or reverse.
         for mut exit in self.working.clone() {
@@ -435,8 +467,7 @@ impl State {
             {
                 continue;
             }
-            let buy = exit.request.side == OrderSide::Buy;
-            if position.quantity == 0.0 || buy == (position.quantity > 0.0) {
+            if !exit.request.side.reduces(position.quantity) {
                 self.cancel_working(&exit.id);
             } else if exit.request.quantity > position.quantity.abs() {
                 exit.request.quantity = position.quantity.abs();
@@ -456,12 +487,12 @@ impl State {
         } else {
             0.0
         };
-        let exit = |price, order_type: fn(f64) -> OrderType| {
+        let exit = |price, quantity, order_type: fn(f64) -> OrderType| {
             let side = match request.side {
                 OrderSide::Buy => OrderSide::Sell,
                 OrderSide::Sell => OrderSide::Buy,
             };
-            let mut exit = OrderRequest::new(&request.symbol, side, protected, order_type(price));
+            let mut exit = OrderRequest::new(&request.symbol, side, quantity, order_type(price));
             exit.time_in_force = TimeInForce::GoodTillCancelled;
             exit.position_bracket = Some(match exit.order_type {
                 OrderType::Limit(_) => PositionBracket::TakeProfit,
@@ -469,30 +500,49 @@ impl State {
             });
             exit
         };
-        let exits: Vec<_> = [
-            request
-                .take_profit
-                .map(|price| exit(price, OrderType::Limit)),
-            request.stop_loss.map(|price| exit(price, OrderType::Stop)),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|_| protected > 0.0)
-        .map(|exit| {
-            let id = self.id();
-            let mut order = Order::new(id, exit, OrderStatus::Working);
-            order.placed = Some(self.now());
-            order
-        })
-        .collect();
-        if let [take_profit, stop_loss] = exits.as_slice() {
-            self.exits
-                .insert(take_profit.id.clone(), Some(stop_loss.id.clone()));
-            self.exits
-                .insert(stop_loss.id.clone(), Some(take_profit.id.clone()));
-        }
+        // Levels close their own quantity, the first ones first when less than the order opened.
+        let mut left = protected;
+        let take_profits = request
+            .take_profit_levels
+            .iter()
+            .map(|level| {
+                let share = level.quantity.min(left);
+                left -= share;
+                (level.price, share)
+            })
+            .chain(request.take_profit.map(|price| (price, protected)))
+            .filter(|(_, quantity)| *quantity > rounding_tolerance(protected, 1e-9))
+            .map(|(price, quantity)| exit(price, quantity, OrderType::Limit));
+        let stop_loss = request
+            .stop_loss
+            .filter(|_| protected > 0.0)
+            .map(|price| exit(price, protected, OrderType::Stop));
+        let exits: Vec<_> = take_profits
+            .chain(stop_loss)
+            .map(|exit| {
+                let id = self.id();
+                let mut order = Order::new(id, exit, OrderStatus::Working);
+                order.placed = Some(self.now());
+                order
+            })
+            .collect();
+        let ids = |bracket| {
+            exits
+                .iter()
+                .filter(|exit| exit.request.position_bracket == Some(bracket))
+                .map(|exit| exit.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let (take_profits, stop_losses) = (
+            ids(PositionBracket::TakeProfit),
+            ids(PositionBracket::StopLoss),
+        );
         for exit in exits {
-            self.exits.entry(exit.id.clone()).or_insert(None);
+            let partners = match exit.request.position_bracket {
+                Some(PositionBracket::StopLoss) => take_profits.clone(),
+                _ => stop_losses.clone(),
+            };
+            self.exits.insert(exit.id.clone(), partners);
             self.push(AccountEvent::Order(exit.clone()));
             self.log(format!(
                 "Exit order {} placed: {}",
@@ -509,10 +559,10 @@ impl State {
             return false;
         };
         let order = self.working.remove(index);
-        if let Some(Some(other)) = self.exits.remove(id)
-            && let Some(pair) = self.exits.get_mut(&other)
-        {
-            *pair = None;
+        for other in self.exits.remove(id).into_iter().flatten() {
+            if let Some(list) = self.exits.get_mut(&other) {
+                list.retain(|exit| exit != id);
+            }
         }
         self.log(format!(
             "Order {id} cancelled: {}",
@@ -527,27 +577,22 @@ impl State {
         let mut index = 0;
         while index < self.working.len() {
             let order = &mut self.working[index];
-            let buy = order.request.side == OrderSide::Buy;
-            let fill = match order.request.order_type {
-                OrderType::Market if order.request.symbol == symbol => Some(price),
-                _ if order.request.symbol != symbol => None,
-                OrderType::Limit(limit) if (buy && price <= limit) || (!buy && price >= limit) => {
-                    Some(price)
-                }
-                OrderType::Stop(stop) if (buy && price >= stop) || (!buy && price <= stop) => {
-                    Some(price)
-                }
-                OrderType::StopLimit { stop, limit }
-                    if (buy && price >= stop) || (!buy && price <= stop) =>
-                {
-                    // Triggered: it works on as a limit order, which may fill at once.
-                    order.request.order_type = OrderType::Limit(limit);
-                    let order = order.clone();
-                    self.push(AccountEvent::Order(order));
-                    continue;
-                }
-                _ => None,
+            let fill = if order.request.symbol == symbol {
+                order
+                    .request
+                    .order_type
+                    .fill_price(order.request.side, price, price)
+            } else {
+                None
             };
+            if let (Some(_), OrderType::StopLimit { limit, .. }) = (fill, order.request.order_type)
+            {
+                // Triggered: it works on as a limit order, which may fill at once.
+                order.request.order_type = OrderType::Limit(limit);
+                let order = order.clone();
+                self.push(AccountEvent::Order(order));
+                continue;
+            }
             if let Some(fill) = fill {
                 let order = self.working.remove(index);
                 let mut request = order.request.clone();
@@ -577,13 +622,21 @@ fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
         OrderType::StopLimit { .. } => f64::NAN,
     };
     let buy = order.side == OrderSide::Buy;
+    let no_profit = |p: f64| !p.is_finite() || if buy { p <= price } else { p >= price };
+    let levels = &order.take_profit_levels;
+    let bad_levels = !levels.is_empty()
+        && (order.take_profit.is_some()
+            || levels.iter().any(|level| {
+                no_profit(level.price) || !level.quantity.is_finite() || level.quantity <= 0.0
+            })
+            || (levels.iter().map(|level| level.quantity).sum::<f64>() - order.quantity).abs()
+                > rounding_tolerance(order.quantity, 1e-9));
     if !order.quantity.is_finite()
         || order.quantity <= 0.0
         || !price.is_finite()
         || !(order.quantity * price).is_finite()
-        || order
-            .take_profit
-            .is_some_and(|p| !p.is_finite() || if buy { p <= price } else { p >= price })
+        || order.take_profit.is_some_and(no_profit)
+        || bad_levels
         || order
             .stop_loss
             .is_some_and(|p| !p.is_finite() || if buy { p >= price } else { p <= price })
@@ -701,6 +754,7 @@ impl Broker for PaperAccount {
                 order.quantity > position.quantity.abs()
                     || (order.side == OrderSide::Buy) == (position.quantity > 0.0)
             }) || order.take_profit.is_some()
+                || !order.take_profit_levels.is_empty()
                 || order.stop_loss.is_some())
         {
             return reply.send(Err(FeedError::Other(
@@ -742,6 +796,7 @@ impl Broker for PaperAccount {
 mod tests {
     use super::*;
     use crate::data::inbox::Inbox;
+    use crate::model::TakeProfitLevel;
     use crate::services::events::Listener;
     use std::sync::Arc;
 
@@ -843,6 +898,34 @@ mod tests {
                 near(account.equity.unwrap(), balance + open);
                 near(account.available_funds.unwrap(), balance + open - margin);
             }
+            // Close the remaining unit, then 0.1 + 0.2 with 0.3 on either side.
+            // One more unit scaled out in ten tenths is also flat: 1 - 10 * 0.1 = 0.
+            for fill in [
+                direction,
+                0.1 * direction,
+                0.2 * direction,
+                -0.3 * direction,
+                direction,
+            ]
+            .into_iter()
+            .chain([-0.1 * direction; 10])
+            {
+                place(
+                    &paper,
+                    OrderRequest::new(
+                        "SYM",
+                        if fill > 0.0 {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        fill.abs(),
+                        OrderType::Market,
+                    ),
+                )
+                .unwrap();
+            }
+            assert!(!paper.lock().positions.contains_key("SYM"));
             paper.set_price("SYM", 100.0);
             place(
                 &paper,
@@ -870,7 +953,7 @@ mod tests {
                     .iter()
                     .filter(|e| matches!(e, AccountEvent::Execution(_)))
                     .count(),
-                5
+                20
             );
             paper.reset();
             let events = snapshot(&paper);
@@ -910,13 +993,25 @@ mod tests {
     #[test]
     fn bracket_exits_only_reduce_the_remaining_position_and_cancel_their_pair() {
         for closed in [0.0, 1.0, 2.0, 4.0] {
-            for close_brackets in [false, true] {
+            for (attached, close_brackets) in [(true, false), (true, true), (false, false)] {
                 let paper = PaperAccount::new("USD", 10_000.0);
                 paper.set_price("SYM", 100.0);
                 let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
-                entry.take_profit = Some(105.0);
-                entry.stop_loss = Some(95.0);
+                if attached {
+                    entry.take_profit = Some(105.0);
+                    entry.stop_loss = Some(95.0);
+                }
                 place(&paper, entry).unwrap();
+                if !attached {
+                    for (kind, role) in [
+                        (OrderType::Limit(105.0), PositionBracket::TakeProfit),
+                        (OrderType::Stop(95.0), PositionBracket::StopLoss),
+                    ] {
+                        let mut exit = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
+                        exit.position_bracket = Some(role);
+                        place(&paper, exit).unwrap();
+                    }
+                }
                 if closed > 0.0 {
                     let mut close =
                         OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market);
@@ -969,6 +1064,88 @@ mod tests {
                     |e| matches!(e, AccountEvent::Order(o) if o.status == OrderStatus::Cancelled)
                 ));
             }
+        }
+    }
+
+    /// Levels close their own quantity, and the first ones first when the fill opened less. A
+    /// take profit shrinks the stop loss so that it protects what is left of the order and no
+    /// more, and cancels it with the last level; the stop loss cancels the levels. A regression
+    /// leaves the rest unprotected, closes units that were never part of the order, or keeps
+    /// levels working on a position they no longer belong to.
+    #[test]
+    fn take_profit_levels_close_their_quantity_and_shrink_the_stop_loss() {
+        let limit = |price, quantity| (OrderType::Limit(price), quantity);
+        let stop = |price, quantity| (OrderType::Stop(price), quantity);
+        // (held before, exits, price, exits, price, exits, position, balance)
+        for (held, entered, first, partly, second, last, position, balance) in [
+            // 1 at 106 earns 6 and 2 at 94 lose 12.
+            (
+                0.0_f64,
+                vec![limit(105.0, 1.0), limit(110.0, 2.0), stop(95.0, 3.0)],
+                106.0,
+                vec![limit(110.0, 2.0), stop(95.0, 2.0)],
+                94.0,
+                vec![],
+                0.0,
+                9_994.0,
+            ),
+            // The same, on top of 5 units the order's exits must leave alone.
+            (
+                5.0,
+                vec![limit(105.0, 1.0), limit(110.0, 2.0), stop(95.0, 3.0)],
+                106.0,
+                vec![limit(110.0, 2.0), stop(95.0, 2.0)],
+                94.0,
+                vec![],
+                5.0,
+                9_994.0,
+            ),
+            // Closing a short of 1 opens 2 of the 3, which both levels close at 111 for 11 each.
+            (
+                -1.0,
+                vec![limit(105.0, 1.0), limit(110.0, 1.0), stop(95.0, 2.0)],
+                111.0,
+                vec![],
+                111.0,
+                vec![],
+                0.0,
+                10_022.0,
+            ),
+        ] {
+            let paper = PaperAccount::new("USD", 10_000.0);
+            paper.set_price("SYM", 100.0);
+            if held != 0.0 {
+                let side = if held > 0.0 {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
+                };
+                let start = OrderRequest::new("SYM", side, held.abs(), OrderType::Market);
+                place(&paper, start).unwrap();
+            }
+            let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 3.0, OrderType::Market);
+            entry.take_profit_levels = vec![
+                TakeProfitLevel::new(105.0, 1.0),
+                TakeProfitLevel::new(110.0, 2.0),
+            ];
+            entry.stop_loss = Some(95.0);
+            place(&paper, entry).unwrap();
+            let exits = || {
+                let state = paper.lock();
+                let exits = state.working.iter();
+                exits
+                    .map(|order| (order.request.order_type, order.request.quantity))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(exits(), entered, "held {held}");
+            paper.set_price("SYM", first);
+            assert_eq!(exits(), partly, "held {held}");
+            paper.set_price("SYM", second);
+            assert_eq!(exits(), last, "held {held}");
+            let state = paper.lock();
+            let quantity = state.positions.get("SYM").map_or(0.0, |p| p.quantity);
+            assert_eq!(quantity, position, "held {held}");
+            assert_eq!(state.balance, balance, "held {held}");
         }
     }
 
@@ -1221,6 +1398,21 @@ mod tests {
         ] {
             assert!(place(&paper, OrderRequest::new("SYM", OrderSide::Buy, 1.0, kind)).is_err());
         }
+        let level = TakeProfitLevel::new;
+        for (levels, take_profit) in [
+            // They add up to 2 of 3.
+            (vec![level(105.0, 1.0), level(110.0, 1.0)], None),
+            (vec![level(95.0, 1.0), level(110.0, 2.0)], None),
+            (vec![level(f64::NAN, 1.0), level(110.0, 2.0)], None),
+            (vec![level(105.0, 0.0), level(110.0, 3.0)], None),
+            (vec![level(105.0, 1.0), level(110.0, 2.0)], Some(110.0)),
+        ] {
+            let mut request = OrderRequest::new("SYM", OrderSide::Buy, 3.0, OrderType::Market);
+            request.take_profit_levels = levels;
+            request.take_profit = take_profit;
+            assert!(place(&paper, request).is_err());
+            assert_eq!(snapshot(&paper).len(), 1);
+        }
         let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market);
         entry.take_profit = Some(110.0);
         place(&paper, entry).unwrap();
@@ -1232,22 +1424,27 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let mut changed = exit.request.clone();
-        changed.quantity = 2.0;
-        let inbox = Arc::new(Inbox::default());
-        paper.modify(exit.id.clone(), changed, inbox.reply(0));
-        assert!(
-            inbox
-                .drain()
-                .answers
-                .pop()
-                .unwrap()
-                .1
-                .downcast::<Result<(), FeedError>>()
-                .unwrap()
-                .is_err()
-        );
-        assert_eq!(snapshot(&paper), before);
+        let mut larger = exit.request.clone();
+        larger.quantity = 2.0;
+        // Valid for the exit's side and quantity: only the rule for exits refuses it.
+        let mut with_level = exit.request.clone();
+        with_level.take_profit_levels = vec![level(105.0, 1.0)];
+        for changed in [larger, with_level] {
+            let inbox = Arc::new(Inbox::default());
+            paper.modify(exit.id.clone(), changed, inbox.reply(0));
+            assert!(
+                inbox
+                    .drain()
+                    .answers
+                    .pop()
+                    .unwrap()
+                    .1
+                    .downcast::<Result<(), FeedError>>()
+                    .unwrap()
+                    .is_err()
+            );
+            assert_eq!(snapshot(&paper), before);
+        }
     }
 
     #[test]
@@ -1305,74 +1502,79 @@ mod tests {
     }
 
     #[test]
-    fn bracket_exits_only_reduce_the_remaining_position() {
-        let terms = PaperAccount::new("USD", 0.0);
+    fn take_profit_only_exits_reduce_the_position_and_fill_at_the_better_price() {
         for attached in [false, true] {
-            for stop_loss in [None, Some(95.0)] {
-                for closed in [1.0, 2.0, 4.0] {
-                    let mut state = State::default();
-                    let mut entry =
-                        OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
-                    if attached {
-                        entry.take_profit = Some(105.0);
-                        entry.stop_loss = stop_loss;
-                    }
-                    state.fill(
-                        &terms,
-                        Order::new(OrderId::new("entry"), entry, OrderStatus::Working),
-                        100.0,
-                    );
-                    if !attached {
-                        for (price, role) in [
-                            (Some(105.0), PositionBracket::TakeProfit),
-                            (stop_loss, PositionBracket::StopLoss),
-                        ] {
-                            if let Some(price) = price {
-                                let kind = match role {
-                                    PositionBracket::TakeProfit => OrderType::Limit(price),
-                                    PositionBracket::StopLoss => OrderType::Stop(price),
-                                };
-                                let mut exit = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
-                                exit.position_bracket = Some(role);
-                                let id = state.id();
-                                state
-                                    .working
-                                    .push(Order::new(id, exit, OrderStatus::Working));
-                            }
+            for closed in [1.0, 2.0, 4.0] {
+                let paper = PaperAccount::new("USD", 10_000.0);
+                paper.set_price("SYM", 100.0);
+                let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
+                if attached {
+                    entry.take_profit = Some(105.0);
+                }
+                place(&paper, entry).unwrap();
+                if !attached {
+                    let mut exit =
+                        OrderRequest::new("SYM", OrderSide::Sell, 2.0, OrderType::Limit(105.0));
+                    exit.position_bracket = Some(PositionBracket::TakeProfit);
+                    place(&paper, exit).unwrap();
+                }
+                place(
+                    &paper,
+                    OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market),
+                )
+                .unwrap();
+                let events = snapshot(&paper);
+                let quantities: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        AccountEvent::Order(order) if order.status == OrderStatus::Working => {
+                            Some(order.request.quantity)
                         }
-                    }
-                    state.fill(
-                        &terms,
-                        Order::new(
-                            OrderId::new("close"),
-                            OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market),
-                            OrderStatus::Working,
-                        ),
-                        100.0,
-                    );
-                    if closed == 1.0 {
-                        assert!(!state.working.is_empty());
-                        assert!(
-                            state
-                                .working
-                                .iter()
-                                .all(|order| order.request.quantity == 1.0)
-                        );
-                    } else {
-                        assert!(state.working.is_empty());
-                    }
-                    state.reach(&terms, "SYM", 106.0);
-                    state.reach(&terms, "SYM", 94.0);
-                    assert_eq!(
-                        state.positions.get("SYM").map_or(0.0, |p| p.quantity),
-                        if closed == 4.0 { -2.0 } else { 0.0 }
-                    );
-                    if closed == 1.0 {
-                        assert_eq!(
-                            state.balance, 6.0,
-                            "a marketable limit fills at the better price"
-                        );
-                    }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    quantities,
+                    if closed == 1.0 { vec![1.0] } else { vec![] },
+                    "attached {attached}, closed {closed}"
+                );
+                paper.set_price("SYM", 106.0);
+                paper.set_price("SYM", 94.0);
+                let events = snapshot(&paper);
+                let position = events
+                    .iter()
+                    .find_map(|event| match event {
+                        AccountEvent::Position(position) => Some(position.quantity),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0);
+                assert_eq!(position, if closed == 4.0 { -2.0 } else { 0.0 });
+                assert!(!events.iter().any(
+                    |e| matches!(e, AccountEvent::Order(o) if o.status == OrderStatus::Working)
+                ));
+                if closed == 1.0 {
+                    // One unit bought at 100 and sold at the reaching price 106 earns 6, not 5.
+                    let account = events
+                        .iter()
+                        .find_map(|event| match event {
+                            AccountEvent::Account(account) => Some(account),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(account.balance, 10_006.0);
+                    let fill = events
+                        .iter()
+                        .find_map(|event| match event {
+                            AccountEvent::Order(order)
+                                if order.request.order_type == OrderType::Limit(105.0) =>
+                            {
+                                Some(order)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(fill.fill_price, Some(106.0));
+                    assert_eq!(fill.filled, 1.0);
                 }
             }
         }

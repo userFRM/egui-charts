@@ -42,7 +42,7 @@ impl Modal {
         }
     }
 
-    /// Set the outer width of the modal, including its 16 px padding
+    /// Set the outer width of the modal, including its frame padding
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self

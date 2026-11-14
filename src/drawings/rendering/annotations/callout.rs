@@ -1,13 +1,17 @@
 //! Callout and comment rendering
 
+use super::labels::{facing_point, pointed_outline};
 use crate::drawings::domain::Drawing;
-use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{
+    Color32, CornerRadius, Pos2, Rect,
+    epaint::{PathShape, RectShape, StrokeKind},
+};
 
 impl Drawing {
-    /// Renders a callout with pointer line and auto-positioning.
-    /// Features: text box with arrow pointer, background, border.
+    /// Renders a callout: a text box at the second anchor whose pointer reaches the first, filled
+    /// and outlined as one shape. An anchor at the box needs no pointer. Wrapped text breaks at
+    /// word boundaries, and inside a word wider than the wrap width.
     pub(crate) fn render_callout(&self, painter: &egui::Painter) {
         if self.points.len() < 2 {
             if self.points.len() == 1 {
@@ -24,214 +28,92 @@ impl Drawing {
         }
         let anchor = self.points[0];
         let box_pos = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
+        let mut colors = self.text_box_colors(painter.ctx());
+        if self.border {
+            colors.border.width = self.stroke_width;
+        }
 
         // Callout box
-        let text = self.text.as_deref().unwrap_or("Callout text here");
-        let font = self.annotation_font();
-        let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
-        let text_size = galley.size();
+        let text = self.display_text(painter.ctx());
+        let mut galley = self.annotation_galley(painter, text, colors.text);
+        if self.text_wrap {
+            let mut job = (*galley.job).clone();
+            job.wrap.max_width = self.text_wrap_width;
+            galley = painter.layout_job(job);
+        }
         let padding = egui::vec2(
             DESIGN_TOKENS.sizing.annotation.callout_padding_x,
             DESIGN_TOKENS.sizing.annotation.callout_padding_y,
         );
-        let box_rect = Rect::from_min_size(box_pos, text_size + padding * 2.0);
+        let box_rect = Rect::from_min_size(box_pos, galley.size() + padding * 2.0);
+        let radius = DESIGN_TOKENS.rounding.lg;
 
-        // Background with subtle gradient effect (darker at top)
-        painter.rect_filled(
-            box_rect,
-            DESIGN_TOKENS.rounding.lg,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.94),
-        );
-
-        // Calculate pointer position (closest edge of box to anchor)
-        let box_center = box_rect.center();
-        let dx = anchor.x - box_center.x;
-        let dy = anchor.y - box_center.y;
-
-        // Find where line from anchor to box center intersects box edge
-        let pointer_pos = if dx.abs() / box_rect.width() > dy.abs() / box_rect.height() {
-            // Intersects left or right edge
-            if dx > 0.0 {
-                Pos2::new(box_rect.max.x, box_center.y)
-            } else {
-                Pos2::new(box_rect.min.x, box_center.y)
-            }
+        // The pointer's base stays on the straight part of the side facing the anchor.
+        let mid = facing_point(box_rect, anchor);
+        let (along, side) = if mid.y == box_rect.center().y {
+            (egui::Vec2::Y, box_rect.height())
         } else {
-            // Intersects top or bottom edge
-            if dy > 0.0 {
-                Pos2::new(box_center.x, box_rect.max.y)
-            } else {
-                Pos2::new(box_center.x, box_rect.min.y)
-            }
+            (egui::Vec2::X, box_rect.width())
         };
-
-        // Draw pointer triangle
-        let pointer_size = DESIGN_TOKENS.sizing.annotation.pointer_size;
-        let perpendicular = if (pointer_pos.x - box_rect.min.x).abs() < 1.0
-            || (pointer_pos.x - box_rect.max.x).abs() < 1.0
-        {
-            // Left or right edge
-            egui::vec2(0.0, pointer_size)
+        let half_base = DESIGN_TOKENS
+            .sizing
+            .annotation
+            .pointer_size
+            .min((side - 2.0 * radius) / 2.0);
+        if half_base >= 1.0 && !box_rect.expand(4.0).contains(anchor) {
+            painter.add(PathShape {
+                points: pointed_outline(
+                    box_rect,
+                    radius,
+                    mid - along * half_base,
+                    anchor,
+                    mid + along * half_base,
+                ),
+                closed: true,
+                fill: colors.fill,
+                stroke: colors.border.into(),
+            });
         } else {
-            // Top or bottom edge
-            egui::vec2(pointer_size, 0.0)
-        };
+            painter.rect(
+                box_rect,
+                radius,
+                colors.fill,
+                colors.border,
+                StrokeKind::Inside,
+            );
+        }
 
-        let pointer_points = vec![
-            anchor,
-            Pos2::new(
-                pointer_pos.x - perpendicular.x / 2.0,
-                pointer_pos.y - perpendicular.y / 2.0,
-            ),
-            Pos2::new(
-                pointer_pos.x + perpendicular.x / 2.0,
-                pointer_pos.y + perpendicular.y / 2.0,
-            ),
-        ];
-        let pointer_shape = egui::epaint::PathShape::convex_polygon(
-            pointer_points,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.94),
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-        painter.add(pointer_shape);
-
-        // Border
-        painter.rect_stroke(
-            box_rect,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, color),
-            StrokeKind::Outside,
-        );
-
-        // Text
-        painter.text(
-            Pos2::new(box_pos.x + padding.x, box_pos.y + padding.y),
-            egui::Align2::LEFT_TOP,
-            text,
-            font,
-            color,
-        );
-
-        // Anchor point
-        painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            anchor,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
+        painter.galley(box_pos + padding, galley, colors.text);
     }
 
-    /// Renders a comment marker with expandable bubble.
-    /// Features: speech bubble icon, expandable text, typing indicator.
+    /// Renders a comment: its text in one bubble that grows with it, with the square lower left
+    /// corner on the anchor.
     pub(crate) fn render_comment(&self, painter: &egui::Painter) {
-        if self.points.is_empty() {
+        let Some(&anchor) = self.points.first() else {
             return;
-        }
-        let pos = self.points[0];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
+        };
+        let text = self.display_text(painter.ctx());
+        let colors = self.text_box_colors(painter.ctx());
+        let galley = self.annotation_galley(painter, text, colors.text);
+        let padding = egui::vec2(
+            DESIGN_TOKENS.sizing.annotation.callout_padding_x,
+            DESIGN_TOKENS.sizing.annotation.callout_padding_y,
         );
-
-        // Comment bubble icon
-        let bubble_width = 28.0;
-        let bubble_height = 22.0;
-        let bubble_rect = Rect::from_center_size(pos, egui::vec2(bubble_width, bubble_height));
-
-        // Draw rounded bubble
-        painter.rect_filled(bubble_rect, DESIGN_TOKENS.rounding.lg, color);
-
-        // Draw tail (triangle pointing down-left)
-        let tail_points = vec![
-            Pos2::new(bubble_rect.left() + 5.0, bubble_rect.bottom()),
-            Pos2::new(bubble_rect.left() - 3.0, bubble_rect.bottom() + 8.0),
-            Pos2::new(bubble_rect.left() + 12.0, bubble_rect.bottom()),
-        ];
-        let tail_shape = egui::epaint::PathShape::convex_polygon(tail_points, color, Stroke::NONE);
-        painter.add(tail_shape);
-
-        // Draw dots inside bubble (typing/comment indicator)
-        let dot_y = pos.y - 1.0;
-        for i in 0..3 {
-            let dot_x = pos.x - 7.0 + i as f32 * 7.0;
-            painter.circle_filled(Pos2::new(dot_x, dot_y), 2.5, Color32::WHITE);
-        }
-
-        // If there's text, show expanded comment
-        if let Some(text) = &self.text
-            && !text.is_empty()
-        {
-            let font = self.annotation_font();
-            let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
-            let text_size = galley.size();
-
-            let padding = egui::vec2(10.0, 6.0);
-            let comment_rect = Rect::from_min_size(
-                Pos2::new(
-                    pos.x + bubble_width / 2.0 + 8.0,
-                    pos.y - text_size.y / 2.0 - padding.y,
-                ),
-                text_size + padding * 2.0,
-            );
-
-            // Connecting line
-            painter.line_segment(
-                [
-                    Pos2::new(bubble_rect.max.x, pos.y),
-                    Pos2::new(comment_rect.min.x, comment_rect.center().y),
-                ],
-                Stroke::new(
-                    stroke::HAIRLINE,
-                    Color32::from_rgba_unmultiplied(
-                        self.color[0],
-                        self.color[1],
-                        self.color[2],
-                        100,
-                    ),
-                ),
-            );
-
-            // Comment box
-            painter.rect_filled(
-                comment_rect,
-                DESIGN_TOKENS.rounding.md,
-                DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.94),
-            );
-            painter.rect_stroke(
-                comment_rect,
-                DESIGN_TOKENS.rounding.md,
-                Stroke::new(stroke::HAIRLINE, color),
-                StrokeKind::Outside,
-            );
-
-            // Comment text
-            painter.text(
-                comment_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                font,
-                color,
-            );
-        }
+        let size = galley.size() + padding * 2.0;
+        let bubble = Rect::from_min_size(Pos2::new(anchor.x, anchor.y - size.y), size);
+        let radius = DESIGN_TOKENS.rounding.lg as u8;
+        painter.add(RectShape::new(
+            bubble,
+            CornerRadius {
+                nw: radius,
+                ne: radius,
+                sw: 0,
+                se: radius,
+            },
+            colors.fill,
+            colors.border,
+            StrokeKind::Inside,
+        ));
+        painter.galley(bubble.min + padding, galley, colors.text);
     }
 }

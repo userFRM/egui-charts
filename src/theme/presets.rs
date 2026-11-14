@@ -30,9 +30,9 @@ impl Theme {
                 modal_overlay: Color32::from_black_alpha(180),
                 text: rgb(219, 219, 219),
                 text_secondary: rgb(184, 184, 184),
-                text_muted: rgb(166, 166, 166),
+                text_muted: rgb(165, 165, 165),
                 text_disabled: rgb(87, 87, 87),
-                border: rgb(42, 42, 42),
+                border: rgb(46, 46, 46),
                 border_control: rgb(144, 144, 144),
                 btn_bg_hover: rgb(32, 32, 32),
                 btn_bg_active: rgb(48, 48, 48),
@@ -62,12 +62,14 @@ impl Theme {
                 grid_line_major: Color32::from_rgba_unmultiplied(255, 255, 255, 18),
                 axis_text: Color32::WHITE,
                 axis_text_secondary: rgb(184, 184, 184),
-                crosshair_line: Color32::from_rgba_unmultiplied(178, 181, 190, 120),
+                crosshair_line: rgb(119, 119, 119),
                 crosshair_label_bg: rgb(55, 59, 70),
                 crosshair_label_text: rgb(209, 212, 220),
                 candle_up: rgb(8, 153, 129),
                 candle_down: rgb(242, 54, 69),
-                volume_alpha: 153,
+                order_notable: rgb(255, 193, 7),
+                order_large: rgb(179, 136, 255),
+                volume_alpha: 128,
             },
             text: TextSizes::default(),
             spacing: Spacing::default(),
@@ -85,10 +87,10 @@ impl Theme {
                 panel_bg_secondary: rgb(235, 235, 235),
                 panel_bg_floating: Color32::WHITE,
                 modal_overlay: Color32::from_black_alpha(96),
-                text: rgb(26, 26, 26),
-                text_secondary: rgb(51, 51, 51),
-                text_muted: rgb(102, 102, 102),
-                text_disabled: rgb(153, 153, 153),
+                text: Color32::BLACK,
+                text_secondary: Color32::BLACK,
+                text_muted: rgb(105, 105, 105),
+                text_disabled: rgb(126, 126, 126),
                 border: rgb(235, 235, 235),
                 border_control: rgb(130, 130, 130),
                 btn_bg_hover: rgb(234, 234, 234),
@@ -109,16 +111,17 @@ impl Theme {
                 bg: Color32::WHITE,
                 bg_axis: Color32::WHITE,
                 bg_tooltip: Color32::WHITE,
-                grid_line: rgb(209, 209, 209),
-                grid_line_major: rgb(209, 209, 209),
-                axis_text: rgb(26, 26, 26),
-                axis_text_secondary: rgb(51, 51, 51),
-                // #9C9C9C on the white chart.
-                crosshair_line: Color32::from_rgba_unmultiplied(135, 135, 135, 210),
+                grid_line: rgb(229, 229, 229),
+                grid_line_major: rgb(229, 229, 229),
+                axis_text: Color32::BLACK,
+                axis_text_secondary: Color32::BLACK,
+                crosshair_line: rgb(116, 116, 116),
                 crosshair_label_bg: Color32::BLACK,
-                crosshair_label_text: Color32::WHITE,
+                crosshair_label_text: rgb(219, 219, 219),
                 candle_up: rgb(8, 153, 129),
                 candle_down: rgb(242, 54, 69),
+                order_notable: rgb(180, 130, 0),
+                order_large: rgb(146, 74, 250),
                 volume_alpha: 128,
             },
             ..dark
@@ -179,9 +182,57 @@ impl Theme {
                 crosshair_label_text: Color32::WHITE,
                 candle_up: rgb(0, 220, 130),
                 candle_down: rgb(255, 95, 95),
+                order_notable: dark.chart.order_notable,
+                order_large: dark.chart.order_large,
                 volume_alpha: 128,
             },
             ..dark
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::contrast;
+
+    /// Guards the order size tier colours of every preset: each reads at 3:1 or more on the chart
+    /// and the panel background, and stays at least 100 sRGB units from the candle colours and
+    /// from the other tier, so a marked order is neither faint nor taken for a candle.
+    #[test]
+    fn order_tiers_read_on_every_preset_and_differ_from_the_candles() {
+        let distance = |a: Color32, b: Color32| {
+            [(a.r(), b.r()), (a.g(), b.g()), (a.b(), b.b())]
+                .map(|(a, b)| (i32::from(a) - i32::from(b)).pow(2))
+                .iter()
+                .sum::<i32>()
+        };
+        for (name, theme) in presets() {
+            let chart = theme.chart;
+            for (tier, color, other) in [
+                ("notable", chart.order_notable, chart.order_large),
+                ("large", chart.order_large, chart.order_notable),
+            ] {
+                for (surface, bg) in [("chart", chart.bg), ("panel", theme.ui.panel_bg)] {
+                    let ratio = contrast(color, bg);
+                    assert!(
+                        ratio >= 3.0,
+                        "{name} {tier} {color:?} on the {surface} background: {ratio:.2}:1"
+                    );
+                }
+                for (role, near) in [
+                    ("up candle", chart.candle_up),
+                    ("down candle", chart.candle_down),
+                    ("other tier", other),
+                ] {
+                    let squared = distance(color, near);
+                    assert!(
+                        squared >= 100 * 100,
+                        "{name} {tier} {color:?} is {:.1} from the {role} {near:?}",
+                        f64::from(squared).sqrt()
+                    );
+                }
+            }
         }
     }
 }

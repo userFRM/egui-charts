@@ -34,7 +34,7 @@ use egui::Color32;
 pub struct AroonOscillator {
     period: usize,
     values: IndicatorValues,
-    color: Color32,
+    colors: [Color32; 2],
     visible: bool,
 }
 
@@ -44,7 +44,7 @@ impl AroonOscillator {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::BLUE,
+            colors: [palette::GREEN, palette::HISTOGRAM_RED],
             visible: true,
         }
     }
@@ -71,6 +71,20 @@ impl AroonOscillator {
 }
 
 impl Indicator for AroonOscillator {
+    fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
+        self.values
+            .value(0, bar)
+            .map(|value| self.colors[usize::from(value < 0.0)])
+    }
+    fn line_count(&self) -> usize {
+        1
+    }
+    fn set_color(&mut self, line: usize, color: Color32) {
+        if line == 0 {
+            self.colors.fill(color);
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Length", 1, usize::MAX)
     ; {});
@@ -110,19 +124,19 @@ impl Indicator for AroonOscillator {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        self.colors.to_vec()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if let Some(&color) = colors.first() {
-            self.color = color;
+            self.colors = [color, colors.get(1).copied().unwrap_or(color)];
         }
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: Some((-100.0, 100.0)),
-            levels: vec![(0.0, Color32::from_gray(128), "Zero")],
+            levels: vec![(0.0, palette::GRAY, "Zero")],
             ..Default::default()
         }
     }

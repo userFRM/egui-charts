@@ -42,7 +42,7 @@ impl DEMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN, // Cyan
+            color: palette::DARK_GREEN,
             visible: true,
         }
     }
@@ -57,7 +57,7 @@ impl DEMA {
 /// Construct with the conventional default parameters.
 impl Default for DEMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

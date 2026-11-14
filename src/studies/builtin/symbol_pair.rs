@@ -26,6 +26,11 @@
 //!
 //! Hosts supply the histories of the symbols named by the inputs, as for any other study with
 //! [`Indicator::data_requests`]; no market data service is included.
+//!
+//! # Presentation
+//!
+//! The correlation opens as an area from zero with dashed guides at its bounds, 1 and -1, and at
+//! zero. The ratio and the spread open as lines without guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
@@ -42,7 +47,8 @@ pub type Spread = SymbolPair<false, false>;
 pub type Correlation = SymbolPair<false, true>;
 
 /// A ratio, spread or correlation of two series, each a price source of a symbol. `RATIO` selects
-/// the ratio and `CORRELATION` the correlation; neither selects the spread.
+/// the ratio and `CORRELATION` the correlation; neither selects the spread. With both `true`,
+/// `CORRELATION` takes precedence and the study is the correlation.
 #[derive(Clone)]
 pub struct SymbolPair<const RATIO: bool, const CORRELATION: bool> {
     symbols: [String; 2],
@@ -68,11 +74,9 @@ impl<const RATIO: bool, const CORRELATION: bool> SymbolPair<RATIO, CORRELATION> 
             pairs: Vec::new(),
             values: IndicatorValues::new(),
             color: if CORRELATION {
-                palette::PURPLE
-            } else if RATIO {
-                palette::TEAL
+                palette::LIGHT_BLUE
             } else {
-                palette::ORANGE
+                Color32::from_rgba_unmultiplied(128, 0, 128, 166)
             },
             visible: true,
         }
@@ -142,6 +146,13 @@ impl<const RATIO: bool, const CORRELATION: bool> Default for SymbolPair<RATIO, C
 }
 
 impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO, CORRELATION> {
+    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: if CORRELATION { 1.0 } else { 2.0 },
+            ..Default::default()
+        }
+    }
+
     fn name(&self) -> &str {
         if CORRELATION {
             "Correlation Coefficient"
@@ -220,14 +231,14 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
         inputs
     }
 
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("symbol_0", InputValue::Symbol(value)) => self.symbols[0] = value,
@@ -236,7 +247,7 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
             ("source_1", InputValue::Choice(value)) => self.sources[1] = PriceSource::all()[value],
             ("length", InputValue::Length(value)) => self.length = value,
             ("log_returns", InputValue::Toggle(value)) => self.log_returns = value,
-            _ => return Err("unknown study input"),
+            _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
         }
         self.pairs.clear();
         self.values.clear();
@@ -310,6 +321,21 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
         vec![self.color]
     }
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            // The correlation is an area from zero; the ratio and the spread are lines.
+            plot_type: if CORRELATION {
+                crate::studies::PlotType::Area
+            } else {
+                crate::studies::PlotType::Line
+            },
+            visible: true,
+        }
+    }
+
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if let Some(color) = colors.first() {
             self.color = *color;
@@ -319,8 +345,13 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: CORRELATION.then_some((-1.1, 1.1)),
+            // The bounds of a correlation, then zero.
             levels: if CORRELATION {
-                vec![(0.0, Color32::from_gray(128), "Zero")]
+                vec![
+                    (1.0, palette::GRAY, "Upper guide"),
+                    (-1.0, palette::GRAY, "Lower guide"),
+                    (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero"),
+                ]
             } else {
                 Vec::new()
             },
@@ -369,6 +400,25 @@ mod tests {
             .collect()
     }
 
+    /// Recalculates the study from bar `from`, with `other` as the host's series.
+    fn feed(study: &mut dyn Indicator, chart: &[Bar], other: &[Bar], from: usize) {
+        let sources: Vec<_> = study
+            .data_requests()
+            .into_iter()
+            .map(|request| StudyData {
+                request,
+                bars: other,
+                clock: BarClock::new(Timeframe::Day1),
+                instrument: None,
+                timeframe: Timeframe::Day1,
+            })
+            .collect();
+        study.update_data(chart, from, &sources);
+    }
+
+    /// The study's values over the whole history. The same history streamed must give the same
+    /// values: every bar but the last, then a tick that leaves another value in both series on
+    /// the last bar, then the bar corrected to its final values.
     fn run(
         name: &str,
         inputs: &[(&str, InputValue)],
@@ -385,21 +435,31 @@ mod tests {
             study.set_input(id, value.clone()).unwrap();
         }
         let (chart, other) = (bars(chart), bars(other));
-        let sources: Vec<_> = study
-            .data_requests()
-            .into_iter()
-            .map(|request| StudyData {
-                request,
-                bars: &other,
-                clock: BarClock::new(Timeframe::Day1),
-                instrument: None,
-                timeframe: Timeframe::Day1,
-            })
-            .collect();
-        study.update_data(&chart, 0, &sources);
-        (0..chart.len())
-            .map(|at| study.values().value(0, at))
-            .collect()
+        let last = chart.len() - 1;
+        let tick = |bars: &[Bar]| -> Vec<Bar> {
+            bars.iter()
+                .map(|bar| {
+                    if bar.time == chart[last].time {
+                        let value = -2.0 * bar.close - 1.0;
+                        Bar::new(bar.time, value, value, value, value, 1.0)
+                    } else {
+                        bar.clone()
+                    }
+                })
+                .collect()
+        };
+        let values = |study: &dyn Indicator| -> Vec<Option<f64>> {
+            (0..chart.len())
+                .map(|at| study.values().value(0, at))
+                .collect()
+        };
+        let mut streamed = study.clone_box();
+        feed(streamed.as_mut(), &chart[..last], &other, 0);
+        feed(streamed.as_mut(), &tick(&chart), &tick(&other), last);
+        feed(streamed.as_mut(), &chart, &other, last);
+        feed(study.as_mut(), &chart, &other, 0);
+        assert_eq!(values(streamed.as_ref()), values(study.as_ref()), "{name}");
+        values(study.as_ref())
     }
 
     fn near(actual: &[Option<f64>], expected: &[Option<f64>], case: &str) {
@@ -482,7 +542,8 @@ mod tests {
     }
 
     /// Log returns: doubling and tripling twice then halving and thirding give returns
-    /// (ln 2, ln 2, -ln 2) and (ln 3, ln 3, -ln 3), perfectly correlated; a zero price has no log.
+    /// (ln 2, ln 2, -ln 2) and (ln 3, ln 3, -ln 3), perfectly correlated. Negative prices
+    /// remain unavailable even when their ratios are positive and their logs finite.
     #[test]
     fn log_return_correlation_needs_positive_prices() {
         let s = Some;
@@ -501,7 +562,15 @@ mod tests {
         near(
             &run("Correlation Coefficient", &inputs, &a, &zero),
             &[None; 4],
-            "non-positive",
+            "zero",
         );
+        let negative = [s(-1.0), s(-2.0), s(-4.0), s(-2.0)];
+        for (a, b) in [(&negative, &b), (&a, &negative)] {
+            near(
+                &run("Correlation Coefficient", &inputs, a, b),
+                &[None; 4],
+                "negative",
+            );
+        }
     }
 }

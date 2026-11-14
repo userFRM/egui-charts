@@ -26,8 +26,17 @@ pub(crate) fn install(ctx: &Context) {
         return;
     }
     ctx.add_image_loader(Arc::new(IconLoader));
-    // Icons painted earlier went through the generic SVG loader, whose textures would otherwise stay cached.
-    ctx.forget_all_images();
+    // Refresh icons painted by the generic loader without discarding the host's registered images.
+    let icons: Vec<_> = ctx
+        .tex_manager()
+        .read()
+        .allocated()
+        .filter(|(_, meta)| meta.name.starts_with(URI_PREFIX))
+        .map(|(_, meta)| meta.name.clone())
+        .collect();
+    for uri in icons {
+        ctx.forget_image(&uri);
+    }
 }
 
 struct IconLoader;
@@ -305,6 +314,63 @@ mod tests {
             }
         }
     }
+    /// Installing the loader refreshes icons the generic SVG loader painted, and keeps the images
+    /// a host registered before the chart's first frame.
+    #[test]
+    #[cfg(feature = "ui")]
+    fn installing_refreshes_icons_and_keeps_host_images() {
+        use egui::TextureOptions;
+        use egui::load::TexturePoll;
+        let ctx = Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let logo = "bytes://host/logo.svg";
+        ctx.include_bytes(logo, br#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="9" fill="blue"/></svg>"#);
+        let image = icons::HORIZONTAL_LINE.as_image_square(18.0);
+        let icon = image.source(&ctx);
+        let ready = |result| matches!(result, Ok(TexturePoll::Ready { .. }));
+        assert!(ready(icon.clone().load(
+            &ctx,
+            TextureOptions::LINEAR,
+            SizeHint::default()
+        )));
+        assert!(ready(ctx.try_load_texture(
+            logo,
+            TextureOptions::LINEAR,
+            SizeHint::default()
+        )));
+        install(&ctx);
+        let names: Vec<_> = ctx
+            .tex_manager()
+            .read()
+            .allocated()
+            .map(|(_, meta)| meta.name.clone())
+            .collect();
+        assert!(
+            !names.iter().any(|name| name.starts_with(URI_PREFIX)),
+            "{names:?}"
+        );
+        assert!(names.iter().any(|name| name == logo), "{names:?}");
+    }
+
+    /// Icons alone install only their own loader when a chart is shown.
+    #[test]
+    #[cfg(not(feature = "ui"))]
+    fn chart_loads_icons_without_a_general_svg_loader() {
+        let ctx = Context::default();
+        let mut chart = crate::Chart::new(crate::model::BarData::new());
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let image = icons::HORIZONTAL_LINE.as_image_square(18.0);
+        assert!(matches!(
+            image
+                .source(&ctx)
+                .load(&ctx, egui::TextureOptions::LINEAR, SizeHint::default()),
+            Ok(egui::load::TexturePoll::Ready { .. })
+        ));
+        let logo = "bytes://host/logo.svg";
+        ctx.include_bytes(logo, icons::HORIZONTAL_LINE.svg_bytes());
+        assert!(ctx.try_load_image(logo, SizeHint::default()).is_err());
+    }
+
     /// Curves stay where they are authored, including the point a closed curve ends on.
     #[test]
     fn closed_curves_keep_their_shape() {

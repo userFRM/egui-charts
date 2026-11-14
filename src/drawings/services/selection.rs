@@ -9,7 +9,21 @@
 //! - Click on empty area deselects all
 //! - Selected drawings show handles
 
+use egui::{
+    Context, Pos2, Rect,
+    epaint::{ClippedShape, Primitive},
+};
 use std::collections::HashSet;
+
+/// Pointer-only state, never part of a saved drawing or undo history.
+#[derive(Debug, Clone)]
+pub(crate) struct SelectionArea {
+    pub origin: Pos2,
+    pub pane: Option<usize>,
+    pub release_frame: Option<u64>,
+    pub cancelled: bool,
+    initial: HashSet<usize>,
+}
 
 /// Selection service for managing drawing selection state
 #[derive(Debug, Clone, Default)]
@@ -20,6 +34,9 @@ pub struct SelectionService {
     primary: Option<usize>,
     /// Whether multi-select mode is active
     multi_select_mode: bool,
+    pub(crate) area: Option<SelectionArea>,
+    /// The frame and area intent of the last primary press, before panning moves geometry.
+    pub(crate) area_press: Option<(u64, bool)>,
 }
 
 impl SelectionService {
@@ -79,10 +96,73 @@ impl SelectionService {
     ///
     /// Returns true if any drawings were selected.
     pub fn deselect_all(&mut self) -> bool {
+        self.cancel_area();
         let had_selection = !self.selected.is_empty();
         self.selected.clear();
         self.primary = None;
         had_selection
+    }
+
+    /// Starts an area gesture that adds to the current selection.
+    pub(crate) fn begin_area(&mut self, origin: Pos2, pane: Option<usize>) {
+        self.area = Some(SelectionArea {
+            origin,
+            pane,
+            release_frame: None,
+            cancelled: false,
+            initial: self.selected.clone(),
+        });
+    }
+
+    /// Drops the press intent and marks a live area cancelled until the button is released.
+    pub(crate) fn cancel_area(&mut self) {
+        if let Some((_, intent)) = &mut self.area_press {
+            *intent = false;
+        }
+        if let Some(area) = &mut self.area {
+            area.cancelled = true;
+        }
+    }
+
+    /// Replaces the selection with the one the area began with plus `ids`.
+    pub(crate) fn update_area(&mut self, ids: impl IntoIterator<Item = usize>) {
+        if let Some(area) = &self.area {
+            self.selected = area.initial.clone();
+            self.select_all(ids);
+            if !self.primary.is_some_and(|id| self.selected.contains(&id)) {
+                self.primary = self.selected.iter().copied().min();
+            }
+        }
+    }
+
+    /// Tests the clipped paint triangles, so curves, labels and custom renderers use the same
+    /// geometry as the chart. Bounding rectangles alone would select empty space around them.
+    pub(crate) fn intersects_painted(ctx: &Context, shapes: &[ClippedShape], area: Rect) -> bool {
+        let candidates = shapes
+            .iter()
+            .filter(|s| {
+                s.clip_rect.intersects(area)
+                    && (s.transform_after_tessellation != egui::emath::TSTransform::IDENTITY
+                        || s.shape.visual_bounding_rect().intersects(area))
+            })
+            .cloned()
+            .collect();
+        ctx.tessellate(candidates, ctx.pixels_per_point())
+            .iter()
+            .any(|primitive| {
+                let area = area.intersect(primitive.clip_rect);
+                if !area.is_positive() {
+                    return false;
+                }
+                match &primitive.primitive {
+                    Primitive::Mesh(mesh) => mesh.triangles().any(|indices| {
+                        let vertices = indices.map(|i| mesh.vertices[i as usize]);
+                        vertices.iter().any(|v| v.color.a() != 0)
+                            && triangle_intersects_rect(vertices.map(|v| v.pos), area)
+                    }),
+                    Primitive::Callback(callback) => callback.rect.intersects(area),
+                }
+            })
     }
 
     /// Check if a specific drawing is selected
@@ -158,6 +238,22 @@ impl SelectionService {
             None
         }
     }
+}
+
+/// Separating-axis test: the rectangle's axes and each triangle edge normal must overlap.
+fn triangle_intersects_rect(triangle: [Pos2; 3], rect: Rect) -> bool {
+    if !Rect::from_points(&triangle).intersects(rect) {
+        return false;
+    }
+    let center = rect.center();
+    let half = rect.size() * 0.5;
+    (0..3).all(|i| {
+        let edge = triangle[(i + 1) % 3] - triangle[i];
+        let normal = egui::vec2(-edge.y, edge.x);
+        let radius = normal.x.abs() * half.x + normal.y.abs() * half.y;
+        let distances = triangle.map(|p| (p - center).dot(normal));
+        distances.iter().any(|&d| d <= radius) && distances.iter().any(|&d| d >= -radius)
+    })
 }
 
 #[cfg(test)]

@@ -34,11 +34,13 @@ pub struct PriceMarkGeneratorConfig {
     /// Max number of marks, capped at 1,000 during generation.
     pub max_marks: usize,
 
-    /// Target density (marks per 100 pixels): marks stay at least `100 / target_density`
-    /// pixels apart, and no closer than `min_spacing`
+    /// Target density (marks per 100 pixels): linear marks take the nice step nearest
+    /// `100 / target_density` pixels, logarithmic marks stay at least that far apart, and no
+    /// marks are closer than `min_spacing`
     pub target_density: f32,
 
-    /// Min price step (for crypto/forex precision)
+    /// Minimum price tick size. Normal and logarithmic marks lie on its multiples;
+    /// invalid sizes are ignored. `None` uses the chart instrument's tick size when available.
     pub min_price_step: Option<f64>,
 }
 
@@ -82,7 +84,7 @@ impl PriceMarkGenerator {
     ///
     /// Logarithmic scales get marks at 1, 2 and 5 times powers of ten; the other
     /// modes get evenly stepped marks in scale units, labelled as prices, signed
-    /// percentages or index values.
+    /// percentages or index values. Labels group their thousands with the map's separator.
     pub fn generate_marks(&self, map: &PriceMap) -> Vec<PriceMark> {
         let range = map.range();
         let (top, bottom) = map.extent();
@@ -142,7 +144,15 @@ impl PriceMarkGenerator {
         let mut nice_step = self.calculate_nice_step(raw_step);
         if let Some(decimals) = map.price_precision() {
             let unit = 10f64.powi(-(decimals as i32));
-            nice_step = (nice_step / unit).ceil().max(1.0) * unit;
+            nice_step = Self::round_up_to_multiple(nice_step, unit);
+        }
+        let min_step = self
+            .min_step()
+            .filter(|_| prices || map.transform().mode == PriceScaleMode::Normal);
+        // A volume step is a multiple of the format's minimum move, so it also keeps that grid.
+        let min_step = map.volume_step().filter(|_| prices).or(min_step);
+        if let Some(min_step) = min_step {
+            nice_step = Self::round_up_to_multiple(nice_step, min_step);
         }
 
         // Guard against zero or invalid step (prevents infinite loop)
@@ -151,7 +161,8 @@ impl PriceMarkGenerator {
         }
 
         // Calculate starting price (round down to nice boundary)
-        let start_price = (min_price / nice_step).floor() * nice_step;
+        let start_index = (min_price / nice_step).floor();
+        let start_price = start_index * nice_step;
 
         // Guard against invalid start price
         if !start_price.is_finite() {
@@ -174,7 +185,16 @@ impl PriceMarkGenerator {
 
                 // Determine precision based on price value and step
                 let precision = map.price_precision().unwrap_or_else(|| {
-                    let decimals = self.calculate_precision(nice_step);
+                    let mut decimals = self.calculate_precision(nice_step);
+                    if min_step.is_some() {
+                        while decimals < 8 {
+                            let scaled = nice_step * 10f64.powi(decimals as i32);
+                            if (scaled - scaled.round()).abs() <= scaled * f64::EPSILON * 4.0 {
+                                break;
+                            }
+                            decimals += 1;
+                        }
+                    }
                     if matches!(
                         map.transform().mode,
                         PriceScaleMode::Normal | PriceScaleMode::Logarithmic
@@ -187,7 +207,7 @@ impl PriceMarkGenerator {
                 let label = if map.price_precision().is_none() && precision > 8 {
                     let mut label = self.format_price(curr_price, precision, true);
                     if map.transform().mode == PriceScaleMode::Percentage {
-                        if !curr_price.is_sign_negative() {
+                        if !label.starts_with('-') {
                             label.insert(0, '+');
                         }
                         label.push('%');
@@ -198,6 +218,7 @@ impl PriceMarkGenerator {
                 } else {
                     map.transform().label(curr_price, precision, None)
                 };
+                let label = super::price_formatter::group_thousands(label, map.thousands_sep());
 
                 // Calculate weight (higher for rounder numbers)
                 let weight = self.calculate_weight(curr_price, nice_step);
@@ -210,12 +231,15 @@ impl PriceMarkGenerator {
                 });
             }
 
-            curr_price += nice_step;
             iterations += 1;
+            curr_price = if min_step.is_some() {
+                (start_index + iterations as f64) * nice_step
+            } else {
+                curr_price + nice_step
+            };
         }
 
-        // Apply spacing constraints
-        self.apply_spacing_constraints(marks)
+        self.apply_spacing_constraints(marks, self.config.min_spacing)
     }
 
     /// Generate marks for logarithmic price scale
@@ -265,14 +289,23 @@ impl PriceMarkGenerator {
             for multiplier in [1.0, 2.0, 5.0] {
                 let price = base * multiplier;
 
+                if let Some(step) = self.min_step()
+                    && (price - (price / step).round() * step).abs()
+                        > price.abs().max(step) * f64::EPSILON * 4.0
+                {
+                    continue;
+                }
+
                 if price >= min_price && price <= max_price {
                     let y = map.price_to_y(price);
 
                     let precision = map
                         .price_precision()
                         .unwrap_or_else(|| self.calculate_precision(base).max(2));
-                    let label =
-                        self.format_price(price, precision, map.price_precision().is_none());
+                    let label = super::price_formatter::group_thousands(
+                        self.format_price(price, precision, map.price_precision().is_none()),
+                        map.thousands_sep(),
+                    );
 
                     let weight = if multiplier == 1.0 {
                         100
@@ -292,19 +325,34 @@ impl PriceMarkGenerator {
             }
         }
 
-        // Apply spacing constraints
-        self.apply_spacing_constraints(marks)
+        // Logarithmic ticks can be closer at one end even when the average spacing fits.
+        self.apply_spacing_constraints(
+            marks,
+            self.config
+                .min_spacing
+                .max(100.0 / self.config.target_density),
+        )
     }
 
-    /// Calculate "nice" step value using modified algorithm from Heckbert
-    /// Returns values like 1, 2, 2.5, 4, 5, 10, 20, 25, 40, 50, etc.
+    fn round_up_to_multiple(step: f64, unit: f64) -> f64 {
+        let ratio = step / unit;
+        let rounded = ratio.round();
+        let multiple = if (ratio - rounded).abs() <= ratio * 1e-9 {
+            rounded
+        } else {
+            ratio.ceil()
+        };
+        multiple.max(1.0) * unit
+    }
+
+    /// The "nice" step nearest `raw_step`, so the marks land nearest their target spacing in
+    /// pixels: 1, 2, 2.5, 4 or 5 times a power of ten.
     fn calculate_nice_step(&self, raw_step: f64) -> f64 {
         if raw_step <= 0.0 {
             return 1.0;
         }
 
-        // Check for min step constraint
-        if let Some(min_step) = self.config.min_price_step
+        if let Some(min_step) = self.min_step()
             && raw_step < min_step
         {
             return min_step;
@@ -314,21 +362,11 @@ impl PriceMarkGenerator {
         let exponent = raw_step.log10().floor();
         let fraction = raw_step / 10f64.powf(exponent);
 
-        // Round fraction to nice value (1, 2, 5, or 10)
-        // Using standard Heckbert thresholds
-        let nice_fraction = if fraction <= 1.0 {
-            1.0
-        } else if fraction <= 2.0 {
-            2.0
-        } else if fraction <= 2.5 {
-            2.5
-        } else if fraction <= 4.0 {
-            4.0
-        } else if fraction <= 5.0 {
-            5.0
-        } else {
-            10.0
-        };
+        let distance = |nice: f64| (fraction - nice).abs();
+        let nice_fraction = [1.0, 2.0, 2.5, 4.0, 5.0, 10.0]
+            .into_iter()
+            .min_by(|a, b| distance(*a).total_cmp(&distance(*b)))
+            .unwrap_or(1.0);
 
         nice_fraction * 10f64.powf(exponent)
     }
@@ -354,9 +392,17 @@ impl PriceMarkGenerator {
         }
     }
 
+    /// The configured minimum tick size, unless it is not a positive finite number.
+    fn min_step(&self) -> Option<f64> {
+        self.config
+            .min_price_step
+            .filter(|s| s.is_finite() && *s > 0.0)
+    }
+
     /// Format price with given precision
     fn format_price(&self, price: f64, precision: usize, automatic: bool) -> String {
         if automatic && precision > 8 {
+            let price = if price == 0.0 { 0.0 } else { price };
             let digits = (price.abs().log10().floor() + precision as f64).clamp(0.0, 17.0) as usize;
             format!("{price:.digits$e}")
         } else {
@@ -385,13 +431,12 @@ impl PriceMarkGenerator {
         }
     }
 
-    /// Apply min spacing constraints
-    fn apply_spacing_constraints(&self, mut marks: Vec<PriceMark>) -> Vec<PriceMark> {
+    /// Keeps the roundest marks at least `spacing` pixels apart
+    fn apply_spacing_constraints(&self, mut marks: Vec<PriceMark>, spacing: f32) -> Vec<PriceMark> {
         if marks.is_empty() {
             return marks;
         }
 
-        // Logarithmic ticks can be closer at one end even when the average spacing fits.
         // Sort by weight descending, then by price
         marks.sort_by(|a, b| {
             b.weight
@@ -400,10 +445,6 @@ impl PriceMarkGenerator {
         });
 
         // Keep marks with sufficient spacing
-        let spacing = self
-            .config
-            .min_spacing
-            .max(100.0 / self.config.target_density);
         let mut filtered = vec![marks[0].clone()];
 
         for mark in marks.iter().skip(1) {
@@ -450,13 +491,13 @@ mod tests {
         let generator = PriceMarkGenerator::new();
 
         // Test various raw steps
-        assert_eq!(generator.calculate_nice_step(0.7), 1.0);
+        assert_eq!(generator.calculate_nice_step(0.7), 0.5);
         assert_eq!(generator.calculate_nice_step(1.8), 2.0);
-        assert_eq!(generator.calculate_nice_step(2.2), 2.5);
+        assert_eq!(generator.calculate_nice_step(2.2), 2.0);
         assert_eq!(generator.calculate_nice_step(3.6), 4.0);
-        assert_eq!(generator.calculate_nice_step(4.5), 5.0);
+        assert_eq!(generator.calculate_nice_step(4.6), 5.0);
         assert_eq!(generator.calculate_nice_step(8.0), 10.0);
-        assert_eq!(generator.calculate_nice_step(15.0), 20.0);
+        assert_eq!(generator.calculate_nice_step(16.0), 20.0);
         assert_eq!(generator.calculate_nice_step(35.0), 40.0);
     }
 
@@ -471,6 +512,69 @@ mod tests {
         assert_eq!(generator.calculate_precision(1.0), 2);
         assert_eq!(generator.calculate_precision(10.0), 1);
         assert_eq!(generator.calculate_precision(100.0), 0);
+    }
+
+    #[test]
+    fn ticks_stay_on_the_minimum_price_grid() {
+        use PriceScaleMode::{Logarithmic, Normal};
+        for (mode, min, max, step, precision, expected) in [
+            (Normal, 4500.0, 4503.75, 0.25, None, None),
+            (Normal, -3.75, 0.5, 0.25, Some(2), None),
+            (Normal, 4500.0, 4503.75, 0.05, None, None),
+            (Normal, 0.01, 0.9, 0.03, Some(2), None),
+            (Logarithmic, 4500.0, 4503.75, 0.25, Some(2), None),
+            (Logarithmic, 0.01, 1.0, 0.03, None, None),
+            (Normal, 100.0, 101.0, 1.0 / 32.0, None, Some("100.125")),
+            (Normal, 0.012, 0.013, 1e-6, None, Some("0.01210000")),
+        ] {
+            let (min, max) = if mode == Logarithmic {
+                (f64::ln(min), f64::ln(max))
+            } else {
+                (min, max)
+            };
+            let marks = map(mode, min, max)
+                .with_price_precision(precision)
+                .with_tick_marks(PriceMarkGeneratorConfig {
+                    min_price_step: Some(step),
+                    ..Default::default()
+                })
+                .marks();
+            assert!(marks.len() >= 3, "{mode:?}: {marks:?}");
+            if let Some(expected) = expected {
+                assert!(
+                    marks.iter().any(|mark| mark.label == expected),
+                    "{mode:?}: expected {expected}, got {marks:?}"
+                );
+            }
+            for mark in marks {
+                let ticks = mark.price / step;
+                assert!(
+                    (ticks - ticks.round()).abs() < 1e-9,
+                    "{mode:?}: {} is off the {step} grid",
+                    mark.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn percentage_and_indexed_ticks_keep_their_own_units() {
+        use PriceScaleMode::{IndexedTo100, Percentage};
+        for (mode, min, max, expected) in [
+            (Percentage, -2.0, 2.375, "-1.60%"),
+            (IndexedTo100, 98.0, 102.375, "98.40"),
+        ] {
+            let marks = map(mode, min, max)
+                .with_tick_marks(PriceMarkGeneratorConfig {
+                    min_price_step: Some(0.25),
+                    ..Default::default()
+                })
+                .marks();
+            assert!(
+                marks.iter().any(|mark| mark.label == expected),
+                "{mode:?}: expected {expected}, got {marks:?}"
+            );
+        }
     }
 
     #[test]
@@ -532,6 +636,7 @@ mod tests {
         for (mode, min, max, precision, expected) in [
             (PriceScaleMode::Normal, 18_200.0, 22_800.0, None, "20000.00"),
             (PriceScaleMode::Normal, 700.0, 730.0, Some(3), "710.000"),
+            (PriceScaleMode::Normal, 0.012, 0.013, Some(6), "0.012100"),
             (
                 PriceScaleMode::Normal,
                 1e-18,
@@ -569,12 +674,10 @@ mod tests {
                     .all(|mark| (mark.label.parse::<f64>().unwrap() - mark.price).abs() < 1e-8)
             );
         }
+        // 0..70 on 500 pixels at 2.5 marks per 100 pixels wants a step of 5.6: the nearest nice
+        // step, 5, puts the marks 35.7 pixels apart, and all 15 stay.
         let marks = generator.generate_marks(&map(PriceScaleMode::Normal, 0.0, 70.0));
-        assert!(
-            marks
-                .windows(2)
-                .all(|pair| (pair[0].y_coord - pair[1].y_coord).abs() >= 40.0)
-        );
+        assert_eq!(marks.len(), 15);
         for (mode, min, max) in [
             (PriceScaleMode::Normal, 1e-10, 2e-10),
             (PriceScaleMode::Normal, -2e-18, 2e-18),
@@ -622,28 +725,72 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "widget")]
+    fn volume_display_format_keeps_the_low_decades_of_a_log_axis() {
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Volume,
+            precision: 2,
+            min_move: 1.0,
+        };
+        let map = map(
+            PriceScaleMode::Logarithmic,
+            1_000f64.ln(),
+            10_000_000f64.ln(),
+        );
+        for map in [map, map.with_display_format(format)] {
+            let marks = map.marks();
+            assert!(marks.iter().any(|mark| mark.price < 10_000.0), "{marks:?}");
+            assert!(marks.iter().all(|mark| mark.price.fract() == 0.0));
+        }
+        // On a linear axis the hundredth of a million still sets a 10,000-unit grid.
+        let marks = self::map(PriceScaleMode::Normal, 1_000.0, 10_000_000.0)
+            .with_display_format(format)
+            .marks();
+        assert!(!marks.is_empty());
+        assert!(marks.iter().all(|mark| mark.price % 10_000.0 == 0.0));
+    }
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn volume_format_on_a_narrow_log_axis_repeats_no_label() {
+        use crate::scales::PriceFormatter;
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Volume,
+            precision: 2,
+            min_move: 1.0,
+        };
+        let marks = map(
+            PriceScaleMode::Logarithmic,
+            1_010_000f64.ln(),
+            1_060_000f64.ln(),
+        )
+        .with_display_format(format)
+        .marks();
+        let labels: Vec<String> = marks.iter().map(|mark| format.format(mark.price)).collect();
+        assert!(labels.len() >= 3, "{labels:?}");
+        let mut distinct = labels.clone();
+        distinct.dedup();
+        assert_eq!(distinct, labels);
+    }
+
+    #[test]
     fn test_log_marks_generation() {
         let generator = PriceMarkGenerator::new();
         let (lo, hi) = (10f64.ln(), 1000f64.ln());
         let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
 
-        assert!(!marks.is_empty());
-
-        // Should have marks at powers of 10
-        let has_10 = marks.iter().any(|m| (m.price - 10.0).abs() < 0.01);
-        let has_100 = marks.iter().any(|m| (m.price - 100.0).abs() < 0.01);
-        let has_1000 = marks.iter().any(|m| (m.price - 1000.0).abs() < 0.01);
-
-        assert!(has_10 || has_100 || has_1000);
+        // Axis endpoints are unlabelled; the interior 1/2/5 decade marks remain.
+        let prices: Vec<_> = marks.iter().map(|mark| mark.price).collect();
+        assert_eq!(prices, [20.0, 50.0, 100.0, 200.0, 500.0]);
 
         // 18,200..22,800 holds one multiple of a power of ten (20,000), so the marks
-        // fall back to 400-unit price steps. Spacing drops the 22,400 mark near the top.
+        // fall back to 400-unit price steps.
         let (lo, hi) = (18_200f64.ln(), 22_800f64.ln());
         let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
         let labels: Vec<&str> = marks.iter().map(|m| m.label.as_str()).collect();
         let expected = [
             "18400.00", "18800.00", "19200.00", "19600.00", "20000.00", "20400.00", "20800.00",
-            "21200.00", "21600.00", "22000.00",
+            "21200.00", "21600.00", "22000.00", "22400.00",
         ];
         assert_eq!(labels, expected);
     }

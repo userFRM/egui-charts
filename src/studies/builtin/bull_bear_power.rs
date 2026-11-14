@@ -50,7 +50,7 @@ impl BullBearPower {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            positive_color: palette::GREEN,
+            positive_color: palette::TEAL,
             negative_color: palette::RED,
             visible: true,
         }

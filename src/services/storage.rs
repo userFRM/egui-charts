@@ -12,7 +12,8 @@ pub enum StoreKind {
     Settings,
     /// The drawings of one symbol, one document per symbol, named by the symbol.
     Drawings,
-    /// Named alert presets in a versioned JSON document.
+    /// The user's alert presets, at most five named sets of selected settings, in one versioned
+    /// JSON document named `presets`.
     AlertPresets,
     /// Named chart display settings templates.
     ChartTemplates,
@@ -66,8 +67,9 @@ pub enum SaveOutcome {
 pub enum ConflictChoice {
     /// Load the stored version and drop the unsaved changes.
     ReloadRemote,
-    /// Save the unsaved changes as a separate document named after the original with
-    /// " (local copy)" appended, then load the stored version.
+    /// Save the unsaved changes as a new document named after the original with " (local copy)"
+    /// appended, or " (local copy 2)" and so on if that name is taken, then load the stored
+    /// version.
     KeepLocalCopy,
     /// Write the unsaved changes over the stored version, which is now the expected revision.
     Retry,
@@ -182,8 +184,9 @@ pub trait Storage: MaybeSend + 'static {
 
     /// Pushes the new revision each time another client changes the document `name` of `kind`,
     /// until `events` is inactive. Writes of this client may be pushed too; the library ignores
-    /// the revisions it knows. Called after the document was read, only for the library's own
-    /// documents that follow remote changes, and by default pushes nothing.
+    /// the revisions it knows. Called right after the library starts reading a document that
+    /// follows remote changes, so a change made while it is read is not missed, and by default
+    /// pushes nothing.
     fn watch(&self, kind: StoreKind, name: &str, events: Events<Revision>) {
         let _ = (kind, name, events);
     }

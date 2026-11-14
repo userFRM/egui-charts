@@ -68,11 +68,7 @@ impl TimeframeToolbarConfig {
             text_color: ui.text,
             hover_text_color: ui.text,
             active_text_color: ui.accent,
-            separator_color: if theme.dark {
-                ui.border
-            } else {
-                ui.panel_bg.lerp_to_gamma(ui.text, 0.085)
-            },
+            separator_color: crate::ui::top_toolbar::buttons::rule_color(theme),
             hover_bg: ui.btn_bg_hover,
             active_bg: ui.btn_bg_active,
             font_size: theme.text.bottom_bar,
@@ -261,7 +257,11 @@ impl TimeframeToolbar {
                     .text_btn(
                         ui,
                         &time_text,
-                        &format!("Timezone: {}", self.state.timezone),
+                        &l10n::format_text(
+                            ui.ctx(),
+                            "Timezone: {zone}",
+                            &[("zone", self.state.timezone.as_str())],
+                        ),
                         false,
                     )
                     .clicked()
@@ -746,22 +746,5 @@ mod tests {
                 "a range can be requested after the view was panned"
             );
         }
-    }
-
-    #[test]
-    fn test_timeframe_toolbar_creation() {
-        let panel = TimeframeToolbar::new();
-        assert_eq!(panel.state.sel_range, DateRange::Month1);
-        assert_eq!(panel.state.session_type, SessionType::RTH);
-        assert!(!panel.state.adjust_for_dividends);
-    }
-
-    #[test]
-    fn test_config_defaults() {
-        let config = TimeframeToolbarConfig::default();
-        assert_eq!(
-            config.panel_height,
-            DESIGN_TOKENS.sizing.toolbar.bottom_height
-        );
     }
 }

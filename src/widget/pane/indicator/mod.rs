@@ -1,0 +1,955 @@
+//! Separate-pane indicator rendering with direct egui painting.
+//!
+//! This module renders oscillator and multi-line indicators (RSI, MACD, Stochastic,
+//! etc.) in dedicated panels below the main chart. It paints directly through
+//! [`egui::Painter`] using the same horizontal coordinate mapping as the main
+//! candlestick chart.
+//!
+//! # Usage
+//!
+//! Indicator panes are typically drawn by [`crate::widget::Chart::show`], but
+//! they can also be used standalone:
+//!
+//! ```rust
+//! use egui_charts::widget::{
+//!     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig
+//! };
+//!
+//! # fn example(
+//! #     ui: &mut egui::Ui,
+//! #     indicator: &egui_charts::studies::CustomIndicator,
+//! #     bars: &[egui_charts::model::Bar],
+//! #     visible_range: std::ops::Range<usize>,
+//! #     coords: IndicatorCoordParams,
+//! # ) {
+//! let config = IndicatorPaneConfig::default();
+//! let mut pane = IndicatorPane::with_config(config);
+//! pane.show_aligned(ui, indicator, bars, visible_range, coords);
+//! # }
+//! ```
+//!
+//! # Coordinate Alignment
+//!
+//! The [`IndicatorCoordParams`] struct captures the main chart's bar spacing,
+//! right offset, and base index so that indicator panes draw their data points
+//! at exactly the same x-coordinates as the corresponding candlesticks above.
+
+mod config;
+mod paint;
+pub use config::{IndicatorCoordParams, IndicatorPaneConfig, PaneInteraction};
+
+use crate::localization as l10n;
+use crate::model::Bar;
+use crate::scales::PriceMap;
+use crate::studies::Indicator;
+use crate::theme::ThemeExt;
+use egui::{Pos2, Rect, Sense, Ui};
+use std::ops::Range;
+
+/// Chart layout constants matching main chart (from ChartConfig defaults)
+mod layout {
+    /// Left padding (matches ChartConfig::padding default)
+    pub const LEFT_PADDING: f32 = crate::styles::sizing::chart::PADDING;
+    /// Right price axis width for standalone panes
+    pub const RIGHT_PADDING: f32 = crate::styles::sizing::chart::RIGHT_AXIS_WIDTH;
+    /// Minimum pixel spacing between vertical grid lines
+    pub const MIN_GRID_SPACING: f32 = 80.0;
+}
+
+/// Indicator panel sizing constants
+mod indicator_sizing {
+    /// Standard panel height for oscillators (RSI, Stochastic)
+    pub const OSCILLATOR_HEIGHT: f32 = 120.0;
+    /// Standard panel height for multi-line indicators (MACD)
+    pub const MULTI_LINE_HEIGHT: f32 = 150.0;
+}
+
+/// A separate-pane indicator panel rendered via direct egui painting.
+///
+/// Each `IndicatorPane` renders one indicator (RSI, MACD, etc.) in its own
+/// rectangular area below the main chart. The pane includes:
+/// - Indicator line(s) with proper colors
+/// - Horizontal zone lines (e.g., RSI 70/30 overbought/oversold)
+/// - Semi-transparent zone fills for overbought/oversold regions
+/// - Y-axis labels on the right side
+/// - A legend showing the indicator name and current value
+/// - Optional vertical grid lines aligned with the main chart
+pub struct IndicatorPane {
+    config: IndicatorPaneConfig,
+    pub(super) bar_index: Option<usize>,
+    pub(super) measured_axis_width: f32,
+    pub(super) price_map: Option<PriceMap>,
+    pub(super) price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    pub(super) overlay: bool,
+    pub(super) draw_axis: bool,
+    pub(super) legend_offset: f32,
+    pub(super) pane_controls: bool,
+    pub(super) axis_rect: Option<Rect>,
+    pub(super) axis_tags: Vec<Option<Rect>>,
+    pub(super) fixed_axis_tags: Vec<Option<Rect>>,
+    /// The primitive tags of this member's scale, for all of the pane's members on it.
+    /// Fixed tags and the crosshair tag are deferred until the pane's value tags have drawn.
+    pub(super) primitive_axis_labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
+    pub(super) axis_options: crate::config::PriceAxisOptions,
+    pub(super) legend_backdrop: f32,
+    /// The background of the chart showing the pane: the rect its gradient spans, its style and
+    /// its solid colour. A pane shown on its own has the theme's chart background.
+    pub(super) background: Option<(Rect, crate::config::BackgroundStyle, egui::Color32)>,
+    /// Colour of the legend text and the axis labels, the scale text colour of the chart showing
+    /// the pane. A pane shown on its own takes them from the egui style and the theme.
+    pub(super) text_color: Option<egui::Color32>,
+}
+
+impl std::fmt::Debug for IndicatorPane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorPane")
+            .field("config", &self.config)
+            .field("overlay", &self.overlay)
+            .finish_non_exhaustive()
+    }
+}
+
+impl IndicatorPane {
+    /// Create a new indicator panel with custom configuration
+    pub fn with_config(config: IndicatorPaneConfig) -> Self {
+        let axis_options = crate::config::PriceAxisOptions {
+            show_study_values: config.show_values,
+            ..Default::default()
+        };
+        Self {
+            config,
+            bar_index: None,
+            measured_axis_width: 0.0,
+            price_map: None,
+            price_formatter: None,
+            overlay: false,
+            draw_axis: true,
+            legend_offset: 0.0,
+            pane_controls: false,
+            axis_rect: None,
+            axis_tags: Vec::new(),
+            fixed_axis_tags: Vec::new(),
+            primitive_axis_labels: Vec::new(),
+            axis_options,
+            legend_backdrop: 0.6,
+            background: None,
+            text_color: None,
+        }
+    }
+
+    /// The colour of the background behind `pos`.
+    pub(super) fn background_at(&self, ctx: &egui::Context, pos: Pos2) -> egui::Color32 {
+        self.background.map_or_else(
+            || ctx.active_theme().chart.bg,
+            |(frame, style, color)| crate::widget::frame::background_at(frame, style, color, pos),
+        )
+    }
+
+    /// Render the indicator panel with proper x-axis alignment
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        visible_range: Range<usize>,
+    ) {
+        if !indicator.is_visible() {
+            return;
+        }
+
+        // Get chart background and text colors from theme
+        let colors = ui.active_theme().chart;
+        let chart_bg = colors.bg;
+        let text_color = ui.style().visuals.text_color();
+        let grid_color = colors.grid_line;
+
+        // Get live theme colors for zones
+
+        // Allocate the panel area
+        let available_width = ui.available_width();
+        let panel_size = egui::vec2(available_width, self.config.height);
+        let (rect, response) = ui.allocate_exact_size(panel_size, Sense::hover());
+
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+
+        let painter = ui.painter();
+
+        // Fill background
+        painter.rect_filled(rect, 0.0, chart_bg);
+
+        // Calculate drawing area to match main chart layout
+        let left_padding = layout::LEFT_PADDING;
+        let right_padding = layout::RIGHT_PADDING;
+        let chart_rect = Rect::from_min_max(
+            Pos2::new(rect.min.x + left_padding, rect.min.y),
+            Pos2::new(rect.max.x - right_padding, rect.max.y),
+        );
+
+        // Determine y-axis range
+        let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
+
+        // The study's tint lies beneath everything else it paints
+        if let Some(color) = indicator.background() {
+            painter.rect_filled(chart_rect, 0.0, color);
+        }
+
+        // Draw zone fills (colored bands)
+        if self.config.show_zones && self.config.zones.len() >= 2 {
+            self.draw_zone_fills(painter, chart_rect, y_min, y_max, indicator);
+        }
+
+        // Draw horizontal grid lines and zone lines
+        self.draw_horizontal_lines(painter, chart_rect, y_min, y_max, grid_color, indicator);
+
+        // Draw indicator lines
+        self.draw_indicator_lines(
+            painter,
+            chart_rect,
+            indicator,
+            bars,
+            &visible_range,
+            y_min,
+            y_max,
+        );
+
+        // Draw y-axis labels
+        self.draw_y_axis_labels(
+            painter,
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
+        );
+
+        // Draw indicator legend at top-left. The non-interactive path cannot
+        // host a clickable close affordance, so no remove "x" is drawn here.
+        self.draw_legend(painter, chart_rect, indicator, text_color);
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(ui, chart_rect, table, response.id);
+        }
+    }
+
+    /// Render with explicit coordinate parameters for perfect x-axis alignment.
+    ///
+    /// Uses [`IndicatorCoordParams`] from the main chart to ensure that each
+    /// indicator data point is drawn at the exact same x-coordinate as its
+    /// corresponding bar in the price chart above.
+    pub fn show_aligned(
+        &mut self,
+        ui: &mut Ui,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        _visible_range: Range<usize>,
+        coords: IndicatorCoordParams,
+    ) {
+        if !indicator.is_visible() {
+            return;
+        }
+
+        // Get chart background and text colors from theme
+        let colors = ui.active_theme().chart;
+        let chart_bg = colors.bg;
+        let text_color = ui.style().visuals.text_color();
+        let grid_color = colors.grid_line;
+
+        // Get live theme colors for zones
+
+        // Allocate the panel area
+        let available_width = ui.available_width();
+        let panel_size = egui::vec2(available_width, self.config.height);
+        let (rect, response) = ui.allocate_exact_size(panel_size, Sense::hover());
+
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+
+        let painter = ui.painter();
+
+        // Fill background
+        painter.rect_filled(rect, 0.0, chart_bg);
+
+        // Calculate drawing area to match main chart layout
+        let left_padding = layout::LEFT_PADDING;
+        let right_padding = layout::RIGHT_PADDING;
+        let chart_rect = Rect::from_min_max(
+            Pos2::new(rect.min.x + left_padding, rect.min.y),
+            Pos2::new(rect.max.x - right_padding, rect.max.y),
+        );
+
+        // Determine y-axis range
+        let horizontal = coords.to_mapping(chart_rect, 0.0, 1.0);
+        let displayed_range = horizontal.x_to_idx(chart_rect.left())
+            ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
+        let (y_min, y_max) = self.calculate_y_range(indicator, &displayed_range);
+
+        // The study's tint lies beneath everything else it paints
+        if let Some(color) = indicator.background() {
+            painter.rect_filled(chart_rect, 0.0, color);
+        }
+
+        // Draw zone fills (colored bands)
+        if self.config.show_zones && self.config.zones.len() >= 2 {
+            self.draw_zone_fills(painter, chart_rect, y_min, y_max, indicator);
+        }
+
+        // Draw horizontal grid lines and zone lines
+        self.draw_horizontal_lines(painter, chart_rect, y_min, y_max, grid_color, indicator);
+
+        // Draw vertical grid lines (aligned with main chart)
+        if self.config.show_grid {
+            self.draw_vertical_grid_aligned(painter, chart_rect, &coords, grid_color);
+        }
+
+        // Draw indicator lines with aligned coordinates
+        self.draw_indicator_lines_aligned(
+            painter, chart_rect, indicator, bars, y_min, y_max, &coords,
+        );
+
+        // Draw y-axis labels
+        self.draw_y_axis_labels(
+            painter,
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
+        );
+
+        // Draw indicator legend at top-left. The non-interactive path cannot
+        // host a clickable close affordance, so no remove "x" is drawn here.
+        self.draw_legend(painter, chart_rect, indicator, text_color);
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(ui, chart_rect, table, response.id);
+        }
+    }
+
+    /// Render with coordinate alignment and return layout info for hit testing.
+    ///
+    /// Like [`IndicatorPane::show_aligned`], but returns the panel and chart
+    /// rects, y-axis range, and an interactive [`egui::Response`]. This allows
+    /// the caller to implement click-on-line selection, tooltip display, or
+    /// other interactive features on indicator panes.
+    ///
+    /// Returns `None` if the indicator is not visible.
+    ///
+    /// The returned [`PaneInteraction`] also carries the [`egui::Response`] for the
+    /// legend's close "x" (when the pane shows a legend), so the host can offer
+    /// one-click pane removal.
+    pub fn show_aligned_interactive(
+        &mut self,
+        ui: &mut Ui,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        _visible_range: Range<usize>,
+        coords: IndicatorCoordParams,
+    ) -> Option<PaneInteraction> {
+        let mut axis_foregrounds = Vec::new();
+        let interaction = self.show_aligned_interactive_in(
+            ui,
+            indicator,
+            bars,
+            coords,
+            None,
+            false,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
+            &[],
+            false,
+            &mut axis_foregrounds,
+            |_, _| {},
+        )?;
+        crate::widget::primitives::paint_backgrounds(ui.painter(), axis_foregrounds);
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(
+                ui,
+                interaction.chart_rect,
+                table,
+                interaction.response.id,
+            );
+        }
+        Some(interaction)
+    }
+
+    /// Shows the pane with attached `primitives`. For a bar series, `indicator` supplies only
+    /// its legend; the caller draws its bars and the series primitive pass afterwards.
+    pub(super) fn show_aligned_interactive_in(
+        &mut self,
+        ui: &mut Ui,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        coords: IndicatorCoordParams,
+        plot_x: Option<egui::emath::Rangef>,
+        collapsed: bool,
+        axis: Option<crate::scales::PriceScaleId>,
+        hover: Option<(Pos2, crate::config::CrosshairOptions)>,
+        primitives: &[&crate::widget::primitives::Attached],
+        bar_series: bool,
+        axis_foregrounds: &mut Vec<egui::epaint::ClippedShape>,
+        mut draw_primitives: impl FnMut(&egui::Painter, crate::chart::primitives::PrimitivePass),
+    ) -> Option<PaneInteraction> {
+        if !indicator.is_visible() {
+            return None;
+        }
+
+        // Get chart background and text colors from theme
+        let colors = ui.active_theme().chart;
+        let chart_bg = colors.bg;
+        let text_color = self
+            .text_color
+            .unwrap_or_else(|| ui.style().visuals.text_color());
+        let grid_color = colors.grid_line;
+
+        // Get live theme colors for zones
+
+        // Allocate the panel area with click sense
+        let available_width = ui.available_width();
+        let panel_size = egui::vec2(available_width, self.config.height);
+        let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
+        let translated_label =
+            l10n::format_text(ui.ctx(), "{0} pane", &[("0", indicator.name().to_string())]);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::GraphicsObject,
+                response.enabled(),
+                &translated_label,
+            )
+        });
+
+        if !ui.is_rect_visible(rect) {
+            return None;
+        }
+
+        let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+
+        // Fill background: the part of the chart's that lies behind the pane, also when a container
+        // paints the chart's: the fill hides the crosshair line the price frame draws through panes.
+        if !self.overlay {
+            match self.background {
+                Some((frame, style, color)) => {
+                    crate::widget::frame::paint_background(painter, frame, rect, style, color);
+                }
+                None => {
+                    painter.rect_filled(rect, 0.0, chart_bg);
+                }
+            }
+        }
+
+        // Calculate drawing area to match main chart layout
+        let left_padding = layout::LEFT_PADDING;
+        let right_padding = layout::RIGHT_PADDING;
+        let left_axis = axis == Some(crate::scales::PriceScaleId::Left);
+        let plot_x = plot_x.unwrap_or_else(|| {
+            egui::emath::Rangef::new(
+                rect.left() + left_padding,
+                (rect.right() - right_padding).max(rect.left() + left_padding),
+            )
+        });
+        let chart_rect = Rect::from_min_max(
+            Pos2::new(plot_x.min, rect.top()),
+            Pos2::new(plot_x.max, rect.bottom()),
+        );
+
+        // Determine y-axis range
+        let horizontal = coords.to_mapping(chart_rect, 0.0, 1.0);
+        let displayed_range = horizontal.x_to_idx(chart_rect.left())
+            ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
+        let (y_min, y_max) = self.price_map.map_or_else(
+            || self.calculate_y_range(indicator, &displayed_range),
+            |map| {
+                (
+                    map.transform().to_price(map.range().min),
+                    map.transform().to_price(map.range().max),
+                )
+            },
+        );
+
+        let mut mapping = coords.to_mapping(chart_rect, y_min, y_max);
+        if let Some(map) = self.price_map {
+            mapping.price = map;
+        }
+        let view = primitives
+            .first()
+            .map(|item| crate::chart::primitives::PrimitiveView {
+                series: item.series,
+                study: (!bar_series).then_some(indicator),
+                mapping: mapping.clone(),
+                bars,
+                visible: displayed_range.clone(),
+                custom: primitives
+                    .iter()
+                    .find_map(|item| item.custom_view(bars, &mapping)),
+            });
+        let crosshair = hover.map(|(mut pos, options)| {
+            if let Some(index) = self.bar_index {
+                pos.x = mapping.idx_to_x(index);
+                if options.mode.snaps()
+                    && chart_rect.contains(pos)
+                    && let Some(value) = crate::chart::rendering::snap_to_values(
+                        pos.y,
+                        &mapping.price,
+                        (0..indicator.line_count())
+                            .filter(|line| {
+                                let plot = indicator.plot_style(*line);
+                                plot.visible
+                                    && !matches!(
+                                        plot.plot_type,
+                                        crate::studies::PlotType::BarColor
+                                            | crate::studies::PlotType::BackgroundColor
+                                    )
+                            })
+                            .filter_map(|line| indicator.plot_value(line, index)),
+                    )
+                {
+                    pos.y = mapping.price_to_y(value);
+                }
+            }
+            (pos, options)
+        });
+        if !collapsed {
+            let plot_painter = &painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
+            // The study's tint lies beneath everything else it paints
+            if let Some(color) = indicator.background() {
+                plot_painter.rect_filled(chart_rect, 0.0, color);
+            }
+
+            // Draw zone fills (colored bands)
+            if self.config.show_zones && self.config.zones.len() >= 2 {
+                self.draw_zone_fills(plot_painter, chart_rect, y_min, y_max, indicator);
+            }
+
+            // Draw horizontal grid lines and zone lines
+            self.draw_horizontal_lines(
+                plot_painter,
+                chart_rect,
+                y_min,
+                y_max,
+                grid_color,
+                indicator,
+            );
+
+            // Draw vertical grid lines (aligned with main chart)
+            if self.config.show_grid {
+                self.draw_vertical_grid_aligned(plot_painter, chart_rect, &coords, grid_color);
+            }
+
+            use crate::chart::primitives::PrimitivePass;
+            draw_primitives(plot_painter, PrimitivePass::Below);
+            // Draw indicator lines with aligned coordinates, unless a renderer draws them
+            if !primitives.iter().any(|item| item.replaces) {
+                self.draw_indicator_lines_aligned(
+                    plot_painter,
+                    chart_rect,
+                    indicator,
+                    bars,
+                    y_min,
+                    y_max,
+                    &coords,
+                );
+            }
+            if !bar_series {
+                draw_primitives(plot_painter, PrimitivePass::Series);
+            }
+
+            let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
+                crate::widget::series::axis_label_rect(chart_rect, axis)
+            });
+            if let Some(side) = axis
+                && indicator.scale() != crate::studies::StudyScale::None
+            {
+                let (axis_rect, axis_edge) = if side == crate::scales::PriceScaleId::Left {
+                    (
+                        Rect::from_x_y_ranges(rect.left()..=chart_rect.left(), rect.y_range()),
+                        chart_rect.left(),
+                    )
+                } else {
+                    (
+                        Rect::from_x_y_ranges(chart_rect.right()..=rect.right(), rect.y_range()),
+                        rect.right(),
+                    )
+                };
+                let axis_rect = self.axis_rect.unwrap_or(axis_rect);
+                let axis_edge = self.axis_rect.map_or(axis_edge, |axis| axis.right());
+                let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis_rect));
+                if let Some(view) = &view {
+                    for item in primitives {
+                        item.get().draw_price_axis(&axis_painter, axis_rect, view);
+                    }
+                }
+                let (fixed, automatic): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut self.primitive_axis_labels)
+                        .into_iter()
+                        .partition(|(label, _)| label.fixed_coordinate.is_some());
+                crate::chart::rendering::axes::render_primitive_price_labels(
+                    painter,
+                    label_rect,
+                    axis_edge,
+                    automatic,
+                    &mut self.axis_tags,
+                    self.axis_options.allow_label_overlap,
+                );
+                let start = painter
+                    .ctx()
+                    .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
+                crate::chart::rendering::axes::render_primitive_price_labels(
+                    &axis_painter,
+                    label_rect,
+                    axis_edge,
+                    fixed,
+                    &mut self.fixed_axis_tags,
+                    self.axis_options.allow_label_overlap,
+                );
+                axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
+            }
+            let context = crate::chart::rendering::RenderContext::new(painter, chart_rect);
+            if let Some((pos, options)) = crosshair {
+                crate::chart::rendering::render_crosshair_lines(
+                    &context,
+                    pos,
+                    &options,
+                    chart_rect.bottom(),
+                );
+            }
+            let start = painter
+                .ctx()
+                .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
+            let tag = crosshair.and_then(|(pos, options)| {
+                axis?;
+                if indicator.scale() == crate::studies::StudyScale::None {
+                    return None;
+                }
+                crate::chart::rendering::render_crosshair_price_tag(
+                    &crate::chart::rendering::RenderContext::new(painter, label_rect),
+                    pos,
+                    &mapping.price.with_price_precision(Some(
+                        indicator.precision().unwrap_or(2).min(255) as u8,
+                    )),
+                    &options,
+                    self.axis_rect.map_or_else(
+                        || {
+                            if left_axis {
+                                egui::emath::Rangef::new(rect.left(), chart_rect.left())
+                            } else {
+                                egui::emath::Rangef::new(chart_rect.right(), rect.right())
+                            }
+                        },
+                        |axis| axis.x_range(),
+                    ),
+                    None,
+                    Some(
+                        if self.price_formatter.is_some()
+                            || matches!(
+                                mapping.price.transform().mode,
+                                crate::scales::PriceScaleMode::Percentage
+                                    | crate::scales::PriceScaleMode::IndexedTo100
+                            )
+                        {
+                            mapping.price.label(
+                                mapping.price.y_to_scale(pos.y),
+                                indicator.precision().unwrap_or(2),
+                                self.price_formatter.as_deref(),
+                            )
+                        } else {
+                            indicator.format_value(mapping.price.y_to_price(pos.y))
+                        },
+                    ),
+                )
+            });
+            axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));
+            // Draw y-axis labels
+            self.measured_axis_width = self.draw_y_axis_labels(
+                painter, rect, chart_rect, y_min, y_max, indicator, axis, tag,
+            );
+        }
+
+        if collapsed && let Some((pos, mut options)) = crosshair {
+            options.horz_line_visible = false;
+            crate::chart::rendering::render_crosshair_lines(
+                &crate::chart::rendering::RenderContext::new(painter, chart_rect),
+                pos,
+                &options,
+                chart_rect.bottom(),
+            );
+        }
+        let controls = self.legend_controls_rect(painter, chart_rect, indicator);
+        let responses = controls.map(|controls| {
+            let row = Rect::from_min_max(
+                chart_rect.min + egui::vec2(0.0, self.legend_offset),
+                controls.right_bottom(),
+            );
+            crate::chart::rendering::study_controls(
+                ui,
+                row,
+                controls,
+                Some(self.background_at(ui.ctx(), controls.center())),
+                response.id.with("study_controls"),
+                indicator,
+            )
+        });
+        let legend_rect = Rect::from_min_max(
+            chart_rect.min,
+            Pos2::new(
+                controls.map_or(chart_rect.right(), |rect| rect.left()),
+                chart_rect.bottom(),
+            ),
+        );
+        self.draw_legend(
+            &painter.with_clip_rect(legend_rect.intersect(ui.clip_rect())),
+            chart_rect,
+            indicator,
+            text_color,
+        );
+        let (visibility_response, settings_response, close_response, menu) = match responses {
+            Some(([visibility, settings, close], menu)) => {
+                (Some(visibility), Some(settings), Some(close), menu)
+            }
+            None => (None, None, None, None),
+        };
+
+        // Return panel info for hit testing
+        Some(PaneInteraction {
+            panel_rect: rect,
+            chart_rect,
+            y_min,
+            y_max,
+            response,
+            close_response,
+            visibility_response,
+            settings_response,
+            menu,
+        })
+    }
+
+    pub(in crate::widget) fn calculate_y_range(
+        &self,
+        indicator: &dyn Indicator,
+        visible_range: &Range<usize>,
+    ) -> (f64, f64) {
+        self.value_range(indicator, visible_range)
+            .unwrap_or_else(|| {
+                if indicator.is_volume()
+                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+                {
+                    crate::widget::volume::range(indicator, visible_range, None)
+                } else {
+                    (0.0, 100.0)
+                }
+            })
+    }
+
+    /// The study's fitted range, without the empty-pane drawing fallback.
+    pub(in crate::widget) fn value_range(
+        &self,
+        indicator: &dyn Indicator,
+        visible_range: &Range<usize>,
+    ) -> Option<(f64, f64)> {
+        if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
+            // Without volume in view the study adds nothing, so its scale keeps its range.
+            let in_view = (0..indicator.line_count())
+                .filter(|line| indicator.plot_style(*line).visible)
+                .any(|line| {
+                    visible_range
+                        .clone()
+                        .any(|bar| indicator.values().value(line, bar).is_some())
+                });
+            return in_view.then(|| crate::widget::volume::range(indicator, visible_range, None));
+        }
+        if let Some((min, max)) = self.config.y_range {
+            return Some((min, max));
+        }
+
+        // Auto-scale based on visible indicator values
+        let mut min_val = f64::MAX;
+        let mut max_val = f64::MIN;
+
+        for line in (0..indicator.line_count()).filter(|line| {
+            let plot = indicator.plot_style(*line);
+            plot.visible
+                && !matches!(
+                    plot.plot_type,
+                    crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+                )
+        }) {
+            for bar in visible_range.clone() {
+                if let Some(value) = indicator.plot_value(line, bar) {
+                    min_val = min_val.min(value);
+                    max_val = max_val.max(value);
+                }
+            }
+        }
+
+        for price in crate::studies::plots::fill_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
+        }
+
+        for candle in indicator.candles().iter().filter(|candle| {
+            candle.bars.end > visible_range.start
+                && candle.bars.start < visible_range.end
+                && indicator.plot_style(candle.plot).visible
+        }) {
+            min_val = min_val.min(candle.bar.low);
+            max_val = max_val.max(candle.bar.high);
+        }
+
+        for plot in indicator.volume_profiles(visible_range.clone()) {
+            min_val = min_val.min(plot.profile.low());
+            max_val = max_val.max(plot.profile.high());
+        }
+
+        for zone in indicator.zones().iter().filter(|zone| {
+            zone.bars.end > visible_range.start
+                && zone.bars.start < visible_range.end
+                && indicator.plot_style(zone.plot).visible
+        }) {
+            min_val = min_val.min(zone.bottom);
+            max_val = max_val.max(zone.top);
+        }
+
+        for projection in indicator.projections().iter().filter(|projection| {
+            projection.bars.end > visible_range.start as f64
+                && projection.bars.start < visible_range.end as f64
+                && indicator.plot_style(projection.plot).visible
+        }) {
+            min_val = min_val.min(projection.bottom);
+            max_val = max_val.max(projection.top);
+        }
+
+        #[cfg(feature = "drawings")]
+        for price in crate::studies::plots::drawing_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
+        }
+
+        if self.config.show_zones {
+            // A hidden level is transparent and no longer holds the scale open.
+            for (level, ..) in self
+                .config
+                .zones
+                .iter()
+                .filter(|zone| zone.1 != egui::Color32::TRANSPARENT)
+            {
+                min_val = min_val.min(*level);
+                max_val = max_val.max(*level);
+            }
+        }
+        for (index, (value, ..)) in indicator.pane().levels.into_iter().enumerate() {
+            if value.is_finite()
+                && indicator
+                    .level_price_line(index)
+                    .is_some_and(|color| color != egui::Color32::TRANSPARENT)
+            {
+                min_val = min_val.min(value);
+                max_val = max_val.max(value);
+            }
+        }
+
+        if min_val != f64::MAX
+            && (0..indicator.line_count()).any(|line| {
+                let plot = indicator.plot_style(line);
+                plot.visible
+                    && matches!(
+                        plot.plot_type,
+                        crate::studies::PlotType::Histogram
+                            | crate::studies::PlotType::Columns
+                            | crate::studies::PlotType::Area
+                    )
+            })
+        {
+            min_val = min_val.min(0.0);
+            max_val = max_val.max(0.0);
+        }
+
+        if min_val == f64::MAX {
+            None
+        } else {
+            // Add 10% padding
+            let padding = crate::scales::auto_scale_span(min_val, max_val) * 0.1;
+            Some((min_val - padding, max_val + padding))
+        }
+    }
+}
+
+#[cfg(all(test, feature = "studies"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candle_panes_fit_the_visible_period_extremes() {
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(
+            crate::studies::HigherIntervalCandles::default(),
+        ));
+        study.set_timeframe(crate::model::Timeframe::Hour1);
+        study.set_overlay(false);
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-11T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..3)
+            .map(|i| {
+                Bar::new(
+                    start + chrono::TimeDelta::hours(i),
+                    10.0,
+                    20.0,
+                    1.0,
+                    15.0,
+                    1.0,
+                )
+            })
+            .collect();
+        study.calculate(&bars);
+        let pane = IndicatorPane::with_config(IndicatorPaneConfig::from_study(&study));
+        for range in [0..1, 1..2, 2..3] {
+            let (low, high) = pane.calculate_y_range(&study, &range);
+            assert!(low <= 1.0 && high >= 20.0, "{range:?}: {low}..{high}");
+        }
+        let mut settings = study.settings();
+        settings.plots[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(pane.calculate_y_range(&study, &(0..3)), (0.0, 100.0));
+    }
+
+    /// A fitted pane keeps a study's levels in view when its values lie between them, and a
+    /// hidden level holds the scale open only when its value line is visible.
+    #[test]
+    fn fitted_panes_keep_visible_levels_in_view() {
+        let bars: Vec<_> = [(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (high, low, close))| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, high, high, low, close, 1.0)
+            })
+            .collect();
+        let mut study =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::ChoppinessIndex::new(2)));
+        study.calculate(&bars);
+        let fit = |study: &crate::studies::ConfiguredStudy| {
+            IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
+                .calculate_y_range(study, &(0..3))
+        };
+        // The only value, 48.54, lies between the levels at 61.8 and 38.2.
+        let (low, high) = fit(&study);
+        assert!(low < 38.2 && high > 61.8, "{low}..{high}");
+
+        let mut settings = study.settings();
+        settings.levels[0].visible = false;
+        for (enabled, color, shown) in [
+            (false, egui::Color32::RED, false),
+            (true, egui::Color32::RED, true),
+            (true, egui::Color32::TRANSPARENT, false),
+        ] {
+            settings.levels[0].price_line = enabled;
+            settings.levels[0].color = color;
+            study.apply_settings(&[], settings.clone()).unwrap();
+            let (low, high) = fit(&study);
+            assert!(low < 38.2, "{low}..{high}");
+            assert_eq!(high > 61.8, shown, "{low}..{high}");
+        }
+    }
+}

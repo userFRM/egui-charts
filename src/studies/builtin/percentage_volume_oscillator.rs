@@ -46,9 +46,12 @@ impl PercentageVolumeOscillator {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - PVO
-                palette::ORANGE, // Orange - Signal
-                palette::GREEN,  // Green - Histogram
+                palette::BLUE,   // PVO
+                palette::ORANGE, // Signal
+                palette::HISTOGRAM_TEAL,
+                palette::LIGHT_TEAL,
+                palette::HISTOGRAM_RED,
+                palette::LIGHT_RED, // Histogram
             ],
             visible: true,
         }
@@ -88,9 +91,16 @@ impl Indicator for PercentageVolumeOscillator {
         signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
 
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if line != 2 {
+            return None;
+        }
+        super::macd::histogram_color(&self.values, bar, &self.colors[2..])
+    }
+
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line],
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 2 {
@@ -146,9 +156,24 @@ impl Indicator for PercentageVolumeOscillator {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        // Lines without a colour in `colors` keep theirs.
-        for (line, color) in self.colors.iter_mut().zip(colors) {
-            *line = color;
+        if colors.len() >= 3 {
+            self.colors = colors;
+            if self.colors.len() < 6 {
+                self.colors.truncate(3);
+            }
+            self.colors.resize(6, self.colors[2]);
+        } else {
+            for (stored, color) in self.colors.iter_mut().zip(colors) {
+                *stored = color;
+            }
+        }
+    }
+
+    fn set_color(&mut self, line: usize, color: Color32) {
+        match line {
+            0 | 1 => self.colors[line] = color,
+            2 => self.colors[2..].fill(color),
+            _ => {}
         }
     }
 
@@ -184,22 +209,41 @@ impl Indicator for PercentageVolumeOscillator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::studies::PriceOscillator;
 
-    /// The PVO of a volume series is the PPO of the same series as closes, for a chosen formula.
+    /// Hand SMA(2) volumes are 11.5,12,13.5 and SMA(3) are 11,12,38/3.
+    /// PVO = 100*(short-long)/long gives 50/11,0,125/19. EMA(2) signal
+    /// seeds at 25/11, then adds 2/3 of the step to 125/19, giving 1075/209.
     #[test]
     fn chosen_averages_apply_to_volume() {
-        let bar = |x: f64| Bar::new(chrono::Utc::now(), x, x, x, x, x);
         let data: Vec<Bar> = [10.0, 12.0, 11.0, 13.0, 14.0]
             .into_iter()
-            .map(bar)
+            .map(|v| Bar::new(chrono::Utc::now(), 100.0, 100.0, 100.0, 100.0, v))
             .collect();
-        let averages = (OscillatorAverage::Simple, OscillatorAverage::Exponential);
-        let mut pvo =
-            PercentageVolumeOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
-        let mut ppo = PriceOscillator::new(2, 3, 2).with_averages(averages.0, averages.1);
+        let mut pvo = PercentageVolumeOscillator::new(2, 3, 2)
+            .with_averages(OscillatorAverage::Simple, OscillatorAverage::Exponential);
         pvo.calculate(&data);
-        ppo.calculate(&data);
-        assert_eq!(format!("{:?}", pvo.values()), format!("{:?}", ppo.values()));
+        for (bar, expected) in [
+            (2, [Some(50.0 / 11.0), None, None]),
+            (3, [Some(0.0), Some(25.0 / 11.0), Some(-25.0 / 11.0)]),
+            (
+                4,
+                [
+                    Some(125.0 / 19.0),
+                    Some(1075.0 / 209.0),
+                    Some(300.0 / 209.0),
+                ],
+            ),
+        ] {
+            for (line, want) in expected.into_iter().enumerate() {
+                let got = pvo.values().value(line, bar);
+                match want {
+                    Some(want) => assert!(
+                        (got.unwrap() - want).abs() < 1e-12,
+                        "line {line}, bar {bar}: {got:?}"
+                    ),
+                    None => assert_eq!(got, None, "line {line}, bar {bar}"),
+                }
+            }
+        }
     }
 }

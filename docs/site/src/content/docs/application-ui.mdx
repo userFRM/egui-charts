@@ -1,14 +1,17 @@
 ---
 title: Application UI and trading
+prev:
+  link: /egui-charts/docs/theming/
+  label: Theming and localization
 ---
 
-Enable `ui` to compose application toolbars, panels, dialogs and reusable `ui_kit`
+Enable [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html) to compose application toolbars, panels, dialogs and reusable [`ui_kit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui_kit/index.html)
 controls around a chart. These are components for your layout. Keep them alive
-between frames and handle the actions returned by their `show` methods.
+between frames and handle the actions each component returns.
 
 ## Compose the workspace
 
-The `ui` module contains top and drawing toolbars, timeframe controls, side panels,
+The [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html) module contains top and drawing toolbars, timeframe controls, side panels,
 symbol and comparison dialogs, replay controls and trading components. The host
 chooses their placement and applies their actions to the chart. Use
 [host data services](../../../../host-data-services.md) for symbol catalogs and external analytics,
@@ -21,7 +24,9 @@ shows a larger composition.
 
 ## Connect trading services
 
-The `services` module defines the host contracts for accounts and broker operations.
+The [`services`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/index.html) module defines the host contracts for accounts and broker operations.
+Implement [`Broker`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/trait.Broker.html)
+and attach it to [`Trading`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/trading/struct.Trading.html).
 The UI offers broker selection, account views, order tickets, a depth ladder and
 trading lines. A host broker supplies account state and receives confirmed orders.
 Authentication, connections, execution and account persistence belong to your

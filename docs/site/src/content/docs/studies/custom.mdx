@@ -1,0 +1,59 @@
+---
+title: Custom studies
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/studies.rs?raw';
+
+Use a [`CustomIndicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html)
+when your host can calculate a complete output from the current bars. Its
+`Send + Sync` closure receives the full oldest-first slice and returns exactly
+one [`IndicatorValue`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html)
+per input slot. The chart calls it again when that input changes.
+This extension point is available without the built-in `studies` feature.
+
+## Warm-up and missing values
+
+The scene calculates **close now minus close ten slots earlier**, in price
+units. It uses the [first chart's](../first-chart.mdx) sample bars,
+with slots 35 through 38 replaced by
+[`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace).
+The first ten outputs are missing because there is no earlier close. Outputs
+are also missing at slots 35 through 38 and 45 through 48, where either endpoint
+of the subtraction is unavailable. Slot numbers start at zero.
+
+<Example scene="custom-study" title="Ten-slot price change with gaps"
+  task="Inspect the blank warm-up on the left and the two breaks in the lower study line."
+  code={'use egui_charts::Chart;\n\n' + source.match(/pub fn custom\b[^]*?\n\}/)[0]} />
+
+Return [`IndicatorValue::None`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html#variant.None)
+for a missing result. Removing it from the vector would shift every later value
+to the wrong time. Returning `Single(0.0)` would draw a real zero and affect the
+pane's scale. A missing value breaks the line.
+
+Only the two endpoints matter for this definition. A missing intermediate slot
+does not suppress an otherwise valid subtraction. For example, the sample's
+slot 10 closes at 101.8 and slot 0 at 99.4, giving `101.8 - 99.4 = 2.4`.
+This is an absolute change, so it does not divide by the earlier close.
+
+## Placement and updates
+
+[`with_overlay(false)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_overlay)
+creates the lower pane. The default is a price overlay; use that for values
+expressed on the price scale. The [pane guide](../panes.mdx) covers
+moving and resizing a study after it has been added.
+
+Create this chart once and call
+[`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
+each frame. Feed changes through the [series API](../series.mdx#lifecycle)
+or a [datafeed](/egui-charts/docs/studies/live-data/); the chart recalculates the
+study, including after older history is prepended. A closure recalculates the
+full slice. For large or frequently changing histories, implement
+[`Indicator::update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update)
+to recompute from the first changed bar, using
+[`Stepper`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Stepper.html)
+where appropriate.
+
+For inputs, plot styles, additional symbols and other intervals, see the
+[study contracts](../studies.mdx) and
+[additional study data](../study-data.md).

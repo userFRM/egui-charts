@@ -4,6 +4,18 @@ use crate::model::{Bar, Instrument, TPOConfig, TPODisplayMode};
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
 use egui::Color32;
 
+/// Display choices of the study, in input order. Saved choices are indices, so new ones go last.
+const DISPLAYS: [TPODisplayMode; 3] = [
+    TPODisplayMode::Letters,
+    TPODisplayMode::Blocks,
+    TPODisplayMode::Both,
+];
+
+/// Index of `mode` among [`DISPLAYS`].
+fn display_choice(mode: TPODisplayMode) -> InputValue {
+    InputValue::Choice(DISPLAYS.iter().position(|d| *d == mode).unwrap())
+}
+
 /// Each session's TPO profile on the price pane, starting at the session's first bar, with its
 /// point of control, value area and initial balance.
 ///
@@ -41,6 +53,7 @@ impl TimePriceOpportunity {
         self.config.tick_size = self
             .instrument_tick
             .map_or(0.0, |tick| tick * self.row_ticks as f64);
+        self.config.instrument_tick = self.instrument_tick;
     }
 }
 
@@ -96,16 +109,30 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.show_single_prints)),
             StudyInput::new(
+                "midpoint",
+                "TPO Midpoint",
+                InputValue::Toggle(self.config.show_midpoint),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.show_midpoint)),
+            StudyInput::new(
+                "statistics",
+                "Statistics",
+                InputValue::Toggle(self.config.show_statistics),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.show_statistics)),
+            StudyInput::new(
                 "display",
                 "Display",
-                InputValue::Choice(usize::from(
-                    self.config.display_mode == TPODisplayMode::Blocks,
-                )),
-                InputKind::Choice(vec!["Letters".into(), "Blocks".into()]),
+                display_choice(self.config.display_mode),
+                InputKind::Choice(vec![
+                    "Letters".into(),
+                    "Blocks".into(),
+                    "Letters and blocks".into(),
+                ]),
             )
-            .with_default(InputValue::Choice(usize::from(
-                defaults.display_mode == TPODisplayMode::Blocks,
-            ))),
+            .with_default(display_choice(defaults.display_mode)),
             StudyInput::new(
                 "sessions",
                 "Sessions",
@@ -117,7 +144,7 @@ impl Indicator for TimePriceOpportunity {
             ))),
         ]
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
             ("period", InputValue::Length(minutes @ 1..=1440)) => {
                 self.config.period_minutes = minutes as u32
@@ -131,13 +158,15 @@ impl Indicator for TimePriceOpportunity {
             }
             ("split_sessions", InputValue::Toggle(split)) => self.config.split_sessions = split,
             ("single_prints", InputValue::Toggle(show)) => self.config.show_single_prints = show,
-            ("display", InputValue::Choice(choice @ 0..=1)) => {
-                self.config.display_mode = [TPODisplayMode::Letters, TPODisplayMode::Blocks][choice]
+            ("midpoint", InputValue::Toggle(show)) => self.config.show_midpoint = show,
+            ("statistics", InputValue::Toggle(show)) => self.config.show_statistics = show,
+            ("display", InputValue::Choice(choice @ 0..=2)) => {
+                self.config.display_mode = DISPLAYS[choice]
             }
             ("sessions", InputValue::Choice(choice @ 0..=1)) => {
                 self.config.latest_session_only = choice == 1
             }
-            _ => return Err("invalid TPO input"),
+            _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         Ok(())
     }

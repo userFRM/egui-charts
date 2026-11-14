@@ -76,23 +76,31 @@ impl NotificationsPanel {
         self.unread
     }
 
-    /// Receive the service's pushes, and watch again after a lagged stream.
-    pub fn poll(&mut self, ctx: &egui::Context) {
+    /// Append a local entry, such as a terminal alert, to the same bounded log.
+    pub fn push(&mut self, entry: Notification) {
+        self.log.push_back(entry);
+        if self.log.len() > KEPT {
+            self.log.pop_front();
+        }
+        self.unread = (self.unread + 1).min(self.log.len());
+    }
+
+    /// Receive the service's pushes and return them, for popup notifications, and watch again
+    /// after a lagged stream. Entries added with [`push`](Self::push) are not returned.
+    pub fn poll(&mut self, ctx: &egui::Context) -> Vec<Notification> {
         if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
             self.watch();
         }
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        let mut received = Vec::new();
         for (_, answer) in self.inbox.drain().answers {
             if let Ok(entry) = answer.downcast::<Notification>() {
-                self.log.push_back(*entry);
-                self.unread += 1;
-                if self.log.len() > KEPT {
-                    self.log.pop_front();
-                }
+                self.push((*entry).clone());
+                received.push(*entry);
             }
         }
-        self.unread = self.unread.min(self.log.len());
+        received
     }
 
     /// Render the log, newest first, after [`poll`](Self::poll).

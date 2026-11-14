@@ -8,8 +8,38 @@ pub mod focus;
 pub mod icons;
 #[cfg(feature = "ui")]
 pub(crate) mod responsive;
+#[cfg(feature = "ui")]
+#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+pub use responsive::LayoutContext;
 pub mod sizing;
 pub mod typography;
+
+/// Give the scroll areas of `ui` the menus' thin scroll bar: 3 px at the right edge, in its own
+/// column beside the rows, with quiet ink from the current palette.
+///
+/// Floating bars are the ones egui draws with the handle opacities; the column they allocate
+/// keeps the bar off the rows.
+#[cfg(feature = "ui")]
+pub(crate) fn menu_scroll_bar(ui: &mut egui::Ui) {
+    // Black ink at alpha 99 over white leaves a #9c9c9c handle.
+    let opacity = if ui.visuals().dark_mode {
+        0.43
+    } else {
+        99.0 / 255.0
+    };
+    let scroll = &mut ui.spacing_mut().scroll;
+    scroll.floating = true;
+    scroll.bar_width = 3.0;
+    scroll.floating_width = 3.0;
+    scroll.floating_allocated_width = 3.0 + scroll.bar_inner_margin;
+    scroll.foreground_color = true;
+    scroll.dormant_handle_opacity = opacity;
+    scroll.active_handle_opacity = opacity;
+    scroll.dormant_background_opacity = 0.0;
+    scroll.active_background_opacity = 0.0;
+    scroll.interact_background_opacity = 0.0;
+    scroll.fade.strength = 0.0;
+}
 
 // =============================================================================
 // Stroke Helpers

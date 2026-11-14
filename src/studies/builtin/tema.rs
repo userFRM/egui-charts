@@ -46,7 +46,7 @@ impl TEMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::PINK, // Pink
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -61,7 +61,7 @@ impl TEMA {
 /// Construct with the conventional default parameters.
 impl Default for TEMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

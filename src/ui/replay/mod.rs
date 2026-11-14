@@ -30,22 +30,26 @@
 //!
 //! chart.set_replay_time(controller.cutoff(&BarClock::new(Timeframe::Min1)));
 //! // Supply finer history with chart.set_replay_source when it is available.
+//! // One-trade bars from data::aggregate_trades advance it trade by trade.
 //! // Store controller.session() in host storage and restore it after fetching source history.
 //! ```
 
 mod actions;
 mod config;
 mod controls;
+pub mod floating;
+pub(super) mod model;
 mod session;
 mod start;
 mod state;
+pub mod status;
 mod toolbar;
 
 pub use crate::model::ReplaySession;
 pub use actions::{ReplayAction, ReplaySpeed};
 pub use config::{ReplayBehavior, ReplayColors, ReplayConfig, ReplayLayout};
 pub use controls::{CompactReplayControls, ReplayControls, ReplayKeyboardHandler};
-pub use start::{ReplayStartAction, ReplayStartPicker};
+pub use start::{ReplayStartAction, ReplayStartPicker, paint_start_line};
 pub use state::{PlaybackState, ReplayMarker, ReplayState};
 pub use toolbar::{ReplayToolbar, ReplayToolbarAction, ReplayToolbarConfig, ReplayToolbarState};
 
@@ -518,10 +522,10 @@ mod tests {
     #[test]
     fn test_find_bar_at_date() {
         let (bars, ts) = create_test_bars(24);
-        let controller = ReplayController::new(bars, ts);
+        let mut controller = ReplayController::new(bars, ts);
 
         let target = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
-        let idx = controller.find_bar_at_date(&target);
-        assert_eq!(idx, Some(12));
+        controller.handle_action(ReplayAction::JumpToDate(target));
+        assert_eq!(controller.state.curr_bar, 12);
     }
 }

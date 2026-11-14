@@ -6,22 +6,48 @@
 //! A second table prints first, steady, tick and new-bar frame times for candles and the five
 //! price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
 //! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
+//! A fourth prints the frame of a zoomed-out daily TPO chart at 400 and at 1,600 sessions;
+//! `-- tpo` runs it alone.
+//! A fifth draws a host-supplied footprint with studies and executions on all 100,000 visible bars;
+//! `-- footprint-host` runs it alone.
+//! A sixth streams a new bar every frame into 100,000 bars held at their bar limit, with three
+//! built-in and three host studies, and prints the median and worst frame; `-- bar-limit` runs
+//! it alone.
+//! `-- comparisons` measures moving-pointer frames with zero, one, two and five comparisons.
 //! `--regression <scenario>` runs a compact workload for `benches/check-regressions.sh`.
 
 use egui::{Rect, UiBuilder, pos2, vec2};
 use egui_charts::ChartType;
 use egui_charts::drawings::{ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType};
-use egui_charts::model::BarData;
+use egui_charts::model::{BarData, EventKind, Marker, TimeScaleEvent};
 use egui_charts::studies::{
     ADX, ATR, BollingerBands, EMA, IchimokuCloud, MACD, ParabolicSAR, RSI, SMA, Stochastic,
 };
-use egui_charts::widget::Chart;
+use egui_charts::widget::{Chart, SeriesId};
 
+#[path = "frame/comparisons.rs"]
+mod comparisons;
 #[path = "../examples/bare_chart.rs"]
 #[expect(dead_code, reason = "the bench draws only the example's sample bars")]
 mod example;
 mod frame;
 mod regression;
+
+/// Fix Linux hash seeds for repeatable instruction counts, including dependencies' maps.
+/// This interposed symbol belongs only to the benchmark executable.
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn getrandom(
+    buffer: *mut std::ffi::c_void,
+    length: usize,
+    _flags: std::ffi::c_uint,
+) -> isize {
+    if length != 0 {
+        // SAFETY: the caller supplies a buffer writable for `length` bytes.
+        unsafe { std::ptr::write_bytes(buffer.cast::<u8>(), 0x42, length) };
+    }
+    length as isize
+}
 
 /// A scenario: its name, how many bars each chart has and shows, and how many charts.
 struct Scenario {
@@ -34,6 +60,10 @@ struct Scenario {
     drawings: Drawings,
     /// Smallest bar spacing in pixels, below the default 0.5 to zoom out further.
     min_bar_spacing: f32,
+    /// The chart type drawn.
+    chart_type: ChartType,
+    /// What the chart marks on every bar.
+    annotations: Annotations,
 }
 
 /// Where the 500 drawings of a scenario are anchored, every drawing tool in turn.
@@ -44,7 +74,17 @@ enum Drawings {
     AcrossHistory,
 }
 
-const SCENARIOS: [Scenario; 7] = [
+/// What a scenario marks on every bar of its history.
+#[derive(PartialEq)]
+enum Annotations {
+    None,
+    /// A one-letter marker on every bar.
+    Markers,
+    /// A news event on every bar.
+    Events,
+}
+
+const SCENARIOS: [Scenario; 11] = [
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed out",
         bars: 5_000_000,
@@ -54,6 +94,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "1 chart, 1,000,000 bars, all in view",
@@ -64,6 +106,56 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.0,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
+    },
+    Scenario {
+        name: "1 chart, 1,000,000 bars, all in view, volume footprint",
+        bars: 1_000_000,
+        visible: 1_000_000,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.0,
+        chart_type: ChartType::VolumeFootprint,
+        annotations: Annotations::None,
+    },
+    Scenario {
+        name: "1 chart, 200,000 bars",
+        bars: 200_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
+    },
+    Scenario {
+        name: "1 chart, 200,000 bars, a marker on every bar",
+        bars: 200_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::Markers,
+    },
+    Scenario {
+        name: "1 chart, 200,000 bars, a news event on every bar",
+        bars: 200_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::Events,
     },
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed in",
@@ -74,6 +166,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "4 charts, 100,000 bars",
@@ -84,6 +178,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "8 charts, 100,000 bars, 10 studies each",
@@ -94,6 +190,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: true,
         drawings: Drawings::None,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "1 chart, 10,000 bars, 500 drawings in view",
@@ -104,6 +202,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::InView,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
     Scenario {
         name: "1 chart, 10,000 bars, 500 drawings across the history",
@@ -114,6 +214,8 @@ const SCENARIOS: [Scenario; 7] = [
         studies: false,
         drawings: Drawings::AcrossHistory,
         min_bar_spacing: 0.5,
+        chart_type: ChartType::Candles,
+        annotations: Annotations::None,
     },
 ];
 
@@ -122,7 +224,18 @@ fn main() {
         std::env::var("FRAME_TIME_FRAMES").map_or(300, |v| v.parse().expect("a frame count"));
     let args: Vec<_> = std::env::args().collect();
     if let Some(at) = args.iter().position(|arg| arg == "--regression") {
-        regression::run(args.get(at + 1).expect("a regression scenario"), frames);
+        let name = args.get(at + 1).expect("a regression scenario");
+        if let Some(count) = name.strip_prefix("comparisons-") {
+            std::hint::black_box(comparisons::samples(
+                100_000,
+                count.parse().expect("a comparison count"),
+                frames,
+            ));
+        } else if matches!(name.as_str(), "tpo-400" | "tpo-1600") {
+            tpo(std::slice::from_ref(name), frames);
+        } else {
+            regression::run(name, frames);
+        }
         return;
     }
     // `cargo bench` passes `--bench`; anything else selects scenarios.
@@ -177,6 +290,201 @@ fn main() {
     price_based(&filters, frames);
     println!();
     bubbles(&filters, frames);
+    println!();
+    tpo(&filters, frames);
+    println!();
+    footprint(&filters, frames);
+    println!();
+    bar_limit(&filters, frames);
+    comparisons::run(&filters, frames);
+}
+
+/// A host footprint, without the feed's history budget, with executions on every visible bar.
+fn footprint(filters: &[String], frames: usize) {
+    use egui_charts::chart::overlays::FootprintConfig;
+    use egui_charts::data::Footprint;
+    use egui_charts::model::{BarClock, OrderSide, Tick, Timeframe};
+
+    let name = "footprint-host, 100,000 bars, all in view";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let bars: Vec<_> = (0..100_000).map(|i| example::sample_bar(i, 0)).collect();
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+    for bar in &bars {
+        for (price, size, side) in [
+            (bar.low, 2.0, OrderSide::Sell),
+            (bar.close, 3.0, OrderSide::Buy),
+            (bar.high, 1.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(bar.time, price, size, Some(side)))
+                .unwrap();
+        }
+    }
+    assert_eq!(flow.bars().len(), bars.len());
+    let mut options = egui_charts::config::ChartOptions::default();
+    options.time_scale.min_bar_spacing = 0.0;
+    let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
+    chart.set_visible_bars(100_000);
+    let config = FootprintConfig {
+        studies: Some(Default::default()),
+        ..Default::default()
+    };
+    let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            chart.show_footprint(ui, &flow, &config);
+        });
+    });
+    let median = |time: fn(&frame::Sample) -> std::time::Duration| {
+        let mut times: Vec<_> = samples.iter().map(time).collect();
+        times.sort();
+        times
+            .get(times.len() / 2)
+            .map_or(0.0, |d| d.as_secs_f64() * 1e3)
+    };
+    println!(
+        "| host footprint | shapes | vertices | frame ms (median) | tessellation ms (median) |"
+    );
+    println!("|---|---:|---:|---:|---:|");
+    println!(
+        "| {name} | {} | {} | {:.3} | {:.3} |",
+        samples.last().map_or(0, |s| s.shapes),
+        samples.last().map_or(0, |s| s.vertices),
+        median(|s| s.frame),
+        median(|s| s.tessellate),
+    );
+}
+
+/// The bar limit of the `bar-limit` scenarios. Their charts start `frame::WARMUP` bars below it
+/// and take a new bar every frame, so the warm-up frames fill the series and the first measured
+/// frame evicts the oldest `BAR_LIMIT / 8 + 1` bars, which restarts every study.
+const BAR_LIMIT: usize = 100_000;
+
+/// The chart of the `bar-limit` scenarios, with SMA 20, EMA 20 and RSI 14 and, with `host`,
+/// three host moving averages, which the chart never updates incrementally.
+fn limited_chart(host: bool) -> Chart {
+    use egui_charts::studies::{CustomIndicator, IndicatorValue};
+
+    let bars = (0..BAR_LIMIT - frame::WARMUP)
+        .map(|i| example::sample_bar(i, 0))
+        .collect();
+    let mut chart = Chart::new(BarData::from_bars(bars));
+    chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(BAR_LIMIT));
+    chart.set_visible_bars(200);
+    let mut config = chart.config().clone();
+    config.show_volume = false;
+    chart.update_config(config);
+    chart.add_indicator(Box::new(SMA::new(20)));
+    chart.add_indicator(Box::new(EMA::new(20)));
+    chart.add_indicator(Box::new(RSI::new(14)));
+    if host {
+        for length in [10, 50, 200] {
+            chart.add_indicator(Box::new(CustomIndicator::new(
+                format!("Host mean {length}"),
+                move |bars| {
+                    let mut sum = 0.0;
+                    bars.iter()
+                        .enumerate()
+                        .map(|(i, bar)| {
+                            sum += bar.close;
+                            if i >= length {
+                                sum -= bars[i - length].close;
+                            }
+                            if i + 1 >= length {
+                                IndicatorValue::Single(sum / length as f64)
+                            } else {
+                                IndicatorValue::None
+                            }
+                        })
+                        .collect()
+                },
+            )));
+        }
+    }
+    chart
+}
+
+/// Bars streaming into a series held at its bar limit: the median and the worst frame, which
+/// includes the eviction and the first full recompute after it.
+fn bar_limit(filters: &[String], frames: usize) {
+    let name = "bar-limit, 100,000 bars, 6 studies, a new bar every frame";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let mut chart = limited_chart(true);
+    let mut last = example::sample_bar(BAR_LIMIT - frame::WARMUP - 1, 0);
+    let mut evictions = 0;
+    let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 350.0), frames, |ui| {
+        // A frame whose first pass is discarded runs this twice but takes one bar.
+        if ui.ctx().current_pass_index() == 0 {
+            last.time += chrono::Duration::minutes(1);
+            let before = chart.bars(SeriesId::MAIN).len();
+            chart.update(SeriesId::MAIN, last.clone());
+            evictions += usize::from(chart.bars(SeriesId::MAIN).len() < before);
+        }
+        egui::CentralPanel::default().show(ui, |ui| {
+            chart.show(ui);
+        });
+    });
+    assert!(
+        frames == 0 || evictions > 0,
+        "the measured frames include an eviction"
+    );
+    let mut times: Vec<_> = samples
+        .iter()
+        .map(|s| s.frame.as_secs_f64() * 1e3)
+        .collect();
+    times.sort_by(f64::total_cmp);
+    println!("| bar limit | evictions | frame ms (median) | frame ms (worst) |");
+    println!("|---|---:|---:|---:|");
+    println!(
+        "| {name} | {evictions} | {:.3} | {:.3} |",
+        times.get(times.len() / 2).copied().unwrap_or(0.0),
+        times.last().copied().unwrap_or(0.0),
+    );
+}
+
+/// Daily TPO sessions, all in view, including the workload used by the regression check.
+fn tpo(filters: &[String], frames: usize) {
+    println!("| daily TPO | shapes | frame ms (median) | us per session |");
+    println!("|---|---:|---:|---:|");
+    for (name, sessions) in [("tpo-400", 400), ("tpo-1600", 1_600)] {
+        if !filters.is_empty() && !filters.iter().any(|f| name.contains(f)) {
+            continue;
+        }
+        let bars = (0..sessions)
+            .map(|i| {
+                let mut bar = example::sample_bar(i, 0);
+                bar.time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+                bar
+            })
+            .collect();
+        let mut options = egui_charts::config::ChartOptions::default();
+        options.time_scale.min_bar_spacing = 0.0001;
+        let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        chart.set_visible_bars(sessions);
+        let mut fit = true;
+        let samples = frame::run(vec2(800.0, 600.0), pos2(400.0, 300.0), frames, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+            if fit {
+                chart.fit_content();
+                fit = false;
+            }
+        });
+        let mut times: Vec<_> = samples.iter().map(|s| s.frame).collect();
+        times.sort();
+        let ms = times
+            .get(times.len() / 2)
+            .map_or(0.0, |d| d.as_secs_f64() * 1e3);
+        println!(
+            "| {name} | {} | {ms:.3} | {:.3} |",
+            samples.last().map_or(0, |s| s.shapes),
+            ms * 1e3 / sessions as f64,
+        );
+    }
 }
 
 fn chart(scenario: &Scenario) -> Chart {
@@ -186,7 +494,7 @@ fn chart(scenario: &Scenario) -> Chart {
     let mut options = egui_charts::config::ChartOptions::default();
     options.time_scale.min_bar_spacing = scenario.min_bar_spacing;
     let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
-    chart.set_chart_type(ChartType::Candles);
+    chart.set_chart_type(scenario.chart_type);
     chart.set_visible_bars(scenario.visible);
     chart.set_symbol("SAMPLE");
     if scenario.studies {
@@ -220,13 +528,56 @@ fn chart(scenario: &Scenario) -> Chart {
         };
         let mut drawing = Drawing::new(k, tool);
         drawing.text = Some("Note".into());
-        drawing.chart_points = (0..tool.required_points().unwrap_or(8))
+        // Curves store their controls as well as the two clicks that place them.
+        let anchors = match tool {
+            DrawingToolType::Curve => 3,
+            DrawingToolType::DoubleCurve => 4,
+            _ => tool.required_points().unwrap_or(8),
+        };
+        drawing.chart_points = (0..anchors)
             .map(|j| {
                 let price = 100.0 + 6.0 * ((k + j) as f64).sin();
                 ChartPoint::new((first + 5 * j) as f32, price)
             })
             .collect();
-        chart.drawings_mut().add_synced_drawing(drawing);
+        chart
+            .drawings_mut()
+            .add_synced_drawing(drawing)
+            .expect("bench drawings are valid");
+    }
+    if scenario.annotations != Annotations::None {
+        let times: Vec<_> = chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .map(|bar| bar.time)
+            .collect();
+        match scenario.annotations {
+            Annotations::Markers => {
+                chart.set_markers(
+                    SeriesId::MAIN,
+                    times
+                        .into_iter()
+                        .map(|time| Marker::new(time).with_text("B"))
+                        .collect(),
+                );
+            }
+            Annotations::Events => {
+                chart.set_time_scale_events(
+                    times
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, time)| TimeScaleEvent {
+                            id: index.to_string(),
+                            time,
+                            kind: EventKind::News,
+                            title: "Headline".into(),
+                            details: String::new(),
+                        })
+                        .collect(),
+                );
+            }
+            Annotations::None => {}
+        }
     }
     chart
 }
@@ -351,16 +702,19 @@ fn price_based(filters: &[String], frames: usize) {
     }
 }
 
-/// Prints the frame of volume bubbles from 100,000 trades over 1,667 one-minute bars, 40 price
-/// levels a bar, 200 bars in view on a 1440 by 900 window.
-fn bubbles(filters: &[String], frames: usize) {
+/// The chart of the volume bubbles workload: `count` trades at 60 a one-minute bar, over 40 price
+/// levels, 200 bars in view. With `session` the bars are the New York regular session of one day
+/// and the chart's clock follows it; without, they start at midnight UTC.
+fn bubble_chart(count: i64, session: bool) -> egui_charts::widget::Chart {
     use chrono::{Duration, TimeZone, Utc};
     use egui_charts::ChartBuilder;
     use egui_charts::chart::overlays::{BubbleGrouping, VolumeBubblesConfig};
     use egui_charts::data::{
         Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
     };
-    use egui_charts::model::{Bar, OrderSide, Tick, Timeframe};
+    use egui_charts::model::{
+        Bar, Instrument, OrderSide, Session, SessionWindow, Tick, Timeframe, TimezoneId,
+    };
     use std::sync::Arc;
 
     struct Feed(Vec<Bar>, Vec<Tick>);
@@ -376,12 +730,12 @@ fn bubbles(filters: &[String], frames: usize) {
         }
     }
 
-    let name = "volume bubbles, 100,000 trades, 200 bars in view";
-    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
-        return;
-    }
-    let (count, levels, step) = (100_000_i64, 40, 0.05);
-    let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let (levels, step) = (40, 0.05);
+    let start = if session {
+        Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap()
+    } else {
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    };
     let mut seed = 0x1234_5678_u64;
     let mut unit = || {
         seed ^= seed << 13;
@@ -412,12 +766,38 @@ fn bubbles(filters: &[String], frames: usize) {
         .with_feed(Arc::new(Feed(bars, trades)))
         .with_initial_bars(len)
         .build();
+    if session {
+        use chrono::Weekday::*;
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let clock = |hour, minute| chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        chart.set_instrument(Some(
+            Instrument::new("BUBBLES")
+                .with_time_zone(TimezoneId::named("America/New_York").unwrap())
+                .with_session(Session::new([SessionWindow::new(
+                    weekdays,
+                    clock(9, 30),
+                    clock(16, 0),
+                )])),
+        ));
+    }
     chart.set_chart_type(ChartType::Candles);
     chart.set_visible_bars(200);
     chart.set_volume_bubbles(Some(VolumeBubblesConfig {
         grouping: BubbleGrouping::PriceStep(step),
         ..VolumeBubblesConfig::default()
     }));
+    chart
+}
+
+/// Prints the frame of volume bubbles from 100,000 trades over 1,667 one-minute bars, 40 price
+/// levels a bar, 200 bars in view on a 1440 by 900 window.
+fn bubbles(filters: &[String], frames: usize) {
+    let name = "volume bubbles, 100,000 trades, 200 bars in view";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let count = 100_000_i64;
+    let mut chart = bubble_chart(count, false);
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             chart.show(ui);

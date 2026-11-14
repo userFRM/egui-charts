@@ -10,7 +10,7 @@
 //! smallest positive `f64`. This also applies when public fields are set directly.
 //! Use [`PriceFormatterBuilder`] for a fluent construction API.
 
-use crate::model::{Instrument, percent_change};
+use crate::model::{Instrument, SeriesDisplayFormat, SeriesFormat, percent_change};
 use std::sync::Arc;
 
 // Enough decimal places to keep even the smallest positive f64 from rounding to zero.
@@ -27,6 +27,56 @@ pub(super) fn format_decimal(value: f64, precision: usize) -> String {
         formatted.remove(0);
     }
     formatted
+}
+
+/// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
+/// step's decimals.
+#[cfg(feature = "widget")]
+pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
+    let scale = 10f64.powi(decimals(step) as i32);
+    (round(value / step) * step * scale).round() / scale
+}
+
+/// Decimals needed to write `step`, such as 2 for 0.25.
+#[cfg(feature = "widget")]
+pub(crate) fn decimals(step: f64) -> usize {
+    let rounded = format!("{:.14e}", step.abs())
+        .parse::<f64>()
+        .unwrap_or(step.abs());
+    let text = format!("{rounded}");
+    let Some((_, fractional)) = text.split_once('.') else {
+        return 0;
+    };
+    fractional.len()
+}
+
+/// Writes `separator` between the groups of three digits of the integer part of `text`, its
+/// first run of ASCII digits: `-42541.77` becomes `-42,541.77` with `','`. Text whose integer
+/// part has three digits or fewer, text without digits (`NaN`, `inf`) and a `None` separator
+/// come back unchanged, without allocating.
+pub(crate) fn group_thousands(text: String, separator: Option<char>) -> String {
+    let Some(separator) = separator else {
+        return text;
+    };
+    let Some(start) = text.find(|c: char| c.is_ascii_digit()) else {
+        return text;
+    };
+    let digits = text[start..]
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len() - start);
+    if digits <= 3 {
+        return text;
+    }
+    let mut grouped = String::with_capacity(text.len() + (digits - 1) / 3 * separator.len_utf8());
+    grouped.push_str(&text[..start]);
+    for (index, digit) in text[start..start + digits].chars().enumerate() {
+        if index > 0 && (digits - index) % 3 == 0 {
+            grouped.push(separator);
+        }
+        grouped.push(digit);
+    }
+    grouped.push_str(&text[start + digits..]);
+    grouped
 }
 
 /// Instrument decimals, falling back to the decimal places needed to write its minimum tick.
@@ -58,14 +108,60 @@ pub trait PriceFormatter: Send + Sync {
     /// Formatted string to display on the price axis
     fn format(&self, price: f64) -> String;
 
+    /// Format an absolute price change. The default preserves the formatter's text;
+    /// chart-owned display formats add the built-in sign for non-negative changes.
+    fn format_change(&self, change: f64) -> String {
+        self.format(change)
+    }
+
     /// Format a price axis tick. Defaults to [`format`](Self::format); override it
     /// to write ticks differently from crosshair and price tag labels.
     fn format_tick(&self, price: f64) -> String {
         self.format(price)
     }
 
+    /// Format the complete tick list for one axis, in ascending value order.
+    /// Values are raw prices in normal and logarithmic modes, percentages or index
+    /// values otherwise. Return one label per value, in the same order, to choose
+    /// units or precision from the whole list. The default calls
+    /// [`format_tick`](Self::format_tick) for each value, and a different label count
+    /// falls back to that per-value method for the whole list.
+    ///
+    /// Layout and painting can each request labels; ticks covered by tags or clipped
+    /// at the pane boundary are still included, as are the edge values when edge ticks
+    /// are enabled. Layout and painting use the same list. Crosshair and price tags use
+    /// [`format`](Self::format) instead.
+    fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
+        prices
+            .iter()
+            .map(|&price| self.format_tick(price))
+            .collect()
+    }
+
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
+}
+
+impl PriceFormatter for SeriesDisplayFormat {
+    fn format(&self, value: f64) -> String {
+        let step = self.min_move;
+        let rounded = (value / step).round() * step;
+        let value = if step.is_finite() && step > 0.0 && rounded.is_finite() {
+            rounded
+        } else {
+            value
+        };
+        let precision = usize::from(self.precision);
+        match self.kind {
+            SeriesFormat::Price => DefaultPriceFormatter::with_precision(precision).format(value),
+            SeriesFormat::Volume => VolumeFormatter { precision }.format(value),
+            SeriesFormat::Percentage => format!("{}%", format_decimal(value, precision)),
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn PriceFormatter> {
+        Box::new(*self)
+    }
 }
 
 /// Default price formatter with configurable precision
@@ -240,11 +336,11 @@ impl CurrencyFormatter {
 
 impl PriceFormatter for CurrencyFormatter {
     fn format(&self, price: f64) -> String {
-        let val_str = if let Some(sep) = self.thousands_sep.filter(|sep| *sep != self.decimal_sep) {
-            self.format_with_separator(price, sep)
-        } else {
-            format_decimal(price, self.precision).replace('.', &self.decimal_sep.to_string())
-        };
+        // The decimal point is replaced first, so a '.' thousands separator is never confused with it.
+        let val_str = group_thousands(
+            format_decimal(price, self.precision).replace('.', &self.decimal_sep.to_string()),
+            self.thousands_sep.filter(|sep| *sep != self.decimal_sep),
+        );
 
         let space = if self.add_space { " " } else { "" };
 
@@ -265,44 +361,6 @@ impl PriceFormatter for CurrencyFormatter {
     }
 }
 
-impl CurrencyFormatter {
-    fn format_with_separator(&self, price: f64, separator: char) -> String {
-        let formatted = format_decimal(price, self.precision);
-        let mut parts = formatted.splitn(2, '.');
-
-        let integer = parts.next().unwrap_or("");
-        let decimal = parts.next().unwrap_or("");
-
-        // Group only the digits of the magnitude; the sign is never counted.
-        let (sign, magnitude) = match integer.strip_prefix('-') {
-            Some(digits) => ("-", digits),
-            None => ("", integer),
-        };
-
-        let integer_with_sep: String = magnitude
-            .chars()
-            .rev()
-            .enumerate()
-            .fold(String::new(), |mut acc, (i, c)| {
-                if i > 0 && i % 3 == 0 {
-                    acc.push(separator);
-                }
-                acc.push(c);
-                acc
-            })
-            .chars()
-            .rev()
-            .collect();
-
-        let body = if decimal.is_empty() {
-            integer_with_sep
-        } else {
-            format!("{integer_with_sep}{}{decimal}", self.decimal_sep)
-        };
-        format!("{sign}{body}")
-    }
-}
-
 /// Volume formatter (K, M, B suffixes)
 #[derive(Debug, Clone)]
 pub struct VolumeFormatter {
@@ -319,17 +377,29 @@ impl Default for VolumeFormatter {
 impl PriceFormatter for VolumeFormatter {
     fn format(&self, value: f64) -> String {
         let abs_val = value.abs();
-        let precision = self.precision.min(MAX_PRECISION);
-
-        if abs_val >= 1_000_000_000.0 {
-            format!("{:.prec$}B", value / 1_000_000_000.0, prec = precision)
+        let (mut unit, mut suffix) = if abs_val >= 1_000_000_000.0 {
+            (1_000_000_000.0, "B")
         } else if abs_val >= 1_000_000.0 {
-            format!("{:.prec$}M", value / 1_000_000.0, prec = precision)
+            (1_000_000.0, "M")
         } else if abs_val >= 1_000.0 {
-            format!("{:.prec$}K", value / 1_000.0, prec = precision)
+            (1_000.0, "K")
         } else {
-            format_decimal(value, self.precision)
+            (1.0, "")
+        };
+        let mut formatted = format_decimal(value / unit, self.precision);
+        if unit < 1_000_000_000.0
+            && formatted.trim_start_matches('-').split('.').next() == Some("1000")
+        {
+            unit *= 1_000.0;
+            suffix = match suffix {
+                "" => "K",
+                "K" => "M",
+                _ => "B",
+            };
+            formatted = format_decimal(value / unit, self.precision);
         }
+        formatted.push_str(suffix);
+        formatted
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
@@ -487,6 +557,15 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "widget")]
+    fn decimals_ignore_binary_noise_and_keep_subnormal_precision() {
+        assert_eq!(decimals(0.025 * 3.0), 3);
+        assert_eq!(decimals(5e-324), 324);
+        assert_eq!(decimals(f64::NAN), 0);
+        assert_eq!(decimals(f64::INFINITY), 0);
+    }
+
+    #[test]
     fn test_default_formatter() {
         let formatter = DefaultPriceFormatter::default();
         assert_eq!(formatter.format(123.456), "123.46");
@@ -561,42 +640,36 @@ mod tests {
     fn test_fixed_precision() {
         let formatter = DefaultPriceFormatter::with_precision(4);
         assert_eq!(formatter.format(123.456), "123.4560");
-        for value in [0.0, 10.0, 100.0, -100.0] {
+        for (value, expected) in [(0.0, "0"), (10.0, "10"), (100.0, "100"), (-100.0, "-100")] {
             assert_eq!(
                 DefaultPriceFormatter::with_precision(0).format(value),
-                format!("{value:.0}")
+                expected
             );
         }
     }
 
     #[test]
     fn test_percentage_formatter() {
-        let formatter = PercentageFormatter::default();
-        assert_eq!(formatter.format(105.0), "+5.00%");
-        assert_eq!(formatter.format(95.0), "-5.00%");
-        assert_eq!(formatter.format(99.999), "+0.00%");
-        assert_eq!(formatter.format(99.994), "-0.01%");
-
-        // A negative base (a spread) reads with the sign of the change.
-        let spread = PercentageFormatter {
-            precision: 2,
-            base_val: -10.0,
-        };
-        assert_eq!(spread.format(-5.0), "+50.00%");
-        assert_eq!(spread.format(-15.0), "-50.00%");
-    }
-
-    #[test]
-    fn test_percentage_formatter_zero_base_is_neutral() {
-        // A zero base has no defined percentage; the formatter must emit a
-        // neutral 0% rather than "inf%"/"NaN%".
-        let formatter = PercentageFormatter {
-            precision: 2,
-            base_val: 0.0,
-        };
-        let out = formatter.format(123.0);
-        assert_eq!(out, "+0.00%");
-        assert!(!out.contains("inf") && !out.contains("NaN"));
+        assert_eq!(PercentageFormatter::default().format(105.0), "+5.00%");
+        // A spread keeps the sign of the change; a zero base has no defined percentage.
+        for (base_val, value, expected) in [
+            (100.0, 95.0, "-5.00%"),
+            (100.0, 99.999, "+0.00%"),
+            (100.0, 99.994, "-0.01%"),
+            (-10.0, -5.0, "+50.00%"),
+            (-10.0, -15.0, "-50.00%"),
+            (0.0, 123.0, "+0.00%"),
+        ] {
+            let formatter = PercentageFormatter {
+                precision: 2,
+                base_val,
+            };
+            assert_eq!(
+                formatter.format(value),
+                expected,
+                "base {base_val}, value {value}"
+            );
+        }
     }
 
     #[test]
@@ -605,6 +678,7 @@ mod tests {
         assert_eq!(usd.format(1234.56), "$1,234.56");
 
         for (formatter, value, expected) in [
+            (CurrencyFormatter::usd(), 1234567.891, "$1,234,567.89"),
             (CurrencyFormatter::eur(), 1234.56, "1.234,56 €"),
             (CurrencyFormatter::eur(), -1234.5, "-1.234,50 €"),
             (CurrencyFormatter::eur(), 0.5, "0,50 €"),
@@ -693,22 +767,32 @@ mod tests {
         }
         assert_eq!(formatter.format(-0.006), "-0.01");
         assert_eq!(formatter.format(-3_500.0), "-3.50K");
+        for (precision, value, expected) in [
+            (2, 999.996, "1.00K"),
+            (2, 999_999.0, "1.00M"),
+            (2, 999_996_000.0, "1.00B"),
+            (2, 999.994, "999.99"),
+            (2, 999_994.0, "999.99K"),
+            (2, 999_994_000.0, "999.99M"),
+            (0, 999.6, "1K"),
+            (0, 999_600.0, "1M"),
+            (3, 999_999.4, "999.999K"),
+            (3, 999_999.6, "1.000M"),
+            (2, 999_999_999_999.0, "1000.00B"),
+        ] {
+            let formatter = VolumeFormatter { precision };
+            assert_eq!(formatter.format(value), expected);
+            assert_eq!(formatter.format(-value), format!("-{expected}"));
+        }
     }
 
     #[test]
     fn test_scientific_formatter() {
         let formatter = ScientificFormatter::default();
         let result = formatter.format(0.000123);
-        assert!(result.contains("e"));
+        assert_eq!(result, "1.230e-4");
         assert_eq!(formatter.format(-0.0), "0.000e0");
         assert_eq!(formatter.format(-0.001), "-1.000e-3");
-    }
-
-    #[test]
-    fn test_custom_formatter() {
-        let formatter = CustomPriceFormatter::new(|price| format!("Price: {price:.2}"));
-        assert_eq!(formatter.format(123.456), "Price: 123.46");
-        assert_eq!(formatter.clone_box().format(123.456), "Price: 123.46");
     }
 
     #[test]
@@ -720,6 +804,6 @@ mod tests {
             .with_currency("$")
             .with_precision(2)
             .build();
-        assert!(currency_formatter.format(100.0).contains("$"));
+        assert_eq!(currency_formatter.format(100.0), "$100.00");
     }
 }

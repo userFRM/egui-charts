@@ -52,6 +52,7 @@ pub struct IchimokuCloud {
     span_a_color: Color32,
     span_b_color: Color32,
     chikou_color: Color32,
+    cloud_colors: [Color32; 2],
     visible: bool,
 }
 
@@ -70,17 +71,15 @@ impl IchimokuCloud {
             senkou_b_period: senkou_b_period.max(1),
             displacement: kijun_period,
             values: IndicatorValues::new(),
-            tenkan_color: palette::BLUE, // Blue
-            kijun_color: palette::RED,   // Red
-            span_a_color: {
-                let success = palette::GREEN;
-                Color32::from_rgba_unmultiplied(success.r(), success.g(), success.b(), 100)
-            }, // Green cloud (transparent)
-            span_b_color: {
-                let error = palette::RED;
-                Color32::from_rgba_unmultiplied(error.r(), error.g(), error.b(), 100)
-            }, // Red cloud (transparent)
-            chikou_color: palette::PURPLE, // Purple
+            tenkan_color: palette::BLUE,
+            kijun_color: palette::DARK_RED,
+            span_a_color: palette::LIGHT_GREEN,
+            span_b_color: Color32::from_rgb(239, 154, 154),
+            chikou_color: palette::DARK_GREEN,
+            cloud_colors: [
+                palette::DARK_GREEN.gamma_multiply_u8(26),
+                Color32::from_rgba_unmultiplied(244, 67, 54, 26),
+            ],
             visible: true,
         }
     }
@@ -165,8 +164,8 @@ impl Indicator for IchimokuCloud {
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(2),
             second: crate::studies::FillBoundary::Plot(3),
-            color: self.span_a_color,
-            inverted_color: Some(self.span_b_color),
+            color: self.cloud_colors[0],
+            inverted_color: Some(self.cloud_colors[1]),
         }]
     }
 
@@ -222,6 +221,8 @@ impl Indicator for IchimokuCloud {
             self.span_a_color,
             self.span_b_color,
             self.chikou_color,
+            self.cloud_colors[0],
+            self.cloud_colors[1],
         ]
     }
 
@@ -240,6 +241,12 @@ impl Indicator for IchimokuCloud {
         }
         if colors.len() > 4 {
             self.chikou_color = colors[4];
+        }
+        if colors.len() > 2 {
+            self.cloud_colors[0] = colors.get(5).copied().unwrap_or(self.span_a_color);
+        }
+        if colors.len() > 3 {
+            self.cloud_colors[1] = colors.get(6).copied().unwrap_or(self.span_b_color);
         }
     }
 

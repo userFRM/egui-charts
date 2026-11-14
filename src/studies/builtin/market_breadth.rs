@@ -20,9 +20,11 @@ pub type AdvanceDeclineLine = MarketBreadth<false, false>;
 /// Running total of advancing volume minus declining volume.
 pub type CumulativeVolumeIndex = MarketBreadth<false, true>;
 
-/// A ratio or cumulative difference of two market series. `VOLUME` chooses volume-series
-/// defaults and the volume-index name. Hosts map the default symbol keys to their own source,
-/// or replace them using the typed inputs. Calculations require [`Indicator::update_data`].
+/// A ratio or cumulative difference of two market series. `RATIO` selects the ratio and its name.
+/// `VOLUME` chooses volume-series default symbols and, without `RATIO`, the volume-index name, so
+/// with both `true` the study is the "Advance/Decline Ratio" of the volume series. Hosts map the
+/// default symbol keys to their own source, or replace them using the typed inputs. Calculations
+/// require [`Indicator::update_data`].
 #[derive(Clone)]
 pub struct MarketBreadth<const RATIO: bool, const VOLUME: bool> {
     advancing_symbol: String,
@@ -56,7 +58,11 @@ impl<const RATIO: bool, const VOLUME: bool> Default for MarketBreadth<RATIO, VOL
             wait_for_close: true,
             values: IndicatorValues::new(),
             source_values: Vec::new(),
-            color: palette::ORANGE,
+            color: if !RATIO && !VOLUME {
+                palette::LIGHT_BLUE
+            } else {
+                palette::BLUE
+            },
             visible: true,
         }
     }
@@ -108,21 +114,21 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
             .with_default(InputValue::Toggle(true)),
         ]
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("invalid breadth input");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("advancing_symbol", InputValue::Symbol(value)) => self.advancing_symbol = value,
             ("declining_symbol", InputValue::Symbol(value)) => self.declining_symbol = value,
             ("timeframe", InputValue::Timeframe(value)) => self.timeframe = value,
             ("wait_for_close", InputValue::Toggle(value)) => self.wait_for_close = value,
-            _ => return Err("invalid breadth input"),
+            _ => return Err(crate::studies::StudyError::invalid_input(id)),
         }
         self.values.clear();
         Ok(())

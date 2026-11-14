@@ -62,7 +62,7 @@ impl ChandeKrollStop {
             values: IndicatorValues::new(),
             atr: ATR::new(atr_length),
             stepper: Stepper::default(),
-            colors: [palette::RED, palette::GREEN],
+            colors: [palette::ORANGE, palette::BLUE],
             visible: true,
         }
     }

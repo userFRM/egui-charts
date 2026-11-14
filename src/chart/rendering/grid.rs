@@ -1,7 +1,7 @@
 //! Grid rendering logic
 //! Grid lines are fixed to bar indices and price levels, moving 1:1 with the chart
 
-use crate::chart::renderers::ChartMapping;
+use crate::chart::rendering::ChartMapping;
 use crate::model::LineStyle;
 use crate::painting::dashed_line::draw_dashed_segments;
 use crate::scales::PriceMap;
@@ -17,7 +17,7 @@ pub fn render_grid(
     grid_color: Color32,
     style: LineStyle,
 ) {
-    let marks = price_map.marks();
+    let marks = price_map.shared_marks();
     render_grid_lines(
         painter,
         marks.iter().map(|mark| {
@@ -51,7 +51,7 @@ pub fn render_vertical_grid(
 
     // Calculate visible bar range
     let chart_width = rect.width();
-    let visible_bars = (chart_width / coords.bar_spacing).ceil() as usize + 2;
+    let visible_bars = ((chart_width / coords.bar_spacing).ceil() as usize).saturating_add(2);
 
     // Find the first grid line that's visible
     // Grid lines are at indices 0, bars_per_grid, 2*bars_per_grid, etc.
@@ -62,7 +62,7 @@ pub fn render_vertical_grid(
     };
 
     let lines = (0..=(visible_bars / bars_per_grid + 2)).filter_map(|i| {
-        let grid_idx = first_visible_idx + i * bars_per_grid;
+        let grid_idx = first_visible_idx.saturating_add(i.saturating_mul(bars_per_grid));
 
         // Convert bar index to x coord using same formula as candle rendering
         let x = coords.idx_to_x(grid_idx);
@@ -102,36 +102,19 @@ pub(crate) fn render_grid_lines(
     }
 }
 
-/// Round to a nice interval (1, 2, 5, 10, 20, 50, 100, etc.)
-fn nice_interval(raw: usize) -> usize {
-    if raw <= 1 {
-        return 1;
+/// The smallest of 1, 2 or 5 times a power of ten that is at least `raw` (1, 2, 5, 10, 20, 50,
+/// 100, etc.), so that grid lines stay at least the minimum spacing apart at any zoom.
+pub(crate) fn nice_interval(raw: usize) -> usize {
+    let mut power = 1usize;
+    loop {
+        for step in [1, 2, 5] {
+            let nice = power.saturating_mul(step);
+            if nice >= raw {
+                return nice;
+            }
+        }
+        power = power.saturating_mul(10);
     }
-    if raw <= 2 {
-        return 2;
-    }
-    if raw <= 5 {
-        return 5;
-    }
-    if raw <= 10 {
-        return 10;
-    }
-    if raw <= 20 {
-        return 20;
-    }
-    if raw <= 50 {
-        return 50;
-    }
-    if raw <= 100 {
-        return 100;
-    }
-    if raw <= 200 {
-        return 200;
-    }
-    if raw <= 500 {
-        return 500;
-    }
-    1000
 }
 
 #[cfg(test)]

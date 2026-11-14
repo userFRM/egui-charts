@@ -6,11 +6,13 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 use std::collections::VecDeque;
 
-/// Average formula of the oscillator's two averages or of its signal line.
+/// Average formula of an oscillator's averages and signal line, and of the middle line of
+/// [`KeltnerChannels`](super::KeltnerChannels).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OscillatorAverage {
-    /// Alpha 2/(length+1), seeded with the mean of the first `length` values.
+    /// Alpha 2/(length+1). The Price and Percentage Volume Oscillators and Keltner's middle line
+    /// seed it with the mean of the first `length` values, MACD with the first value.
     Exponential,
     /// Arithmetic mean of the last `length` values.
     Simple,
@@ -24,7 +26,7 @@ pub(super) struct Mean {
 }
 
 impl Mean {
-    fn next(&mut self, kind: OscillatorAverage, input: f64, length: usize) -> f64 {
+    pub(super) fn next(&mut self, kind: OscillatorAverage, input: f64, length: usize) -> f64 {
         match kind {
             OscillatorAverage::Exponential => {
                 self.exponential
@@ -93,9 +95,12 @@ impl PriceOscillator {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - PPO
-                palette::ORANGE, // Orange - Signal
-                palette::GREEN,  // Green - Histogram
+                palette::BLUE,   // PPO
+                palette::ORANGE, // Signal
+                palette::HISTOGRAM_TEAL,
+                palette::LIGHT_TEAL,
+                palette::HISTOGRAM_RED,
+                palette::LIGHT_RED, // Histogram
             ],
             visible: true,
         }
@@ -164,9 +169,16 @@ impl Indicator for PriceOscillator {
         signal_average: choice("Signal MA", [OscillatorAverage::Exponential, OscillatorAverage::Simple])
     ; {});
 
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if line != 2 {
+            return None;
+        }
+        super::macd::histogram_color(&self.values, bar, &self.colors[2..])
+    }
+
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line],
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 2 {
@@ -222,9 +234,24 @@ impl Indicator for PriceOscillator {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        // Lines without a colour in `colors` keep theirs.
-        for (line, color) in self.colors.iter_mut().zip(colors) {
-            *line = color;
+        if colors.len() >= 3 {
+            self.colors = colors;
+            if self.colors.len() < 6 {
+                self.colors.truncate(3);
+            }
+            self.colors.resize(6, self.colors[2]);
+        } else {
+            for (stored, color) in self.colors.iter_mut().zip(colors) {
+                *stored = color;
+            }
+        }
+    }
+
+    fn set_color(&mut self, line: usize, color: Color32) {
+        match line {
+            0 | 1 => self.colors[line] = color,
+            2 => self.colors[2..].fill(color),
+            _ => {}
         }
     }
 
@@ -261,47 +288,6 @@ impl Indicator for PriceOscillator {
 mod tests {
     use super::*;
     use crate::studies::test_support::make_bar;
-
-    #[test]
-    fn test_ppo_calculation() {
-        let mut ppo = PriceOscillator::new(5, 10, 3);
-
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        ppo.calculate(&data);
-
-        assert_eq!(ppo.values.len(), 30);
-
-        // Should have valid values after long period warmup
-        let valid_cnt = ppo
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
-    }
-
-    #[test]
-    fn test_ppo_uptrend() {
-        let mut ppo = PriceOscillator::new(3, 6, 2);
-
-        // Strong uptrend
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64 * 2.0)).collect();
-
-        ppo.calculate(&data);
-
-        // PPO should be positive in uptrend
-        if let Some(last_val) = ppo.values.to_rows().last() {
-            let ppo_val = match last_val {
-                IndicatorValue::Multiple(vals) => vals[0],
-                IndicatorValue::Single(val) => *val,
-                IndicatorValue::None => panic!("Expected non-None PPO value"),
-            };
-            assert!(ppo_val > 0.0, "PPO should be positive in uptrend");
-        }
-    }
 
     /// Hand values for lengths 2, 3 and 2 on closes 10, 12, 11, 13, 14, for each pairing of the
     /// oscillator and signal formulas. The averages of 2 are 11, 11.5, 12, 13.5 (simple) and

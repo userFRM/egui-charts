@@ -35,8 +35,7 @@
 //!
 //! # Default colours
 //!
-//! Upper and lower bands use [`palette::ACCENT`](crate::studies::palette::ACCENT);
-//! the middle band uses [`palette::BB_MIDDLE`](crate::studies::palette::BB_MIDDLE).
+//! The basis is blue, the upper boundary red and the lower boundary teal.
 //!
 //! # Example
 //!
@@ -84,9 +83,10 @@ impl BollingerBands {
             average: None,
             values: IndicatorValues::new(),
             colors: vec![
-                palette::ACCENT,    // Upper
+                palette::RED,       // Upper
                 palette::BB_MIDDLE, // Middle
-                palette::ACCENT,    // Lower
+                palette::TEAL,      // Lower
+                palette::LIGHT_BLUE.gamma_multiply_u8(13),
             ],
             visible: true,
         }
@@ -150,11 +150,10 @@ impl Indicator for BollingerBands {
     ; {});
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
-        let color = self.colors[0];
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(0),
             second: crate::studies::FillBoundary::Plot(2),
-            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+            color: self.colors[3],
             inverted_color: None,
         }]
     }
@@ -206,6 +205,15 @@ impl Indicator for BollingerBands {
             // If less than 3 colors provided, use the first color for all bands
             self.colors = vec![colors[0], colors[0], colors[0]];
         }
+        if self.colors.len() == 3 {
+            let color = self.colors[0];
+            self.colors.push(Color32::from_rgba_unmultiplied(
+                color.r(),
+                color.g(),
+                color.b(),
+                16,
+            ));
+        }
     }
 
     fn is_overlay(&self) -> bool {
@@ -222,6 +230,11 @@ impl Indicator for BollingerBands {
             format!("BB Middle({}, {})", self.period, self.std_dev),
             format!("BB Lower({}, {})", self.period, self.std_dev),
         ]
+    }
+
+    /// The basis, then the upper and lower band.
+    fn legend_lines(&self) -> Vec<usize> {
+        vec![1, 0, 2]
     }
 
     fn is_visible(&self) -> bool {

@@ -13,7 +13,7 @@
 //! Use [`to_tpo_profiles`] to transform OHLCV bars into per-session
 //! [`TPOProfile`]s.
 
-use crate::model::bar::{bar_level_keys, level_grid};
+use crate::model::bar::{bar_level_keys, level_grid, level_key};
 use crate::model::{Bar, BarClock, SessionProvider};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -25,7 +25,7 @@ const TPO_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 /// A single TPO letter placed at a price level during one time period.
 #[derive(Debug, Clone)]
 pub struct TPOLetter {
-    /// Price level (quantised to `tick_size`).
+    /// Price of the letter's row: its lowest tick (see [`TPOProfile::row_price`]).
     pub price: f64,
     /// The letter assigned to this time period (A, B, C, ...).
     pub letter: char,
@@ -44,24 +44,35 @@ pub struct TPOLetter {
 pub struct TPOProfile {
     /// Session timestamp
     pub session_date: DateTime<Utc>,
-    /// Row height the profile's prices are keyed on: the configured tick size,
-    /// widened to a whole number of ticks when the bars span more than 1,000
-    /// ticks, or the span divided into 1,000 rows without a usable tick size.
-    /// Pass it to the methods that take a `tick_size`.
+    /// Row height the profile's prices are keyed on: `row_ticks` ticks of `instrument_tick`. It is
+    /// the configured tick size, rounded up to whole instrument ticks when one is configured and
+    /// widened to a whole number of rows when the bars span more than 1,000 of them, or the span
+    /// divided into 1,000 rows without a usable tick size.
     pub tick_size: f64,
+    /// Tick the rows are counted in: [`TPOConfig::instrument_tick`], or `tick_size` itself, making
+    /// every row one tick, without one or when prices are more than 2^50 ticks from zero.
+    pub instrument_tick: f64,
+    /// Ticks of `instrument_tick` in each row. A row holds the ticks from a multiple of
+    /// `row_ticks` up to the next and spans from half a tick below its first tick to half a tick
+    /// below the next row's, as footprint rows do.
+    pub row_ticks: u64,
     /// All TPO letters in this profile
     pub letters: Vec<TPOLetter>,
     /// TPO count at each price level
     pub price_tpo_count: HashMap<i64, usize>,
-    /// Point of Control - price with most TPOs
+    /// Point of control: the price (lowest tick) of the row with the most TPOs. A tie takes the
+    /// lower price.
     pub poc_price: f64,
-    /// Upper boundary of the configured TPO-count value area.
+    /// Price of the highest row of the configured TPO-count value area. The area grows from the
+    /// point of control toward whichever of the next two rows above or the next two rows below
+    /// holds more TPOs; equal counts add one row on each side.
     pub value_area_high: f64,
-    /// Lower boundary of the configured TPO-count value area.
+    /// Price of its lowest row.
     pub value_area_low: f64,
-    /// Highest price during the configured initial balance period.
+    /// Highest price of the bars that open within the configured initial balance period, or
+    /// `f64::MIN` when none does, so the profile has no initial balance.
     pub initial_balance_high: f64,
-    /// Lowest price during the configured initial balance period.
+    /// Lowest price of those bars, or `f64::MAX` when none does.
     pub initial_balance_low: f64,
     /// Profile high
     pub profile_high: f64,
@@ -69,7 +80,7 @@ pub struct TPOProfile {
     pub profile_low: f64,
     /// Opening price
     pub opening_price: f64,
-    /// Single prints (price levels with only 1 TPO)
+    /// Single prints: the prices of the rows with exactly one TPO, in ascending order
     pub single_prints: Vec<f64>,
     /// Poor highs (multiple TPOs at high)
     pub has_poor_high: bool,
@@ -81,8 +92,9 @@ pub struct TPOProfile {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TPOConfig {
-    /// Tick size for price grouping (e.g., 0.25 for ES futures). [`to_tpo_profiles`]
-    /// widens it to bound the rows; see [`TPOProfile::tick_size`].
+    /// Row height for price grouping, such as 0.25 for one ES tick or 1.0 for four. With
+    /// `instrument_tick` it rounds up to whole ticks. [`to_tpo_profiles`] widens it to bound the
+    /// rows; see [`TPOProfile::tick_size`].
     pub tick_size: f64,
     /// Duration of each period in minutes (typically 30), raised to the bar interval when
     /// shorter so that every bar takes a period of its own
@@ -99,10 +111,18 @@ pub struct TPOConfig {
     pub show_poc: bool,
     /// Show Value Area
     pub show_value_area: bool,
+    /// Show the caption and marker at the middle of the profile's range
+    pub show_midpoint: bool,
     /// Show Initial Balance
     pub show_initial_balance: bool,
+    /// Draw one and two initial balance ranges above its high and below its low.
+    pub show_initial_balance_extensions: bool,
+    /// Mark the highest and lowest rows when they hold more than one TPO.
+    pub show_poor_highs_lows: bool,
     /// Show single prints
     pub show_single_prints: bool,
+    /// Show the session statistics table below the profile
+    pub show_statistics: bool,
     /// Highlight opening range
     pub show_opening_range: bool,
     /// Split each session where it moves between extended and regular hours, giving separate
@@ -116,6 +136,10 @@ pub struct TPOConfig {
     pub composites: Vec<RangeInclusive<DateTime<Utc>>>,
     /// Draw only the newest session's profile instead of every visible one
     pub latest_session_only: bool,
+    /// The instrument's minimum price increment. When set, rows are whole ticks counted as
+    /// footprint rows are: a row of n ticks holds the ticks from a multiple of n up to the next.
+    /// `None`, or a tick that is not positive and finite, counts each row as one tick.
+    pub instrument_tick: Option<f64>,
 }
 
 impl Default for TPOConfig {
@@ -129,13 +153,18 @@ impl Default for TPOConfig {
             color_mode: TPOColorMode::ByPeriod,
             show_poc: true,
             show_value_area: true,
+            show_midpoint: false,
             show_initial_balance: true,
-            show_single_prints: true,
+            show_initial_balance_extensions: false,
+            show_poor_highs_lows: false,
+            show_single_prints: false,
+            show_statistics: false,
             show_opening_range: true,
             split_sessions: false,
             custom_letters: None,
             composites: Vec::new(),
             latest_session_only: false,
+            instrument_tick: None,
         }
     }
 }
@@ -176,18 +205,20 @@ pub enum SessionType {
 }
 
 impl TPOProfile {
-    /// Create a new empty TPO profile keyed on rows of `tick_size`
+    /// Create a new empty TPO profile on rows of one tick of `tick_size`
     pub fn new(session_date: DateTime<Utc>, tick_size: f64) -> Self {
         Self {
             session_date,
             tick_size,
+            instrument_tick: tick_size,
+            row_ticks: 1,
             letters: Vec::new(),
             price_tpo_count: HashMap::new(),
             poc_price: 0.0,
             value_area_high: 0.0,
             value_area_low: 0.0,
-            initial_balance_high: 0.0,
-            initial_balance_low: 0.0,
+            initial_balance_high: f64::MIN,
+            initial_balance_low: f64::MAX,
             profile_high: f64::MIN,
             profile_low: f64::MAX,
             opening_price: 0.0,
@@ -197,18 +228,35 @@ impl TPOProfile {
         }
     }
 
+    /// Row key of `price` on this profile's rows.
+    fn key(&self, price: f64) -> i64 {
+        level_key(price, self.instrument_tick, self.row_ticks)
+    }
+
+    /// Price of the row holding `price`: the row's lowest tick.
+    pub fn row_price(&self, price: f64) -> f64 {
+        key_to_price(self.key(price), self.tick_size)
+    }
+
+    /// Lowest and highest price of the row holding `price`, from half a tick below its first tick
+    /// to half a tick below the next row's first tick.
+    pub fn row_span(&self, price: f64) -> (f64, f64) {
+        let (row, half_tick) = (self.row_price(price), self.instrument_tick * 0.5);
+        (row - half_tick, row + self.tick_size - half_tick)
+    }
+
     /// Get the TPO count at a specific price level
-    pub fn tpo_count_at(&self, price: f64, tick_size: f64) -> usize {
-        let price_key = price_to_key(price, tick_size);
+    pub fn tpo_count_at(&self, price: f64) -> usize {
+        let price_key = self.key(price);
         *self.price_tpo_count.get(&price_key).unwrap_or(&0)
     }
 
     /// Get all unique price levels with TPOs
-    pub fn price_levels(&self, tick_size: f64) -> Vec<f64> {
+    pub fn price_levels(&self) -> Vec<f64> {
         let mut levels: Vec<f64> = self
             .price_tpo_count
             .keys()
-            .map(|&k| key_to_price(k, tick_size))
+            .map(|&k| key_to_price(k, self.tick_size))
             .collect();
         levels.sort_by(|a, b| b.total_cmp(a));
         levels
@@ -241,11 +289,11 @@ impl TPOProfile {
     }
 
     /// Get the letters at a specific price level
-    pub fn letters_at(&self, price: f64, tick_size: f64) -> Vec<&TPOLetter> {
-        let price_key = price_to_key(price, tick_size);
+    pub fn letters_at(&self, price: f64) -> Vec<&TPOLetter> {
+        let price_key = self.key(price);
         self.letters
             .iter()
-            .filter(|l| price_to_key(l.price, tick_size) == price_key)
+            .filter(|l| self.key(l.price) == price_key)
             .collect()
     }
 }
@@ -285,9 +333,24 @@ pub fn derive_tick_size(price_range: f64, target_rows: usize) -> f64 {
     }
 }
 
-/// Convert price to integer key for HashMap
-fn price_to_key(price: f64, tick_size: f64) -> i64 {
-    (price / tick_size).round() as i64
+/// Largest tick number whose rows keep finding their own prices.
+const EXACT_TICKS: f64 = (1u64 << 50) as f64;
+
+/// The fewest whole ticks that reach `height`, at least one, within one part in a billion so that
+/// a height of exactly n ticks stays n ticks despite rounding.
+pub(crate) fn whole_ticks(height: f64, tick: f64) -> f64 {
+    (height / tick * (1.0 - 1e-9)).ceil().max(1.0)
+}
+
+/// The tick and ticks per row of rows of `grid` for prices up to `extreme` in magnitude: whole
+/// instrument ticks reaching the grid, or the grid as one tick without a usable instrument tick
+/// or when tick numbers reach 2^50, past which a row's price can key the row below.
+fn row_ticks(grid: f64, instrument_tick: Option<f64>, extreme: f64) -> (f64, u64) {
+    instrument_tick
+        .filter(|tick| *tick > 0.0 && tick.is_finite() && extreme / tick < EXACT_TICKS)
+        .map(|tick| (tick, whole_ticks(grid, tick)))
+        .filter(|&(_, ticks)| ticks < EXACT_TICKS)
+        .map_or((grid, 1), |(tick, ticks)| (tick, ticks as u64))
 }
 
 /// Convert integer key back to price
@@ -332,12 +395,19 @@ pub(crate) fn session_starts(
 /// extended and regular hours with `config.split_sessions` and combined over
 /// `config.composites`. A session's periods are whole multiples of
 /// `config.period_minutes`, or of the clock's interval when longer, since its
-/// first bar, so a gap leaves empty periods, and each period places one letter
-/// on every row its bars touched.
+/// open: that of its trading day with intraday bars and trading hours, or of
+/// its stretch of extended or regular hours when split, whatever time its
+/// first bar has. Calendar days, daily and longer bars and bars split off
+/// outside the hours count from their first bar, since their open is not
+/// known. A gap leaves empty periods, and each period places one letter on
+/// every row its bars touched. The initial balance covers the bars that open
+/// within `config.initial_balance_minutes` of the same instant.
 ///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
-/// rows (see [`TPOProfile::tick_size`]). Bars with a non-finite high or low or
-/// an inverted range are skipped.
+/// rows (see [`TPOProfile::tick_size`]). With `config.instrument_tick` rows are
+/// whole ticks grouped from a multiple of the row, and each row's price is its
+/// lowest tick. Bars with a non-finite high or low or an inverted range are
+/// skipped.
 ///
 /// # Arguments
 /// * `bars` - Source OHLCV bars
@@ -361,17 +431,26 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
 
     let mut profiles: Vec<TPOProfile> = Vec::new();
     let mut current_profile: Option<TPOProfile> = None;
-    let mut current_session_start: Option<DateTime<Utc>> = None;
+    let mut session_open = bars[0].time;
     // The open period: its index, first bar time and row-range endpoints
     let mut period_idx = 0;
     let mut period_ts = bars[0].time;
     let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
     let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
-    let mut starts = session_starts(bars, &clock.sessions(), config.split_sessions)
+    let sessions = clock.sessions();
+    let mut starts = session_starts(bars, &sessions, config.split_sessions)
         .into_iter()
         .peekable();
-    let tick_size = level_grid(bars, config.tick_size);
-    let keys = bars.iter().filter_map(|bar| bar_level_keys(bar, tick_size));
+    let grid = level_grid(bars, config.tick_size);
+    let extreme = bars
+        .iter()
+        .filter(|bar| bar.low.is_finite() && bar.high.is_finite() && bar.low <= bar.high)
+        .fold(0.0_f64, |m, bar| m.max(bar.low.abs()).max(bar.high.abs()));
+    let (tick, row_ticks) = row_ticks(grid, config.instrument_tick, extreme);
+    let row = row_ticks as f64 * tick;
+    let keys = bars
+        .iter()
+        .filter_map(|bar| bar_level_keys(bar, tick, row_ticks));
     let Some((first_key, last_key)) = keys.reduce(|(low, high), (l, h)| (low.min(l), high.max(h)))
     else {
         return Vec::new();
@@ -382,7 +461,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     let mut touched = RangeInclusive::new(usize::MAX, 0);
 
     for (i, bar) in bars.iter().enumerate() {
-        let Some((low_key, high_key)) = bar_level_keys(bar, tick_size) else {
+        let Some((low_key, high_key)) = bar_level_keys(bar, tick, row_ticks) else {
             continue;
         };
 
@@ -391,12 +470,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         while starts.next_if(|&start| start <= i).is_some() {
             is_new_session = true;
         }
-        let bar_period = match current_session_start {
-            Some(start) if !is_new_session => {
-                ((bar.time - start).num_minutes().max(0) / period_minutes) as usize
-            }
-            _ => 0,
-        };
+        if is_new_session {
+            session_open = sessions
+                .session_open(bar.time, config.split_sessions)
+                .unwrap_or(bar.time);
+        }
+        let elapsed = (bar.time - session_open).num_minutes().max(0);
+        let bar_period = (elapsed / period_minutes) as usize;
 
         if is_new_session || bar_period != period_idx {
             if let Some(ref mut profile) = current_profile {
@@ -421,13 +501,12 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             profiles.extend(current_profile.take());
 
             // Start new profile
-            current_profile = Some(TPOProfile::new(bar.time, tick_size));
-            current_session_start = Some(bar.time);
-
-            // Set opening price
-            if let Some(ref mut profile) = current_profile {
-                profile.opening_price = bar.open;
-            }
+            current_profile = Some(TPOProfile {
+                instrument_tick: tick,
+                row_ticks,
+                opening_price: bar.open,
+                ..TPOProfile::new(bar.time, row)
+            });
         }
 
         let (lo, hi) = (
@@ -444,17 +523,9 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             profile.profile_low = profile.profile_low.min(bar.low);
 
             // Update initial balance (first N minutes)
-            if let Some(session_start) = current_session_start {
-                let elapsed = (bar.time - session_start).num_minutes();
-                if elapsed < config.initial_balance_minutes as i64 {
-                    if profile.initial_balance_high == 0.0 {
-                        profile.initial_balance_high = bar.high;
-                        profile.initial_balance_low = bar.low;
-                    } else {
-                        profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
-                        profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
-                    }
-                }
+            if elapsed < i64::from(config.initial_balance_minutes) {
+                profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
+                profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
             }
         }
     }
@@ -530,11 +601,11 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         return;
     }
 
-    // Find POC (price with most TPOs)
+    // Find POC (price with most TPOs); a tie takes the lower price
     let (poc_key, _) = profile
         .price_tpo_count
         .iter()
-        .max_by_key(|(_, count)| *count)
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
         .unwrap();
     profile.poc_price = key_to_price(*poc_key, profile.tick_size);
 
@@ -547,7 +618,8 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
     // POC, then repeatedly extend the contiguous range one row at a time,
     // always toward whichever adjacent side (the two rows immediately above
     // the current high, or the two rows immediately below the current low)
-    // holds more TPOs. Counts are accumulated until the running total reaches
+    // holds more TPOs; equal sums add one row on each side, as volume profiles
+    // do. Counts are accumulated until the running total reaches
     // `value_area_pct` of all TPOs. The result is guaranteed contiguous and
     // centered on the POC, the usual market-profile convention.
     let target_tpos = (total_tpos as f64 * config.value_area_pct).ceil() as usize;
@@ -577,9 +649,16 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
             0
         };
 
-        // Prefer the heavier side; when only one side remains, take it.
+        // Prefer the heavier side; equal sums add one row on each side, as volume profiles do;
+        // when only one side remains, take it.
         let go_up = match (up_avail, down_avail) {
-            (true, true) => up_pair >= down_pair,
+            (true, true) if up_pair == down_pair => {
+                va_low_key -= 1;
+                va_high_key += 1;
+                accumulated_tpos += count_at(va_low_key) + count_at(va_high_key);
+                continue;
+            }
+            (true, true) => up_pair > down_pair,
             (true, false) => true,
             (false, true) => false,
             (false, false) => break,
@@ -612,10 +691,11 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         .filter(|(_, count)| **count == 1)
         .map(|(&key, _)| key_to_price(key, profile.tick_size))
         .collect();
+    profile.single_prints.sort_by(f64::total_cmp);
 
     // Check for poor high/low (multiple TPOs at extreme)
-    let high_key = price_to_key(profile.profile_high, profile.tick_size);
-    let low_key = price_to_key(profile.profile_low, profile.tick_size);
+    let high_key = profile.key(profile.profile_high);
+    let low_key = profile.key(profile.profile_low);
 
     profile.has_poor_high = profile.price_tpo_count.get(&high_key).unwrap_or(&0) > &1;
     profile.has_poor_low = profile.price_tpo_count.get(&low_key).unwrap_or(&0) > &1;
@@ -640,9 +720,64 @@ pub enum ProfileShape {
 }
 
 impl TPOProfile {
+    /// Height of the initial balance, or `None` for a profile without one.
+    pub fn initial_balance_range(&self) -> Option<f64> {
+        (self.initial_balance_high != f64::MIN)
+            .then_some(self.initial_balance_high - self.initial_balance_low)
+    }
+
+    /// TPOs of the rows below and of the rows above the point of control's row, `(below, above)`.
+    /// The point of control's row counts in neither.
+    pub fn tpo_counts_around_poc(&self) -> (usize, usize) {
+        let poc = self.key(self.poc_price);
+        let sum = |side: std::cmp::Ordering| -> usize {
+            self.price_tpo_count
+                .iter()
+                .filter(|&(key, _)| key.cmp(&poc) == side)
+                .map(|(_, count)| count)
+                .sum()
+        };
+        (
+            sum(std::cmp::Ordering::Less),
+            sum(std::cmp::Ordering::Greater),
+        )
+    }
+
+    /// Rotation factor: for each period after the first, +1 for a higher high and +1 for a higher
+    /// low than the previous period's, -1 for a lower high and -1 for a lower low, summed. Highs
+    /// and lows are compared on the profile's rows, so a move inside one row counts 0. A composite
+    /// reads its periods in time order.
+    pub fn rotation_factor(&self) -> i32 {
+        let periods: Vec<(i64, i64)> = self
+            .letters
+            .chunk_by(|a, b| a.ts == b.ts)
+            .map(|period| {
+                let keys = period.iter().map(|letter| self.key(letter.price));
+                (
+                    keys.clone().max().unwrap_or_default(),
+                    keys.min().unwrap_or_default(),
+                )
+            })
+            .collect();
+        periods
+            .windows(2)
+            .map(|pair| pair[1].0.cmp(&pair[0].0) as i32 + pair[1].1.cmp(&pair[0].1) as i32)
+            .sum()
+    }
+
+    /// How far the profile's range reaches beyond its initial balance, `(below, above)`, in price,
+    /// or `None` for a profile without one.
+    pub fn range_extension(&self) -> Option<(f64, f64)> {
+        self.initial_balance_range()?;
+        Some((
+            (self.initial_balance_low - self.profile_low).max(0.0),
+            (self.profile_high - self.initial_balance_high).max(0.0),
+        ))
+    }
+
     /// Classify the profile shape
-    pub fn classify_shape(&self, tick_size: f64) -> ProfileShape {
-        let levels = self.price_levels(tick_size);
+    pub fn classify_shape(&self) -> ProfileShape {
+        let levels = self.price_levels();
         if levels.len() < 3 {
             return ProfileShape::Normal;
         }
@@ -651,14 +786,8 @@ impl TPOProfile {
         let upper_third = &levels[..levels.len() / 3];
         let lower_third = &levels[levels.len() * 2 / 3..];
 
-        let upper_tpos: usize = upper_third
-            .iter()
-            .map(|p| self.tpo_count_at(*p, tick_size))
-            .sum();
-        let lower_tpos: usize = lower_third
-            .iter()
-            .map(|p| self.tpo_count_at(*p, tick_size))
-            .sum();
+        let upper_tpos: usize = upper_third.iter().map(|p| self.tpo_count_at(*p)).sum();
+        let lower_tpos: usize = lower_third.iter().map(|p| self.tpo_count_at(*p)).sum();
 
         let upper_pct = upper_tpos as f64 / total_tpos as f64;
         let lower_pct = lower_tpos as f64 / total_tpos as f64;
@@ -683,68 +812,46 @@ mod tests {
     use crate::model::Timeframe;
     use chrono::{Duration, TimeZone};
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
-        vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 101.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(30),
-                open: 101.0,
-                high: 103.0,
-                low: 100.0,
-                close: 102.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(60),
-                open: 102.0,
-                high: 104.0,
-                low: 101.0,
-                close: 103.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(90),
-                open: 103.0,
-                high: 104.0,
-                low: 102.0,
-                close: 103.5,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-        ]
-    }
-
     #[test]
-    fn test_tpo_initial_balance() {
-        let bars = create_test_bars();
+    fn initial_balance_spans_its_bars_whatever_their_sign() {
+        // (minutes between bars, bars as (high, low), initial balance as (high, low)), tick 0.25
+        // and the default 60-minute balance from 14:30 UTC
+        type Case<'a> = (i64, &'a [(f64, f64)], (f64, f64));
+        let cases: [Case; 3] = [
+            // The first bar's high is zero
+            (30, &[(0.0, -1.0), (-0.25, -0.5)], (0.0, -1.0)),
+            // The running high reaches zero at the second bar
+            (1, &[(-1.0, -2.0), (0.0, -1.5), (-0.5, -0.75)], (0.0, -2.0)),
+            // Only the bars of the first hour count: not those at 60 and 90 minutes
+            (
+                30,
+                &[
+                    (102.0, 99.0),
+                    (103.0, 100.0),
+                    (104.0, 101.0),
+                    (104.0, 102.0),
+                ],
+                (103.0, 99.0),
+            ),
+        ];
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
         let config = TPOConfig {
-            tick_size: 1.0,
-            initial_balance_minutes: 60,
+            tick_size: 0.25,
             ..Default::default()
         };
-        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
-
-        let profile = &profiles[0];
-
-        // Initial balance should be set from first 60 minutes
-        assert!(profile.initial_balance_high > 0.0);
-        assert!(profile.initial_balance_low > 0.0);
-        assert!(profile.initial_balance_high >= profile.initial_balance_low);
+        for (spacing, bars, expected) in cases {
+            let bars: Vec<_> = bars
+                .iter()
+                .enumerate()
+                .map(|(i, &(high, low))| bar_at(start, spacing * i as i64, low, high, low, high))
+                .collect();
+            let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
+            assert_eq!(
+                (profile.initial_balance_high, profile.initial_balance_low),
+                expected,
+                "{bars:?}"
+            );
+        }
     }
 
     /// Build a single bar at a chosen offset from a fixed session start.
@@ -824,7 +931,7 @@ mod tests {
                     profile
                         .letters
                         .iter()
-                        .map(|l| (i, l.period_idx, l.letter, l.ts, price_to_key(l.price, 1.0))),
+                        .map(|l| (i, l.period_idx, l.letter, l.ts, profile.key(l.price))),
                 );
                 counts.extend(profile.price_tpo_count.iter().map(|(&k, &c)| (i, k, c)));
             }
@@ -862,7 +969,7 @@ mod tests {
             false,
         );
         let stock = BarClock::new(Timeframe::Min30).with_session(
-            new_york,
+            new_york.clone(),
             Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
                 .with_extended_windows([
                     SessionWindow::new(weekdays, at(4, 0), at(9, 30)),
@@ -882,7 +989,7 @@ mod tests {
             Vec<RangeInclusive<DateTime<Utc>>>,
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 6] = [
+        let cases: [Case; 8] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
@@ -897,7 +1004,8 @@ mod tests {
                 (0..19).map(|i| i * 30).collect(),
                 false,
                 vec![],
-                &[(0, "ABCDEFGHIJKLMNOPQRS")],
+                // Pre-market opens at 04:00, eight periods before the first bar at 08:00
+                &[(0, "IJKLMNOPQRSTUVWXYZa")],
             ),
             (
                 "split at extended hours",
@@ -905,7 +1013,37 @@ mod tests {
                 (0..19).map(|i| i * 30).collect(),
                 true,
                 vec![],
-                &[(0, "ABC"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
+                &[(0, "IJK"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
+            ),
+            // Post-market opens where regular hours close, inside its all-day extended window
+            (
+                "split inside an extended window spanning regular hours",
+                BarClock::new(Timeframe::Min30).with_session(
+                    new_york.clone(),
+                    Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
+                        .with_extended_windows([SessionWindow::new(weekdays, at(4, 0), at(20, 0))]),
+                    true,
+                ),
+                vec![540, 570],
+                true,
+                vec![],
+                &[(540, "CD")],
+            ),
+            // No extended hours divide a lunch break, so 13:00 counts from the 09:00 open
+            (
+                "split across a lunch break",
+                BarClock::new(Timeframe::Min30).with_session(
+                    new_york.clone(),
+                    Session::new([
+                        SessionWindow::new(weekdays, at(9, 0), at(11, 30)),
+                        SessionWindow::new(weekdays, at(12, 30), at(15, 0)),
+                    ]),
+                    false,
+                ),
+                vec![300],
+                true,
+                vec![],
+                &[(300, "I")],
             ),
             (
                 "hourly bars take one period each",
@@ -948,12 +1086,88 @@ mod tests {
                 .map(|profile| {
                     let open = (profile.session_date - start).num_minutes();
                     let letters: String = profile.letters.iter().map(|l| l.letter).collect();
-                    assert_eq!(profile.tpo_count_at(100.0, 1.0), letters.len(), "{case}");
+                    assert_eq!(profile.tpo_count_at(100.0), letters.len(), "{case}");
                     (open, letters)
                 })
                 .collect();
             let expected: Vec<_> = expected.iter().map(|&(m, l)| (m, l.to_owned())).collect();
             assert_eq!(profiles, expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn periods_and_initial_balance_count_from_the_session_open() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        // Regular hours 09:30 to 16:00 New York (UTC-5); 2024-03-05 opens at 14:30 UTC.
+        let clock = BarClock::new(Timeframe::Min5).with_session(
+            TimezoneId::fixed_offset(-5 * 3600).unwrap(),
+            Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                at(9, 30),
+                at(16, 0),
+            )]),
+            false,
+        );
+        let open = Utc.with_ymd_and_hms(2024, 3, 5, 14, 30, 0).unwrap();
+        // (case, bars as (minutes after the open, low, high), letters as (letter, row), initial
+        // balance as (high, low)), tick 1, 30-minute periods
+        type Case<'a> = (
+            &'a str,
+            &'a [(i64, f64, f64)],
+            &'a [(char, f64)],
+            (f64, f64),
+        );
+        let cases: [Case; 2] = [
+            // First trade at 09:45. A is 09:30 to 10:00, B 10:00 to 10:30, C 10:30 to 11:00: the
+            // 10:05 bar prints B and the 10:40 bar C, after the 09:30 to 10:30 initial balance.
+            (
+                "late first bar",
+                &[(15, 100.0, 101.0), (35, 101.0, 102.0), (70, 103.0, 104.0)],
+                &[
+                    ('A', 100.0),
+                    ('A', 101.0),
+                    ('B', 101.0),
+                    ('B', 102.0),
+                    ('C', 103.0),
+                    ('C', 104.0),
+                ],
+                (102.0, 100.0),
+            ),
+            // History that starts at 11:00, 90 minutes after the open: the fourth period, D, past
+            // the initial balance.
+            (
+                "history from 11:00",
+                &[(90, 100.0, 100.0), (125, 101.0, 101.0)],
+                &[('D', 100.0), ('E', 101.0)],
+                (f64::MIN, f64::MAX),
+            ),
+        ];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        for (case, bars, letters, initial_balance) in cases {
+            let bars: Vec<_> = bars
+                .iter()
+                .map(|&(m, low, high)| bar_at(open, m, low, high, low, high))
+                .collect();
+            let profiles = to_tpo_profiles(&bars, &config, &clock);
+            assert_eq!(profiles.len(), 1, "{case}");
+            let profile = &profiles[0];
+            let mut placed: Vec<_> = profile
+                .letters
+                .iter()
+                .map(|l| (l.letter, l.price))
+                .collect();
+            placed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(placed, letters, "{case}");
+            assert_eq!(
+                (profile.initial_balance_high, profile.initial_balance_low),
+                initial_balance,
+                "{case}"
+            );
         }
     }
 
@@ -997,16 +1211,63 @@ mod tests {
             ..Default::default()
         };
         let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
-
-        // Independently find the heaviest level and confirm POC matches it.
-        let heaviest = profile
-            .price_tpo_count
-            .iter()
-            .max_by_key(|(_, c)| **c)
-            .map(|(&k, _)| key_to_price(k, 1.0))
-            .unwrap();
-        assert_eq!(profile.poc_price, heaviest);
         assert_eq!(profile.poc_price, 102.0);
+    }
+
+    #[test]
+    fn ties_give_one_point_of_control_and_value_area_on_every_build() {
+        // (case, half-hour periods from 14:30 UTC as (low, high), (POC, VAL, VAH), single prints)
+        type Case<'a> = (&'a str, Vec<(f64, f64)>, (f64, f64, f64), Vec<f64>);
+        let cases: [Case; 2] = [
+            // A spans 100 to 109, B to D print 100 and E to G 109. Rows 100 and 109 hold 4 TPOs
+            // and 101 to 108 one each, 16 in all, so the 70% value area needs 12. The tie takes
+            // 100, from which the area can only grow upward, one TPO per row, reaching 12 at 108.
+            (
+                "tied point of control",
+                [(100.0, 109.0)]
+                    .into_iter()
+                    .chain([(100.0, 100.0); 3])
+                    .chain([(109.0, 109.0); 3])
+                    .collect(),
+                (100.0, 100.0, 108.0),
+                (101..=108).map(f64::from).collect(),
+            ),
+            // A spans 100 to 104, B and C print 102: rows of 1, 1, 3, 1 and 1 TPOs, 7 in all, so
+            // the value area needs 5. From 102 the two rows above and the two below hold 2 each,
+            // so it adds 101 and 103 and stops at 5.
+            (
+                "tied value area expansion",
+                vec![(100.0, 104.0), (102.0, 102.0), (102.0, 102.0)],
+                (102.0, 101.0, 103.0),
+                vec![100.0, 101.0, 103.0, 104.0],
+            ),
+        ];
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        for (case, periods, levels, single_prints) in cases {
+            let bars: Vec<_> = periods
+                .iter()
+                .enumerate()
+                .map(|(i, &(low, high))| bar_at(start, 30 * i as i64, low, high, low, high))
+                .collect();
+            // Each build hashes its rows with a new seed, so an unbroken tie varies between builds.
+            for _ in 0..64 {
+                let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min30.into())[0];
+                assert_eq!(
+                    (
+                        profile.poc_price,
+                        profile.value_area_low,
+                        profile.value_area_high
+                    ),
+                    levels,
+                    "{case}"
+                );
+                assert_eq!(profile.single_prints, single_prints, "{case}");
+            }
+        }
     }
 
     #[test]
@@ -1034,8 +1295,8 @@ mod tests {
         // The value area is a contiguous price band: every level between VAL and
         // VAH (inclusive) that exists in the profile is part of one run.
         let total: usize = profile.price_tpo_count.values().sum();
-        let va_lo = price_to_key(profile.value_area_low, 1.0);
-        let va_hi = price_to_key(profile.value_area_high, 1.0);
+        let va_lo = profile.key(profile.value_area_low);
+        let va_hi = profile.key(profile.value_area_high);
         assert!(va_lo <= va_hi);
 
         let va_tpos: usize = profile
@@ -1100,5 +1361,162 @@ mod tests {
         let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
         // 1e6 ticks widen to rows of 1,000 ticks: 0, 1,000, ..., 1e6
         assert_eq!((profile.tick_size, profile.letters.len()), (1_000.0, 1_001));
+    }
+
+    #[test]
+    fn rows_of_several_ticks_hold_whole_ticks_from_a_multiple_of_the_row() {
+        // (tick, ticks per row, tick numbers swept, quote divisor, prices with their row price and
+        // span), worked out by hand from row = floor(round(price / tick) / ticks per row)
+        type Case<'a> = (
+            f64,
+            u64,
+            std::ops::Range<i64>,
+            f64,
+            &'a [(f64, f64, (f64, f64))],
+        );
+        let cases: [Case; 5] = [
+            (
+                0.01,
+                2,
+                10_000..20_000,
+                100.0,
+                &[(100.01, 100.0, (99.995, 100.015))],
+            ),
+            (
+                0.01,
+                2,
+                -100..100,
+                100.0,
+                &[
+                    (0.0, 0.0, (-0.005, 0.015)),
+                    (-0.01, -0.02, (-0.025, -0.005)),
+                ],
+            ),
+            (
+                0.01,
+                10,
+                10_000..20_000,
+                100.0,
+                &[
+                    (100.05, 100.0, (99.995, 100.095)),
+                    (199.99, 199.9, (199.895, 199.995)),
+                ],
+            ),
+            (
+                0.25,
+                4,
+                -40..40,
+                4.0,
+                &[
+                    (110.0, 110.0, (109.875, 110.875)),
+                    // Between two ticks, and half a tick from the next row
+                    (110.6, 110.0, (109.875, 110.875)),
+                    (110.875, 111.0, (110.875, 111.875)),
+                    (0.0, 0.0, (-0.125, 0.875)),
+                    (-0.25, -1.0, (-1.125, -0.125)),
+                ],
+            ),
+            (
+                0.25,
+                3,
+                -12..12,
+                4.0,
+                &[
+                    (110.0, 109.5, (109.375, 110.125)),
+                    (0.0, 0.0, (-0.125, 0.625)),
+                    (-0.25, -0.75, (-0.875, -0.125)),
+                ],
+            ),
+        ];
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1.0);
+        for (tick, row_ticks, sweep, divisor, rows) in cases {
+            let profile = TPOProfile {
+                instrument_tick: tick,
+                row_ticks,
+                ..TPOProfile::new(DateTime::UNIX_EPOCH, row_ticks as f64 * tick)
+            };
+            let mut held: HashMap<u64, u64> = HashMap::new();
+            for n in sweep.clone() {
+                let price = n as f64 / divisor;
+                let (low, high) = profile.row_span(price);
+                assert!(
+                    low < price && price < high,
+                    "{price} on {tick} x {row_ticks}"
+                );
+                *held.entry(profile.row_price(price).to_bits()).or_insert(0) += 1;
+            }
+            assert!(
+                held.values().all(|&ticks| ticks == row_ticks),
+                "uneven rows on {tick} x {row_ticks}"
+            );
+            assert_eq!(
+                held.len() as u64 * row_ticks,
+                (sweep.end - sweep.start) as u64,
+                "{tick} x {row_ticks}"
+            );
+            for &(price, row, (low, high)) in rows {
+                let at = (tick, row_ticks, price);
+                assert!(close(profile.row_price(price), row), "{at:?}");
+                let span = profile.row_span(price);
+                assert!(close(span.0, low) && close(span.1, high), "{at:?} {span:?}");
+                let own = profile.row_price(price);
+                assert_eq!(profile.row_price(own), own, "{at:?}");
+            }
+        }
+
+        // Past 2^50 ticks a row's price can key the row below, so the rows count as one tick.
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
+        let bars = [bar_at(start, 0, 1e4, 1e4 + 1e-4, 1e4, 1e4)];
+        let config = TPOConfig {
+            tick_size: 1e-6,
+            instrument_tick: Some(1e-12),
+            ..Default::default()
+        };
+        let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
+        assert_eq!(profile.letters.len(), 101);
+        assert!(
+            profile
+                .letters
+                .iter()
+                .all(|letter| profile.row_price(letter.price) == letter.price)
+        );
+    }
+
+    #[test]
+    fn session_statistics_follow_a_hand_counted_session() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
+        let bars = [
+            bar_at(start, 0, 101.0, 103.0, 100.0, 102.0),
+            bar_at(start, 30, 102.0, 104.0, 101.0, 103.0),
+            bar_at(start, 60, 104.0, 106.0, 103.0, 105.0),
+            bar_at(start, 90, 104.0, 105.0, 99.0, 100.0),
+        ];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let clock = Timeframe::Min30.into();
+        // Rows 99 to 106 hold 1, 2, 3, 3, 4, 3, 2 and 1 TPOs, 19 in all. The value area takes 14:
+        // from 103 (4), the two rows below (6) beat the two above (5), then the two above (5) beat
+        // the rest below (3).
+        let session = to_tpo_profiles(&bars, &config, &clock).remove(0);
+        assert_eq!(session.poc_price, 103.0);
+        assert_eq!(
+            (session.value_area_low, session.value_area_high),
+            (101.0, 105.0)
+        );
+        assert_eq!(session.initial_balance_range(), Some(4.0));
+        assert_eq!(session.tpo_counts_around_poc(), (9, 6));
+        // B over A +2, C over B +2, D under C -2.
+        assert_eq!(session.rotation_factor(), 2);
+        assert_eq!(session.range_extension(), Some((1.0, 2.0)));
+
+        // After A and B: rows 100 to 104 hold 1, 2, 2, 2 and 1, and a tie takes the lower price.
+        let partial = to_tpo_profiles(&bars[..2], &config, &clock).remove(0);
+        assert_eq!(partial.poc_price, 101.0);
+        assert_eq!(partial.initial_balance_range(), Some(4.0));
+        assert_eq!(partial.tpo_counts_around_poc(), (1, 5));
+        assert_eq!(partial.rotation_factor(), 2);
+        assert_eq!(partial.range_extension(), Some((0.0, 0.0)));
     }
 }

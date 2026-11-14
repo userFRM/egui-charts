@@ -19,7 +19,6 @@ pub(crate) trait PriceBuilder {
 }
 
 mod alert;
-mod annotations;
 pub mod bar;
 mod box_size;
 mod chart_style;
@@ -33,7 +32,9 @@ pub mod line_break;
 mod markers;
 #[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) mod math;
+mod parse;
 pub mod point_figure;
+mod post;
 mod price_source;
 pub mod quote;
 pub mod range_bar;
@@ -45,6 +46,7 @@ mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
+mod study;
 mod time_scale_event;
 mod timeframe;
 mod timescale;
@@ -54,27 +56,35 @@ mod trading;
 mod watchlist;
 
 pub use alert::{
-    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
-    AlertStatus, NotificationSchedule, NotificationWindow,
+    Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
+    AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertStatus, AlertStudy,
+    NotificationSchedule, NotificationWindow,
 };
-pub use annotations::{Annotation, MarkerType};
-#[cfg(feature = "widget")]
-pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{index_at, time_at};
+pub(crate) use bar::{
+    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
+};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
-    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HlcAreaStyle, KagiStyle,
-    LastPriceAnimation, LinePlotStyle, LineType,
+    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle,
+    HighLowStyle, HlcAreaStyle, HollowStyle, KagiStyle, LastPriceAnimation, LinePlotStyle,
+    LineType, VolumeCandlesStyle,
 };
-pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
+pub use chart_type::{
+    BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
+    FootprintColor, FootprintMode, FootprintStatistic, NodeSensitivity, ProfileRows,
+    ProfileSession, TradeProfileSettings,
+};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) use instrument::same_currency;
 pub use instrument::{
-    DataStatus, Instrument, OverrideWindow, Session, SessionOverride, SessionWindow, SymbolType,
+    DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
+    SessionOverride, SessionWindow, SymbolType,
 };
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
@@ -85,7 +95,11 @@ pub use markers::{
     ChangeMarkers, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder,
     PriceLine,
 };
-pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
+pub use parse::ParseError;
+pub use point_figure::{
+    ColumnDirection, PnfBoxesError, PnfColumn, PointFigureConfig, to_pnf_columns,
+};
+pub use post::{PostContent, PostLink};
 pub use price_source::PriceSource;
 pub use quote::{
     ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,
@@ -97,8 +111,11 @@ pub use range_bar::{
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use replay::ReplaySession;
 pub(crate) use revision::next_revision;
-pub use series_scale::SeriesScale;
-pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesAlerts, SeriesStyle};
+pub use series_scale::{AxisSide, PaneAxisOptions, SeriesScale};
+pub use series_style::{
+    AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, PriceLineSource, SeriesAlerts,
+    SeriesDisplayFormat, SeriesFormat, SeriesStyle,
+};
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
     MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,
@@ -109,19 +126,21 @@ pub use strategy::{
     StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
     StrategyTrade,
 };
+pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
-pub use timeframe::Timeframe;
-pub use timescale::{LogicalRange, TimeScale};
+pub use timeframe::{Timeframe, TimeframeUnit};
+pub use timescale::{LogicalRange, NumericPositions, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
 };
+pub(crate) use trading::rounding_tolerance;
 pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
-    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,
-    TradingRules,
+    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TakeProfitLevel,
+    TimeInForce, TradingRules,
 };
 
 pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};

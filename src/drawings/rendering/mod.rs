@@ -1,7 +1,7 @@
 //! Painting drawings against bars and a coordinate mapping.
 //!
 //! [`ChartView`] supplies data and mappings to [`Drawing::render`]; [`traits`]
-//! provides renderer contexts, handle geometry and hit-testing helpers for custom
+//! provides handle drawing and hit-testing helpers for custom
 //! renderers. A chart invokes drawing rendering automatically.
 
 mod annotations;
@@ -13,6 +13,7 @@ mod gann;
 mod lines;
 mod measurements;
 mod media;
+mod outline;
 mod patterns;
 mod pitchfork;
 mod shapes;
@@ -24,11 +25,13 @@ pub(crate) mod utils {
     pub(crate) use crate::painting::dashed_line::draw_dashed_line;
 }
 
+pub(crate) use outline::Outline;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
-use crate::model::{Bar, SpanCache};
-use egui::{Pos2, Rect};
+use crate::model::Bar;
+use crate::painting::span_cache::SpanCache;
+use egui::Rect;
 use std::rc::Rc;
 
 /// The bars and coordinate mapping that drawings are rendered against.
@@ -37,8 +40,25 @@ use std::rc::Rc;
 /// the regression trend, the position and forecast results and the bars
 /// pattern are computed from these bars.
 pub struct ChartView<'a> {
-    /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
+    /// Instrument metadata supplied by the host or feed, for tick and pip measurements. `None` in
+    /// a pane without a visible price series, whose values are not prices.
     pub instrument: Option<&'a crate::model::Instrument>,
+    /// The host's raw-price formatter for the series the drawings belong to, from
+    /// [`Chart::set_series_formatter`](crate::Chart::set_series_formatter) or else
+    /// [`Chart::set_price_formatter`](crate::Chart::set_price_formatter). Drawing prices and
+    /// price changes use its `format`; `None` keeps their built-in decimals.
+    pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
+    /// The chart's time formatter, which writes times in its display time zone with its
+    /// locale, date format, clock visibility and the host's
+    /// [`TimeFormatter`](crate::scales::TimeFormatter). Drawings write the dates they print with
+    /// its [`format_crosshair`](crate::scales::TimeFormatter::format_crosshair) and
+    /// [`bar_seconds`](Self::bar_seconds), as the crosshair time label does; `None` keeps their
+    /// built-in UTC dates. Custom renderers can use it the same way.
+    pub time_formatter: Option<&'a dyn crate::scales::TimeFormatter>,
+    /// The bar duration in seconds that the chart passes to `time_formatter`'s
+    /// `format_crosshair` for the crosshair time label, which sets how much of the clock a
+    /// date shows. Unused without `time_formatter`.
+    pub bar_seconds: i64,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
     /// [`ChartState::revision`](crate::studies::ChartState::revision) of `bars`.
@@ -49,6 +69,8 @@ pub struct ChartView<'a> {
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
     /// Screen y of a price.
     pub price_to_y: &'a dyn Fn(f64) -> f32,
+    /// Price at a screen y, using the same scale and orientation as `price_to_y`.
+    pub y_to_price: &'a dyn Fn(f32) -> f64,
     /// Whether the bar times are times, so measurements show the time between anchors; `false`
     /// on a [horizontal scale](crate::scales::HorizontalScale) other than time.
     pub time_axis: bool,
@@ -56,6 +78,15 @@ pub struct ChartView<'a> {
     /// then show the executed volume at each price, split by aggressor side, instead of
     /// spreading bar volume over bar ranges; `None` estimates from the bars.
     pub executions: Option<&'a crate::data::Footprint>,
+    /// Interval of `bars`, or `None` for price-based chart types, trade-based intervals and
+    /// horizontal scales other than time. Volume profiles read finer bars only with an interval.
+    pub timeframe: Option<crate::model::Timeframe>,
+    /// Histories of this symbol at the intervals that
+    /// [`Chart::study_data_requests`](crate::Chart::study_data_requests) lists for its drawings.
+    /// Without executions in their span, profile drawings use the interval
+    /// [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions)
+    /// suggests, replacing covered chart bars with finer bars; `&[]` estimates from `bars`.
+    pub finer: &'a [crate::data::StudyData<'a>],
 }
 
 impl std::fmt::Debug for ChartView<'_> {
@@ -103,235 +134,27 @@ impl ChartView<'_> {
     }
 }
 
-/// The lines a drawing draws and the convex areas it fills, in screen
-/// coordinates, from the geometry its renderer draws.
-#[derive(Debug, Default)]
-pub(crate) struct Outline {
-    pub(crate) lines: Vec<[Pos2; 2]>,
-    pub(crate) areas: Vec<Vec<Pos2>>,
-    /// The width the lines are stroked at, where it is wider than the
-    /// drawing's own stroke (the brushes).
-    pub(crate) width: f32,
-}
-
-impl Drawing {
-    /// What this drawing draws, with lines that run to the chart's edge cut at
-    /// the edge of `rect`. `None` for the tools not described here (text,
-    /// media, the data-driven tools and the Fibonacci arcs, circles, spiral and
-    /// wedge, the cycles, the position and projection tools) and below the
-    /// anchors a tool needs.
-    pub(crate) fn outline(&self, rect: Rect) -> Option<Outline> {
-        use DrawingToolType as T;
-        let p = self.points.as_slice();
-        let path = |closed: bool| {
-            let mut lines: Vec<[Pos2; 2]> = p.windows(2).map(|w| [w[0], w[1]]).collect();
-            if closed && p.len() >= 3 {
-                lines.push([p[p.len() - 1], p[0]]);
-            }
-            lines
-        };
-        let corners = |r: Rect| {
-            vec![
-                r.left_top(),
-                r.right_top(),
-                r.right_bottom(),
-                r.left_bottom(),
-            ]
-        };
-        let edges = |c: &[Pos2]| (0..c.len()).map(|i| [c[i], c[(i + 1) % c.len()]]).collect();
-        // A stroked and filled box: its border, and its inside.
-        let boxed = |outline: &mut Outline, r: Rect| {
-            let c = corners(r);
-            outline.lines = edges(&c);
-            outline.areas.push(c);
-        };
-        let filled = self.fill_color.is_some();
-        let &first = p.first()?;
-        let across = |y: f32| [Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y)];
-        let mut outline = Outline::default();
-        match self.tool_type {
-            T::HorizontalRay => outline.lines = vec![[first, Pos2::new(rect.max.x, first.y)]],
-            T::CrossLine => {
-                let down = [
-                    Pos2::new(first.x, rect.min.y),
-                    Pos2::new(first.x, rect.max.y),
-                ];
-                outline.lines = vec![across(first.y), down];
-            }
-            _ => {}
-        }
-        if !outline.lines.is_empty() {
-            return Some(outline);
-        }
-        let &second = p.get(1)?;
-        match self.tool_type {
-            T::TrendLine => {
-                let (left, right) = self.trend_line_ends(rect.min.x, rect.max.x)?;
-                outline.lines = vec![[left, right]];
-            }
-            T::TrendAngle
-            | T::InfoLine
-            | T::Arrow
-            | T::ArrowMarker
-            | T::Polyline
-            | T::Path
-            | T::Brush
-            | T::Highlighter
-            | T::XABCDPattern
-            | T::CypherPattern
-            | T::ABCDPattern
-            | T::ThreeDrivesPattern
-            | T::ElliottImpulse
-            | T::ElliottCorrection
-            | T::ElliottTriangle
-            | T::ElliottDoubleCombo
-            | T::ElliottTripleCombo => {
-                outline.lines = path(false);
-                outline.width = self.brush_width().unwrap_or(0.0);
-            }
-            T::HeadAndShoulders => {
-                outline.lines = path(false);
-                outline.lines.extend(self.neckline().map(|(line, _)| line));
-            }
-            T::TrianglePattern => match patterns::triangle_boundaries(p, f32::INFINITY) {
-                Some((lines, _)) => {
-                    outline.lines = path(false);
-                    outline.lines.extend(lines);
-                }
-                None => outline.lines = path(p.len() == 3),
-            },
-            T::Sector => {
-                let points = self.sector_points()?;
-                outline.lines = edges(&points);
-                if filled {
-                    outline.areas.extend(
-                        points[1..]
-                            .windows(2)
-                            .map(|edge| vec![points[0], edge[0], edge[1]]),
-                    );
-                }
-            }
-            T::Triangle => {
-                let [a, b, c, ..] = *p else { return None };
-                outline.lines = vec![[a, b], [b, c], [c, a]];
-                if filled {
-                    outline.areas.push(vec![a, b, c]);
-                }
-            }
-            T::Measure | T::DateAndPriceRange | T::GannBox => {
-                boxed(&mut outline, Rect::from_two_pos(first, second));
-            }
-            T::GannFixed => boxed(&mut outline, Rect::from_two_pos(first, second)),
-            T::GannSquare => {
-                let corner = gann::gann_square_corner(first, second);
-                boxed(&mut outline, Rect::from_two_pos(first, corner));
-            }
-            T::RotatedRect => {
-                let corners = self.rotated_rect_corners()?;
-                outline.lines = edges(&corners);
-                if filled {
-                    outline.areas.push(corners.to_vec());
-                }
-            }
-            T::Ray => outline.lines = vec![[first, lines::ray_end(first, second, rect)]],
-            T::ExtendedLine => outline.lines = vec![lines::extended_line(first, second, rect)],
-            T::PriceRange => {
-                let mid_x = (first.x + second.x) / 2.0;
-                outline.lines = vec![
-                    across(first.y),
-                    across(second.y),
-                    [Pos2::new(mid_x, first.y), Pos2::new(mid_x, second.y)],
-                ];
-            }
-            T::DateRange => {
-                let band = Rect::from_x_y_ranges(
-                    first.x.min(second.x)..=first.x.max(second.x),
-                    rect.y_range(),
-                );
-                outline.lines = [first.x, second.x]
-                    .map(|x| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
-                    .into();
-                outline.areas.push(corners(band));
-            }
-            T::Circle => {
-                let radius = first.distance(second);
-                let ring: Vec<Pos2> = (0..=64)
-                    .map(|i| {
-                        let angle = i as f32 / 64.0 * std::f32::consts::TAU;
-                        first + radius * egui::vec2(angle.cos(), angle.sin())
-                    })
-                    .collect();
-                outline.lines = ring.windows(2).map(|w| [w[0], w[1]]).collect();
-                if filled {
-                    outline.areas.push(ring);
-                }
-            }
-            T::Ellipse => {
-                let ring = lines::ellipse_points(first, second);
-                outline.lines = ring.windows(2).map(|w| [w[0], w[1]]).collect();
-                if filled {
-                    outline.areas.push(ring);
-                }
-            }
-            T::Arc => {
-                outline.lines = self.arc_path().windows(2).map(|w| [w[0], w[1]]).collect();
-            }
-            T::Curve => {
-                let [p0, p1, p2] = self.curve_controls()?;
-                outline.lines = shapes::curve_points(p0, p1, p2)
-                    .windows(2)
-                    .map(|w| [w[0], w[1]])
-                    .collect();
-            }
-            T::DoubleCurve => {
-                outline.lines = self
-                    .double_curve_points()?
-                    .windows(2)
-                    .map(|w| [w[0], w[1]])
-                    .collect();
-            }
-            T::Pitchfork | T::SchiffPitchfork | T::ModifiedSchiffPitchfork | T::InsidePitchfork => {
-                outline.lines = self.pitchfork_lines(rect)?;
-                outline.areas = self.pitchfork_bands(rect);
-            }
-            T::Pitchfan => {
-                outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
-            }
-            T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
-            T::FlatTopBottom => {
-                let &third = p.get(2)?;
-                outline.lines = vec![[first, second], channels::flat_line(first, second, third)];
-                outline
-                    .areas
-                    .push(channels::flat_top_bottom_fill(first, second, third));
-            }
-            T::ParallelChannel => return self.parallel_channel_outline(rect),
-            T::DisjointChannel => {
-                let &third = p.get(2)?;
-                let [_, fourth] = channels::disjoint_second_line(first, second, third);
-                outline.lines = vec![[first, second], [third, fourth]];
-                outline.areas.push(vec![first, second, fourth, third]);
-            }
-            T::FibonacciTimeZones => {
-                outline.lines = fibonacci::time_zone_lines(first, second, rect)
-            }
-            T::FibonacciWedge => return self.fibonacci_wedge_outline(),
-            T::FibonacciSpeedFan => outline.lines = fibonacci::speed_fan_lines(first, second, rect),
-            _ => return None,
-        }
-        Some(outline)
-    }
-}
-
 /// Results kept per kind of drawing, more than the drawings of one kind on screen.
 pub(crate) const MAX_CACHED_SPANS: usize = 32;
 
 impl Drawing {
+    /// Renders the drawing as unselected.
+    pub fn render_original(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
+        self.render_with_selection(painter, rect, view, false);
+    }
+
     /// Main rendering dispatcher - routes to category-specific render methods
     ///
     /// This method handles rendering for every drawing tool type,
-    /// delegating to the appropriate category-specific implementation.
-    pub fn render_original(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
+    /// delegating to the appropriate category-specific implementation. `selected`
+    /// lets a tool mark its selection, as a position's statistics block does.
+    pub(crate) fn render_with_selection(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &ChartView,
+        selected: bool,
+    ) {
         if self.points.is_empty() {
             return;
         }
@@ -347,21 +170,19 @@ impl Drawing {
         match self.tool_type {
             // Simple Lines (9 tools)
             DrawingToolType::TrendLine => self.render_trend_line(painter, rect, color, stroke),
-            DrawingToolType::Ray => self.render_ray(painter, rect, color, stroke),
-            DrawingToolType::ExtendedLine => {
-                self.render_extended_line(painter, rect, color, stroke)
+            DrawingToolType::Ray | DrawingToolType::ExtendedLine | DrawingToolType::InfoLine => {
+                self.render_trend_line(painter, rect, color, stroke)
             }
             DrawingToolType::HorizontalLine => self.render_horizontal_line(painter, rect, stroke),
-            DrawingToolType::HorizontalRay => {
-                self.render_horizontal_ray(painter, rect, color, stroke)
-            }
+            DrawingToolType::HorizontalRay => self.render_horizontal_ray(painter, rect, stroke),
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
-            DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
-            DrawingToolType::TrendAngle => self.render_trend_angle(painter, color, stroke, view),
-            DrawingToolType::InfoLine => self.render_info_line(painter, view),
+            DrawingToolType::CrossLine => self.render_cross_line(painter, rect, stroke),
+            DrawingToolType::TrendAngle => {
+                return self.render_trend_angle(painter, rect, color, stroke, view, selected);
+            }
 
             // Shapes (8 tools)
-            DrawingToolType::Rect => self.render_rect(painter, color, stroke),
+            DrawingToolType::Rect => self.render_rect(painter, rect, color, stroke),
             DrawingToolType::RotatedRect => self.render_rotated_rect(painter),
             DrawingToolType::Circle => self.render_circle(painter, color, stroke),
             DrawingToolType::Ellipse => self.render_ellipse(painter, color, stroke),
@@ -371,22 +192,24 @@ impl Drawing {
             DrawingToolType::DoubleCurve => self.render_double_curve(painter),
 
             // Fibonacci (10 tools)
-            DrawingToolType::FibonacciRetracement => self.render_fibonacci(painter, rect),
-            DrawingToolType::FibonacciExtension => self.render_fibonacci_extension(painter, rect),
+            DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
+                self.render_fibonacci(painter, rect, view, selected)
+            }
             DrawingToolType::FibonacciSpeedResistanceArcs => self.render_fibonacci_arc(painter),
             DrawingToolType::FibonacciTimeZones => self.render_fibonacci_time_zones(painter, rect),
-            DrawingToolType::FibonacciChannel => self.render_fibonacci_channel(painter, rect),
+            DrawingToolType::FibonacciChannel => self.render_fibonacci_channel(painter, rect, view),
             DrawingToolType::FibonacciCircles => self.render_fibonacci_circles(painter),
             DrawingToolType::FibonacciSpeedFan => self.render_fibonacci_speed_fan(painter, rect),
-            DrawingToolType::FibonacciSpiral => self.render_fibonacci_spiral(painter),
+            DrawingToolType::FibonacciSpiral => self.render_fibonacci_spiral(painter, rect),
             DrawingToolType::FibonacciWedge => self.render_fibonacci_wedge(painter, rect),
-            DrawingToolType::TrendBasedFibTime => self.render_trend_based_fib_time(painter, rect),
+            DrawingToolType::TrendBasedFibTime => self.render_fibonacci_time_zones(painter, rect),
 
             // Gann (4 tools)
             DrawingToolType::GannFan => self.render_gann_fan(painter, rect),
-            DrawingToolType::GannSquare => self.render_gann_square(painter),
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
+                self.render_gann_square(painter, view)
+            }
             DrawingToolType::GannBox => self.render_gann_box(painter),
-            DrawingToolType::GannFixed => self.render_gann_fixed(painter),
 
             // Pitchforks (4 tools)
             DrawingToolType::Pitchfork => self.render_pitchfork(painter, rect),
@@ -397,10 +220,10 @@ impl Drawing {
             DrawingToolType::InsidePitchfork => self.render_inside_pitchfork(painter, rect),
 
             // Channels (4 tools)
-            DrawingToolType::ParallelChannel => self.render_parallel_channel(painter, rect),
+            DrawingToolType::ParallelChannel
+            | DrawingToolType::FlatTopBottom
+            | DrawingToolType::DisjointChannel => self.render_channel(painter, rect),
             DrawingToolType::RegressionTrend => self.render_regression_trend(painter, view),
-            DrawingToolType::FlatTopBottom => self.render_flat_top_bottom(painter, view),
-            DrawingToolType::DisjointChannel => self.render_disjoint_channel(painter, view),
 
             // Patterns (6 tools)
             DrawingToolType::XABCDPattern => self.render_xabcd_pattern(painter),
@@ -408,14 +231,14 @@ impl Drawing {
             DrawingToolType::HeadAndShoulders => self.render_head_and_shoulders(painter),
             DrawingToolType::ABCDPattern => self.render_abcd_pattern(painter),
             DrawingToolType::TrianglePattern => self.render_triangle_pattern(painter),
-            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter, view),
+            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter),
 
             // Elliott Wave (5 tools)
-            DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter, view),
-            DrawingToolType::ElliottCorrection => self.render_elliott_correction(painter),
-            DrawingToolType::ElliottTriangle => self.render_elliott_triangle(painter),
-            DrawingToolType::ElliottDoubleCombo => self.render_elliott_double_combo(painter),
-            DrawingToolType::ElliottTripleCombo => self.render_elliott_triple_combo(painter),
+            DrawingToolType::ElliottImpulse
+            | DrawingToolType::ElliottCorrection
+            | DrawingToolType::ElliottTriangle
+            | DrawingToolType::ElliottDoubleCombo
+            | DrawingToolType::ElliottTripleCombo => self.render_elliott_waves(painter),
 
             // Cycles (3 tools)
             DrawingToolType::CyclicLines => self.render_cyclic_lines(painter, rect),
@@ -423,11 +246,12 @@ impl Drawing {
             DrawingToolType::SineLine => self.render_sine_line(painter, rect),
 
             // Projection (6 tools)
-            DrawingToolType::LongPos => self.render_pos_tool(painter, view, true),
-            DrawingToolType::ShortPos => self.render_pos_tool(painter, view, false),
+            DrawingToolType::LongPos => self.render_pos_tool(painter, view, true, selected),
+            DrawingToolType::ShortPos => self.render_pos_tool(painter, view, false, selected),
             DrawingToolType::Forecast => self.render_forecast(painter, view),
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
-            DrawingToolType::GhostFeed => self.render_ghost_feed(painter),
+            // Candle colours and the neutral path are independent of the common drawing style.
+            DrawingToolType::GhostFeed => return self.render_ghost_feed(painter, view),
             DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
 
             // Volume (3 tools)
@@ -441,40 +265,40 @@ impl Drawing {
 
             // Measurers (4 tools)
             DrawingToolType::Measure => self.render_measure(painter, view),
-            DrawingToolType::PriceRange => self.render_price_range(painter, rect, view),
-            DrawingToolType::DateRange => self.render_date_range(painter, rect, view),
-            DrawingToolType::DateAndPriceRange => self.render_date_and_price_range(painter, view),
+            DrawingToolType::PriceRange
+            | DrawingToolType::DateRange
+            | DrawingToolType::DateAndPriceRange => self.render_range(painter, rect, stroke, view),
 
             // Annotations (7 tools)
-            DrawingToolType::TextLabel => self.render_text_label(painter),
-            DrawingToolType::AnchoredText => self.render_anchored_text(painter),
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText => {
+                self.render_text_label(painter, view)
+            }
             DrawingToolType::Note => self.render_note(painter),
-            DrawingToolType::AnchoredNote => self.render_anchored_note(painter),
+            DrawingToolType::AnchoredNote => self.render_anchored_note(painter, selected),
             DrawingToolType::Callout => self.render_callout(painter),
-            DrawingToolType::PriceLabel => self.render_price_label(painter),
+            DrawingToolType::PriceLabel => self.render_price_label(painter, view),
             DrawingToolType::FlagNote => self.render_flag_note(painter),
 
             // Brushes (2 tools)
-            DrawingToolType::Brush => self.render_brush(painter),
-            DrawingToolType::Highlighter => self.render_highlighter(painter),
+            DrawingToolType::Brush | DrawingToolType::Highlighter => self.render_brush(painter),
 
             // Arrows (6 tools)
             DrawingToolType::Arrow => self.render_arrow(painter, color, stroke),
             DrawingToolType::ArrowMarker => self.render_arrow_marker(painter, color),
-            DrawingToolType::ArrowMarkUp => self.render_arrow_mark_up(painter),
-            DrawingToolType::ArrowMarkDown => self.render_arrow_mark_down(painter),
-            DrawingToolType::ArrowMarkLeft => self.render_horizontal_mark(painter, -1.0),
-            DrawingToolType::ArrowMarkRight => self.render_horizontal_mark(painter, 1.0),
+            DrawingToolType::ArrowMarkUp => self.render_arrow_mark(painter, egui::Vec2::UP),
+            DrawingToolType::ArrowMarkDown => self.render_arrow_mark(painter, egui::Vec2::DOWN),
+            DrawingToolType::ArrowMarkLeft => self.render_arrow_mark(painter, egui::Vec2::LEFT),
+            DrawingToolType::ArrowMarkRight => self.render_arrow_mark(painter, egui::Vec2::RIGHT),
 
             // Additional tools
-            DrawingToolType::Pitchfan => self.render_pitchfan(painter, rect),
+            DrawingToolType::Pitchfan => self.render_pitchfork(painter, rect),
             DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
             DrawingToolType::Curve => self.render_curve(painter),
-            DrawingToolType::PriceNote => self.render_price_note(painter, rect),
+            DrawingToolType::PriceNote => self.render_price_note(painter, view),
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),
-            DrawingToolType::Signpost => self.render_signpost(painter, rect),
+            DrawingToolType::Signpost => self.render_signpost(painter),
             DrawingToolType::Image => self.render_image(painter),
             DrawingToolType::Tweet => self.render_post(painter),
             DrawingToolType::Idea => self.render_idea(painter),
@@ -486,7 +310,16 @@ impl Drawing {
             | DrawingToolType::ArrowCursor
             | DrawingToolType::Eraser => {}
         }
+        if selected {
+            self.render_text_hint(painter);
+        }
         self.finish_style(painter, start, rect);
+        if self.tool_type.supports_line_measurements() {
+            self.render_line_measurements(painter, view, selected);
+        }
+        if self.tool_type == DrawingToolType::Rect {
+            self.render_rect_middle_line(painter, rect);
+        }
     }
 
     /// Render this drawing using the modular render system
@@ -495,11 +328,11 @@ impl Drawing {
     }
 
     /// The screen area this drawing paints in, for tools that paint within three times the
-    /// diagonal of their anchors plus [`PAINT_MARGIN`] around them, so a drawing outside the pane
-    /// can be skipped. Tools that also paint at prices taken from the bars, such as positions and
-    /// volume profiles, or run a leg on a fixed time past its anchor, which a steep leg carries to
-    /// any price, are bounded in time only. `None` for tools that can reach the pane's edges, as
-    /// lines extended left or right do.
+    /// diagonal of their anchors plus [`PAINT_MARGIN`] and the room its text needs around them, so
+    /// a drawing outside the pane can be skipped. Tools that also paint at prices taken from the
+    /// bars, such as positions and volume profiles, or run a leg on a fixed time past its anchor,
+    /// which a steep leg carries to any price, are bounded in time only. `None` for tools that can
+    /// reach the pane's edges, as lines extended left or right do.
     pub(crate) fn paint_bounds(&self) -> Option<Rect> {
         use DrawingToolType as T;
         let bounded = matches!(
@@ -539,9 +372,10 @@ impl Drawing {
                 | T::ShortPos
                 | T::Forecast
                 | T::BarsPattern
-                | T::GhostFeed
                 | T::FixedRangeVolumeProfile
                 | T::Measure
+                | T::PriceRange
+                | T::DateRange
                 | T::DateAndPriceRange
                 | T::Arrow
                 | T::ArrowMarker
@@ -553,11 +387,63 @@ impl Drawing {
                 | T::Sticker
                 | T::Image
         );
-        if !bounded || self.extend_left || self.extend_right {
+        if !bounded
+            || self.extend_left
+            || self.extend_right
+            || self.volume_profile.is_some_and(|c| c.extend_right)
+        {
             return None;
         }
+        if matches!(
+            self.tool_type,
+            T::FibonacciCircles | T::FibonacciSpeedResistanceArcs
+        ) {
+            let &[start, end, ..] = self.points.as_slice() else {
+                return None;
+            };
+            let config = self.fibonacci_config();
+            let ratio = config
+                .visible_levels()
+                .map(|l| l.value)
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .fold(0.0_f32, f32::max);
+            // Level labels sit just outside their circle, as wide as the font allows.
+            let label = config
+                .visible_levels()
+                .map(|l| config.label_text(l, None).chars().count())
+                .max()
+                .unwrap_or(0) as f32
+                * 1.5
+                * crate::styles::typography::font_size(config.label_size);
+            let (center, size) = if self.tool_type == T::FibonacciCircles {
+                (start.lerp(end, 0.5), (end - start).abs() * ratio)
+            } else {
+                (start, egui::Vec2::splat(start.distance(end) * ratio * 2.0))
+            };
+            return size.is_finite().then(|| {
+                Rect::from_center_size(center, size)
+                    .union(Rect::from_two_pos(start, end))
+                    .expand(PAINT_MARGIN + label)
+            });
+        }
+        if self.tool_type == T::GannFixed {
+            let &[first, second, ..] = self.points.as_slice() else {
+                return None;
+            };
+            // Five times the anchors' span can pass the reach below when the span is steep.
+            let corner = self.gann_square_corner(first, second);
+            return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
+        }
+        if self.tool_type == T::Image {
+            return self.image_frame().map(|frame| frame.expand(PAINT_MARGIN));
+        }
         let hull = self.bounding_rect()?;
-        let reach = 3.0 * hull.size().length() + PAINT_MARGIN;
+        // Room for the drawing's text: one and a half ems per character covers the widest glyph
+        // advance and the row of a line break.
+        let text = self.text.as_deref().map_or(0.0, |t| {
+            1.5 * crate::styles::typography::font_size(self.font_size) * t.chars().count() as f32
+        });
+        let reach = 3.0 * hull.size().length() + PAINT_MARGIN + text;
         let bounds = hull.expand(reach);
         let time_only = matches!(
             self.tool_type,
@@ -568,7 +454,6 @@ impl Drawing {
                 | T::FixedRangeVolumeProfile
                 | T::HeadAndShoulders
                 | T::TrianglePattern
-                | T::ElliottTriangle
         );
         Some(if time_only {
             Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
@@ -608,7 +493,7 @@ pub(crate) fn sample_bars() -> Vec<Bar> {
 mod tests {
     use super::*;
     use crate::drawings::DrawingManager;
-    use egui::{Context, Pos2, RawInput, Shape};
+    use egui::{Color32, Context, Pos2, RawInput, Shape};
 
     /// A non-default style reaches geometry in every renderer family, while fills keep
     /// their configured colour. Dashes in a 200 px horizontal edge cannot be one solid edge.
@@ -622,7 +507,11 @@ mod tests {
             DrawingToolType::Curve,
             DrawingToolType::GannFan,
             DrawingToolType::CyclicLines,
+            DrawingToolType::TimeCycles,
             DrawingToolType::XABCDPattern,
+            DrawingToolType::PriceRange,
+            DrawingToolType::DateRange,
+            DrawingToolType::DateAndPriceRange,
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = [
@@ -678,8 +567,11 @@ mod tests {
                 DrawingToolType::Rect
                     | DrawingToolType::Circle
                     | DrawingToolType::Triangle
-                    | DrawingToolType::CyclicLines
+                    | DrawingToolType::TimeCycles
                     | DrawingToolType::XABCDPattern
+                    | DrawingToolType::PriceRange
+                    | DrawingToolType::DateRange
+                    | DrawingToolType::DateAndPriceRange
             ) {
                 fn has_fill(shapes: &[Shape], color: egui::Color32) -> bool {
                     shapes.iter().any(|s| match s {
@@ -695,6 +587,177 @@ mod tests {
                     "{tool:?} ignored fill"
                 );
             }
+        }
+    }
+
+    /// For the box (100, 100) to (300, 300), the arrows end at the second anchor's
+    /// coordinate on each axis. Cards sit beyond that end in the tooltip colours.
+    #[test]
+    fn measurer_arrows_point_to_the_second_anchor_and_stats_sit_on_cards() {
+        use crate::drawings::ChartPoint;
+        use DrawingToolType as T;
+        let chart = crate::theme::Theme::dark().chart;
+        for tool in [
+            T::Measure,
+            T::PriceRange,
+            T::DateRange,
+            T::DateAndPriceRange,
+        ] {
+            for (first, second) in [
+                ((300., 100.), (100., 300.)),
+                ((100., 300.), (300., 100.)),
+                ((100., 100.), (300., 300.)),
+                ((300., 300.), (100., 100.)),
+                ((100., 200.), (300., 200.)),
+                ((200., 100.), (200., 300.)),
+                ((200., 200.), (200., 200.)),
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.points = [first, second].map(|(x, y)| Pos2::new(x, y)).to_vec();
+                drawing.chart_points = drawing
+                    .points
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x / 10.0, 500.0 - f64::from(p.y)))
+                    .collect();
+                let shapes = paint(&drawing);
+                let bounds = Rect::from_two_pos(drawing.points[0], drawing.points[1]);
+                let card = shapes
+                    .iter()
+                    .find_map(|s| match s {
+                        Shape::Rect(r) if r.fill == chart.bg_tooltip => Some(r.rect),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{tool:?}: no tooltip card"));
+                assert!(
+                    shapes.iter().any(|s| matches!(s, Shape::Text(t)
+                    if t.galley.job.sections.iter().all(|s| s.format.color == chart.axis_text
+                        && s.format.font_id.size == crate::styles::typography::SM_MD))),
+                    "{tool:?}: card text"
+                );
+                if second.1 <= first.1 {
+                    assert!(card.max.y < bounds.min.y, "{tool:?}: card above");
+                } else {
+                    assert!(card.min.y > bounds.max.y, "{tool:?}: card below");
+                }
+                let mut tips = Vec::new();
+                if tool != T::DateRange && first.1 != second.1 {
+                    tips.push(Pos2::new(bounds.center().x, second.1));
+                }
+                if tool != T::PriceRange && first.0 != second.0 {
+                    tips.push(Pos2::new(second.0, bounds.center().y));
+                }
+                let heads: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Path(p) if p.closed && p.fill.a() > 0 => Some(p),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    heads.len(),
+                    tips.len(),
+                    "{tool:?}: heads for {first:?} to {second:?}"
+                );
+                for tip in tips {
+                    let head = heads
+                        .iter()
+                        .find(|p| p.points[0] == tip)
+                        .unwrap_or_else(|| panic!("{tool:?}: no arrow at {tip:?}"));
+                    // Both base corners lie behind the tip along the drag direction.
+                    let direction = if tip.y == bounds.center().y {
+                        egui::vec2(second.0 - first.0, 0.0)
+                    } else {
+                        egui::vec2(0.0, second.1 - first.1)
+                    };
+                    assert!(
+                        head.points[1..]
+                            .iter()
+                            .all(|p| (*p - tip).dot(direction) < 0.0)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
+    /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
+    /// tool's default, since an extended line starts extended), the text is painted, each line
+    /// end style draws a marker and the middle line flag adds a line.
+    /// Icons keep their glyph in the text field, which the glyph picker edits.
+    #[test]
+    fn tool_capabilities_match_their_renderers() {
+        use crate::drawings::ArrowStyle;
+        fn found(shapes: &[Shape], hit: &impl Fn(&Shape) -> bool) -> bool {
+            shapes.iter().any(|s| match s {
+                Shape::Vec(v) => found(v, hit),
+                s => hit(s),
+            })
+        }
+        for &tool in DrawingToolType::all() {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = [
+                (100., 100.),
+                (300., 300.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+                (450., 180.),
+                (500., 250.),
+            ]
+            .map(|(x, y)| Pos2::new(x, y))
+            .to_vec();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            if tool == DrawingToolType::RegressionTrend {
+                drawing.chart_points[0].bar_idx = 0.0;
+                drawing.chart_points[1].bar_idx = 6.0;
+            }
+            let mut filled = drawing.clone();
+            filled.fill_color = Some([12, 34, 56, 80]);
+            let fill = filled.fill_color32().unwrap();
+            let fill = found(&paint(&filled), &|s| match s {
+                Shape::Path(p) => p.fill == fill,
+                Shape::Rect(r) => r.fill == fill,
+                Shape::Circle(c) => c.fill == fill,
+                Shape::Mesh(m) => m.vertices.iter().any(|v| v.color == fill),
+                _ => false,
+            });
+            assert_eq!(tool.supports_fill(), fill, "{tool:?} fill");
+            let mut extended = drawing.clone();
+            (extended.extend_left, extended.extend_right) =
+                (!drawing.extend_left, !drawing.extend_right);
+            let extend = format!("{:?}", paint(&extended)) != format!("{:?}", paint(&drawing));
+            assert_eq!(tool.supports_extend(), extend, "{tool:?} extend");
+            let mut labelled = drawing.clone();
+            labelled.text = Some("Edited text".into());
+            let text = found(
+                &paint_with(&labelled, true),
+                &|s| matches!(s, Shape::Text(t) if t.galley.text().contains("Edited text")),
+            );
+            let icon = matches!(tool, DrawingToolType::FontIcon | DrawingToolType::Sticker);
+            assert_eq!(tool.supports_text(), text && !icon, "{tool:?} text");
+            let mut plain = drawing.clone();
+            plain.arrow_start_style = ArrowStyle::None;
+            plain.arrow_end_style = ArrowStyle::None;
+            let changes = |edit: &dyn Fn(&mut Drawing)| {
+                let mut edited = plain.clone();
+                edit(&mut edited);
+                format!("{:?}", paint(&edited)) != format!("{:?}", paint(&plain))
+            };
+            for (end, styled) in [
+                (
+                    "start",
+                    changes(&|d| d.arrow_start_style = ArrowStyle::Circle),
+                ),
+                ("end", changes(&|d| d.arrow_end_style = ArrowStyle::Circle)),
+            ] {
+                assert_eq!(tool.supports_line_ends(), styled, "{tool:?} line {end}");
+            }
+            let middle = changes(&|d| d.channel_midline = !d.channel_midline);
+            assert_eq!(tool.supports_middle_line(), middle, "{tool:?} middle line");
         }
     }
 
@@ -741,7 +804,7 @@ mod tests {
         let pane = Rect::from_min_max(Pos2::new(-2000., -2000.), Pos2::new(2500., 2500.));
         let mut wrong = Vec::new();
         for &tool in DrawingToolType::all() {
-            for layout in layouts {
+            for (i, layout) in layouts.into_iter().enumerate() {
                 let mut drawing = Drawing::new(7, tool);
                 let count = tool.required_points().unwrap_or(layout.len());
                 drawing.points = layout
@@ -752,20 +815,49 @@ mod tests {
                 drawing.chart_points = (drawing.points.iter())
                     .map(|p| crate::drawings::ChartPoint::new(p.x / 40.0, 500.0 - p.y as f64))
                     .collect();
-                drawing.text = Some("Sample".into());
+                // A label too long for the margin must grow the bounds with it, on the tiny anchors
+                // where the margin is nearly all the reach there is.
+                drawing.text = Some(if i == 2 {
+                    "Sample label ".repeat(8)
+                } else {
+                    "Sample".into()
+                });
+                if tool == DrawingToolType::Image {
+                    drawing.image = Some(crate::drawings::ImageConfig {
+                        size: Some([1500.0, 800.0]),
+                        ..Default::default()
+                    });
+                }
+                // The largest label size, whose text reaches far past a circle, on closed arcs.
+                if matches!(
+                    tool,
+                    DrawingToolType::FibonacciCircles
+                        | DrawingToolType::FibonacciSpeedResistanceArcs
+                ) && i == 2
+                {
+                    let config = drawing.fib_config.as_mut().unwrap();
+                    config.label_size = 256.0;
+                    config.close_arcs = true;
+                }
                 let Some(bounds) = drawing.paint_bounds() else {
                     continue;
                 };
                 let ctx = Context::default();
                 let output = ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
+                        price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|b| b * 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
+                        y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     };
                     drawing.render(ui.painter(), pane, &view);
                 });
@@ -785,26 +877,50 @@ mod tests {
     #[test]
     fn common_annotation_fonts_are_laid_out_at_the_configured_size() {
         use crate::drawings::FontWeight;
-        for tool in [
-            DrawingToolType::TextLabel,
-            DrawingToolType::AnchoredText,
-            DrawingToolType::Note,
-            DrawingToolType::AnchoredNote,
-            DrawingToolType::Callout,
-            DrawingToolType::PriceLabel,
-            DrawingToolType::FlagNote,
-            DrawingToolType::PriceNote,
-            DrawingToolType::Comment,
-            DrawingToolType::Signpost,
-            DrawingToolType::Table,
-            DrawingToolType::FontIcon,
+        for (tool, every_label) in [
+            (DrawingToolType::TextLabel, false),
+            (DrawingToolType::AnchoredText, false),
+            (DrawingToolType::Note, false),
+            (DrawingToolType::AnchoredNote, false),
+            (DrawingToolType::Callout, false),
+            (DrawingToolType::PriceLabel, false),
+            (DrawingToolType::FlagNote, false),
+            (DrawingToolType::PriceNote, false),
+            (DrawingToolType::Comment, false),
+            (DrawingToolType::Signpost, false),
+            (DrawingToolType::Table, false),
+            (DrawingToolType::FontIcon, false),
+            (DrawingToolType::XABCDPattern, true),
+            (DrawingToolType::CypherPattern, true),
+            (DrawingToolType::HeadAndShoulders, true),
+            (DrawingToolType::ABCDPattern, true),
+            (DrawingToolType::TrianglePattern, true),
+            (DrawingToolType::ThreeDrivesPattern, true),
+            (DrawingToolType::ElliottImpulse, true),
+            (DrawingToolType::ElliottCorrection, true),
+            (DrawingToolType::ElliottTriangle, true),
+            (DrawingToolType::ElliottDoubleCombo, true),
+            (DrawingToolType::ElliottTripleCombo, true),
         ] {
             let mut drawing = Drawing::new(7, tool);
-            drawing.points = vec![Pos2::new(50.0, 100.0), Pos2::new(150.0, 150.0)];
+            drawing.points = (0..tool.required_points().unwrap_or(2).max(2))
+                .map(|i| {
+                    Pos2::new(
+                        50.0 + i as f32 * 60.0,
+                        if i % 2 == 0 { 100.0 } else { 150.0 },
+                    )
+                })
+                .collect();
+            // Three drives labels only its ratios, which are measured in price.
+            if tool == DrawingToolType::ThreeDrivesPattern {
+                drawing.chart_points = (drawing.points.iter())
+                    .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                    .collect();
+            }
             drawing.text = Some("Sample".into());
             drawing.font_size = 48.0;
             drawing.font_weight = FontWeight::Bold;
-            let shapes = paint(&drawing);
+            let shapes = paint_with(&drawing, true);
             let mut texts = Vec::new();
             fn collect<'a>(shapes: &'a [Shape], texts: &mut Vec<&'a egui::epaint::TextShape>) {
                 for s in shapes {
@@ -827,17 +943,21 @@ mod tests {
                 assert!(
                     texts
                         .iter()
-                        .filter(|t| tool == DrawingToolType::Table || t.galley.job.text == "N")
                         .all(|t| table.contains_rect(t.visual_bounding_rect()))
                 );
             }
+            let matching = texts
+                .iter()
+                .filter(|t| {
+                    t.galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|s| s.format.font_id.size == 48.0)
+                })
+                .count();
             assert!(
-                texts.iter().any(|t| t
-                    .galley
-                    .job
-                    .sections
-                    .iter()
-                    .any(|s| s.format.font_id.size == 48.0)),
+                matching > 0 && (!every_label || matching == texts.len()),
                 "{tool:?} ignored font size"
             );
             let bold_text: Vec<_> = texts.iter().map(|t| (*t).clone()).collect();
@@ -897,7 +1017,6 @@ mod tests {
             DrawingToolType::InfoLine,
             DrawingToolType::TrendAngle,
             DrawingToolType::Arrow,
-            DrawingToolType::ArrowMarker,
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = vec![Pos2::new(100., 100.), Pos2::new(300., 100.)];
@@ -947,6 +1066,147 @@ mod tests {
                     .any(|s| matches!(s,Shape::Rect(r) if r.rect.center() == end)),
                 "{tool:?}: vertical end"
             );
+        }
+    }
+
+    /// Marks are 14 px triangles with their tip on the anchor and an 8.4 px half-base.
+    /// The 200 px marker has a 70 by 80 px head and a shaft widening from 16 to 32 px:
+    /// area 70 * 80 / 2 + 130 * (16 + 32) / 2 = 5920 px², in every direction.
+    /// Saved line ends, extension, fill and line styles must not alter these solid shapes.
+    #[test]
+    fn arrow_tools_paint_one_solid_shape_in_the_drawing_colour() {
+        use crate::drawings::ArrowStyle;
+        use DrawingToolType as T;
+        use egui::epaint::{Mesh, TessellationOptions, Tessellator};
+        let p = Pos2::new;
+        for (tool, anchors, want) in [
+            (
+                T::ArrowMarkUp,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(208.4, 214.), p(191.6, 214.)],
+            ),
+            (
+                T::ArrowMarkDown,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(191.6, 186.), p(208.4, 186.)],
+            ),
+            (
+                T::ArrowMarkLeft,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(214., 191.6), p(214., 208.4)],
+            ),
+            (
+                T::ArrowMarkRight,
+                vec![p(200., 200.)],
+                vec![p(200., 200.), p(186., 208.4), p(186., 191.6)],
+            ),
+            (
+                T::ArrowMarker,
+                vec![p(100., 200.), p(300., 200.)],
+                vec![
+                    p(300., 200.),
+                    p(230., 240.),
+                    p(230., 216.),
+                    p(100., 208.),
+                    p(100., 192.),
+                    p(230., 184.),
+                    p(230., 160.),
+                ],
+            ),
+            (
+                T::ArrowMarker,
+                vec![p(300., 200.), p(100., 200.)],
+                vec![
+                    p(100., 200.),
+                    p(170., 160.),
+                    p(170., 184.),
+                    p(300., 192.),
+                    p(300., 208.),
+                    p(170., 216.),
+                    p(170., 240.),
+                ],
+            ),
+            (
+                T::ArrowMarker,
+                vec![p(100., 300.), p(100., 100.)],
+                vec![
+                    p(100., 100.),
+                    p(140., 170.),
+                    p(116., 170.),
+                    p(108., 300.),
+                    p(92., 300.),
+                    p(84., 170.),
+                    p(60., 170.),
+                ],
+            ),
+        ] {
+            let mut drawing = Drawing::with_color(7, tool, [12, 34, 56, 255]);
+            drawing.points = anchors;
+            drawing.arrow_start_style = ArrowStyle::Circle;
+            drawing.arrow_end_style = ArrowStyle::Arrow;
+            (drawing.extend_left, drawing.extend_right) = (true, true);
+            let shapes = paint(&drawing);
+            let paths: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Path(path) => Some(path),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !shapes
+                    .iter()
+                    .any(|s| matches!(s, Shape::LineSegment { .. } | Shape::Circle(_))),
+                "{tool:?} line or end"
+            );
+            assert_eq!(paths.len(), 1, "{tool:?}");
+            let path = paths[0];
+            assert_eq!(path.fill, drawing.color32(), "{tool:?} colour");
+            assert!(path.closed && path.stroke.is_empty(), "{tool:?}");
+            assert_eq!(path.points.len(), want.len(), "{tool:?}");
+            for (got, want) in path.points.iter().zip(&want) {
+                assert!(
+                    got.distance(*want) < 1e-3,
+                    "{tool:?}: {:?}, want {want:?}",
+                    path.points
+                );
+            }
+            let mut styled = drawing.clone();
+            styled.fill_color = Some([200, 100, 50, 80]);
+            styled.line_style = crate::model::LineStyle::Dashed;
+            styled.stroke_width = 8.0;
+            assert_eq!(
+                format!("{:?}", paint(&styled)),
+                format!("{shapes:?}"),
+                "{tool:?} style"
+            );
+            if tool == T::ArrowMarker {
+                let mut mesh = Mesh::default();
+                Tessellator::new(1.0, TessellationOptions::default(), [1, 1], Vec::new())
+                    .tessellate_shape(Shape::Path(path.clone()), &mut mesh);
+                let mut area = 0.0;
+                for tri in mesh.indices.as_chunks::<3>().0 {
+                    let vertices = tri.map(|i| mesh.vertices[i as usize]);
+                    if vertices.iter().any(|v| v.color.a() != 255) {
+                        continue;
+                    }
+                    let [a, b, c] = vertices.map(|v| v.pos);
+                    let centre = a + ((b - a) + (c - a)) / 3.0;
+                    let mut inside = false;
+                    for i in 0..want.len() {
+                        let (a, b) = (want[i], want[(i + 1) % want.len()]);
+                        if (a.y > centre.y) != (b.y > centre.y)
+                            && centre.x < (b.x - a.x) * (centre.y - a.y) / (b.y - a.y) + a.x
+                        {
+                            inside = !inside;
+                        }
+                    }
+                    assert!(inside, "triangle outside the arrow: {a:?}, {b:?}, {c:?}");
+                    area += ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.0;
+                }
+                // Feathering removes at most 10% of the opaque area.
+                assert!((5328.0..=5920.0).contains(&area), "opaque area {area}");
+            }
         }
     }
 
@@ -1022,22 +1282,269 @@ mod tests {
         }
     }
 
-    fn paint(drawing: &Drawing) -> Vec<Shape> {
+    /// y = 250 - x/2 and either y = 150 or its reflection y = 50 + x/2.
+    /// Both cross at (200, 150); fills must cover both lobes without stroked ends.
+    #[test]
+    fn wedge_channels_share_clean_paint_fill_and_extended_hit_geometry() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        for tool in [
+            DrawingToolType::FlatTopBottom,
+            DrawingToolType::DisjointChannel,
+        ] {
+            for reverse in [false, true] {
+                for (left, right, xs) in [
+                    (false, false, [100.0, 300.0]),
+                    (true, false, [0.0, 300.0]),
+                    (false, true, [100.0, 500.0]),
+                    (true, true, [0.0, 500.0]),
+                ] {
+                    for filled in [false, true] {
+                        let mut drawing = Drawing::new(1, tool);
+                        drawing.chart_points = vec![
+                            crate::drawings::ChartPoint::new(10.0, 300.0),
+                            crate::drawings::ChartPoint::new(30.0, 400.0),
+                            crate::drawings::ChartPoint::new(20.0, 350.0),
+                        ];
+                        if reverse {
+                            drawing.chart_points.swap(0, 1);
+                        }
+                        drawing.extend_left = left;
+                        drawing.extend_right = right;
+                        drawing.fill_color = filled.then_some([12, 34, 56, 80]);
+                        drawing.update_screen_coords(|b| b * 10.0, |p| 500.0 - p as f32);
+                        let other_y = |x| {
+                            if tool == DrawingToolType::FlatTopBottom {
+                                150.0
+                            } else {
+                                50.0 + x / 2.0
+                            }
+                        };
+                        let lines = vec![
+                            xs.map(|x| Pos2::new(x, 250.0 - x / 2.0)),
+                            xs.map(|x| Pos2::new(x, other_y(x))),
+                        ];
+                        let outline = drawing.outline(rect).unwrap();
+                        assert_eq!(outline.lines, lines, "{tool:?}");
+                        assert_eq!(outline.areas.len(), if filled { 2 } else { 0 });
+                        let shapes = paint(&drawing);
+                        let mut painted_lines = Vec::new();
+                        let mut areas = Vec::new();
+                        for shape in shapes {
+                            match shape {
+                                Shape::LineSegment { points, .. } => painted_lines.push(points),
+                                Shape::Path(path) if path.fill.a() > 0 => {
+                                    assert!(path.stroke.is_empty());
+                                    assert_eq!(path.fill, drawing.fill_color32().unwrap());
+                                    areas.push(path.points);
+                                }
+                                Shape::Noop => {}
+                                other => panic!("unexpected channel decoration: {other:?}"),
+                            }
+                        }
+                        assert_eq!(painted_lines, lines);
+                        assert_eq!(areas, outline.areas);
+                        let hit = crate::drawings::services::DrawingInteraction::new();
+                        for x in [125.0, 275.0] {
+                            for y in [250.0 - x / 2.0, other_y(x)] {
+                                assert_eq!(
+                                    hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                    Some(1)
+                                );
+                            }
+                            let y = (250.0 - x / 2.0 + other_y(x)) / 2.0;
+                            assert_eq!(
+                                hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                filled.then_some(1)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Even-odd fills and their hit areas agree for concave and crossing paths and curve lobes.
+    #[test]
+    fn filled_shapes_cover_the_area_their_line_encloses() {
+        use crate::drawings::services::DrawingInteraction;
+        use DrawingToolType as T;
+        let concave = vec![
+            (50., 50.),
+            (200., 50.),
+            (200., 200.),
+            (125., 100.),
+            (50., 200.),
+        ];
+        // Analytic areas: a radius-100 semicircle, the quadratic's 300 * 90 * 2/3,
+        // and the cubic's two lobes, 2 * 300 * 450 / 32. Curved fills allow the
+        // curved boundary length, bounded by control polygons for Beziers, times
+        // a quarter point of boundary error.
+        for (tool, points, closed, area, area_tolerance, hits, misses) in [
+            (
+                T::Polyline,
+                concave.clone(),
+                true,
+                15000.,
+                2.,
+                vec![(125., 75.), (50., 125.)],
+                vec![(125., 150.)],
+            ),
+            (
+                T::Polyline,
+                concave,
+                false,
+                0.,
+                2.,
+                vec![],
+                vec![(125., 75.), (50., 125.)],
+            ),
+            (
+                T::Polyline,
+                vec![(50., 50.), (250., 250.), (250., 50.), (50., 250.)],
+                false,
+                20000.,
+                2.,
+                vec![(70., 150.)],
+                vec![(150., 70.)],
+            ),
+            (
+                T::Arc,
+                vec![(100., 200.), (300., 200.), (200., 100.)],
+                false,
+                std::f32::consts::PI * 5000.,
+                80.,
+                vec![(200., 150.)],
+                vec![(200., 250.)],
+            ),
+            (
+                T::Curve,
+                vec![(100., 300.), (250., 120.), (400., 300.)],
+                false,
+                18000.,
+                120.,
+                vec![(250., 260.)],
+                vec![(250., 190.)],
+            ),
+            (
+                T::DoubleCurve,
+                vec![(100., 200.), (200., 350.), (300., 50.), (400., 200.)],
+                false,
+                8437.5,
+                170.,
+                vec![(163.4, 230.), (336.6, 170.)],
+                vec![(163.4, 170.), (250., 240.)],
+            ),
+            // Samples round the same semicircle, closed by the chord between the stroke's ends.
+            (
+                T::Brush,
+                (0..=12)
+                    .map(|i| {
+                        let (sin, cos) = (i as f32 * std::f32::consts::PI / 12.).sin_cos();
+                        (200. - 100. * cos, 200. - 100. * sin)
+                    })
+                    .collect(),
+                false,
+                std::f32::consts::PI * 5000.,
+                80.,
+                vec![(200., 150.)],
+                vec![(200., 250.)],
+            ),
+        ] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.points = points.into_iter().map(Pos2::from).collect();
+            drawing.completed = true;
+            drawing.closed = closed;
+            drawing.fill_color = (area > 0.).then_some([12, 34, 56, 80]);
+            let painted = paint(&drawing);
+            let fill = Color32::from_rgba_unmultiplied(12, 34, 56, 80);
+            let painted_area: f32 = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Mesh(mesh) => {
+                        assert!(mesh.vertices.iter().all(|v| v.color == fill));
+                        Some(
+                            mesh.indices
+                                .as_chunks::<3>()
+                                .0
+                                .iter()
+                                .map(|tri| {
+                                    let a = mesh.vertices[tri[0] as usize].pos;
+                                    let b = mesh.vertices[tri[1] as usize].pos;
+                                    let c = mesh.vertices[tri[2] as usize].pos;
+                                    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs()
+                                        / 2.
+                                })
+                                .sum::<f32>(),
+                        )
+                    }
+                    _ => None,
+                })
+                .sum();
+            assert!(
+                (painted_area - area).abs() < area_tolerance,
+                "{tool:?}: {painted_area} != {area}"
+            );
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+            let clipped: Vec<_> = painted
+                .into_iter()
+                .map(|shape| egui::epaint::ClippedShape::new(rect, shape))
+                .collect();
+            for (points, want) in [(hits, true), (misses, false)] {
+                for point in points.into_iter().map(Pos2::from) {
+                    assert_eq!(
+                        DrawingInteraction::new().hit_test(point, &[drawing.clone()], "1m"),
+                        want.then_some(1),
+                        "{tool:?} outline at {point:?}"
+                    );
+                    assert_eq!(
+                        DrawingInteraction::hit_test_painted(point, &clipped),
+                        want,
+                        "{tool:?} paint at {point:?}"
+                    );
+                }
+            }
+        }
+        for points in [
+            vec![],
+            vec![Pos2::ZERO; 2],
+            vec![Pos2::ZERO, Pos2::new(f32::NAN, 1.), Pos2::new(1., 2.)],
+        ] {
+            assert!(shapes::even_odd_trapezoids(&points).is_empty());
+        }
+    }
+
+    pub(super) fn paint(drawing: &Drawing) -> Vec<Shape> {
+        paint_with(drawing, false)
+    }
+
+    fn paint_with(drawing: &Drawing, selected: bool) -> Vec<Shape> {
         let ctx = Context::default();
+        let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
                 instrument: None,
-                bars: &[],
+                bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
+                    &bars
+                } else {
+                    &[]
+                },
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
+                y_to_price: &|y| 500.0 - f64::from(y),
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
-            drawing.render(
+            drawing.render_with_selection(
                 ui.painter(),
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.)),
                 &view,
+                selected,
             );
         });
         let shapes = output.shapes.iter().map(|s| s.shape.clone()).collect();
@@ -1045,7 +1552,298 @@ mod tests {
         shapes
     }
 
-    /// A pattern's projected target and selection handles can cross the pane edge;
+    /// Each tool with an anchor and a label draws the label where its anchors say, joined to the
+    /// anchor by one thin line from the side that faces it, and a pin shows its text only while
+    /// selected.
+    #[test]
+    fn anchored_labels_join_their_anchor() {
+        #[derive(Default)]
+        struct Painted {
+            rects: Vec<egui::epaint::RectShape>,
+            segments: Vec<([Pos2; 2], egui::Stroke)>,
+            circles: Vec<egui::epaint::CircleShape>,
+            paths: Vec<egui::epaint::PathShape>,
+            texts: Vec<egui::epaint::TextShape>,
+        }
+        fn collect(shapes: &[Shape], painted: &mut Painted) {
+            for shape in shapes {
+                match shape {
+                    Shape::Vec(shapes) => collect(shapes, painted),
+                    Shape::Rect(r) => painted.rects.push(r.clone()),
+                    Shape::LineSegment { points, stroke } => {
+                        painted.segments.push((*points, *stroke))
+                    }
+                    Shape::Circle(c) => painted.circles.push(*c),
+                    Shape::Path(p) => painted.paths.push(p.clone()),
+                    Shape::Text(t) => painted.texts.push(t.clone()),
+                    _ => {}
+                }
+            }
+        }
+        let text_of = |t: &egui::epaint::TextShape| t.galley.job.text.clone();
+        let pos = |x, y| Pos2::new(x, y);
+        // Bars and prices come from the mapping `paint` renders with.
+        let draw = |tool, points: &[(f32, f32)], text: &str, selected| {
+            let mut drawing = Drawing::new(7, tool);
+            // White on this red has a contrast of 1.05 / (0.2195 + 0.05) = 3.90.
+            drawing.color = [0xF2, 0x36, 0x45, 0xFF];
+            drawing.points = points.iter().map(|&(x, y)| pos(x, y)).collect();
+            drawing.chart_points = points
+                .iter()
+                .map(|&(x, y)| crate::drawings::ChartPoint::new(x / 10.0, 500.0 - f64::from(y)))
+                .collect();
+            drawing.text = Some(text.into());
+            let mut painted = Painted::default();
+            collect(&paint_with(&drawing, selected), &mut painted);
+            painted
+        };
+
+        let note = draw(
+            DrawingToolType::Note,
+            &[(130., 400.), (100., 100.)],
+            "Hi",
+            false,
+        );
+        let [card] = &note.rects[..] else {
+            panic!("one label");
+        };
+        assert_eq!(card.rect.min, pos(100.0, 100.0));
+        assert_eq!(card.stroke.width, 1.0);
+        // The anchor lies far below and at most 30 px to the side, so the bottom faces it.
+        assert_eq!(
+            note.segments,
+            [(
+                [
+                    pos(card.rect.center().x, card.rect.max.y),
+                    pos(130.0, 400.0)
+                ],
+                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+            )]
+        );
+        let [dot] = &note.circles[..] else {
+            panic!("one dot");
+        };
+        assert_eq!((dot.center, dot.radius), (pos(130.0, 400.0), 3.0));
+        assert_eq!(note.texts.iter().map(text_of).collect::<Vec<_>>(), ["Hi"]);
+
+        let saved = draw(DrawingToolType::Note, &[(100., 100.)], "", false);
+        assert_eq!(saved.rects[0].rect.min, pos(100.0, 100.0));
+        assert!(saved.segments.is_empty());
+        assert_eq!(
+            saved.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["Text"]
+        );
+
+        let price_note = draw(
+            DrawingToolType::PriceNote,
+            &[(130., 400.), (100., 100.)],
+            "Entry",
+            false,
+        );
+        assert_eq!(
+            price_note.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["100.00 Entry"]
+        );
+        assert_eq!(price_note.segments.len(), 1, "no line across the pane");
+        assert_eq!(
+            price_note.rects[0].fill,
+            Color32::from_rgb(0xF2, 0x36, 0x45)
+        );
+        assert_eq!(
+            price_note.texts[0].galley.job.sections[0].format.color,
+            Color32::WHITE
+        );
+
+        let pin = draw(
+            DrawingToolType::AnchoredNote,
+            &[(200., 300.)],
+            "Fill",
+            false,
+        );
+        assert!(pin.texts.is_empty());
+        let [marker] = &pin.paths[..] else {
+            panic!("one marker");
+        };
+        let bounds = Rect::from_points(&marker.points);
+        assert!(marker.closed && marker.points.contains(&pos(200.0, 300.0)));
+        assert!(
+            Rect::from_min_max(pos(194.0, 278.0), pos(206.0, 300.0))
+                .expand(0.01)
+                .contains_rect(bounds)
+                && bounds.height() > 20.0,
+            "{bounds:?}"
+        );
+        let selected = draw(DrawingToolType::AnchoredNote, &[(200., 300.)], "Fill", true);
+        assert_eq!(
+            selected.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["Fill"]
+        );
+        assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
+        // The popup is a card in the theme's colours whatever the pin's colour, tied to the pin's
+        // head by a thin line in the pin's colour.
+        let theme = crate::theme::Theme::dark();
+        let [card] = &selected.rects[..] else {
+            panic!("one popup");
+        };
+        assert_eq!(card.fill, theme.ui.panel_bg);
+        assert_eq!(card.stroke, egui::Stroke::new(1.0, theme.ui.border));
+        assert_eq!(
+            selected.texts[0].galley.job.sections[0].format.color,
+            theme.ui.text
+        );
+        assert_eq!(
+            selected.segments,
+            [(
+                [pos(200.0, card.rect.max.y), pos(200.0, 278.0)],
+                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+            )]
+        );
+
+        let comment = draw(DrawingToolType::Comment, &[(100., 300.)], "Hi", false);
+        let [bubble] = &comment.rects[..] else {
+            panic!("one bubble");
+        };
+        assert_eq!((bubble.rect.min.x, bubble.rect.max.y), (100.0, 300.0));
+        assert_eq!(
+            bubble.corner_radius,
+            egui::CornerRadius {
+                nw: 8,
+                ne: 8,
+                sw: 0,
+                se: 8
+            }
+        );
+        assert!(comment.circles.is_empty());
+        assert!(
+            bubble
+                .rect
+                .contains_rect(comment.texts[0].visual_bounding_rect())
+        );
+
+        // Black on this yellow has the better contrast: white has only 1.05 / 0.860 = 1.22.
+        let mut pale = Drawing::new(7, DrawingToolType::Comment);
+        pale.points = vec![pos(100.0, 300.0)];
+        pale.fill_color = Some([255, 235, 59, 255]);
+        let mut painted = Painted::default();
+        collect(&paint(&pale), &mut painted);
+        assert_eq!(
+            painted.texts[0].galley.job.sections[0].format.color,
+            Color32::BLACK
+        );
+
+        let callout = draw(
+            DrawingToolType::Callout,
+            &[(100., 300.), (200., 100.)],
+            "Hi",
+            false,
+        );
+        assert!(callout.rects.is_empty());
+        let [outline] = &callout.paths[..] else {
+            panic!("box and pointer are one shape");
+        };
+        assert!(outline.closed && outline.points.contains(&pos(100.0, 300.0)));
+        assert_eq!(outline.stroke.width, 2.0);
+        let inside = draw(
+            DrawingToolType::Callout,
+            &[(205., 105.), (200., 100.)],
+            "Hi",
+            false,
+        );
+        assert!(inside.paths.is_empty());
+        assert_eq!(inside.rects.len(), 1);
+        assert_eq!(inside.rects[0].stroke.width, 2.0);
+
+        // Wrapped text breaks into lines no wider than the wrap width.
+        for tool in [
+            DrawingToolType::Callout,
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+        ] {
+            let mut wrapped = Drawing::new(7, tool);
+            wrapped.points = vec![pos(100.0, 300.0), pos(200.0, 100.0)];
+            wrapped.text = Some("Wrapped annotation text".into());
+            wrapped.text_wrap = true;
+            wrapped.text_wrap_width = 60.0;
+            let mut painted = Painted::default();
+            collect(&paint(&wrapped), &mut painted);
+            let [text] = &painted.texts[..] else {
+                panic!("one text");
+            };
+            assert!(
+                text.galley.rows.len() > 1 && text.galley.size().x <= 60.0,
+                "{tool:?}"
+            );
+        }
+
+        // Text sized at 5 points a bar is twice as large at the 10 points a bar `paint` maps
+        // with: its 14 point font, 60 point wrap width and box padding all double.
+        let mut zoomed = Drawing::new(7, DrawingToolType::TextLabel);
+        zoomed.chart_points = vec![crate::drawings::ChartPoint::new(10.0, 200.0)];
+        zoomed.points = vec![pos(100.0, 300.0)];
+        zoomed.text = Some("Wrapped annotation text".into());
+        zoomed.background = true;
+        zoomed.text_wrap = true;
+        zoomed.text_wrap_width = 60.0;
+        let boxes = |drawing: &Drawing| {
+            let mut painted = Painted::default();
+            collect(&paint(drawing), &mut painted);
+            let ([card], [text]) = (&painted.rects[..], &painted.texts[..]) else {
+                panic!("one box around one text");
+            };
+            (
+                text.galley.job.sections[0].format.font_id.size,
+                text.galley.job.wrap.max_width,
+                text.pos - card.rect.min,
+            )
+        };
+        let (font, wrap, padding) = boxes(&zoomed);
+        assert_eq!((font, wrap), (14.0, 60.0));
+        zoomed.text_zoom_spacing = Some(5.0);
+        assert_eq!(boxes(&zoomed), (font, wrap, padding));
+        zoomed.text_follows_zoom = true;
+        assert_eq!(boxes(&zoomed), (28.0, 120.0, padding * 2.0));
+
+        let label = draw(
+            DrawingToolType::PriceLabel,
+            &[(100., 300.)],
+            "Ignored",
+            false,
+        );
+        assert_eq!(
+            label.texts.iter().map(text_of).collect::<Vec<_>>(),
+            ["200.00"]
+        );
+        let [badge] = &label.paths[..] else {
+            panic!("badge and pointer are one shape");
+        };
+        assert!(badge.closed && badge.points.contains(&pos(100.0, 300.0)));
+        let text = label.texts[0].visual_bounding_rect();
+        assert!(text.min.x > 108.0 && text.max.y < 292.0, "{text:?}");
+
+        // A second anchor on another bar still gets a vertical pole; one anchor shows the label
+        // 40 px above the bar.
+        for (points, centre) in [
+            (&[(100., 300.), (160., 200.)][..], pos(100.0, 200.0)),
+            (&[(100., 300.)][..], pos(100.0, 260.0)),
+        ] {
+            let signpost = draw(DrawingToolType::Signpost, points, "Earnings", false);
+            let [plate] = &signpost.rects[..] else {
+                panic!("one plate");
+            };
+            assert_eq!(plate.rect.center(), centre);
+            let [(pole, stroke)] = signpost.segments[..] else {
+                panic!("one pole");
+            };
+            assert_eq!(pole, [pos(100.0, 300.0), pos(100.0, plate.rect.max.y)]);
+            assert_eq!(stroke.width, 1.0);
+            assert_eq!(
+                signpost.texts.iter().map(text_of).collect::<Vec<_>>(),
+                ["Earnings"]
+            );
+        }
+    }
+
+    /// A pattern's labels and selection handles can cross the pane edge;
     /// their paint commands retain the pane's clip, intersected with the caller's clip.
     #[test]
     fn drawings_and_handles_keep_the_pane_clip() {
@@ -1069,13 +1867,19 @@ mod tests {
         manager.select(7);
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
                 instrument: None,
                 bars: &[],
                 revision: 0,
                 bar_to_x: &|x| x,
                 price_to_y: &|p| p as f32,
+                y_to_price: &f64::from,
                 time_axis: true,
                 executions: None,
+                timeframe: None,
+                finer: &[],
             };
             manager.render_all(&ui.painter().with_clip_rect(parent), pane, &view);
         });
@@ -1092,5 +1896,57 @@ mod tests {
                 .all(|s| s.clip_rect == pane.intersect(parent)),
             "drawing or handle escaped its pane"
         );
+    }
+
+    /// An annotation that offers line controls draws differently at 2 and 7 px; annotations
+    /// with fixed borders or guides must hide those controls.
+    #[test]
+    fn offered_line_width_changes_the_drawing() {
+        let mut inert = Vec::new();
+        for tool in [
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::Note,
+            DrawingToolType::PriceNote,
+            DrawingToolType::AnchoredNote,
+            DrawingToolType::Table,
+            DrawingToolType::Callout,
+            DrawingToolType::Comment,
+            DrawingToolType::PriceLabel,
+            DrawingToolType::Signpost,
+            DrawingToolType::FlagNote,
+        ] {
+            if !tool.draws_line() {
+                continue;
+            }
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = [
+                (100., 100.),
+                (300., 300.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+                (450., 180.),
+                (500., 250.),
+            ]
+            .map(|(x, y)| Pos2::new(x, y))
+            .to_vec();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            if drawing.text.is_none() {
+                drawing.text = Some("Label".into());
+            }
+            let mut thin = drawing.clone();
+            thin.stroke_width = 2.0;
+            let mut wide = drawing;
+            wide.stroke_width = 7.0;
+            if format!("{:?}", paint(&thin)) == format!("{:?}", paint(&wide)) {
+                inert.push(tool);
+            }
+        }
+        assert_eq!(inert, Vec::<DrawingToolType>::new());
     }
 }

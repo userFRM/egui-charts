@@ -25,7 +25,6 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -54,7 +53,7 @@ impl UltimateOscillator {
             period2: period2.max(1),
             period3: period3.max(1),
             values: IndicatorValues::new(),
-            color: palette::PURPLE,
+            color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
     }
@@ -125,9 +124,9 @@ impl UltimateOscillator {
             let tr3: f64 = tr[(i + 1 - self.period3)..=i].iter().sum();
 
             // Avoid division by zero
-            let avg1 = if tr1.abs() > 1e-10 { bp1 / tr1 } else { 0.5 };
-            let avg2 = if tr2.abs() > 1e-10 { bp2 / tr2 } else { 0.5 };
-            let avg3 = if tr3.abs() > 1e-10 { bp3 / tr3 } else { 0.5 };
+            let avg1 = if tr1 != 0.0 { bp1 / tr1 } else { 0.5 };
+            let avg2 = if tr2 != 0.0 { bp2 / tr2 } else { 0.5 };
+            let avg3 = if tr3 != 0.0 { bp3 / tr3 } else { 0.5 };
 
             // UO = 100 * ((4 * Avg1) + (2 * Avg2) + Avg3) / 7
             let uo = 100.0 * ((4.0 * avg1) + (2.0 * avg2) + avg3) / 7.0;

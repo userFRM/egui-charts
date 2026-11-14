@@ -1,4 +1,5 @@
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -19,7 +20,7 @@ impl NetVolume {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: vec![Color32::from_rgb(38, 166, 154)], // Teal
+            colors: vec![palette::BLUE], // Teal
             visible: true,
         }
     }
@@ -43,7 +44,7 @@ impl Indicator for NetVolume {
             color: self.colors[0],
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Columns,
+            plot_type: crate::studies::PlotType::Line,
             visible: true,
         }
     }

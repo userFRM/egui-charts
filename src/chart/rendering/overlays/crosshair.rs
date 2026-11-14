@@ -1,0 +1,647 @@
+use super::super::{ChartMapping, RenderContext};
+use crate::chart::rendering::axes::tick_decimals;
+use crate::chart::rendering::axes::{axis_font, paint_crosshair_tag};
+use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};
+use crate::model::Bar;
+use crate::model::LineStyle;
+use crate::painting::dashed_line::{draw_cached_dashed_segments, draw_dashed_segments};
+use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
+use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
+use egui::{Align2, Color32, Pos2, Rect, Stroke};
+
+/// Renders crosshair with full customization: style, mode, color, line width, line style
+///
+/// The vertical line runs down to `chart_bottom`, the bottom of the volume pane. The price label
+/// sits in the price axis, which ends at `axis_right`, over the `last_price_tag` it overlaps, and
+/// the time label on the time axis below `chart_bottom`, written by `scale`. Returns the rects
+/// of the price and time labels drawn.
+pub fn render_crosshair_full(
+    context: &RenderContext,
+    hover_pos: Pos2,
+    visible_data: &[Bar],
+    price_scale: &PriceMap,
+    coords: &ChartMapping,
+    mode: CrosshairMode,
+    style: CrosshairStyle,
+    crosshair_color: Color32,
+    line_width: f32,
+    line_style: LineStyle,
+    label_bg: Color32,
+    label_text: Color32,
+    chart_bottom: f32,
+    axis_right: f32,
+    last_price_tag: Option<Rect>,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+) -> [Option<Rect>; 2] {
+    render_crosshair_with_options(
+        context,
+        hover_pos,
+        visible_data,
+        price_scale,
+        coords,
+        &CrosshairOptions {
+            mode,
+            style,
+            vert_line_color: crosshair_color,
+            horz_line_color: crosshair_color,
+            vert_line_width: line_width,
+            horz_line_width: line_width,
+            vert_line_style: line_style,
+            horz_line_style: line_style,
+            vert_label_background_color: label_bg,
+            horz_label_background_color: label_bg,
+            label_text_color: label_text,
+            ..Default::default()
+        },
+        chart_bottom,
+        axis_right,
+        last_price_tag,
+        scale,
+        bar_seconds,
+        None,
+    )
+}
+
+/// Renders both crosshair lines and axis labels with independently configured visibility and strokes.
+pub fn render_crosshair_with_options(
+    context: &RenderContext,
+    hover_pos: Pos2,
+    visible_data: &[Bar],
+    price_scale: &PriceMap,
+    coords: &ChartMapping,
+    options: &CrosshairOptions,
+    chart_bottom: f32,
+    axis_right: f32,
+    last_price_tag: Option<Rect>,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    price_formatter: Option<&dyn PriceFormatter>,
+) -> [Option<Rect>; 2] {
+    let bar = coords
+        .local_idx_at_x(hover_pos.x, visible_data.len())
+        .map(|idx| (coords.start_idx + idx, &visible_data[idx]));
+    let mut pos = hover_pos;
+    if let Some((idx, candle)) = bar {
+        pos.x = coords.idx_to_x(idx);
+        if options.mode.snaps() && context.rect.contains(hover_pos) && !candle.is_whitespace() {
+            let price = if options.mode == CrosshairMode::MagnetClose {
+                candle.close
+            } else {
+                snap_to_nearest_ohlc(pos.y, price_scale, candle)
+            };
+            pos.y = price_scale.price_to_y(price);
+        }
+    }
+    render_crosshair_at_time(
+        context,
+        pos,
+        bar.map(|(_, candle)| candle.time),
+        price_scale,
+        options,
+        chart_bottom,
+        axis_right,
+        last_price_tag,
+        scale,
+        bar_seconds,
+        price_formatter,
+    )
+}
+
+/// Paints an already resolved crosshair without rounding an independently keyed point.
+pub(crate) fn render_crosshair_at_time(
+    context: &RenderContext,
+    pos: Pos2,
+    time: Option<chrono::DateTime<chrono::Utc>>,
+    price_scale: &PriceMap,
+    options: &CrosshairOptions,
+    chart_bottom: f32,
+    axis_right: f32,
+    last_price_tag: Option<Rect>,
+    scale: &dyn HorizontalScale,
+    bar_seconds: i64,
+    price_formatter: Option<&dyn PriceFormatter>,
+) -> [Option<Rect>; 2] {
+    let options = options.resolved(context.painter.ctx());
+    render_crosshair_lines(context, pos, &options, chart_bottom);
+    let price_tag = render_crosshair_price_tag(
+        context,
+        pos,
+        price_scale,
+        &options,
+        if axis_right <= context.rect.left() {
+            egui::emath::Rangef::new(context.painter.clip_rect().left(), axis_right)
+        } else {
+            egui::emath::Rangef::new(context.rect.right(), axis_right)
+        },
+        last_price_tag,
+        price_formatter.map(|price_formatter| {
+            price_scale
+                .transform()
+                .label(price_scale.y_to_scale(pos.y), 2, Some(price_formatter))
+        }),
+    );
+    let time_tag = time
+        .filter(|_| {
+            options.label_visible
+                && options.vert_label_visible
+                && options.style != CrosshairStyle::Hidden
+        })
+        .map(|time| {
+            paint_crosshair_tag(
+                context.painter,
+                Pos2::new(pos.x, chart_bottom + 1.5),
+                Align2::CENTER_TOP,
+                context.rect.left()..=axis_right.max(context.rect.right()),
+                scale.format_crosshair(time, bar_seconds),
+                (
+                    options.label_text_color,
+                    options.vert_label_background_color,
+                ),
+                egui::FontId::proportional(context.painter.ctx().active_theme().text.title),
+                23.5,
+                None,
+            )
+        });
+    [price_tag, time_tag]
+}
+
+pub(crate) fn render_crosshair_lines(
+    context: &RenderContext,
+    pos: Pos2,
+    options: &CrosshairOptions,
+    chart_bottom: f32,
+) {
+    // Pointerless image exports keep vector strokes for the vector writer.
+    let cache_lines = context
+        .painter
+        .ctx()
+        .input(|input| input.pointer.has_pointer());
+    let line = |segments: &[[Pos2; 2]], color, width, style| {
+        let stroke = Stroke::new(width, color);
+        let pattern = match style {
+            LineStyle::Solid => None,
+            LineStyle::Dashed => Some((6.0, 6.0)),
+            LineStyle::Dotted => Some((1.0, 3.0)),
+            LineStyle::LargeDashed => Some((10.0, 10.0)),
+            LineStyle::SparseDotted => Some((1.0, 7.0)),
+        };
+        if let Some((dash, gap)) = pattern {
+            let segments = segments.iter().map(|&[from, to]| (from, to, 0.0));
+            if cache_lines {
+                draw_cached_dashed_segments(context.painter, segments, stroke, dash, gap);
+            } else {
+                draw_dashed_segments(context.painter, segments, stroke, dash, gap);
+            }
+        } else {
+            for &points in segments {
+                context.painter.line_segment(points, stroke);
+            }
+        }
+    };
+    match options.style {
+        CrosshairStyle::Full => {
+            let vertical = [
+                Pos2::new(pos.x, context.rect.top()),
+                Pos2::new(pos.x, chart_bottom),
+            ];
+            let horizontal = [
+                Pos2::new(context.rect.left(), pos.y),
+                Pos2::new(context.rect.right(), pos.y),
+            ];
+            let show_horizontal =
+                options.horz_line_visible && context.rect.y_range().contains(pos.y);
+            if cache_lines
+                && options.vert_line_visible
+                && show_horizontal
+                && options.vert_line_style == options.horz_line_style
+                && options.vert_line_color == options.horz_line_color
+                && options.vert_line_width == options.horz_line_width
+            {
+                // One mesh avoids growing and copying the frame mesh again for the other axis.
+                line(
+                    &[vertical, horizontal],
+                    options.vert_line_color,
+                    options.vert_line_width,
+                    options.vert_line_style,
+                );
+                return;
+            }
+            if options.vert_line_visible {
+                line(
+                    &[vertical],
+                    options.vert_line_color,
+                    options.vert_line_width,
+                    options.vert_line_style,
+                );
+            }
+            if show_horizontal {
+                line(
+                    &[horizontal],
+                    options.horz_line_color,
+                    options.horz_line_width,
+                    options.horz_line_style,
+                );
+            }
+        }
+        CrosshairStyle::Dot if context.rect.contains(pos) => {
+            context.painter.circle_filled(
+                pos,
+                DESIGN_TOKENS.sizing.crosshair.dot_radius,
+                options.vert_line_color,
+            );
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn render_crosshair_price_tag(
+    context: &RenderContext,
+    pos: Pos2,
+    price_scale: &PriceMap,
+    options: &CrosshairOptions,
+    axis: egui::emath::Rangef,
+    last_price_tag: Option<Rect>,
+    label: Option<String>,
+) -> Option<Rect> {
+    if !options.label_visible
+        || !options.horz_label_visible
+        || options.style == CrosshairStyle::Hidden
+        || !context.rect.y_range().contains(pos.y)
+    {
+        return None;
+    }
+    let transform = price_scale.transform();
+    let label = if let Some(label) = label {
+        label
+    } else if matches!(
+        transform.mode,
+        PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+    ) {
+        price_scale.label(price_scale.y_to_scale(pos.y), 2, None)
+    } else {
+        let decimals = price_scale
+            .price_precision()
+            .unwrap_or_else(|| tick_decimals(price_scale, pos.y));
+        price_scale.label(price_scale.y_to_scale(pos.y), decimals, None)
+    };
+    let left = axis.max <= context.rect.left();
+    let painter = context
+        .painter
+        .with_clip_rect(context.painter.clip_rect().intersect(Rect::from_x_y_ranges(
+            context.painter.clip_rect().x_range(),
+            context.rect.y_range(),
+        )));
+    Some(paint_crosshair_tag(
+        &painter,
+        Pos2::new(if left { axis.max } else { axis.min }, pos.y),
+        if left {
+            Align2::RIGHT_CENTER
+        } else {
+            Align2::LEFT_CENTER
+        },
+        axis.min..=axis.max,
+        label,
+        (
+            options.label_text_color,
+            options.horz_label_background_color,
+        ),
+        axis_font(context.painter.ctx()),
+        21.0,
+        last_price_tag,
+    ))
+}
+
+/// Snap to nearest OHLC price (for Magnet mode)
+pub(crate) fn snap_to_nearest_ohlc(hover_y: f32, price_scale: &PriceMap, candle: &Bar) -> f64 {
+    snap_to_values(
+        hover_y,
+        price_scale,
+        [candle.open, candle.high, candle.low, candle.close],
+    )
+    .unwrap_or(candle.close)
+}
+
+pub(crate) fn snap_to_values(
+    hover_y: f32,
+    price_scale: &PriceMap,
+    values: impl IntoIterator<Item = f64>,
+) -> Option<f64> {
+    values
+        .into_iter()
+        .filter(|value| value.is_finite())
+        .min_by(|a, b| {
+            (price_scale.price_to_y(*a) - hover_y)
+                .abs()
+                .total_cmp(&(price_scale.price_to_y(*b) - hover_y).abs())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceTransform, TimeFormatterBuilder, TimezoneMode};
+    use chrono::{Duration, TimeZone, Utc};
+    use egui::{Context, RawInput, Shape};
+
+    /// Default lines keep six-point dashes and gaps in the preset's contrasting ink.
+    #[test]
+    fn default_crosshair_dashes_read_in_both_presets() {
+        use crate::theme::{Theme, apply_to_egui, contrast};
+        for (theme, ink) in [(Theme::dark(), 119), (Theme::light(), 116)] {
+            let ctx = Context::default();
+            apply_to_egui(&ctx, &theme);
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(24.0, 24.0));
+            let mut output = ctx.run_ui(RawInput::default(), |ui| {
+                let painter = ui.painter().with_clip_rect(rect);
+                render_crosshair_lines(
+                    &RenderContext::new(&painter, rect),
+                    Pos2::new(12.0, 12.0),
+                    &CrosshairOptions::default().resolved(&ctx),
+                    24.0,
+                );
+            });
+            output.textures_delta.clear();
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match shape.shape {
+                    Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                lines,
+                [
+                    (
+                        [Pos2::new(12.0, 0.0), Pos2::new(12.0, 6.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                    (
+                        [Pos2::new(12.0, 12.0), Pos2::new(12.0, 18.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                    (
+                        [Pos2::new(0.0, 12.0), Pos2::new(6.0, 12.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                    (
+                        [Pos2::new(12.0, 12.0), Pos2::new(18.0, 12.0)],
+                        Stroke::new(1.0, Color32::from_gray(ink))
+                    ),
+                ]
+            );
+            assert!(contrast(theme.chart.crosshair_line, theme.chart.bg) >= 4.5);
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// Edge tags remain inside the pane, use supplied precision, and name the nearest bar
+    /// in the selected timezone, including when the pointer is below the price area.
+    #[test]
+    fn hover_tags_keep_the_bar_time_and_fit_both_edges() {
+        let time = Utc.with_ymd_and_hms(2024, 10, 1, 0, 30, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .map(|i| Bar::new(time + Duration::hours(i), 704.0, 706.0, 703.0, 705.0, 10.0))
+            .collect();
+        let zones = [
+            (TimezoneMode::Utc, "Tue 01 Oct '24 00:30"),
+            #[cfg(feature = "timezones")]
+            (TimezoneMode::nyse(), "Mon 30 Sep '24 20:30"),
+        ];
+        for (zone, first_label) in zones {
+            let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
+            for (index, hover_y, width, style) in [
+                (0, 100.0, 300.0, CrosshairStyle::Full),
+                (0, 100.0, 300.0, CrosshairStyle::Arrow),
+                (0, 100.0, 300.0, CrosshairStyle::Dot),
+                (29, 100.0, 300.0, CrosshairStyle::Full),
+                (0, 250.0, 300.0, CrosshairStyle::Full),
+                (0, 100.0, 60.0, CrosshairStyle::Full),
+                (0, 1.0, 300.0, CrosshairStyle::Full),
+                (0, 199.0, 300.0, CrosshairStyle::Full),
+            ] {
+                let rect =
+                    Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(100.0 + width, 200.0));
+                let axis_right = rect.right() + 60.0;
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(700.0, 710.0),
+                    0.0,
+                    200.0,
+                    false,
+                )
+                .with_price_precision(Some(3));
+                let coords = ChartMapping::new(rect, 10.0, 0, 29, 0.0, map);
+                let ctx = Context::default();
+                let mut tags = [None; 2];
+                let mut output = ctx.run_ui(RawInput::default(), |ui| {
+                    tags = render_crosshair_full(
+                        &RenderContext::new(ui.painter(), rect),
+                        Pos2::new(coords.idx_to_x(index), hover_y),
+                        &bars,
+                        &map,
+                        &coords,
+                        CrosshairMode::Normal,
+                        style,
+                        Color32::GRAY,
+                        1.0,
+                        LineStyle::Dotted,
+                        Color32::BLACK,
+                        Color32::WHITE,
+                        300.0,
+                        axis_right,
+                        None,
+                        &formatter,
+                        3600,
+                    );
+                });
+                output.textures_delta.clear();
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                let date_text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text().contains("'24") => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(date_text.galley.job.sections[0].format.font_id.size, 14.0);
+                output.drop_without_applying_deltas();
+                let date = tags[1].unwrap();
+                assert!(
+                    date.left() >= rect.left() && date.right() <= axis_right,
+                    "{date:?}"
+                );
+                assert_eq!(date.height(), 23.5);
+                if let Some(tag) = tags[0] {
+                    assert_eq!(tag.height(), 21.0);
+                    assert!(
+                        tag.top() >= rect.top() && tag.bottom() <= rect.bottom(),
+                        "{tag:?}"
+                    );
+                    assert!(
+                        tag.left() >= rect.right() && tag.right() <= axis_right,
+                        "{tag:?}"
+                    );
+                } else {
+                    assert!(!rect.y_range().contains(hover_y));
+                }
+                if index == 0 {
+                    assert!(
+                        labels.iter().any(|label| label == first_label),
+                        "{labels:?}"
+                    );
+                }
+                if rect.y_range().contains(hover_y) {
+                    assert!(
+                        labels.contains(&format!("{:.3}", map.y_to_price(hover_y))),
+                        "{labels:?}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn options_control_each_stroke_and_label_at_the_bar_center() {
+        let rect = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(400.0, 200.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(700.0, 710.0),
+            0.0,
+            200.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 10.0, 0, 29, 0.0, map);
+        let bar = Bar::new(
+            Utc.with_ymd_and_hms(2024, 10, 1, 0, 0, 0).unwrap(),
+            704.0,
+            706.0,
+            703.0,
+            705.0,
+            10.0,
+        );
+        let bars = vec![bar; 30];
+        for flags in 0..32 {
+            let vertical = flags & 1 != 0;
+            let horizontal = flags & 2 != 0;
+            let labels = flags & 4 != 0;
+            let time_label = flags & 8 != 0;
+            let price_label = flags & 16 != 0;
+            for style in [
+                CrosshairStyle::Full,
+                CrosshairStyle::Dot,
+                CrosshairStyle::Arrow,
+                CrosshairStyle::Demonstration,
+                CrosshairStyle::Magic,
+                CrosshairStyle::Hidden,
+            ] {
+                let shown = style != CrosshairStyle::Hidden;
+                let (vertical_shown, horizontal_shown) = (
+                    vertical && style == CrosshairStyle::Full,
+                    horizontal && style == CrosshairStyle::Full,
+                );
+                let options = CrosshairOptions {
+                    style,
+                    vert_line_visible: vertical,
+                    horz_line_visible: horizontal,
+                    label_visible: labels,
+                    vert_label_visible: time_label,
+                    horz_label_visible: price_label,
+                    vert_line_color: Color32::RED,
+                    horz_line_color: Color32::BLUE,
+                    vert_line_width: 2.0,
+                    horz_line_width: 3.0,
+                    vert_line_style: LineStyle::Solid,
+                    horz_line_style: LineStyle::Dotted,
+                    vert_label_background_color: Color32::DARK_RED,
+                    horz_label_background_color: Color32::DARK_GREEN,
+                    ..Default::default()
+                };
+                let ctx = Context::default();
+                let mut tags = [None; 2];
+                let x = coords.idx_to_x(10);
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    tags = render_crosshair_with_options(
+                        &RenderContext::new(ui.painter(), rect),
+                        Pos2::new(x + 3.0, 100.0),
+                        &bars,
+                        &map,
+                        &coords,
+                        &options,
+                        300.0,
+                        480.0,
+                        None,
+                        &TimeFormatterBuilder::new().build(),
+                        3600,
+                        None,
+                    );
+                });
+                let lines: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match shape.shape {
+                        Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                        _ => None,
+                    })
+                    .collect();
+                let dots: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) => Some(mesh),
+                        _ => None,
+                    })
+                    .collect();
+                // The dotted horizontal line is a row of one-point dots.
+                assert!(dots.iter().all(|mesh| {
+                    mesh.vertices.as_chunks::<4>().0.iter().all(|dot| {
+                        let positions: [Pos2; 4] = std::array::from_fn(|at| dot[at].pos);
+                        let rect = Rect::from_points(&positions);
+                        dot.iter().all(|vertex| vertex.color == Color32::BLUE)
+                            && rect.width() <= 1.0
+                            && rect.height() == 3.0
+                            && (rect.center().y - 100.0).abs() <= 0.5
+                    })
+                }));
+                let dots = !dots.is_empty();
+                let fill = |color| {
+                    output
+                        .shapes
+                        .iter()
+                        .any(|shape| matches!(&shape.shape, Shape::Rect(r) if r.fill == color))
+                };
+                let (time_fill, price_fill) = (fill(Color32::DARK_RED), fill(Color32::DARK_GREEN));
+                if !shown {
+                    assert!(
+                        output
+                            .shapes
+                            .iter()
+                            .all(|shape| matches!(shape.shape, Shape::Noop))
+                    );
+                }
+                output.drop_without_applying_deltas();
+                assert_eq!(lines.len(), usize::from(vertical_shown));
+                if vertical_shown {
+                    assert!(lines.contains(&(
+                        [Pos2::new(x, 0.0), Pos2::new(x, 300.0)],
+                        Stroke::new(2.0, Color32::RED)
+                    )));
+                }
+                assert_eq!(dots, horizontal_shown);
+                assert_eq!(tags[0].is_some(), labels && price_label && shown);
+                assert_eq!(tags[1].is_some(), labels && time_label && shown);
+                assert_eq!(price_fill, tags[0].is_some());
+                assert_eq!(time_fill, tags[1].is_some());
+            }
+        }
+    }
+}

@@ -2,10 +2,11 @@
 //!
 //! Includes: parallel channel, disjoint channel, regression trend, and flat top/bottom.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::model::Bar;
 use crate::model::math::{LinearFit, Moments};
-use crate::model::{Bar, SpanCache};
+use crate::painting::span_cache::SpanCache;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -18,8 +19,14 @@ thread_local! {
 }
 
 impl Drawing {
-    pub(crate) fn render_parallel_channel(&self, painter: &egui::Painter, rect: Rect) {
-        let Some(outline) = self.parallel_channel_outline(rect) else {
+    pub(crate) fn render_channel(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(outline) = self.outline(rect) else {
+            for pair in self.points.windows(2) {
+                painter.line_segment(
+                    [pair[0], pair[1]],
+                    Stroke::new(self.stroke_width, self.color32()),
+                );
+            }
             return;
         };
         if let Some(fill) = self.fill_color {
@@ -37,7 +44,7 @@ impl Drawing {
                     painter,
                     a,
                     b,
-                    Stroke::new(self.stroke_width, self.color32()),
+                    Stroke::new(stroke::HAIRLINE, self.color32()),
                     8.0,
                     4.0,
                 );
@@ -50,6 +57,7 @@ impl Drawing {
                 );
             }
         }
+        self.render_line_text(painter, self.points[0], self.points[1], true);
     }
 
     pub(super) fn parallel_channel_outline(&self, rect: Rect) -> Option<super::Outline> {
@@ -105,28 +113,39 @@ impl Drawing {
     /// bars between the anchors, with bands the configured number of standard
     /// deviations away
     pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, view: &ChartView) {
-        let (&[start, end, ..], &[a, b, ..]) =
-            (self.points.as_slice(), self.chart_points.as_slice())
-        else {
-            return;
+        if let Some((first, len, fit)) = self.regression_fit(view) {
+            self.draw_regression_channel(painter, view, first, len, &fit, self.color32());
+        }
+    }
+
+    /// The first fitted bar, the number of bars and the least-squares fit of the anchored range,
+    /// or `None` without bars or when the fit is not finite.
+    fn regression_fit(&self, view: &ChartView) -> Option<(usize, usize, LinearFit)> {
+        let &[a, b, ..] = self.chart_points.as_slice() else {
+            return None;
         };
-        let color = self.color32();
+        let (first, bars) = bars_between(view.bars, a.bar_idx, b.bar_idx)?;
+        let fit = span_moments(view, first, bars).fit()?;
+        (fit.intercept.is_finite()
+            && fit.slope.is_finite()
+            && fit.sigma.is_finite()
+            && fit.r_squared.is_finite())
+        .then_some((first, bars.len(), fit))
+    }
 
-        if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx)
-            && let Some(fit) = span_moments(view, first, bars).fit()
-        {
-            self.draw_regression_channel(painter, view, first, bars.len(), &fit, color);
+    /// Fitted endpoints in anchor order, before extension, for selection and hit testing.
+    pub(crate) fn regression_ends(&self, view: &ChartView) -> Option<[Pos2; 2]> {
+        let (first, len, fit) = self.regression_fit(view)?;
+        let mut ends = [0, len - 1].map(|i| {
+            Pos2::new(
+                (view.bar_to_x)((first + i) as f32),
+                (view.price_to_y)(fit.intercept + fit.slope * i as f64),
+            )
+        });
+        if self.chart_points[0].bar_idx > self.chart_points[1].bar_idx {
+            ends.reverse();
         }
-
-        // Draw anchor points with white border
-        for anchor in [start, end] {
-            painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
-            painter.circle_stroke(
-                anchor,
-                DESIGN_TOKENS.rounding.lg,
-                Stroke::new(stroke::MEDIUM, Color32::WHITE),
-            );
-        }
+        ends.iter().all(|p| p.is_finite()).then_some(ends)
     }
 
     fn draw_regression_channel(
@@ -151,368 +170,125 @@ impl Drawing {
             })
         };
         let [upper, center, lower] = [deviations, 0.0, -deviations].map(line);
+        let fitted = center;
 
-        // Fill between the bands
-        let fill = Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
-        painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![upper[0], upper[1], lower[1], lower[0]],
-            fill,
-            Stroke::NONE,
-        ));
-
-        // Draw the band lines
-        let band_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
+        let label_pos = lower[0] + egui::vec2(4.0, 4.0);
+        let extend = |[a, b]: [Pos2; 2]| {
+            let at = |x: f32| {
+                let dx = b.x - a.x;
+                Pos2::new(
+                    x,
+                    if dx.abs() < 1e-6 {
+                        a.y
+                    } else {
+                        a.y + (b.y - a.y) * ((x - a.x) / dx)
+                    },
+                )
+            };
+            [
+                if self.extend_left {
+                    at(painter.clip_rect().left())
+                } else {
+                    a
+                },
+                if self.extend_right {
+                    at(painter.clip_rect().right())
+                } else {
+                    b
+                },
+            ]
+        };
+        let [upper, center, lower] = [upper, center, lower].map(extend);
+        let band_color = DESIGN_TOKENS.semantic.brand.accent;
+        if let Some(fill) = self.fill_color {
+            for (a, b, rgb) in [
+                (upper, center, [fill[0], fill[1], fill[2]]),
+                (center, lower, [self.color[0], self.color[1], self.color[2]]),
+            ] {
+                painter.add(egui::Shape::convex_polygon(
+                    vec![a[0], a[1], b[1], b[0]],
+                    Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], fill[3]),
+                    Stroke::NONE,
+                ));
+            }
+        }
         for band in [upper, lower] {
-            painter.line_segment(band, Stroke::new(stroke::HAIRLINE, band_color));
+            painter.line_segment(band, Stroke::new(self.stroke_width, band_color));
         }
-
-        // Draw main regression line (thicker)
-        painter.line_segment(center, Stroke::new(self.stroke_width + 0.5, color));
-
-        // Draw info label with R² and the correlation
-        let line_end = center[1];
-        let label_pos = Pos2::new(line_end.x + typography::XS, line_end.y - typography::XXL);
-        let label_bg = DESIGN_TOKENS
-            .semantic
-            .extended
-            .chart_axis_bg
-            .gamma_multiply(0.9);
-        let label_rect = Rect::from_min_size(
-            label_pos,
-            egui::Vec2::new(
-                DESIGN_TOKENS.sizing.technical_labels.channel_label_width,
-                DESIGN_TOKENS.sizing.technical_labels.channel_label_height,
-            ),
-        );
-        painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-        painter.rect_stroke(
-            label_rect,
-            DESIGN_TOKENS.rounding.sm,
-            Stroke::new(stroke::HAIRLINE, color),
-            egui::epaint::StrokeKind::Inside,
-        );
-
-        // R² value
-        painter.text(
-            Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XS),
-            egui::Align2::CENTER_CENTER,
-            format!("R² = {:.2}", fit.r_squared),
-            egui::FontId::proportional(typography::XS),
-            color,
-        );
-
-        // Pearson correlation
-        painter.text(
-            Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XXL),
-            egui::Align2::CENTER_CENTER,
-            fit.correlation
-                .map_or_else(|| "r = n/a".to_owned(), |r| format!("r = {r:.2}")),
-            egui::FontId::proportional(typography::XS),
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180),
-        );
-    }
-
-    /// Render Flat Top/Bottom - Trend line with horizontal support/resistance
-    pub(crate) fn render_flat_top_bottom(&self, painter: &egui::Painter, view: &ChartView) {
-        if self.points.len() < 3 {
-            let color = Color32::from_rgba_unmultiplied(
-                self.color[0],
-                self.color[1],
-                self.color[2],
-                self.color[3],
-            );
-            for (i, &p) in self.points.iter().enumerate() {
-                painter.circle_filled(p, DESIGN_TOKENS.rounding.md, color);
-                if i > 0 {
-                    painter.line_segment(
-                        [self.points[i - 1], p],
-                        Stroke::new(self.stroke_width, color),
-                    );
-                }
-            }
-            return;
-        }
-
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let p3 = self.points[2];
-
-        // Determine if this is a flat top or flat bottom
-        let is_flat_top = p3.y < (p1.y + p2.y) / 2.0;
-
-        // Draw flat horizontal line at p3's y level
-        let [flat_start, flat_end] = flat_line(p1, p2, p3);
-        painter.line_segment(
-            [flat_start, flat_end],
+        super::utils::draw_dashed_line(
+            painter,
+            center[0],
+            center[1],
             Stroke::new(self.stroke_width, color),
-        );
-
-        // Draw trendline from p1 to p2
-        painter.line_segment([p1, p2], Stroke::new(self.stroke_width, color));
-
-        // Create fill polygon between trend line and flat line
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 35);
-
-        painter.add(egui::epaint::PathShape::convex_polygon(
-            flat_top_bottom_fill(p1, p2, p3),
-            fill_color,
-            Stroke::NONE,
-        ));
-
-        // Draw dashed connector lines
-        let connector_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-        super::utils::draw_dashed_line(
-            painter,
-            Pos2::new(p1.x, p1.y),
-            Pos2::new(p1.x, p3.y),
-            Stroke::new(stroke::HAIRLINE, connector_color),
-            DESIGN_TOKENS.rounding.lg,
-            DESIGN_TOKENS.rounding.sm,
-        );
-        super::utils::draw_dashed_line(
-            painter,
-            Pos2::new(p2.x, p2.y),
-            Pos2::new(p2.x, p3.y),
-            Stroke::new(stroke::HAIRLINE, connector_color),
-            DESIGN_TOKENS.rounding.lg,
-            DESIGN_TOKENS.rounding.sm,
-        );
-
-        // Draw price labels
-        let label_bg = DESIGN_TOKENS
-            .semantic
-            .extended
-            .chart_axis_bg
-            .gamma_multiply(0.85);
-        let label_font = egui::FontId::proportional(typography::XS);
-
-        // Flat line price label (shown at the right end)
-        let flat_label_pos = Pos2::new(flat_end.x + DESIGN_TOKENS.rounding.lg, p3.y);
-        let flat_price_text = if is_flat_top { "Resistance" } else { "Support" };
-        let flat_label_rect = Rect::from_min_size(
-            flat_label_pos,
-            egui::Vec2::new(
-                DESIGN_TOKENS.sizing.technical_labels.channel_offset_x,
-                typography::XXL,
-            ),
-        );
-        painter.rect_filled(flat_label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-        painter.text(
-            Pos2::new(
-                flat_label_pos.x + DESIGN_TOKENS.sizing.technical_labels.cycle_label_width
-                    - DESIGN_TOKENS.spacing.lg,
-                flat_label_pos.y + DESIGN_TOKENS.spacing.lg,
-            ),
-            egui::Align2::CENTER_CENTER,
-            flat_price_text,
-            label_font.clone(),
-            color,
-        );
-
-        // Height measurement between lines
-        let mid_x = (p1.x + p2.x) / 2.0;
-        let mid_trend_y = (p1.y + p2.y) / 2.0;
-
-        // Draw measurement indicator
-        let measure_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
-
-        // Vertical measurement line
-        let measure_top = Pos2::new(mid_x, p3.y.min(mid_trend_y));
-        let measure_bottom = Pos2::new(mid_x, p3.y.max(mid_trend_y));
-        super::utils::draw_dashed_line(
-            painter,
-            measure_top,
-            measure_bottom,
-            Stroke::new(stroke::HAIRLINE, measure_color),
-            DESIGN_TOKENS.rounding.sm,
-            DESIGN_TOKENS.rounding.sm,
-        );
-
-        // Height label
-        let height_label_pos = Pos2::new(
-            mid_x + DESIGN_TOKENS.rounding.lg,
-            (p3.y + mid_trend_y) / 2.0,
+            8.0,
+            4.0,
         );
         painter.text(
-            height_label_pos,
-            egui::Align2::LEFT_CENTER,
-            self.size_labels(view.price_to_y).concat(),
+            label_pos,
+            egui::Align2::LEFT_TOP,
+            fit.correlation
+                .map_or_else(|| "n/a".to_owned(), |r| format!("{r:.2}")),
             egui::FontId::proportional(typography::XS),
-            measure_color,
+            band_color,
         );
-
-        // Draw anchor points with white border
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p1,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p2,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p3, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p3,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
+        self.render_line_text(painter, fitted[0], fitted[1], true);
     }
 
-    /// Render Disjoint Channel - Two parallel channel segments with connector
-    pub(crate) fn render_disjoint_channel(&self, painter: &egui::Painter, view: &ChartView) {
-        if self.points.len() < 3 {
-            let color = Color32::from_rgba_unmultiplied(
-                self.color[0],
-                self.color[1],
-                self.color[2],
-                self.color[3],
-            );
-            for (i, &p) in self.points.iter().enumerate() {
-                painter.circle_filled(p, DESIGN_TOKENS.rounding.md, color);
-                if i > 0 {
-                    painter.line_segment(
-                        [self.points[i - 1], p],
-                        Stroke::new(self.stroke_width, color),
-                    );
-                }
+    /// Unextended endpoints in anchor order, shared with selection handles.
+    pub(crate) fn channel_second_line(&self) -> Option<[Pos2; 2]> {
+        let &[a, b, c, ..] = self.points.as_slice() else {
+            return None;
+        };
+        match self.tool_type {
+            DrawingToolType::ParallelChannel => self.parallel_channel_second_line(),
+            DrawingToolType::FlatTopBottom => Some(flat_line(a, b, c)),
+            DrawingToolType::DisjointChannel => Some(disjoint_second_line(a, b, c)),
+            _ => None,
+        }
+    }
+
+    /// The flat or mirrored channel, split at a crossing into convex fill areas.
+    pub(super) fn wedge_channel_outline(&self, rect: Rect) -> Option<super::Outline> {
+        let other = self.channel_second_line()?;
+        let extend = |mut line: [Pos2; 2]| {
+            if line[0].x > line[1].x {
+                line.reverse();
             }
-            return;
+            let [a, b] = line;
+            let dx = b.x - a.x;
+            if dx.abs() < 1e-6 {
+                return line;
+            }
+            let at = |x| Pos2::new(x, a.y + (x - a.x) * (b.y - a.y) / dx);
+            [
+                if self.extend_left {
+                    at(rect.left().min(a.x))
+                } else {
+                    a
+                },
+                if self.extend_right {
+                    at(rect.right().max(b.x))
+                } else {
+                    b
+                },
+            ]
+        };
+        let [a, b] = extend([self.points[0], self.points[1]]);
+        let [c, d] = extend(other);
+        let mut outline = super::Outline {
+            lines: vec![[a, b], [c, d]],
+            ..Default::default()
+        };
+        if self.fill_color.is_some() {
+            let (start_gap, end_gap) = (c.y - a.y, d.y - b.y);
+            if start_gap * end_gap < 0.0 {
+                let crossing = a.lerp(b, start_gap / (start_gap - end_gap));
+                outline.areas = vec![vec![a, crossing, c], vec![crossing, b, d]];
+            } else {
+                outline.areas.push(vec![a, b, d, c]);
+            }
         }
-
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let p3 = self.points[2];
-
-        // Calculate direction vector for first segment
-        let dx = p2.x - p1.x;
-        let dy = p2.y - p1.y;
-        let line_length = (dx * dx + dy * dy).sqrt();
-
-        // Second segment endpoint (parallel to first)
-        let [_, p4] = disjoint_second_line(p1, p2, p3);
-
-        // Calculate midpoints for the connector
-        let mid1 = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
-        let mid2 = Pos2::new((p3.x + p4.x) / 2.0, (p3.y + p4.y) / 2.0);
-
-        // Fill between the two channel segments
-        let fill_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
-        painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![p1, p2, p4, p3],
-            fill_color,
-            Stroke::NONE,
-        ));
-
-        // Draw first segment (main stroke)
-        painter.line_segment([p1, p2], Stroke::new(self.stroke_width, color));
-
-        // Draw second segment (parallel)
-        painter.line_segment([p3, p4], Stroke::new(self.stroke_width, color));
-
-        // Draw middle connector line (dashed)
-        let connector_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 120);
-        super::utils::draw_dashed_line(
-            painter,
-            mid1,
-            mid2,
-            Stroke::new(stroke::HAIRLINE, connector_color),
-            DESIGN_TOKENS.rounding.lg,
-            DESIGN_TOKENS.rounding.md,
-        );
-
-        // Draw edge connectors (lighter dashed)
-        let edge_connector_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80);
-        super::utils::draw_dashed_line(
-            painter,
-            p1,
-            p3,
-            Stroke::new(stroke::HAIRLINE, edge_connector_color),
-            DESIGN_TOKENS.rounding.md,
-            DESIGN_TOKENS.rounding.sm,
-        );
-        super::utils::draw_dashed_line(
-            painter,
-            p2,
-            p4,
-            Stroke::new(stroke::HAIRLINE, edge_connector_color),
-            DESIGN_TOKENS.rounding.md,
-            DESIGN_TOKENS.rounding.sm,
-        );
-
-        // Draw width measurement
-        if line_length > 20.0 {
-            let mid_connector = Pos2::new((mid1.x + mid2.x) / 2.0, (mid1.y + mid2.y) / 2.0);
-
-            // Label background
-            let label_bg = DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.8);
-            super::measurements::boxed_label(
-                painter,
-                egui::Align2::CENTER_CENTER,
-                mid_connector,
-                self.size_labels(view.price_to_y).concat(),
-                connector_color,
-                label_bg,
-            );
-        }
-
-        // Draw anchor points with white border
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p1,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p2,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(p3, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            p3,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-
-        // Also draw the derived point p4
-        let derived_point_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
-        painter.circle_filled(p4, DESIGN_TOKENS.rounding.md, derived_point_color);
-        painter.circle_stroke(
-            p4,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::HAIRLINE, Color32::WHITE),
-        );
+        Some(outline)
     }
 }
 
@@ -527,28 +303,20 @@ fn span_moments(view: &ChartView, first: usize, bars: &[Bar]) -> Rc<Moments> {
     })
 }
 
-/// The flat top/bottom's horizontal line at `p3`, run past both ends of the
-/// trend line from `p1` to `p2`.
-pub(super) fn flat_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
-    let extend = typography::XXL + typography::LG;
-    [p1.x.min(p2.x) - extend, p1.x.max(p2.x) + extend].map(|x| Pos2::new(x, p3.y))
+/// The horizontal boundary over the base line's bars, in anchor order.
+fn flat_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
+    [p1.x, p2.x].map(|x| Pos2::new(x, p3.y))
 }
 
-/// The area between the flat top/bottom's trend line from `p1` to `p2` and
-/// its flat line at `p3`, over the trend line's bars, wound clockwise.
-pub(super) fn flat_top_bottom_fill(p1: Pos2, p2: Pos2, p3: Pos2) -> Vec<Pos2> {
-    let (f1, f2) = (Pos2::new(p1.x, p3.y), Pos2::new(p2.x, p3.y));
-    if p3.y < (p1.y + p2.y) / 2.0 {
-        vec![p1, p2, f2, f1]
-    } else {
-        vec![f1, f2, p2, p1]
+/// Reflect the base slope through the third anchor over the same bars. A vertical
+/// base reflects about the third anchor's height, since it has no finite slope.
+fn disjoint_second_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
+    let d = p2 - p1;
+    if d.x.abs() < 1e-6 {
+        let axis = (p1.y + p2.y) / 2.0;
+        return [p1, p2].map(|p| Pos2::new(p.x, p3.y + axis - p.y));
     }
-}
-
-/// The disjoint channel's second line: from `p3`, parallel to and as long as
-/// the line from `p1` to `p2`.
-pub(super) fn disjoint_second_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
-    [p3, p3 + (p2 - p1)]
+    [p1.x, p2.x].map(|x| Pos2::new(x, p3.y - (x - p3.x) * d.y / d.x))
 }
 
 /// The move that carries the line through `p1` and `p2` onto `p3`: straight up
@@ -568,6 +336,48 @@ mod tests {
     use super::*;
     use crate::drawings::DrawingToolType;
     use crate::drawings::rendering::sample_bars;
+
+    fn collect(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => out.push(shape.clone()),
+        }
+    }
+
+    /// Reflect y = 100 - x about y = 85: the other line is y = 70 + x,
+    /// through (50, 120), with the same bars in either anchor order.
+    #[test]
+    fn disjoint_second_line_mirrors_the_slope_through_the_third_anchor() {
+        for (a, b, c, expected) in [
+            (
+                (10.0, 90.0),
+                (90.0, 10.0),
+                (50.0, 120.0),
+                [(10.0, 80.0), (90.0, 160.0)],
+            ),
+            (
+                (90.0, 10.0),
+                (10.0, 90.0),
+                (150.0, 220.0),
+                [(90.0, 160.0), (10.0, 80.0)],
+            ),
+            (
+                (10.0, 90.0),
+                (90.0, 90.0),
+                (50.0, 120.0),
+                [(10.0, 120.0), (90.0, 120.0)],
+            ),
+            (
+                (10.0, 90.0),
+                (10.0, 10.0),
+                (50.0, 120.0),
+                [(10.0, 80.0), (10.0, 160.0)],
+            ),
+        ] {
+            let p = |(x, y)| Pos2::new(x, y);
+            assert_eq!(disjoint_second_line(p(a), p(b), p(c)), expected.map(p));
+        }
+    }
 
     /// The second line keeps the base line's slope and passes through the third
     /// anchor straight above or below it, so the channel's price width is the
@@ -620,14 +430,14 @@ mod tests {
         restored.id = 1;
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 200.0));
         let outline = restored.outline(rect).unwrap();
-        assert_eq!(
-            outline.lines,
-            vec![
-                [Pos2::new(0.0, 110.0), Pos2::new(100.0, 10.0)],
-                [Pos2::new(0.0, 140.0), Pos2::new(100.0, 40.0)],
-                [Pos2::new(0.0, 125.0), Pos2::new(100.0, 25.0)],
-            ]
-        );
+        assert_eq!(outline.lines.len(), 3);
+        for line in [
+            [Pos2::new(0.0, 110.0), Pos2::new(100.0, 10.0)],
+            [Pos2::new(0.0, 140.0), Pos2::new(100.0, 40.0)],
+            [Pos2::new(0.0, 125.0), Pos2::new(100.0, 25.0)],
+        ] {
+            assert!(outline.lines.contains(&line), "missing {line:?}");
+        }
         assert_eq!(outline.areas.len(), 1);
         let hit = crate::drawings::services::DrawingInteraction::new();
         assert_eq!(
@@ -653,6 +463,58 @@ mod tests {
         }
         restored.fill_color = None;
         assert!(restored.outline(rect).unwrap().areas.is_empty());
+    }
+
+    /// A new parallel channel draws its middle line dashed in the line colour at 1 px, whatever
+    /// width its two lines take.
+    #[test]
+    fn parallel_channel_middle_line_stays_one_pixel_at_any_line_width() {
+        let mut drawing = Drawing::new(1, DrawingToolType::ParallelChannel);
+        drawing.points = vec![
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 100.0),
+            Pos2::new(100.0, 200.0),
+        ];
+        drawing.stroke_width = 3.0;
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(pane),
+                ..Default::default()
+            },
+            |ui| drawing.render_channel(ui.painter(), pane),
+        );
+        let mut shapes = Vec::new();
+        for shape in &output.shapes {
+            collect(&shape.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        let on_line = |y: f32| -> Vec<_> {
+            shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::LineSegment { points, stroke }
+                        if points.iter().all(|p| p.y == y) =>
+                    {
+                        Some(*stroke)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        for y in [100.0, 200.0] {
+            assert_eq!(
+                on_line(y),
+                [Stroke::new(3.0, drawing.color32())],
+                "outer line at {y}"
+            );
+        }
+        let middle = on_line(150.0);
+        assert!(middle.len() > 1, "the middle line is dashed");
+        for stroke in middle {
+            assert_eq!(stroke, Stroke::new(1.0, drawing.color32()));
+        }
     }
 
     /// Reference: ordinary least squares of the closes of bars 0..=5 against
@@ -689,5 +551,162 @@ mod tests {
         .fit()
         .unwrap();
         assert_eq!((flat.r_squared, flat.correlation), (1.0, None));
+    }
+
+    /// Closes 10, 14, 12 have Sxx = 2, Sxy = 2, Syy = 8: y = 11 + x,
+    /// residual sigma = sqrt(3), r = 1/2. Each half ends on that same centre line.
+    #[test]
+    fn regression_channel_respects_fill_extension_and_line_roles() {
+        use crate::drawings::{ChartPoint, RegressionTrendConfig};
+        use egui::{Context, RawInput, Shape};
+        let bars: Vec<_> = [10.0, 14.0, 12.0]
+            .into_iter()
+            .map(|close| Bar {
+                close,
+                ..sample_bars()[0].clone()
+            })
+            .collect();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        for reverse in [false, true] {
+            for (left, right, xs) in [
+                (false, false, [100.0, 300.0]),
+                (false, true, [100.0, 500.0]),
+                (true, false, [0.0, 300.0]),
+            ] {
+                for filled in [false, true] {
+                    let mut drawing = Drawing::new(1, DrawingToolType::RegressionTrend);
+                    drawing.chart_points =
+                        vec![ChartPoint::new(0.0, 30.0), ChartPoint::new(2.0, 5.0)];
+                    if reverse {
+                        drawing.chart_points.reverse();
+                    }
+                    drawing
+                        .update_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+                    drawing.regression_trend = RegressionTrendConfig::new(1.0);
+                    drawing.stroke_width = 3.0;
+                    drawing.line_style = crate::model::LineStyle::Dotted;
+                    drawing.fill_color = filled.then_some([41, 98, 255, 51]);
+                    drawing.extend_left = left;
+                    drawing.extend_right = right;
+                    let ctx = Context::default();
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(pane),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            drawing.render(
+                                ui.painter(),
+                                pane,
+                                &ChartView {
+                                    price_formatter: None,
+                                    time_formatter: None,
+                                    bar_seconds: 0,
+                                    instrument: None,
+                                    bars: &bars,
+                                    revision: 0,
+                                    bar_to_x: &|b| 100.0 + b * 100.0,
+                                    price_to_y: &|p| 500.0 - p as f32 * 10.0,
+                                    y_to_price: &|y| f64::from((500.0 - y) / 10.0),
+                                    time_axis: true,
+                                    executions: None,
+                                    timeframe: None,
+                                    finer: &[],
+                                },
+                            );
+                        },
+                    );
+                    let mut shapes = Vec::new();
+                    for shape in &output.shapes {
+                        collect(&shape.shape, &mut shapes);
+                    }
+                    output.drop_without_applying_deltas();
+                    let fills: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Path(p) if p.fill.a() > 0 => Some(p),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(fills.len(), if filled { 2 } else { 0 });
+                    let center_y = |x: f32| 400.0 - x / 10.0;
+                    if filled {
+                        for (color, offset) in [
+                            (
+                                Color32::from_rgba_unmultiplied(41, 98, 255, 51),
+                                -10.0 * 3f32.sqrt(),
+                            ),
+                            (
+                                Color32::from_rgba_unmultiplied(242, 54, 69, 51),
+                                10.0 * 3f32.sqrt(),
+                            ),
+                        ] {
+                            let fill = fills
+                                .iter()
+                                .find(|p| p.fill == color)
+                                .expect("half fill colour");
+                            for expected in [
+                                Pos2::new(xs[0], center_y(xs[0])),
+                                Pos2::new(xs[1], center_y(xs[1])),
+                                Pos2::new(xs[0], center_y(xs[0]) + offset),
+                                Pos2::new(xs[1], center_y(xs[1]) + offset),
+                            ] {
+                                assert!(
+                                    fill.points.iter().any(|p| p.distance(expected) < 1e-3),
+                                    "missing {expected:?}"
+                                );
+                            }
+                        }
+                    }
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                            _ => None,
+                        })
+                        .collect();
+                    for offset in [-10.0 * 3f32.sqrt(), 10.0 * 3f32.sqrt()] {
+                        assert!(lines.iter().any(|(p, s)| s.width == 3.0
+                            && s.color == Color32::from_rgb(41, 98, 255)
+                            && p[0].distance(Pos2::new(xs[0], center_y(xs[0]) + offset)) < 1e-3
+                            && p[1].distance(Pos2::new(xs[1], center_y(xs[1]) + offset)) < 1e-3));
+                    }
+                    let center: Vec<_> = lines
+                        .iter()
+                        .filter(|(_, s)| s.color == drawing.color32())
+                        .collect();
+                    assert!(center.len() > 1, "the centre line is dashed");
+                    let mut points = Vec::new();
+                    for (p, s) in center {
+                        assert_eq!(s.width, 3.0);
+                        assert!(p[0].distance(p[1]) < (xs[1] - xs[0]) / 2.0);
+                        for point in p.iter() {
+                            assert!((point.y - center_y(point.x)).abs() < 1e-3);
+                            points.push(*point);
+                        }
+                    }
+                    let bounds = Rect::from_points(&points);
+                    let tolerance = (xs[1] - xs[0]) * 0.1;
+                    assert!(
+                        bounds.left() <= xs[0] + tolerance && bounds.right() >= xs[1] - tolerance
+                    );
+                    let text: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Text(t) => Some(t),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(text.len(), 1);
+                    assert_eq!(text[0].galley.job.text, "0.50");
+                    assert!((text[0].pos.x - 100.0).abs() < 15.0);
+                    assert!(
+                        !shapes
+                            .iter()
+                            .any(|s| matches!(s, Shape::Circle(_) | Shape::Rect(_)))
+                    );
+                }
+            }
+        }
     }
 }

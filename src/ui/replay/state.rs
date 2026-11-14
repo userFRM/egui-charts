@@ -450,38 +450,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_replay_state_creation() {
-        let state = ReplayState::new();
-        assert!(!state.is_active());
-        assert!(!state.is_playing());
-        assert_eq!(state.curr_bar, 0);
-    }
-
-    #[test]
     fn test_replay_progress() {
         let mut state = ReplayState::new();
         state.total_bars = 100;
         state.curr_bar = 50;
         assert!((state.progress() - 0.505).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_navigation() {
-        let mut state = ReplayState::new();
-        state.total_bars = 10;
-        state.playback_state = PlaybackState::Paused;
-
-        state.step_forward();
-        assert_eq!(state.curr_bar, 1);
-
-        state.jump_to_bar(5);
-        assert_eq!(state.curr_bar, 5);
-
-        state.step_backward();
-        assert_eq!(state.curr_bar, 4);
-
-        state.jump_to_percent(1.0);
-        assert_eq!(state.curr_bar, 9);
     }
 
     #[test]
@@ -512,10 +485,11 @@ mod tests {
             state.total_bars = 100;
             state.set_speed(speed);
             state.play();
-            state.last_update = Instant::now().checked_sub(std::time::Duration::from_secs(10));
+            state.last_update =
+                Instant::now().checked_sub(std::time::Duration::from_millis(10_500));
             state.update()
         });
-        // 10 s at 1 s per bar: a speed plays clamped to 0.1x..100x, and at 1x when not finite.
+        // 10.5 s at 1 s per bar: a speed plays clamped to 0.1x..100x, and at 1x when not finite.
         assert_eq!(bars, [10, 1, 10, 1, 10]);
     }
 

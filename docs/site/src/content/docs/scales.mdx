@@ -1,33 +1,40 @@
 ---
 title: Scales and navigation
+prev:
+  link: /egui-charts/docs/chart-types/
+  label: Chart types and series
 ---
 
-The chart supplies time and price scales, pointer navigation and crosshair
-interaction. `ChartConfig` and `ChartOptions` configure behaviour; the
-[API reference](api-reference.mdx) documents their fields and defaults.
+A chart has one shared time axis and a price scale for each pane, with optional
+independent scales for added series. Choose a task below to try it with fixed
+synthetic data and the Rust source that runs the scene.
 
 ## Choose a price scale
 
-The price scale supports normal, logarithmic, percentage and indexed modes.
-Use the instrument's precision and a price formatter for labels. A logarithmic
-scale needs positive drawable prices. Relative scales need a usable reference;
-when it is unavailable or zero, the renderer uses ordinary prices.
+The [price scale guide](price-scale.mdx) covers independent scales, normal,
+logarithmic and relative modes, margins, inversion and manual ranges.
 
 ## Exchange time, not bar indices
 
-Use `Chart::visible_time_range` and `Chart::apply_synced_time_range` to share
-UTC viewports. Use `hover_time` and `set_synced_crosshair_time` for crosshairs.
-Show each receiving chart once so its plot width is known. Select one source
-chart and propagate only its changes to avoid feedback loops.
+The [time scale guide](time-scale.mdx) covers fitting, scrolling, visible ranges,
+future whitespace and conversions between logical indices, UTC and screen points.
+It also explains when the first frame's geometry becomes available.
 
-The [builder guide](../../../../builder-guide.md#synchronize-charts) includes the integration
-snippet; the [synchronized charts example](https://github.com/userFRM/egui-charts/blob/main/examples/synchronized_charts.rs)
-shows different intervals together. For deliberate future whitespace, use
-`set_visible_logical_range` with the chart's own logical coordinates.
+## Strikes, maturities and other keys
+
+The [horizontal scales guide](horizontal-scales.mdx) encodes numeric keys as bar
+times and spaces actual samples proportionally without placeholder rows.
+
+## Arrange panes
+
+The [panes guide](panes.mdx) moves an added series below the main plot and
+resizes it. Panes share a chart's time axis; a grid contains separate charts.
 
 ## Handle chart events
 
-After `Chart::show`, drain `Chart::drain_events` for pointer actions, crosshair
-movement and visible-range changes. Let the host decide whether a click opens
-another view or changes application selection. Keep that decision outside the
-renderer.
+After [`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show),
+drain [`Chart::drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
+for pointer actions, crosshair movement and visible-range changes. Let the host
+decide whether a click opens another view or changes application selection.
+The [builder guide](../../../../builder-guide.md#synchronize-charts) shows how to
+synchronize separate charts without feedback loops.

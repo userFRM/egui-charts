@@ -7,7 +7,6 @@
 // Module declarations
 pub mod actions;
 pub mod config;
-pub mod dialog;
 pub mod menu;
 pub mod types;
 
@@ -15,7 +14,8 @@ pub mod types;
 pub use actions::SettingsAction;
 pub use config::{ChartSettings, SettingsDialogConfig};
 
-pub use dialog::SettingsDialog;
+pub use crate::ui::dialogs::chart_settings as dialog;
+pub use crate::ui::dialogs::chart_settings::SettingsDialog;
 pub use menu::SettingsMenu;
 pub use types::SettingsTab;
 // ChartType is re-exported from chart_type_selector - use that as single source of truth

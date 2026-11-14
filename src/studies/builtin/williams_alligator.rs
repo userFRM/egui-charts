@@ -60,7 +60,11 @@ impl WilliamsAlligator {
             lips_offset: 3,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: [palette::ACCENT, palette::PINK, palette::GREEN],
+            colors: [
+                palette::ACCENT,
+                palette::PINK,
+                Color32::from_rgb(102, 187, 106),
+            ],
             visible: true,
         }
     }

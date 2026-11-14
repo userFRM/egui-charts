@@ -1,0 +1,58 @@
+---
+title: Price lines and markers
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/recipes.rs?raw';
+
+Use a [price line](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.PriceLine.html)
+for a level in a series' units and a
+[marker](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Marker.html)
+for an annotation attached to a stored timestamp. They belong to the addressed
+bar series, including an added series in another pane.
+
+## Add the annotations once
+
+Pass the [first chart](../first-chart.mdx) to this setup once before the frame
+loop. It marks the newest bar and draws a reference two price units below its close.
+Empty history is allowed and leaves the chart unchanged.
+
+<Example scene="annotations" title="A reference level and a bar annotation"
+  task="Hover the newest bar's arrow to read its tooltip. Pan and zoom: the annotation stays attached to its time."
+  code={source.match(/pub fn annotations\b[^]*?\n\}/)[0]} />
+
+[`set_markers`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_markers)
+replaces the complete marker list for the series; pass an empty vector to clear
+it. Marker times match data points. Use
+[`MarkerPos`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.MarkerPos.html)
+to place a shape above or below its bar, or at an explicit price. The default
+[`MarkerOptions::auto_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.MarkerOptions.html#structfield.auto_scale)
+reserves space for visible price-relative markers and labels.
+
+## Edit a line or handle a click
+
+[`add_price_line`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_price_line)
+returns an optional
+[`PriceLineId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PriceLineId.html).
+Retain it to call
+[`update_price_line`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update_price_line)
+or
+[`remove_price_line`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_price_line).
+The setup does not need individual edits, so it uses
+[`set_price_lines`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_price_lines)
+to replace all levels. That replacement invalidates earlier line handles.
+
+A marker with an
+[`id`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Marker.html#structfield.id)
+emits
+[`ChartEvent::MarkClick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html#variant.MarkClick)
+on a primary click. [Drain events after showing the chart](../interaction.mdx#drain-events-once-per-frame)
+and route that id to your host action. Hovering a marker or a price line sets
+[`ChartPointer::target`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.target)
+to
+[`PointerTarget::Marker`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.Marker)
+or
+[`PointerTarget::PriceLine`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.PriceLine),
+which carry the series and the marker id or line handle. Remove an annotation by replacing the
+marker list without it. Interactive drawing tools and their persistence are
+covered by the [drawing guide](../drawings.mdx).

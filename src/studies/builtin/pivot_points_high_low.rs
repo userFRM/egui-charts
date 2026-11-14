@@ -128,8 +128,8 @@ impl PivotPointsHighLow {
             low_left: low_left.max(1),
             low_right: low_right.max(1),
             values: IndicatorValues::new(),
-            high_color: palette::MUTED,
-            low_color: palette::MUTED,
+            high_color: palette::WHITE,
+            low_color: palette::WHITE,
             visible: true,
         }
     }
@@ -234,6 +234,17 @@ impl Indicator for PivotPointsHighLow {
         }
     }
 
+    fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
+        Some((
+            if line == 0 {
+                self.high_color
+            } else {
+                self.low_color
+            },
+            Color32::from_rgb(54, 58, 69),
+        ))
+    }
+
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         Some(self.format_value(self.values.value(line, bar)?))
     }
@@ -278,7 +289,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     /// A stream of bars confirms exactly the pivots of the batch rule over its finite bars, each
-    /// `right` finite bars later, skipping a bar without a price.
+    /// `right` finite bars later, skipping a bar without a price. The PivotsHL rows in
+    /// `studies/reference/expected.txt` independently pin the batch rule used as the reference.
     #[test]
     fn swings_confirm_the_pivots_of_the_batch_rule() {
         let highs: Vec<f64> = (0..200u32)

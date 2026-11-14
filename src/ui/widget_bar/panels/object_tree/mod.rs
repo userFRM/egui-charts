@@ -2,9 +2,11 @@
 //!
 //! Use [`ObjectTreePanel`] with host-supplied [`SourceItem`] records and optional
 //! [`DataWindowInfo`]. Apply drawing and study actions through
-//! [`ObjectTreePanel::apply_to_chart`]. Copy each drawing's `folder` into its source row.
-//! Folder paths persist with drawings. Hosts retain [`ObjectTreeState::folders`] per chart
-//! when empty folders must survive closing the panel or restarting the application.
+//! [`ObjectTreePanel::apply_to_chart`]. Copy each drawing's `folder` and
+//! `folder_sync_mode()` into its source row. Folders persist with their drawings.
+//!
+//! To offer the layout's drawings by symbol, set [`ObjectTreeState::symbol_drawings`] from
+//! `ChartLayout::drawing_inventory` each frame and handle the actions the list emits.
 
 mod actions;
 mod chart_actions;
@@ -22,7 +24,6 @@ mod types;
 pub use actions::ObjectTreeAction;
 pub use config::ObjectTreeConfig;
 pub use data_window::show_data_window;
-pub(crate) use data_window::{format_price, price_decimals};
 pub use panel::ObjectTreePanel;
 pub use state::ObjectTreeState;
 pub use types::{DataWindowInfo, DrawingProperties, SourceItem, SourceType};

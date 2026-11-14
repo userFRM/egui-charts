@@ -98,7 +98,7 @@ pub(super) fn rasterize(
         };
         let Some(texture) = textures.get(&mesh.texture_id) else {
             return Err(format!(
-                "{:?} is not a texture of the frame; host textures cannot be drawn into PNG",
+                "{:?} is not a texture of the frame; host textures cannot be drawn into PNG without their pixels in ImageExportOptions::textures",
                 mesh.texture_id
             ));
         };

@@ -1,0 +1,256 @@
+---
+title: Migrate from 0.2.0 to main
+---
+
+<style>{`
+  @media (max-width: 50rem) {
+    .sl-markdown-content table { display: table; table-layout: fixed; width: 100%; }
+    .sl-markdown-content :is(th, td) { overflow-wrap: anywhere; }
+    .sl-markdown-content td code { white-space: normal; }
+  }
+`}</style>
+
+This page upgrades an application using **published 0.2.0** to **main (0.3 in
+development)**. Main has breaking API changes and is not a published 0.3 release.
+The [release notes](../../../../../CHANGELOG.md#unreleased) list the individual
+changes; [0.2.0 remains documented separately](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+
+The examples labelled 0.2.0 use that release's API. The replacement Rust examples
+are compiled with main's documentation tests.
+
+## 1. Update Rust, egui and features together
+
+| Dependency | Published 0.2.0 | Main |
+| --- | --- | --- |
+| Rust minimum | 1.88 | 1.95 |
+| egui / eframe | 0.33.3 | 0.37 |
+| Default features | `icons` | `ui`, `locales`, `timezones` |
+| Widget without application UI | Available without default features | Enable `widget` explicitly |
+
+For a chart with built-in studies and drawing tools, without the application UI:
+
+```toml
+[dependencies]
+egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget", "studies", "drawings"] }
+eframe = "0.37"
+chrono = "0.4"
+```
+
+Upgrade direct egui dependencies too, so your host and the chart use the same egui
+types. See [installation](installation.mdx#enable-what-your-application-uses) for
+the complete feature table. With no features, main is a headless engine.
+Remove the old `backtest` and `scripting` feature names. Main's separate
+`strategies` feature provides the [strategy runner](../../../../strategy-report.md), and
+[custom studies](studies.mdx#write-a-custom-study) provide a Rust extension point.
+The application supplies any study language and its compiler.
+
+## 2. Replace history and update individual bars
+
+Keep constructing a chart with `Chart::new(BarData::from_bars(bars))`, and keep the
+instance between frames. Replace `update_data` and `data` with the main series API.
+
+**0.2.0:**
+
+```rust,ignore
+use egui_charts::{Chart, model::BarData};
+
+let mut chart = Chart::new(BarData::new());
+let followed_live_edge = chart.update_data(BarData::from_bars(Vec::new()));
+assert!(chart.data().bars.is_empty());
+```
+
+**Main:**
+
+```rust
+use chrono::DateTime;
+use egui_charts::{Chart, model::{Bar, BarData}, widget::SeriesId};
+
+let mut chart = Chart::new(BarData::new());
+let time = DateTime::UNIX_EPOCH;
+chart.set_data(SeriesId::MAIN, vec![
+    Bar::new(time, 100.0, 103.0, 99.0, 102.0, 10.0),
+]);
+chart.update(SeriesId::MAIN,
+    Bar::new(time, 100.0, 104.0, 99.0, 103.0, 12.0));
+assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
+assert_eq!(chart.bars(SeriesId::MAIN)[0].close, 103.0);
+```
+
+[`set_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data)
+replaces history. [`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update)
+replaces the latest bar at the same opening time or appends a later bar.
+There is no replacement for `update_data`'s boolean return: the chart follows the
+live edge according to `ChartOptions::time_scale.shift_visible_range_on_new_bar`.
+Remove the old validation enable/disable calls. Invalid bars are rejected, with
+the count in [`feed_state(SeriesId::MAIN).rejected_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FeedState.html#structfield.rejected_bars).
+
+## 3. Replace DataSource with Datafeed
+
+[`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html)
+answers requests through replies and streams updates through a sink. Its methods
+run on the UI thread: return promptly and do network work in your host's worker
+or browser task. On native targets a feed must be `Send + Sync`.
+
+| 0.2.0 | Main |
+| --- | --- |
+| `DataSource::fetch_historical` returning `Result<Vec<Bar>, DataSourceError>` | `Datafeed::history(request, reply)`, answering `Reply<HistoryPage>` once |
+| `HistoricalDataRequest::end_ts_millis`, `limit` | `HistoryRequest::before`, `since`, `count`, using UTC timestamps |
+| `DataSource::poll` / `DataUpdate` | `subscribe` receives a `Subscription`; push bars or trades into its `sink` |
+| `Box<dyn DataSource>` and `with_data_src` | `Arc<dyn Datafeed>` and `with_feed` |
+| `DataSource::search_symbols`, marks | Separate `services::SymbolSearch` and `services::Marks` services |
+
+This history-only adapter serves one symbol and interval from an ascending list:
+
+```rust
+use std::sync::Arc;
+use egui_charts::{ChartBuilder, data::{Datafeed, HistoryPage, HistoryRequest, Reply},
+    model::{Bar, Timeframe}};
+
+struct History(Vec<Bar>);
+
+impl Datafeed for History {
+    fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+        let end = self.0.partition_point(|bar| {
+            request.before.is_none_or(|before| bar.time < before)
+        });
+        let first = self.0.partition_point(|bar| {
+            request.since.is_some_and(|since| bar.time < since)
+        }).min(end);
+        let start = end.saturating_sub(request.count).max(first);
+        reply.send(Ok(HistoryPage::new(self.0[start..end].to_vec(), start == 0)));
+    }
+}
+
+let chart = ChartBuilder::new()
+    .with_feed(Arc::new(History(Vec::new())))
+    .with_symbol("SAMPLE")
+    .with_timeframe(Timeframe::Min1)
+    .with_initial_bars(500)
+    .build();
+assert_eq!(chart.symbol(), "SAMPLE");
+```
+
+Respect both bounds: `since` is inclusive, `before` exclusive, and `None` for
+`before` requests the latest bars. Return the newest `count` bars in that range.
+Set `end_of_history` only when no earlier history remains. A feed that pages by
+time windows uses `HistoryPage::with_continue_before` to cross empty windows.
+For live updates, retain the supplied sink and stop when `Sink::is_active` is
+false; implement `unsubscribe` for backend cleanup. See
+[historical and streaming data](data.mdx) and the
+[network feed example](https://github.com/userFRM/egui-charts/blob/main/examples/network_feed.rs).
+The host continues to own credentials, connections and market data.
+
+Map old errors to [`FeedError`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FeedError.html):
+`ConnError`, `FetchError` and `IoError` become `Network`; `ParseError` and
+`InvalidTimeRange` become `InvalidData`; `SymbolNotFound` and `NotSupported` retain
+their names. `RateLimited` carries `retry_after: Option<Duration>`.
+
+## 4. Let the chart own studies, drawings and updates
+
+`ChartBuilder::build` now returns a `Chart`, replacing `TradingChart`. Remove
+`tc.update()`; [`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
+applies feed updates. Replace `tc.chart` with the chart itself. For the lower-level
+widget, move externally owned studies and drawings onto the chart:
+
+**0.2.0:**
+
+```rust,ignore
+use egui_charts::{Chart, model::BarData, studies::{IndicatorRegistry, SMA}};
+
+let mut chart = Chart::new(BarData::new());
+let mut studies = IndicatorRegistry::new();
+studies.add(Box::new(SMA::new(20)));
+studies.calculate_all(&chart.data().bars);
+let mut drawings = egui_charts::drawings::DrawingManager::new();
+// In the frame callback:
+# let ui: &mut egui::Ui = todo!();
+chart.show_with_indicators(ui, Some(&mut drawings), Some(&studies));
+```
+
+**Main:**
+
+```rust
+use egui_charts::{Chart, model::BarData, studies::SMA};
+
+let mut chart = Chart::new(BarData::new());
+let study = chart.add_indicator(Box::new(SMA::new(20)));
+chart.set_indicator_visible(study, true);
+// In the frame callback, call chart.show(ui).
+// Later, remove the study by its stable series identifier:
+chart.remove_series(study);
+```
+
+Use [`drawings_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drawings_mut)
+for chart-owned drawing edits. Replace study indices and
+`ChartElementId::{OverlayIndicator, PaneIndicator}` with `SeriesId` and
+`ChartElementId::Indicator(id)`. Drop host `calculate_all` calls after bar updates;
+the chart schedules study calculations. Values may be unavailable until a later
+frame. If an export needs results immediately, calculate a clone of the study
+over `chart.bars(SeriesId::MAIN)`.
+
+Replace `set_timeframe_label(label)` with `set_timeframe(timeframe)`. A feed-backed
+chart reloads on a symbol or interval change. Supply `with_symbol` explicitly;
+an empty symbol requests no history. Keep a
+[`ChartMenus`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/context_menu/struct.ChartMenus.html)
+beside the chart and call `menus.show(ctx, &mut chart)` instead of
+`TradingChart::take_context_action`.
+
+## 5. Update imports, options and interval construction
+
+Use public re-exports instead of implementation modules. These are paths that
+existed in 0.2.0:
+
+| 0.2.0 | Main |
+| --- | --- |
+| `chart::builder::ChartBuilder` | `ChartBuilder` or `widget::ChartBuilder` |
+| `chart::selection::{SeriesId, ChartElementId}` | `widget::{SeriesId, ChartElementId}` |
+| `model::{ChartState, ZoomState}` | `studies::{ChartState, ZoomState}` |
+| `ext::UiExt` | `ui_kit::ext::UiExt` (feature `ui`) |
+| `ui::top_toolbar::Timeframe` | `model::Timeframe` |
+
+The release notes also cover intermediate development APIs. For example,
+`widget::builder::ChartBuilder` was introduced after 0.2.0 and is private now.
+
+[`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html),
+[`ChartOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html)
+and several other extensible records are non-exhaustive. Start with a constructor
+or `Default` and assign fields; external struct literals, including
+`..Default::default()`, cannot construct non-exhaustive records. Add a fallback
+arm when matching non-exhaustive chart, interval, event and host-intent enums.
+
+**Main:**
+
+```rust
+use egui_charts::{Chart, config::ChartOptions, model::{BarData, Timeframe}};
+
+let mut options = ChartOptions::default();
+options.time_scale.shift_visible_range_on_new_bar = true;
+let mut chart = Chart::new(BarData::new()).with_chart_options(options);
+let timeframe: Timeframe = "45s".parse().expect("positive interval");
+chart.set_timeframe(timeframe);
+assert_eq!(timeframe.duration_ms(), 45_000);
+```
+
+`Timeframe::Custom(45)` now takes `NonZeroU64`; parsing a positive label avoids
+manual construction. Use `duration_ms()` or `duration()` instead of the removed
+seconds helpers, which lost subsecond precision. See [scales](scales.mdx).
+
+## 6. Preserve themes and saved drawings deliberately
+
+A default `ChartBuilder` follows the applied egui theme. Call
+`with_theme(Theme::dark())` to keep a fixed dark chart. Replace
+`theme.apply_to_config(&mut config)` with `config = config.with_theme(&theme)`; use `Theme`
+fields and `theme.text` instead of removed component styles and typography
+tokens. See [theming](theming.mdx).
+
+[`DrawingStorage::from_json`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/persistence/struct.DrawingStorage.html#method.from_json)
+now returns `(document, skipped_drawings)`, rather than just the document.
+Report skipped records and retain the original JSON if they need recovery:
+saving the migrated document writes only the records that loaded. Main reads
+version 1 files and saves its current version; 0.2.0 cannot read the newer format.
+Back up saved layouts and drawings before allowing main to rewrite them.
+
+Finally, run your application's checks and exercise history paging, a forming-bar
+update, symbol and interval changes, study removal and saved-document reloads.
+Consult [Unreleased changes](../../../../../CHANGELOG.md#unreleased) for the individual
+study constructor, rendering and UI intent changes your application uses.

@@ -82,10 +82,10 @@ impl Indicator for AcceleratorOscillator {
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.rising_color,
+            color: Color32::from_rgb(0, 0, 128),
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Columns,
+            plot_type: crate::studies::PlotType::Histogram,
             visible: true,
         }
     }

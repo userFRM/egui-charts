@@ -56,7 +56,7 @@ impl AdxBreakout {
             adx: ADX::new(period),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: [palette::GOLD, palette::GREEN, palette::RED],
+            colors: [palette::PURPLE, palette::GREEN, palette::RED],
             visible: true,
         }
     }
@@ -137,7 +137,7 @@ impl Indicator for AdxBreakout {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line],
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: match line {
@@ -166,7 +166,7 @@ impl Indicator for AdxBreakout {
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: Some((0.0, 100.0)),
-            levels: vec![(self.threshold as f64, Color32::from_gray(128), "Threshold")],
+            levels: vec![(self.threshold as f64, palette::GRAY, "Threshold")],
             ..Default::default()
         }
     }

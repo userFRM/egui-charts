@@ -169,14 +169,20 @@ mod tests {
 
         assert_eq!(ef.values.len(), 7);
 
-        // Should have Fisher values
-        let valid_cnt = ef
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
+        // Hand recurrence for this normalized-price-clamped Fisher variant:
+        // x = .33*.999 + .67*x_prev gives .32967, .5505489, .698537763;
+        // F = atanh(x) + F_prev/2, from x_prev = F_prev = 0.
+        for (bar, want, signal) in [
+            (4, 0.3424579708431785, None),
+            (5, 0.7903975933238373, Some(0.3424579708431785)),
+            (6, 1.2596379279580296, Some(0.7903975933238373)),
+        ] {
+            let got = ef.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+            match signal {
+                Some(want) => assert!((ef.values().value(1, bar).unwrap() - want).abs() < 1e-12),
+                None => assert_eq!(ef.values().value(1, bar), None),
+            }
+        }
     }
 }

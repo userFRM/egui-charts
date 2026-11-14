@@ -1,23 +1,28 @@
 //! Vector output of exported chart frames, from the shapes before tessellation.
 
+#[cfg(feature = "png-export")]
 use super::raster::{Texture, png, textures};
 use egui::epaint::{ClippedShape, Mesh, PathStroke, Shape, StrokeKind, TextShape, Vertex};
 use egui::{Color32, Pos2, Rect, Stroke, TextureId, TexturesDelta, emath::TSTransform};
+#[cfg(feature = "png-export")]
 use std::collections::HashSet;
 use std::fmt::Write;
 
 /// Renders `shapes` as an SVG document of `size` points, embedding the textures that `delta`
 /// sets as PNG. Fails on shapes the format cannot take over unchanged: host callbacks, host
-/// textures, rotated or underlined text, gradient strokes and non-linear mesh colours.
+/// textures without supplied pixels, underlined text, gradient strokes and non-linear mesh
+/// colours.
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],
-    delta: &TexturesDelta,
+    #[cfg_attr(not(feature = "png-export"), allow(unused_variables))] delta: &TexturesDelta,
 ) -> Result<String, String> {
     let mut out = Svg {
+        #[cfg(feature = "png-export")]
         textures: textures(delta),
         defs: String::new(),
         body: String::new(),
+        #[cfg(feature = "png-export")]
         embedded: HashSet::new(),
         ids: 0,
     };
@@ -67,10 +72,12 @@ struct Run {
 }
 
 struct Svg {
+    #[cfg(feature = "png-export")]
     textures: std::collections::HashMap<TextureId, Texture>,
     defs: String,
     body: String,
-    embedded: HashSet<TextureId>,
+    #[cfg(feature = "png-export")]
+    embedded: HashSet<(TextureId, Color32)>,
     ids: usize,
 }
 
@@ -116,6 +123,17 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        // A raw carriage return would read back as a line feed.
+        .replace('\r', "&#13;")
+}
+
+/// Whether the XML 1.0 `Char` production allows `ch` in a document.
+fn is_xml_char(ch: char) -> bool {
+    !matches!(ch, '\0'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
+}
+
+fn attr_escape(text: &str) -> String {
+    escape(text).replace('"', "&quot;")
 }
 
 impl Svg {
@@ -298,11 +316,22 @@ impl Svg {
     /// One `<text>` per run of glyphs of one colour, size and family, each glyph at the position
     /// the layout gave it.
     fn text(&mut self, text: &TextShape) -> Result<(), String> {
-        if text.angle != 0.0 {
-            return Err("Rotated text cannot be written as SVG".into());
+        if !text.angle.is_finite() {
+            return Err("Text at a non-finite angle cannot be written as SVG".into());
         }
         if !text.underline.is_empty() {
             return Err("Underlined text cannot be written as SVG".into());
+        }
+        // egui turns text clockwise about its position, as an SVG rotation about that point does.
+        let rotated = text.angle != 0.0;
+        if rotated {
+            let _ = write!(
+                self.body,
+                r#"<g transform="rotate({} {} {})">"#,
+                text.angle.to_degrees(),
+                text.pos.x,
+                text.pos.y
+            );
         }
         let job = &text.galley.job;
         let ends: Vec<_> = job
@@ -323,7 +352,7 @@ impl Svg {
                         r#"<text x="{}" y="{}" font-family="{}" font-size="{}" fill="{}" fill-opacity="{}" xml:space="preserve">{}</text>"#,
                         xs.join(" "),
                         run.y,
-                        run.family,
+                        attr_escape(&run.family),
                         run.size,
                         run.rgb,
                         run.opacity,
@@ -338,6 +367,10 @@ impl Svg {
                     .or(ends.last())
                     .map(|(_, format)| *format);
                 index += 1;
+                // Skipping the glyph keeps the remaining x positions aligned with their characters.
+                if !is_xml_char(glyph.chr) {
+                    continue;
+                }
                 let Some(format) = format else { continue };
                 let vertex = row.visuals.mesh.vertices.get(glyph.first_vertex as usize);
                 let mut tint = vertex.map_or(Color32::PLACEHOLDER, |v| v.color);
@@ -353,7 +386,22 @@ impl Svg {
                 let family = match &format.font_id.family {
                     egui::FontFamily::Proportional => "sans-serif".to_owned(),
                     egui::FontFamily::Monospace => "monospace".to_owned(),
-                    egui::FontFamily::Name(name) => format!("'{name}', sans-serif"),
+                    egui::FontFamily::Name(name) => {
+                        let mut family = String::from("'");
+                        for ch in name.chars() {
+                            if ch.is_control() || matches!(ch, '\u{fffe}' | '\u{ffff}') {
+                                // CSS escapes preserve whitespace and keep forbidden XML characters out.
+                                let _ = write!(family, "\\{:x} ", ch as u32);
+                            } else {
+                                if matches!(ch, '\\' | '\'') {
+                                    family.push('\\');
+                                }
+                                family.push(ch);
+                            }
+                        }
+                        family.push_str("', sans-serif");
+                        family
+                    }
                 };
                 let x = origin.x + glyph.pos.x;
                 let y = origin.y + glyph.pos.y;
@@ -387,6 +435,9 @@ impl Svg {
             if placed.ends_with_newline {
                 index += 1;
             }
+        }
+        if rotated {
+            self.body.push_str("</g>");
         }
         Ok(())
     }
@@ -513,29 +564,35 @@ impl Svg {
         self.image(mesh.texture_id, pos, uv, v[0].color)
     }
 
-    /// The `uv` part of a frame texture in `pos`, white or fading with `tint`'s alpha.
+    /// The `uv` part of a frame texture in `pos`, multiplied by `tint`.
+    #[cfg(feature = "png-export")]
     fn image(&mut self, key: TextureId, pos: Rect, uv: Rect, tint: Color32) -> Result<(), String> {
         let Some(texture) = self.textures.get(&key) else {
             return Err(format!(
-                "{key:?} is not a texture of the frame; host textures cannot be written as SVG"
+                "{key:?} is not a texture of the frame; host textures cannot be written as SVG without their pixels in ImageExportOptions::textures"
             ));
         };
-        let [r, g, b, a] = tint.to_array();
-        if !(r == a && g == a && b == a) {
-            return Err("Tinted images cannot be written as SVG".into());
-        }
+        let id = format!(
+            "{}_{:08x}",
+            self.texture_ids(key),
+            u32::from_be_bytes(tint.to_array())
+        );
         let [tw, th] = texture.size.map(|side| side as f32);
         let crop = Rect::from_min_max(
             Pos2::new(uv.min.x * tw, uv.min.y * th),
             Pos2::new(uv.max.x * tw, uv.max.y * th),
         );
-        if self.embedded.insert(key) {
+        if self.embedded.insert((key, tint)) {
             let pixels = &self.textures[&key];
-            let data = png(
-                [pixels.size[0] as u32, pixels.size[1] as u32],
-                &pixels.pixels,
-            )?;
-            let id = self.texture_ids(key);
+            // Multiply premultiplied channels in gamma space, as the frame's renderer does.
+            let tinted: Vec<_> = pixels.pixels.iter().map(|pixel| *pixel * tint).collect();
+            if tinted
+                .iter()
+                .any(|pixel| pixel.a() == 0 && *pixel != Color32::TRANSPARENT)
+            {
+                return Err(format!("Additive texture {key:?} cannot be written as SVG"));
+            }
+            let data = png([pixels.size[0] as u32, pixels.size[1] as u32], &tinted)?;
             let rendering = if pixels.nearest {
                 r#" style="image-rendering:pixelated""#
             } else {
@@ -547,10 +604,9 @@ impl Svg {
                 base64(&data)
             );
         }
-        let id = self.texture_ids(key);
         let _ = write!(
             self.body,
-            r##"<svg x="{}" y="{}" width="{}" height="{}" viewBox="{} {} {} {}" preserveAspectRatio="none" overflow="hidden" opacity="{}"><use href="#t{id}"/></svg>"##,
+            r##"<svg x="{}" y="{}" width="{}" height="{}" viewBox="{} {} {} {}" preserveAspectRatio="none" overflow="hidden"><use href="#t{id}"/></svg>"##,
             pos.min.x,
             pos.min.y,
             pos.width(),
@@ -558,17 +614,30 @@ impl Svg {
             crop.min.x,
             crop.min.y,
             crop.width(),
-            crop.height(),
-            f32::from(a) / 255.0
+            crop.height()
         );
         Ok(())
     }
 
-    /// A stable small number for a texture.
-    fn texture_ids(&self, id: TextureId) -> u64 {
+    #[cfg(not(feature = "png-export"))]
+    fn image(
+        &mut self,
+        key: TextureId,
+        _pos: Rect,
+        _uv: Rect,
+        _tint: Color32,
+    ) -> Result<(), String> {
+        Err(format!(
+            "SVG image texture {key:?} requires the png-export feature"
+        ))
+    }
+
+    /// Keep managed and user ids distinct, including user ids with their highest bit set.
+    #[cfg(feature = "png-export")]
+    fn texture_ids(&self, id: TextureId) -> String {
         match id {
-            TextureId::Managed(n) => n,
-            TextureId::User(n) => n | 1 << 63,
+            TextureId::Managed(n) => format!("m{n}"),
+            TextureId::User(n) => format!("u{n}"),
         }
     }
 }
@@ -577,6 +646,7 @@ fn dist(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     (0..4).map(|i| (a[i] - b[i]).powi(2)).sum()
 }
 
+#[cfg(feature = "png-export")]
 fn base64(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);

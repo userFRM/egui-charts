@@ -3,11 +3,13 @@
 use super::{Action, ExportContents, ExportFile, Terminal};
 use egui_charts::Chart;
 use egui_charts::data::FeedStatus;
+use egui_charts::localization as l10n;
 use egui_charts::model::{ChartType, Timeframe};
-use egui_charts::services::{Notification, UserSettings};
+use egui_charts::services::{ConflictChoice, Notification, SettingsStore, UserSettings};
 use egui_charts::theme::Theme;
 use egui_charts::ui::Control;
 use egui_charts::ui::app_state::ChartAppState;
+use egui_charts::ui::dialogs::StorageConflictDialog;
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
 use egui_charts::widget::SeriesId;
@@ -22,13 +24,13 @@ pub(super) enum Direction {
 }
 
 /// The side panels beside the chart.
-#[expect(dead_code, reason = "the side panels open these")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SidePanel {
     ObjectTree,
     Alerts,
     DataWindow,
     Watchlist,
+    TimeAndSales,
     Highlights,
     Screener,
     Hotlists,
@@ -70,6 +72,21 @@ impl ChartAppState for ActiveChart<'_> {
 
 impl Terminal {
     pub(super) fn core_perform(&mut self, action: Action) -> Option<Action> {
+        if let Action::StorageConflict(choice) = action {
+            if let Some(settings) = &mut self.settings {
+                settings.resolve_conflict(choice);
+            }
+            return None;
+        }
+        if let Action::DrawingsConflict(symbol, choice) = &action {
+            for chart in &mut self.charts {
+                chart.resolve_storage_conflict(symbol, *choice);
+            }
+            if *choice == ConflictChoice::KeepLocalCopy {
+                self.offer_local_copies(symbol);
+            }
+            return None;
+        }
         let Action::TopToolbar(top) = action else {
             return Some(action);
         };
@@ -116,6 +133,8 @@ impl Terminal {
         let visible = visible && self.shown(control);
         self.top_toolbar.set_control_visible(control, visible);
         self.menus.set_control_visible(control, visible);
+        self.panels.widget_bar.set_control_visible(control, visible);
+        self.time.bar.set_control_visible(control, visible);
     }
 
     /// Whether the host left `control` visible.
@@ -169,7 +188,6 @@ impl Terminal {
     }
 
     /// Hands `contents` to the host's file export as `name`. False without one.
-    #[expect(dead_code, reason = "the export dialog and the panels save files")]
     pub(super) fn save_file(&mut self, name: String, contents: ExportContents) -> bool {
         let Some(save) = &mut self.services.save else {
             return false;
@@ -178,7 +196,9 @@ impl Terminal {
             name,
             path: None,
             contents,
-        });
+            open: false,
+        })
+        .unwrap_or_else(|error| self.toasts.error(format!("Export failed: {error}")));
         true
     }
 
@@ -190,13 +210,12 @@ impl Terminal {
     }
 
     /// Shows `message` briefly.
-    #[expect(dead_code, reason = "the groups report their results")]
     pub(super) fn toast(&mut self, message: impl Into<String>) {
         self.toasts.info(message);
     }
 
     /// Shows `title` briefly and logs it in the notifications panel, about `symbol` if any.
-    #[expect(dead_code, reason = "alerts and trading notify the user")]
+    #[allow(dead_code, reason = "alerts and trading notify the user")]
     pub(super) fn notify(&mut self, title: impl Into<String>, symbol: Option<&str>) {
         let title = title.into();
         let mut entry = Notification::new(chrono::Utc::now(), title.clone());
@@ -217,6 +236,11 @@ impl Terminal {
             || self.layouts_modal()
             || self.compare_modal()
             || self.commands_modal()
+            || self.settings.as_ref().is_some_and(SettingsStore::conflict)
+            || self
+                .charts
+                .iter()
+                .any(|chart| chart.storage_conflict().is_some())
     }
 
     /// Shows the top toolbar in line with the active chart and queues what it emitted.
@@ -281,7 +305,6 @@ impl Terminal {
         self.studies_settings(settings, direction);
         self.time_settings(settings, direction);
         self.replay_settings(settings, direction);
-        self.alerts_settings(settings, direction);
         self.panels_settings(settings, direction);
         self.trading_settings(settings, direction);
         self.layouts_settings(settings, direction);
@@ -305,6 +328,36 @@ impl Terminal {
         }
         if let Some(settings) = loaded {
             self.apply_user_settings(settings);
+        }
+    }
+
+    /// Asks how to settle settings, then drawings, that another window or device changed while
+    /// these had unsaved changes.
+    pub(super) fn show_storage_conflict(&mut self, ctx: &egui::Context) {
+        let (dialog, symbol) = if self.settings.as_ref().is_some_and(SettingsStore::conflict) {
+            let dialog = StorageConflictDialog::new(
+                "Settings changed elsewhere",
+                "Another window or device saved the settings while this window had unsaved \
+                 changes. Nothing is saved until you choose.",
+            );
+            (dialog, None)
+        } else if let Some(symbol) = self.charts.iter().find_map(Chart::storage_conflict) {
+            let message = l10n::format_text(
+                ctx,
+                "Another window or device saved the drawings of {symbol} while this window had \
+                 unsaved changes to them. Nothing is saved until you choose.",
+                &[("symbol", symbol.to_owned())],
+            );
+            let dialog = StorageConflictDialog::new("Drawings changed elsewhere", message);
+            (dialog, Some(symbol.to_owned()))
+        } else {
+            return;
+        };
+        if let Some(choice) = dialog.show(ctx) {
+            self.emit(match symbol {
+                Some(symbol) => Action::DrawingsConflict(symbol, choice),
+                None => Action::StorageConflict(choice),
+            });
         }
     }
 }

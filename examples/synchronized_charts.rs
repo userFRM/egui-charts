@@ -8,7 +8,6 @@ mod support;
 use chrono::{TimeDelta, TimeZone, Utc};
 use egui_charts::data::resample;
 use egui_charts::model::{BarClock, BarData, Timeframe};
-use egui_charts::widget::VisibleTimeRange;
 use egui_charts::{Chart, theme::Theme};
 
 fn main() -> eframe::Result {
@@ -24,7 +23,6 @@ fn main() -> eframe::Result {
 
 struct SynchronizedChartsApp {
     charts: [Chart; 2],
-    last_source: Option<(usize, VisibleTimeRange)>,
     last_crosshair: Option<(usize, chrono::DateTime<Utc>)>,
 }
 
@@ -45,7 +43,6 @@ impl SynchronizedChartsApp {
                 make(hourly, Timeframe::Hour1),
                 make(four_hour, Timeframe::Hour4),
             ],
-            last_source: None,
             last_crosshair: None,
         }
     }
@@ -57,6 +54,8 @@ impl eframe::App for SynchronizedChartsApp {
             ui.label(
                 "SAMPLE: 1 hour / 4 hours. Hover either chart, then pan or zoom to synchronize.",
             );
+            // Only a pan or zoom of the chart under the pointer moves the other one.
+            let before = self.charts.each_ref().map(Chart::visible_time_range);
             let mut source = None;
             ui.columns(2, |columns| {
                 for (i, (chart, column)) in self.charts.iter_mut().zip(columns).enumerate() {
@@ -76,12 +75,10 @@ impl eframe::App for SynchronizedChartsApp {
                     self.last_crosshair = crosshair;
                     ui.ctx().request_repaint();
                 }
-                let current = range.map(|range| (i, range));
-                if current != self.last_source {
-                    if let Some(range) = range {
-                        self.charts[1 - i].apply_synced_time_range(range);
-                    }
-                    self.last_source = current;
+                if range != before[i]
+                    && let Some(range) = range
+                {
+                    self.charts[1 - i].apply_synced_time_range(range);
                     ui.ctx().request_repaint();
                 }
             } else {
@@ -91,7 +88,6 @@ impl eframe::App for SynchronizedChartsApp {
                     }
                     ui.ctx().request_repaint();
                 }
-                self.last_source = None;
             }
         });
     }

@@ -197,26 +197,56 @@ impl DrawingInteraction {
                     }
                 }
                 DrawingToolType::Rect => {
-                    if drawing.points.len() >= 2 {
-                        let rect = Rect::from_two_pos(drawing.points[0], drawing.points[1]);
-                        if rect.contains(point) {
-                            return Some(drawing.id);
-                        }
+                    if drawing
+                        .rectangle_bounds(Rect::EVERYTHING)
+                        .is_some_and(|rect| rect.contains(point))
+                    {
+                        return Some(drawing.id);
                     }
                 }
                 // Fibonacci tools
                 // The level lines the renderer draws, over the extent it draws them
                 DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
-                    if let Some((config, _)) = drawing.fib_levels()
-                        && drawing.points.len() >= 2
-                        && drawing
+                    if drawing.points.len() >= 2 {
+                        let config = drawing.fibonacci_config();
+                        let on_level = drawing
                             .fib_level_x_range(&config, Rect::EVERYTHING)
                             .contains(point.x)
-                        && drawing
-                            .level_ys
-                            .iter()
-                            .any(|y| (point.y - y).abs() <= hit_distance)
-                    {
+                            && config
+                                .visible_levels()
+                                .zip(&drawing.level_ys)
+                                .any(|(level, y)| {
+                                    (point.y - y).abs()
+                                        <= hit_distance
+                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
+                                });
+                        let on_trend = config.trend_visible
+                            && drawing
+                                .points
+                                .windows(2)
+                                .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
+                        if on_level || on_trend {
+                            return Some(drawing.id);
+                        }
+                    }
+                }
+                DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime => {
+                    let config = drawing.fibonacci_config();
+                    let on_level = config.visible_levels().any(|level| {
+                        drawing
+                            .fibonacci_time_level_x(level.value)
+                            .is_some_and(|x| {
+                                (point.x - x).abs()
+                                    <= hit_distance
+                                        .max(level.width.unwrap_or(config.level_width) / 2.0)
+                            })
+                    });
+                    let on_trend = config.trend_visible
+                        && drawing.points.windows(2).any(|p| {
+                            point_to_line_distance(point, p[0], p[1])
+                                <= hit_distance.max(drawing.stroke_width / 2.0)
+                        });
+                    if on_level || on_trend {
                         return Some(drawing.id);
                     }
                 }
@@ -227,10 +257,15 @@ impl DrawingInteraction {
                         .expand(2.0 * hit_distance);
                     if drawing
                         .fib_channel_level_lines(reach)
-                        .is_some_and(|(_, lines)| {
+                        .is_some_and(|(config, lines)| {
                             lines
                                 .iter()
-                                .any(|&[a, b]| point_to_line_distance(point, a, b) <= hit_distance)
+                                .zip(config.visible_levels())
+                                .any(|(&[a, b], level)| {
+                                    point_to_line_distance(point, a, b)
+                                        <= hit_distance
+                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
+                                })
                         })
                     {
                         return Some(drawing.id);
@@ -258,8 +293,8 @@ impl DrawingInteraction {
                         }
                         continue;
                     }
-                    // The other tools: proximity to any anchor
-                    for &p in &drawing.points {
+                    // The other tools: proximity to any anchor. A bars pattern draws nothing at its source.
+                    for &p in drawing.points.iter().skip(drawing.first_moved_anchor()) {
                         let dist = ((point.x - p.x).powi(2) + (point.y - p.y).powi(2)).sqrt();
                         if dist <= hit_distance * 2.0 {
                             return Some(drawing.id);
@@ -371,7 +406,11 @@ fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
                 },
             )
         }
-        Shape::Text(t) => t.visual_bounding_rect().contains(point),
+        // A turned label is hit over its own box, not the larger upright box around it.
+        Shape::Text(t) => t
+            .galley
+            .mesh_bounds
+            .contains((egui::emath::Rot2::from_angle(-t.angle) * (point - t.pos)).to_pos2()),
         Shape::Mesh(m) => m.indices.as_chunks::<3>().0.iter().any(|tri| {
             let points = [
                 m.vertices[tri[0] as usize].pos,
@@ -447,6 +486,44 @@ pub fn point_to_line_distance(point: Pos2, line_start: Pos2, line_end: Pos2) -> 
 mod tests {
     use super::*;
     use crate::drawings::ChartPoint;
+
+    /// The glyph box is about [0, w] x [0, h] from the text's position. Turned 45 degrees clockwise,
+    /// the upright box around it has its top-right corner at about (w c, 0), with c = cos 45. Turned
+    /// back that is (w / 2, -w / 2), far above the glyphs, so the corner must not hit.
+    #[test]
+    fn turned_text_is_hit_over_its_own_box() {
+        use egui::epaint::{ClippedShape, TextShape};
+        let pos = Pos2::new(100., 100.);
+        let hits = |shape: &TextShape, point: Pos2| {
+            DrawingInteraction::hit_test_painted(
+                point,
+                &[ClippedShape::new(
+                    Rect::EVERYTHING,
+                    egui::Shape::Text(shape.clone()),
+                )],
+            )
+        };
+        egui::Context::default()
+            .run_ui(Default::default(), |ui| {
+                let galley = ui.painter().layout_no_wrap(
+                    "WWWWWWWW".into(),
+                    egui::FontId::proportional(20.0),
+                    Color32::WHITE,
+                );
+                let bounds = galley.mesh_bounds;
+                let upright = TextShape::new(pos, galley, Color32::WHITE);
+                let turned = upright.clone().with_angle(std::f32::consts::FRAC_PI_4);
+                let center =
+                    egui::emath::Rot2::from_angle(turned.angle) * bounds.center().to_vec2();
+                assert!(hits(&turned, pos + center));
+                let corner = turned.visual_bounding_rect().right_top() + egui::vec2(-1., 1.);
+                assert!(!hits(&turned, corner));
+                assert!(hits(&upright, pos + bounds.center().to_vec2()));
+                let past = Pos2::new(bounds.max.x + 1., bounds.center().y);
+                assert!(!hits(&upright, past + pos.to_vec2()));
+            })
+            .drop_without_applying_deltas();
+    }
 
     #[test]
     fn test_point_to_line_distance() {
@@ -532,6 +609,7 @@ mod tests {
                 unlabelled.show_price = false;
                 fib.fib_config = Some(FibonacciConfig {
                     logarithmic,
+                    levels_as_percent: true,
                     show_background: true,
                     levels: vec![
                         unlabelled,
@@ -550,19 +628,31 @@ mod tests {
                     "{tool:?}, log levels {logarithmic}, log scale {log_scale}"
                 );
                 let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 500.0));
-                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                    if tool == DrawingToolType::FibonacciRetracement {
-                        fib.render_fibonacci(ui.painter(), rect);
-                    } else {
-                        fib.render_fibonacci_extension(ui.painter(), rect);
-                    }
+                let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    let view = crate::drawings::rendering::ChartView {
+                        price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 30.0,
+                        price_to_y: &price_to_y,
+                        y_to_price: &f64::from,
+                        time_axis: true,
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                    };
+                    fib.render_fibonacci(ui.painter(), rect, &view, false);
                 });
+                output.textures_delta.clear();
                 let line = output.shapes.iter().any(|s| matches!(&s.shape,
                     egui::Shape::LineSegment { points, .. } if (points[0].y-y).abs() < 1e-3 && (points[1].y-y).abs() < 1e-3));
                 let label = output.shapes.iter().any(|s| {
                     matches!(&s.shape,
                     egui::Shape::Text(t) if t.galley.text() == format!("level ({want:.2})")
-                        && t.pos.y + t.galley.size().y < y)
+                        && (t.pos.y + t.galley.size().y / 2.0 - y).abs() < 1.0)
                 });
                 let band = output.shapes.iter().any(|s| matches!(&s.shape,
                     egui::Shape::Rect(r) if (r.rect.top()-y).abs() < 1e-3 || (r.rect.bottom()-y).abs() < 1e-3));
@@ -574,7 +664,7 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert!(labels.windows(2).all(|pair| !pair[0].intersects(pair[1])));
+                assert_eq!(labels.len(), 2, "nearby levels retain both labels");
                 output.drop_without_applying_deltas();
                 assert!(
                     line && label && band,
@@ -587,10 +677,10 @@ mod tests {
     /// Anchors at bars 0 and 10, prices 100 and 400, on x = 30 per bar and y = 500 - price: the
     /// first anchor is at (0, 400) and the second at (300, 100). A retracement level price is
     /// 400 - 300 * level, at y = 100 + 300 * level; with `extend_right` its lines run on past
-    /// x = 300. The point (90, 310) lies on the diagonal between the anchors, which is not drawn,
+    /// x = 300. The point (90, 310) selects the construction diagonal between the anchors,
     /// and 24.6 px from the nearest level (78.6% at 335.8 is 25.8 px away; 61.8% at 285.4).
-    /// A channel with its third anchor at bar 5, price 150, (150, 350), moves the base line
-    /// 100 px straight down: level 0.5 runs from (0, 450) to (300, 150), so y = 450 - x, and
+    /// A channel with its third anchor at bar 5, price 150, (150, 350), translates by (150,-50):
+    /// level 0.5 runs from (75,375) to (375,75), so y = 450 - x, and
     /// with `extend_right` on to x = 400 at y = 50. Its drawn levels cross x = 150 between
     /// y = 250 and 350, far from (150, 214.6), where the 61.8% level of a horizontal channel was.
     #[test]
@@ -620,13 +710,35 @@ mod tests {
                 DrawingToolType::FibonacciRetracement,
                 None,
                 (90.0, 310.0),
-                None,
+                Some(7),
             ),
             (
                 DrawingToolType::FibonacciExtension,
                 None,
                 (90.0, 310.0),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                Some(FibonacciConfig {
+                    trend_visible: false,
+                    ..Default::default()
+                }),
+                (90.0, 310.0),
                 None,
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel {
+                        width: Some(40.0),
+                        ..crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])
+                    }],
+                    trend_visible: false,
+                    ..Default::default()
+                }),
+                (150.0, 265.0),
+                Some(7),
             ),
             (
                 DrawingToolType::FibonacciChannel,
@@ -645,6 +757,30 @@ mod tests {
                 extended(),
                 (400.0, 50.0),
                 Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])],
+                    level_width: 40.0,
+                    ..Default::default()
+                }),
+                // The level crosses (150, 300); this point is 14.1 px from its centre.
+                (150.0, 320.0),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                Some(FibonacciConfig {
+                    levels: vec![crate::drawings::FibonacciLevel {
+                        width: Some(2.0),
+                        ..crate::drawings::FibonacciLevel::new(0.5, "", [255; 4])
+                    }],
+                    level_width: 40.0,
+                    ..Default::default()
+                }),
+                (150.0, 320.0),
+                None,
             ),
         ];
         let mut wrong = Vec::new();
@@ -688,9 +824,9 @@ mod tests {
     }
 
     /// Each point is at least 40 px from every anchor. A ray from (0, 0) through (100, 50) runs on
-    /// through (300, 150) and not back through (-100, -50); one from (500, 100) through
-    /// (400, 150) runs left through (200, 250). The cross line through (100, 100) runs
-    /// down through (100, 300). The pattern's second leg runs from
+    /// through (300, 150) and back through (-100, -50) with both extensions on; one from
+    /// (500, 100) through (400, 150) runs left through (200, 250). The cross line through
+    /// (100, 100) runs down through (100, 300). The pattern's second leg runs from
     /// (100, 100) to (200, 0) through (150, 50). The triangle's edge from (200, 0) to (100, 200)
     /// passes (150, 100); without a fill its inside is empty. The circle around (100, 100)
     /// through (150, 100) passes (100, 150), and its centre is empty. The pitchfork's median
@@ -699,11 +835,17 @@ mod tests {
     /// y = 200 - 300 / 2 = 50 at x = 300. The measure fills its box, which holds (20, 80), 42 px
     /// from its diagonal. A measure across bars at one price, from (0, 100) to (100, 100), is hit
     /// 2 px off its border at (50, 102), but not 400 px past its end on the same line. A
-    /// highlighter is drawn 8 times its stroke width of 2, 16 px wide, so a point 7 px off its
-    /// line is on it. The date range fills the band between x = 100 and 200 at any height.
+    /// highlighter 16 px wide is hit within 8 px of its line, so a point 7 px off is on it and
+    /// one 9 px off is not. The date range is a box between its anchors, so (150, 400) below it misses.
+    /// The price range holds (120, 65), 15 px from its edges and 30 px from its centre.
+    /// The marker's head at x = 240 spans y = 200 +- 34.3. At x = 200 its shaft spans
+    /// y = 200 +- 14.2, leaving (200, 225) 10.8 px from the shaft and 30 px from the head.
     /// The ellipse in the box from (0, 0) to (200, 100) is lowest at (100, 100). Every drawing
     /// extends both ways where its tool can: the trend line from (100, 100) to (200, 150) runs on
-    /// through (500, 300) and (0, 50).
+    /// through (500, 300) and (0, 50). A head and shoulders on a neckline at y = 300 fills its
+    /// head above it, which holds (300, 200), and not the gap between shoulder and head at
+    /// (200, 200). The triangle pattern's boundaries y = x / 4 and y = 200 - x / 4 meet at
+    /// (400, 100), so its fill holds (300, 100) beyond the anchors.
     #[test]
     fn drawings_are_hit_along_what_they_draw() {
         use DrawingToolType as T;
@@ -719,7 +861,7 @@ mod tests {
             (
                 T::Ray,
                 (-100.0, -50.0),
-                None,
+                Some(7),
                 vec![(0.0, 0.0), (100.0, 50.0)],
             ),
             (
@@ -752,6 +894,40 @@ mod tests {
                     (300.0, 100.0),
                     (400.0, 0.0),
                 ],
+            ),
+            (
+                T::HeadAndShoulders,
+                (300.0, 200.0),
+                Some(7),
+                vec![
+                    (0.0, 450.0),
+                    (100.0, 150.0),
+                    (200.0, 300.0),
+                    (300.0, 0.0),
+                    (400.0, 300.0),
+                    (500.0, 150.0),
+                    (600.0, 450.0),
+                ],
+            ),
+            (
+                T::HeadAndShoulders,
+                (200.0, 200.0),
+                None,
+                vec![
+                    (0.0, 450.0),
+                    (100.0, 150.0),
+                    (200.0, 300.0),
+                    (300.0, 0.0),
+                    (400.0, 300.0),
+                    (500.0, 150.0),
+                    (600.0, 450.0),
+                ],
+            ),
+            (
+                T::TrianglePattern,
+                (300.0, 100.0),
+                Some(7),
+                vec![(0.0, 0.0), (0.0, 200.0), (200.0, 50.0), (200.0, 150.0)],
             ),
             (
                 T::Triangle,
@@ -814,9 +990,33 @@ mod tests {
                 vec![(0.0, 0.0), (100.0, 0.0)],
             ),
             (
+                T::Highlighter,
+                (50.0, 9.0),
+                None,
+                vec![(0.0, 0.0), (100.0, 0.0)],
+            ),
+            (
+                T::ArrowMarker,
+                (240.0, 230.0),
+                Some(7),
+                vec![(100.0, 200.0), (300.0, 200.0)],
+            ),
+            (
+                T::ArrowMarker,
+                (200.0, 225.0),
+                None,
+                vec![(100.0, 200.0), (300.0, 200.0)],
+            ),
+            (
+                T::PriceRange,
+                (120.0, 65.0),
+                Some(7),
+                vec![(100.0, 50.0), (200.0, 80.0)],
+            ),
+            (
                 T::DateRange,
                 (150.0, 400.0),
-                Some(7),
+                None,
                 vec![(100.0, 50.0), (200.0, 80.0)],
             ),
             (
@@ -835,6 +1035,14 @@ mod tests {
         let mut wrong = Vec::new();
         for (tool, (x, y), want, anchors) in cases {
             let mut drawing = Drawing::new(7, tool);
+            // These shapes start filled; their cases test the outline alone.
+            if matches!(tool, T::Triangle | T::Circle | T::Ellipse) {
+                drawing.fill_color = None;
+            }
+            if tool == T::Highlighter {
+                // A 16 px stroke: hit within 8 px.
+                drawing.stroke_width = 16.0;
+            }
             drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
             (drawing.extend_left, drawing.extend_right) = (true, true);
             let got = interaction.hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");
@@ -850,13 +1058,17 @@ mod tests {
     #[test]
     fn test_selection() {
         let mut interaction = DrawingInteraction::new();
-
-        assert!(interaction.sel_drawing.is_none());
-
-        interaction.sel_drawing = Some(5);
+        let mut drawing = Drawing::new(5, DrawingToolType::HorizontalLine);
+        drawing.points = vec![Pos2::new(0.0, 100.0)];
+        let drawings = [drawing];
+        let hit = Pos2::new(50.0, 102.0);
+        assert!(interaction.select_at(hit, &drawings, "1D"));
         assert_eq!(interaction.sel_drawing, Some(5));
-
+        assert!(!interaction.select_at(Pos2::new(50.0, 150.0), &drawings, "1D"));
+        assert_eq!(interaction.sel_drawing, None);
+        assert!(interaction.select_at(hit, &drawings, "1D"));
+        assert_eq!(interaction.sel_drawing, Some(5));
         interaction.deselect();
-        assert!(interaction.sel_drawing.is_none());
+        assert_eq!(interaction.sel_drawing, None);
     }
 }

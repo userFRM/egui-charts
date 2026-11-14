@@ -9,7 +9,7 @@ use crate::model::{Alert, AlertId};
 /// The host's alerts. The host stores and evaluates them, on its own prices or on a server; the
 /// library shows what the host pushes and sends every change the user makes through
 /// [`save`](Alerts::save) and [`remove`](Alerts::remove). With the `alert-engine` feature,
-/// [`AlertEngine`](crate::services::AlertEngine) is a ready-made implementation that evaluates
+/// `services::AlertEngine` is a ready-made implementation that evaluates
 /// the alerts on the bars the host feeds it; without it the library evaluates nothing.
 ///
 /// The host is the source of truth. The terminal shows only the alerts and triggers that
@@ -28,10 +28,16 @@ use crate::model::{Alert, AlertId};
 /// entering and exiting hold only on the evaluation that crosses a boundary.
 /// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
 /// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
-/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) limits notifications
-/// only: evaluate and trigger the alert as usual, and deliver the notification when
+/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) allows triggers only when
 /// [`NotificationSchedule::allows`](crate::model::NotificationSchedule::allows) accepts the
-/// trigger time.
+/// trigger time. Outside it, keep observing values for crossings without consuming an occurrence
+/// or disarming an alert that fires once.
+///
+/// A [`StrategyFills`](crate::model::AlertCondition::StrategyFills) alert receives each execution
+/// of a host-named run through `AlertEngine::strategy_fills`, with `strategies` and `alert-engine`.
+/// Its event carries the fill time, execution price and a message such as
+/// "Buy 2 at 187.50, position 4". The host supplies bars and retains the run; delivery outside the
+/// application remains the host's responsibility.
 ///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through
@@ -61,7 +67,7 @@ use crate::model::{Alert, AlertId};
 ///     fn watch(&self, events: Events<AlertEvent>) {
 ///         let mut state = self.0.lock().unwrap();
 ///         for alert in &state.alerts {
-///             events.push(AlertEvent::Upsert(alert.clone()));
+///             events.push(AlertEvent::Upsert(Box::new(alert.clone())));
 ///         }
 ///         state.events = Some(events);
 ///     }
@@ -75,7 +81,7 @@ use crate::model::{Alert, AlertId};
 ///         state.alerts.retain(|kept| kept.id != alert.id);
 ///         state.alerts.push(alert.clone());
 ///         if let Some(events) = &state.events {
-///             events.push(AlertEvent::Upsert(alert));
+///             events.push(AlertEvent::Upsert(Box::new(alert)));
 ///         }
 ///         reply.send(Ok(()));
 ///     }
@@ -94,6 +100,14 @@ use crate::model::{Alert, AlertId};
 /// # let _ = alerts;
 /// ```
 pub trait Alerts: MaybeSend + 'static {
+    /// The local evaluator, when this service uses one. The assembled terminal feeds it from
+    /// its datafeed, including subjects that no live chart shows. Server-backed services keep
+    /// the default so evaluation remains on the server.
+    #[cfg(feature = "alert-engine")]
+    fn engine(&self) -> Option<&super::AlertEngine> {
+        None
+    }
+
     /// Pushes the host's alerts, then every change and trigger. Called when the terminal starts and
     /// again after a lagged stream, each time with a new stream that starts from no alerts: push
     /// the current list first, then keep pushing until `events` is inactive. On the first call,
@@ -105,7 +119,11 @@ pub trait Alerts: MaybeSend + 'static {
     /// triggers), or the stream lags on every call and no alert shows.
     fn watch(&self, events: Events<AlertEvent>);
 
-    /// Creates (`alert.id` is `None`) or replaces an alert. Answer `Ok` once the change is kept;
+    /// Creates (`alert.id` is `None`) or replaces an alert. Keep `alert.inputs` with the alert:
+    /// its independent study parameters and source view must survive copies and restoration.
+    /// Preserve display choices and creation time on edits, and retain the latest firing time
+    /// on every trigger, including repeats, so the manager and chart can restore their state.
+    /// Answer `Ok` once the change is kept;
     /// the alert appears when `watch` pushes it, so push the saved alert, with its id, as
     /// [`AlertEvent::Upsert`].
     fn save(&self, alert: Alert, reply: Reply<()>);
@@ -119,7 +137,7 @@ pub trait Alerts: MaybeSend + 'static {
 #[non_exhaustive]
 pub enum AlertEvent {
     /// Adds the alert, or replaces the one with its id. An alert without an id is ignored.
-    Upsert(Alert),
+    Upsert(Box<Alert>),
     /// Removes the alert with this id, if any.
     Remove(AlertId),
     /// Removes every alert, so a host that reconnects can push its full list again.
@@ -147,6 +165,21 @@ pub enum AlertEvent {
         price: Option<f64>,
         /// The alert's message with its placeholders filled in, as [`Alert::expand_message`]
         /// does, empty if the alert has none. The terminal shows it in the popup and the log.
+        message: String,
+    },
+    /// The alert's conditions held outside its notification schedule. Log it, marked as silent,
+    /// without a popup, sound or delivery. It leaves the alert's status and firing time as they
+    /// are, so a once alert stays armed.
+    SilentTriggered {
+        /// Identifier of the alert whose conditions held.
+        id: AlertId,
+        /// Symbol whose live source satisfied the conditions.
+        symbol: String,
+        /// UTC instant of the trigger.
+        time: DateTime<Utc>,
+        /// Price observed by the host when available.
+        price: Option<f64>,
+        /// The alert's message with its placeholders filled in, empty if the alert has none.
         message: String,
     },
 }

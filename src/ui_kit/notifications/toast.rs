@@ -58,6 +58,9 @@ impl ToastKind {
 pub struct TradingToast {
     /// Instrument identifier.
     pub symbol: String,
+    /// URI of the symbol logo, for egui's installed image loaders. Without one, or while it is
+    /// loading or unreadable, the chip shows the symbol's initial.
+    pub logo: Option<String>,
     /// Buy or sell.
     pub side: crate::model::OrderSide,
     /// Filled or placed quantity.

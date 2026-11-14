@@ -11,10 +11,10 @@ use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec
 use serde::{Deserialize, Serialize};
 
 use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
-use super::object_tree::price_decimals;
-use super::watchlist::{HEADER_HEIGHT, grouped, signed, weighted};
+use super::price_decimals;
+use super::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
-use crate::data::{Datafeed, FeedError, SymbolDetails};
+use crate::data::{CompanyFinancials, Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
 use crate::model::{ExtendedSession, Instrument, Quote, TimezoneId};
 use crate::scales::StudyFormat;
@@ -59,6 +59,7 @@ struct Notes {
 /// What an inbox answer is for.
 enum Request {
     Details(String),
+    Financials(String),
     Load(String),
     Save(String, String),
 }
@@ -76,13 +77,16 @@ enum Request {
 /// [`SymbolDetails::url`] gets a link to the instrument beside its name, and one that supplies
 /// [`SymbolDetails::category`] gets the category under it. For each new symbol the panel asks the
 /// feed for [`Datafeed::symbol_details`] and shows the statistics, on a card, and the profile it
-/// answers; an empty section, or a feed that does not support the request, shows nothing. Notes
+/// answers; an empty section, or a feed that does not support the request, shows nothing. It also
+/// asks for [`Datafeed::financials`] and holds a nonempty answer in
+/// [`financials`](Self::financials). Notes
 /// are kept in memory per symbol, and with a storage service attached they are read from and
 /// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
 /// document at a time. Call [`poll`](Self::poll) each frame, even while the panel is hidden, then
 /// [`show`](Self::show) while it is open. The More menu's Financials item is reported by
 /// [`take_financials_request`](Self::take_financials_request), for the host to open a
-/// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures.
+/// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures, such
+/// as [`financials`](Self::financials).
 ///
 /// The Performance and Seasonality sections show what the host supplies. Call
 /// [`take_market_requests`](Self::take_market_requests) each frame: the first call for a symbol
@@ -99,6 +103,7 @@ pub struct SymbolDetailsPanel {
     timezone: TimezoneId,
     hidden: HashSet<&'static str>,
     details: Option<SymbolDetails>,
+    financials: Option<CompanyFinancials>,
     returns: Option<MarketDetail<Vec<PeriodReturn>>>,
     seasonality: Option<MarketDetail<Seasonality>>,
     error: Option<String>,
@@ -109,6 +114,7 @@ pub struct SymbolDetailsPanel {
     requests: HashMap<u64, Request>,
     next: u64,
     financials_requested: bool,
+    hide_financials: bool,
 }
 
 impl SymbolDetailsPanel {
@@ -117,7 +123,8 @@ impl SymbolDetailsPanel {
         Self::default()
     }
 
-    /// Ask `feed` for the details of each symbol from now on, starting with the shown one.
+    /// Ask `feed` for the details and financials of each symbol from now on, starting with the
+    /// shown one.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
         self.feed = Some(feed);
         if let Some(symbol) = self.symbol().map(str::to_owned) {
@@ -130,7 +137,7 @@ impl SymbolDetailsPanel {
         self.storage = Some(storage);
         self.notes.clear();
         self.requests
-            .retain(|_, request| matches!(request, Request::Details(_)));
+            .retain(|_, request| matches!(request, Request::Details(_) | Request::Financials(_)));
         if let Some(symbol) = self.symbol().map(str::to_owned) {
             self.load_notes(symbol);
         }
@@ -146,6 +153,7 @@ impl SymbolDetailsPanel {
             self.quote = None;
             self.average_volume = None;
             self.details = None;
+            self.financials = None;
             self.returns = None;
             self.seasonality = None;
             self.error = None;
@@ -180,6 +188,20 @@ impl SymbolDetailsPanel {
     /// Shows update times in `timezone`, such as the chart's.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
+    }
+
+    /// Show or hide Financials in the More menu, shown by default. Hide it when the host cannot
+    /// supply company financials.
+    pub fn set_financials_visible(&mut self, visible: bool) {
+        self.hide_financials = !visible;
+        if !visible {
+            self.financials_requested = false;
+        }
+    }
+
+    /// The shown symbol's [`Datafeed::financials`] once the feed answers with at least one page.
+    pub fn financials(&self) -> Option<&CompanyFinancials> {
+        self.financials.as_ref()
     }
 
     /// Whether the user chose Financials in the More menu since the last call.
@@ -241,6 +263,8 @@ impl SymbolDetailsPanel {
         if let Some(feed) = self.feed.clone() {
             let key = self.key(Request::Details(symbol.clone()));
             feed.symbol_details(&symbol, self.inbox.reply(key));
+            let key = self.key(Request::Financials(symbol.clone()));
+            feed.financials(&symbol, self.inbox.reply(key));
         }
     }
 
@@ -277,7 +301,35 @@ impl SymbolDetailsPanel {
                     match result {
                         Ok(details) => self.details = Some(details),
                         Err(FeedError::NotSupported) => {}
-                        Err(error) => self.error = Some(format!("Details unavailable: {error}")),
+                        Err(error) => {
+                            self.error = Some(l10n::format_text(
+                                ctx,
+                                "Details unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ))
+                        }
+                    }
+                }
+                Request::Financials(symbol) => {
+                    let result = *answer
+                        .downcast::<Result<CompanyFinancials, FeedError>>()
+                        .expect("company financials");
+                    if !current(&symbol) {
+                        continue;
+                    }
+                    match result {
+                        Ok(financials) => {
+                            self.financials =
+                                Some(financials).filter(|figures| !figures.pages.is_empty());
+                        }
+                        Err(FeedError::NotSupported) => {}
+                        Err(error) => {
+                            self.error = Some(l10n::format_text(
+                                ctx,
+                                "Financials unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ))
+                        }
                     }
                 }
                 Request::Load(symbol) => {
@@ -303,7 +355,11 @@ impl SymbolDetailsPanel {
                             notes.written = Some(text);
                         }
                         Err(error) if current(&symbol) => {
-                            self.error = Some(format!("Notes unavailable: {error}"));
+                            self.error = Some(l10n::format_text(
+                                ctx,
+                                "Notes unavailable: {error}",
+                                &[("error", error.to_string().as_str())],
+                            ));
                         }
                         Err(_) => {}
                     }
@@ -313,7 +369,14 @@ impl SymbolDetailsPanel {
                         .downcast::<Result<(), FeedError>>()
                         .expect("notes save");
                     if let Err(error) = result {
-                        self.error = Some(format!("Notes for {symbol} not saved: {error}"));
+                        self.error = Some(l10n::format_text(
+                            ctx,
+                            "Notes for {symbol} not saved: {error}",
+                            &[
+                                ("symbol", symbol.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
+                        ));
                     }
                     // After a failure too, so the next edit writes again rather than every frame.
                     if let Some(notes) = self.notes.get_mut(&symbol) {
@@ -380,6 +443,7 @@ impl SymbolDetailsPanel {
             error,
             notes,
             financials_requested,
+            hide_financials,
             ..
         } = self;
         let Some(instrument) = instrument else {
@@ -395,7 +459,7 @@ impl SymbolDetailsPanel {
                 .tooltip("More")
                 .show(ui);
             egui::Popup::menu(&more).show(|ui| {
-                if ui.button(l10n::text(ui.ctx(), "Financials")).clicked() {
+                if !*hide_financials && ui.button(l10n::text(ui.ctx(), "Financials")).clicked() {
                     *financials_requested = true;
                 }
                 if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
@@ -438,12 +502,19 @@ impl SymbolDetailsPanel {
             hidden.remove("Notes");
         }
         let shown = |section| !hidden.contains(section);
+        let ctx = ui.ctx().clone();
         let update = |time: DateTime<Utc>| {
             let local = time.with_timezone(&*timezone);
-            format!(
-                "Last update at {} {}",
-                local.format("%H:%M"),
-                zone_label(local.offset().fix().local_minus_utc())
+            l10n::format_text(
+                &ctx,
+                "Last update at {time} {zone}",
+                &[
+                    ("time", local.format("%H:%M").to_string().as_str()),
+                    (
+                        "zone",
+                        zone_label(local.offset().fix().local_minus_utc()).as_str(),
+                    ),
+                ],
             )
         };
         egui::ScrollArea::vertical()
@@ -891,16 +962,22 @@ fn volume_bar(ui: &mut Ui, volume: f64, average: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HistoryPage, HistoryRequest, Reply};
+    use crate::data::{FinancialPage, HistoryPage, HistoryRequest, Reply};
     use std::sync::Mutex;
 
-    /// Keeps detail requests for the test to answer in any order.
+    /// Keeps detail requests for the test to answer in any order, and answers financials at once
+    /// with a page named after the symbol.
     #[derive(Default)]
     struct Feed(Mutex<Vec<(String, Reply<SymbolDetails>)>>);
 
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
             reply.send(Ok(HistoryPage::default()));
+        }
+
+        fn financials(&self, symbol: &str, reply: Reply<CompanyFinancials>) {
+            let page = FinancialPage::new(symbol, Vec::new());
+            reply.send(Ok(CompanyFinancials::new(None, vec![page])));
         }
 
         fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
@@ -983,9 +1060,10 @@ mod tests {
         let store = Arc::new(Store::default());
         let mut panel = SymbolDetailsPanel::new();
         panel.set_feed(feed.clone());
-        panel.set_storage(store.clone());
         panel.set_instrument(&Instrument::new("AAPL"));
         panel.set_instrument(&Instrument::new("MSFT"));
+        // Storage attached while the feed's answers are on their way does not drop them.
+        panel.set_storage(store.clone());
         // The answer for the previous symbol arrives last and must not replace the current one.
         let requests = std::mem::take(&mut *feed.0.lock().unwrap());
         for (symbol, reply) in requests.into_iter().rev() {
@@ -1002,6 +1080,7 @@ mod tests {
         assert!(shown.contains(&"Facts".into()), "{shown:?}");
         assert!(!shown.contains(&"Key statistics".into()), "{shown:?}");
         assert!(!shown.contains(&"Profile".into()), "{shown:?}");
+        assert_eq!(panel.financials().unwrap().pages[0].name, "MSFT");
 
         // A second edit waits for the first write of the same document, then writes the latest text.
         let edit = |panel: &mut SymbolDetailsPanel, text: &str| {

@@ -1,0 +1,1557 @@
+//! Price and time axis rendering
+
+mod currency;
+mod labels;
+mod study_scale;
+
+use crate::model::PriceLine;
+use crate::painting::dashed_line::draw_dashed_line;
+use crate::scales::PriceMap;
+use crate::theme::{ThemeExt, contrast};
+pub use currency::render_axis_currency;
+use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+pub(super) use labels::semibold;
+pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
+pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
+pub(crate) use study_scale::{fit_study_mapping, render_study_axis, study_mapping};
+
+/// Gap between the plot's right edge and the start of the price axis labels.
+pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
+
+/// Padding between an axis tag's text and its edge.
+const TAG_PADDING: Vec2 = Vec2::new(6.0, 1.5);
+
+fn axis_font_id() -> egui::Id {
+    egui::Id::NULL.with("axis_font")
+}
+
+/// Restores the axis font after painting one chart, including during unwinding.
+pub(crate) struct AxisFontScope {
+    ctx: egui::Context,
+    previous: Option<FontId>,
+}
+
+impl AxisFontScope {
+    pub(crate) fn new(ctx: &egui::Context, family: &FontFamily) -> Self {
+        let family = if ctx.fonts(|fonts| fonts.definitions().families.contains_key(family)) {
+            family.clone()
+        } else {
+            FontFamily::Proportional
+        };
+        let font = FontId::new(ctx.active_theme().text.label, family);
+        let previous = ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id())
+                .replace(font)
+        });
+        Self {
+            ctx: ctx.clone(),
+            previous,
+        }
+    }
+}
+
+impl Drop for AxisFontScope {
+    fn drop(&mut self) {
+        self.ctx.data_mut(|data| {
+            // Keep the slot allocated so steady frames only replace its value.
+            *data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id()) = self.previous.take();
+        });
+    }
+}
+
+/// The chart's axis family at the theme's label size, proportional outside a chart.
+pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
+    ctx.data(|data| data.get_temp::<Option<FontId>>(axis_font_id()))
+        .flatten()
+        .unwrap_or_else(|| FontId::proportional(ctx.active_theme().text.label))
+}
+
+/// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
+///
+/// The text sits where an axis label placed at `anchor` with `align` would, and the tag pads it.
+/// A tag that would end past `max_x` moves left to end there, but stays inside the painter's left edge.
+pub(crate) fn paint_axis_tag(
+    painter: &Painter,
+    anchor: Pos2,
+    align: Align2,
+    max_x: f32,
+    text: String,
+    text_color: Color32,
+    fill: Color32,
+) -> Rect {
+    let max_x = if align == Align2::LEFT_CENTER {
+        max_x - 6.0
+    } else {
+        max_x
+    };
+    let theme = painter.ctx().active_theme();
+    let font = axis_font(painter.ctx());
+    let galley = painter.layout_no_wrap(text, font, text_color);
+    let mut tag = align
+        .anchor_size(anchor, galley.size())
+        .expand2(TAG_PADDING);
+    tag = tag.translate(Vec2::new((max_x - tag.max.x).min(0.0), 0.0));
+    tag = tag.translate(Vec2::new(
+        (painter.clip_rect().left() - tag.min.x).max(0.0),
+        0.0,
+    ));
+    let text_pos = tag.min + TAG_PADDING;
+    painter.rect_filled(
+        tag,
+        CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: theme.radius.xs as u8,
+            se: theme.radius.xs as u8,
+        },
+        fill,
+    );
+    painter.galley(text_pos, galley, text_color);
+    tag
+}
+
+/// `label` led by `name` when the axis shows names, so equal values of different series stay
+/// apart.
+pub(crate) fn named_label(show_name: bool, name: &str, label: String) -> String {
+    if show_name && !name.is_empty() {
+        format!("{name} {label}")
+    } else {
+        label
+    }
+}
+
+/// The axis ending at the plot's left edge uses right-aligned tags.
+fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
+    if axis_right <= plot.left() {
+        (
+            Pos2::new(plot.left() - 5.0 - TAG_PADDING.x, y),
+            Align2::RIGHT_CENTER,
+        )
+    } else {
+        (
+            Pos2::new(plot.right() + 5.0 + TAG_PADDING.x, y),
+            Align2::LEFT_CENTER,
+        )
+    }
+}
+
+/// Moves the tag centres `ys`, given top to bottom, apart where they are closer than a tag is
+/// high, so the tags stack in the order of their prices. Each stack of tags that touch is
+/// centred on where its tags wanted to be; tags that are far apart stay where they are.
+pub(crate) fn spread_axis_ys(painter: &Painter, ys: &[f32]) -> Vec<f32> {
+    let height = painter
+        .layout_no_wrap("0".into(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + 2.0 * TAG_PADDING.y;
+    // Stacks of (tag count, centre of the stack's first tag).
+    let mut stacks: Vec<(usize, f32)> = Vec::new();
+    for &y in ys {
+        let (mut count, mut first) = (1, y);
+        // Merge while the stack touches the one above it. The first centres of the two are
+        // averaged after lining their tags up in one stack.
+        while let Some(&(above_count, above_first)) = stacks.last() {
+            if first >= above_first + above_count as f32 * height {
+                break;
+            }
+            let (a, b) = (above_count as f32, count as f32);
+            first = (a * above_first + b * first - a * b * height) / (a + b);
+            count += above_count;
+            stacks.pop();
+        }
+        stacks.push((count, first));
+    }
+    stacks
+        .into_iter()
+        .flat_map(|(count, first)| (0..count).map(move |at| first + at as f32 * height))
+        .collect()
+}
+
+/// Paints a later value beside the nearest free vertical slot, preserving earlier tags.
+/// Tags that cannot fit inside the pane are omitted.
+pub(crate) fn render_axis_value(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    y: f32,
+    text: String,
+    colors: (Color32, Color32),
+    occupied: &[Option<Rect>],
+    allow_overlap: bool,
+) -> Option<Rect> {
+    let (text_color, fill) = colors;
+    let height = painter
+        .layout_no_wrap(text.clone(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + 2.0 * TAG_PADDING.y;
+    if !y.is_finite() || height > plot.height() {
+        return None;
+    }
+    let clamp = |y: f32| y.clamp(plot.top() + height / 2.0, plot.bottom() - height / 2.0);
+    let free = |y: f32| {
+        allow_overlap
+            || occupied.iter().flatten().all(|rect| {
+                y + height / 2.0 <= rect.top() + 0.001 || y - height / 2.0 >= rect.bottom() - 0.001
+            })
+    };
+    let centre = std::iter::once(clamp(y))
+        .chain(occupied.iter().flatten().flat_map(|rect| {
+            [
+                clamp(rect.top() - height / 2.0),
+                clamp(rect.bottom() + height / 2.0),
+            ]
+        }))
+        .filter(|y| free(*y))
+        .min_by(|a, b| (a - y).abs().total_cmp(&(b - y).abs()))?;
+    let (anchor, align) = price_tag_anchor(plot, axis_right, centre);
+    Some(paint_axis_tag(
+        painter, anchor, align, axis_right, text, text_color, fill,
+    ))
+}
+
+/// Primitive tags share automatic placement; callers defer fixed tags until automatic tags finish.
+pub(crate) fn render_primitive_price_labels(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
+    occupied: &mut Vec<Option<Rect>>,
+    allow_overlap: bool,
+) {
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(
+        painter.clip_rect().x_range(),
+        plot.y_range(),
+    )));
+    let axis = Rect::from_x_y_ranges(
+        if axis_right <= plot.left() {
+            painter.clip_rect().left()..=plot.left()
+        } else {
+            plot.right()..=axis_right
+        },
+        plot.y_range(),
+    );
+    let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    for (label, map) in labels {
+        let fixed = label.fixed_coordinate.is_some();
+        if !fixed && !map.range().contains(map.transform().to_scale(label.price)) {
+            continue;
+        }
+        let y = label
+            .fixed_coordinate
+            .map_or_else(|| map.price_to_y(label.price), |offset| plot.top() + offset);
+        if !y.is_finite() {
+            continue;
+        }
+        let ink = label
+            .text_color
+            .unwrap_or_else(|| tag_text_color(label.color));
+        let tag = if fixed {
+            let (anchor, align) = price_tag_anchor(plot, axis_right, y);
+            Some(paint_axis_tag(
+                &axis_painter,
+                anchor,
+                align,
+                axis_right,
+                label.text,
+                ink,
+                label.color,
+            ))
+        } else {
+            render_axis_value(
+                &painter,
+                plot,
+                axis_right,
+                y,
+                label.text,
+                (ink, label.color),
+                occupied,
+                allow_overlap,
+            )
+        };
+        let clip = if fixed {
+            axis_painter.clip_rect()
+        } else {
+            painter.clip_rect()
+        };
+        if let Some(tag) = tag.filter(|tag| tag.intersects(clip)) {
+            if label.tick_visible {
+                let edge = if axis_right <= plot.left() {
+                    plot.left()
+                } else {
+                    plot.right()
+                };
+                let end = edge + if axis_right <= plot.left() { -5.0 } else { 5.0 };
+                axis_painter.line_segment(
+                    [
+                        Pos2::new(edge, tag.center().y),
+                        Pos2::new(end, tag.center().y),
+                    ],
+                    Stroke::new(1.0, ink),
+                );
+            }
+            occupied.push(Some(tag));
+        }
+    }
+}
+
+/// Fixed time tags are clipped rather than moved; automatic tags keep the usual edge fitting.
+pub(crate) fn render_primitive_time_label(
+    painter: &Painter,
+    axis: Rect,
+    x: f32,
+    label: crate::chart::primitives::TimeAxisLabel,
+) -> Option<Rect> {
+    if !x.is_finite() || (label.fixed_coordinate.is_none() && !axis.x_range().contains(x)) {
+        return None;
+    }
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    let ink = label
+        .text_color
+        .unwrap_or_else(|| tag_text_color(label.color));
+    let tag = if label.fixed_coordinate.is_some() {
+        let galley = painter.layout_no_wrap(label.text, axis_font(painter.ctx()), ink);
+        let size = Vec2::new(galley.size().x + 8.0, 25.0_f32.max(galley.size().y));
+        let tag = Align2::CENTER_TOP.anchor_size(Pos2::new(x, axis.top() + 1.5), size);
+        painter.rect_filled(tag, 1.0, label.color);
+        painter.galley(tag.center() - galley.size() / 2.0, galley, ink);
+        tag
+    } else {
+        paint_crosshair_tag(
+            &painter,
+            Pos2::new(x, axis.top() + 1.5),
+            Align2::CENTER_TOP,
+            axis.left()..=axis.right(),
+            label.text,
+            (ink, label.color),
+            axis_font(painter.ctx()),
+            25.0,
+            None,
+        )
+    };
+    if !tag.intersects(painter.clip_rect()) {
+        return None;
+    }
+    if label.tick_visible {
+        painter.line_segment(
+            [Pos2::new(x, axis.top()), Pos2::new(x, axis.top() + 5.0)],
+            Stroke::new(1.0, ink),
+        );
+    }
+    Some(tag.intersect(axis))
+}
+
+/// Last-bar values of visible study lines, in the same units and colours as their plot.
+pub(crate) fn render_study_tags(
+    painter: &Painter,
+    plot: Rect,
+    map: &PriceMap,
+    study: &dyn crate::studies::Indicator,
+    axis_right: f32,
+    occupied: &mut Vec<Option<Rect>>,
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+    axis: &crate::config::PriceAxisOptions,
+) {
+    if !axis.show_study_values
+        || !study.is_visible()
+        || study.scale() == crate::studies::StudyScale::None
+    {
+        return;
+    }
+    let values = study.values();
+    let Some(bar) = values.len().checked_sub(1) else {
+        return;
+    };
+    let transform = map.transform();
+    let mut tags = Vec::new();
+    for line in 0..study.line_count() {
+        let plot_style = study.plot_style(line);
+        let Some(value) = study.plot_value(line, bar) else {
+            continue;
+        };
+        if !plot_style.visible
+            || !study.plot_tagged(line)
+            || matches!(
+                plot_style.plot_type,
+                crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+            )
+            || plot_style.width <= 0.0
+            || !map.range().contains(transform.to_scale(value))
+        {
+            continue;
+        }
+        let label = if study.value_format() == crate::scales::StudyFormat::Price {
+            map.label(
+                transform.to_scale(value),
+                study
+                    .precision()
+                    .unwrap_or_else(|| tag_decimals(map, map.price_to_y(value))),
+                formatter,
+            )
+        } else {
+            study.format_plot_value(line, value)
+        };
+        let color = axis.study_value_color.unwrap_or(plot_style.color);
+        tags.push((
+            map.price_to_y(value),
+            named_label(axis.show_study_names, study.name(), label),
+            (tag_text_color(color), color),
+        ));
+    }
+    // The lines of one study stack in the order of their prices.
+    tags.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut ys: Vec<_> = tags.iter().map(|tag| tag.0).collect();
+    if !axis.allow_label_overlap {
+        ys = spread_axis_ys(painter, &ys);
+    }
+    for ((_, text, colors), y) in tags.into_iter().zip(ys) {
+        occupied.push(render_axis_value(
+            painter,
+            plot,
+            axis_right,
+            y,
+            text,
+            colors,
+            occupied,
+            axis.allow_label_overlap,
+        ));
+    }
+}
+
+/// Renders `line` from `start_x`, clamped to the plot's left edge, to its right edge and, with
+/// `show_axis` and the line's `axis_label`, its tag in the price axis, which ends at `axis_right`.
+/// Pass the plot's left edge as `axis_right` to place tags in the left axis.
+/// Returns the tag's rect, or `None` when no tag is drawn.
+pub fn render_price_line(
+    painter: &Painter,
+    price_rect: Rect,
+    price_map: &PriceMap,
+    line: &PriceLine,
+    start_x: f32,
+    show_axis: bool,
+    axis_right: f32,
+) -> Option<Rect> {
+    let x0 = start_x.max(price_rect.min.x);
+    if x0 >= price_rect.max.x {
+        return None;
+    }
+    let transform = price_map.transform();
+    // In scale units: a flat range maps every price, NaN included, to the pane's middle.
+    if !price_map.range().contains(transform.to_scale(line.price)) {
+        return None;
+    }
+    let y = price_map.price_to_y(line.price);
+
+    let start = Pos2::new(x0, y);
+    let end = Pos2::new(price_rect.max.x, y);
+    let stroke = Stroke::new(line.width, line.color);
+    if line.width > 0.0 {
+        if let Some((dash, gap)) = line.style.hairline_pattern() {
+            draw_dashed_line(painter, start, end, stroke, dash, gap);
+        } else {
+            painter.line_segment([start, end], stroke);
+        }
+    }
+    if let Some(title) = &line.title {
+        painter.with_clip_rect(price_rect).text(
+            start,
+            Align2::LEFT_BOTTOM,
+            title,
+            axis_font(painter.ctx()),
+            line.title_color.unwrap_or(line.color),
+        );
+    }
+
+    if !show_axis || !line.axis_label {
+        return None;
+    }
+    let label = price_map.label(
+        transform.to_scale(line.price),
+        tag_decimals(price_map, y),
+        None,
+    );
+    let (text_color, fill) = axis_label_colors(line);
+    let (anchor, align) = price_tag_anchor(price_rect, axis_right, y);
+    Some(paint_axis_tag(
+        painter, anchor, align, axis_right, label, text_color, fill,
+    ))
+}
+
+/// The text colour and fill of `line`'s axis tag.
+pub(crate) fn axis_label_colors(line: &PriceLine) -> (Color32, Color32) {
+    let fill = line.axis_label_color.unwrap_or(line.color);
+    (
+        line.axis_label_text_color
+            .unwrap_or_else(|| tag_text_color(fill)),
+        fill,
+    )
+}
+
+/// The decimals of an automatic price tag at `y`: the scale's precision, else the nearest tick
+/// label's, with at least two.
+pub(crate) fn tag_decimals(map: &PriceMap, y: f32) -> usize {
+    map.price_precision()
+        .unwrap_or_else(|| tick_decimals(map, y).max(2))
+}
+
+// Keep white text on financial colours; pale custom fills still need dark text.
+pub(crate) fn tag_text_color(fill: Color32) -> Color32 {
+    if contrast(Color32::WHITE, fill) >= 2.0 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
+/// Paints a compact hover tag within its axis bounds, using `font`'s size and the axis family.
+pub(crate) fn paint_crosshair_tag(
+    painter: &Painter,
+    anchor: Pos2,
+    align: Align2,
+    bounds: std::ops::RangeInclusive<f32>,
+    text: String,
+    colors: (Color32, Color32),
+    mut font: FontId,
+    height: f32,
+    covered: Option<Rect>,
+) -> Rect {
+    let (text_color, fill) = colors;
+    let padding = 8.0;
+    let available = (bounds.end() - bounds.start()).max(0.0);
+    font.family = axis_font(painter.ctx()).family;
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, text_color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((available - padding).max(0.0));
+    let galley = painter.layout_job(job);
+    let size = Vec2::new(
+        (galley.size().x + padding).min(available),
+        height.max(galley.size().y),
+    );
+    let mut tag = align.anchor_size(anchor, size);
+    tag = tag.translate(Vec2::new((bounds.end() - tag.right()).min(0.0), 0.0));
+    tag = tag.translate(Vec2::new((bounds.start() - tag.left()).max(0.0), 0.0));
+    tag = tag.translate(Vec2::new(
+        0.0,
+        (painter.clip_rect().bottom() - tag.bottom()).min(0.0),
+    ));
+    tag = tag.translate(Vec2::new(
+        0.0,
+        (painter.clip_rect().top() - tag.top()).max(0.0),
+    ));
+    if let Some(covered) = covered.filter(|covered| covered.intersects(tag)) {
+        let cover = covered.intersect(Rect::from_x_y_ranges(
+            *bounds.start()..=*bounds.end(),
+            painter.clip_rect().y_range(),
+        ));
+        painter.rect_filled(cover, 0.0, painter.ctx().active_theme().chart.bg);
+    }
+    tag.min.x = tag.min.x.max(*bounds.start());
+    tag.max.x = tag.max.x.min(*bounds.end());
+    let painter = painter.with_clip_rect(tag.intersect(painter.clip_rect()));
+    painter.rect_filled(tag, 1.0, fill);
+    let text_pos = Pos2::new(tag.left() + 4.0, tag.center().y - galley.size().y / 2.0);
+    painter.galley(text_pos, galley, text_color);
+    tag
+}
+
+/// Width of the current price labels and tags, including their plot gap and right clearance.
+/// Include formatted session and volume labels in `tag_labels` when allocating their column,
+/// and the host `formatter` the labels are written with.
+pub fn price_axis_width(
+    painter: &Painter,
+    price_map: &PriceMap,
+    tag_labels: &[&str],
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+) -> f32 {
+    price_axis_width_with_edges(painter, price_map, tag_labels, formatter, None)
+}
+
+/// Measures the list painted by an axis, including edge ticks when `pane` is present.
+pub(crate) fn price_axis_width_with_edges(
+    painter: &Painter,
+    price_map: &PriceMap,
+    tag_labels: &[&str],
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+    pane: Option<Rect>,
+) -> f32 {
+    labels::price_axis_marks(painter, price_map, pane, formatter)
+        .into_iter()
+        .map(|mark| mark.label)
+        .chain(tag_labels.iter().map(|label| (*label).to_owned()))
+        .map(|label| {
+            painter
+                .layout_no_wrap(label, axis_font(painter.ctx()), Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
+        + 5.0
+        + TAG_PADDING.x * 2.0
+        + 6.0
+}
+
+/// Paints independent current close, session and volume readouts, returning their rectangles
+/// in that order. Pass all three rectangles to tick occlusion and pointer routing.
+///
+/// Session lines stay at their data price. Tags move apart only to keep the rows readable;
+/// volume is a value readout at the bottom of the pane, never a price coordinate. The caller supplies
+/// the current values and colours independently of the historical bar under the pointer.
+/// Off-scale prices do not hide other rows. A short pane keeps close, session, then volume.
+pub fn render_quote_tags(
+    painter: &Painter,
+    price_rect: Rect,
+    price_map: &PriceMap,
+    close: &PriceLine,
+    session: Option<(&crate::model::quote::SessionQuote, Color32)>,
+    volume: Option<(f64, Color32)>,
+    axis_right: f32,
+) -> [Option<Rect>; 3] {
+    render_quote_tags_with_countdown(
+        painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0, None,
+        None, false, "",
+    )
+}
+
+/// The chart's current-value stack, optionally including the supplied quote's bar countdown.
+/// A non-empty `close_name` leads the current close's tag.
+pub(crate) fn render_quote_tags_with_countdown(
+    painter: &Painter,
+    price_rect: Rect,
+    price_map: &PriceMap,
+    close: &PriceLine,
+    session: Option<(&crate::model::quote::SessionQuote, Color32)>,
+    volume: Option<(f64, Color32)>,
+    axis_right: f32,
+    countdown: Option<&str>,
+    volume_precision: Option<u8>,
+    reserved_top: f32,
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+    volume_formatter: Option<&dyn crate::scales::PriceFormatter>,
+    allow_overlap: bool,
+    close_name: &str,
+) -> [Option<Rect>; 3] {
+    use crate::scales::{PriceFormatter, VolumeFormatter};
+    let mut tags = [None; 3];
+    let transform = price_map.transform();
+    let height = painter
+        .layout_no_wrap("0".into(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + TAG_PADDING.y * 2.0;
+    let visible = |price| price_map.range().contains(transform.to_scale(price));
+    let close_y = price_map.price_to_y(close.price);
+    let mut rows = Vec::with_capacity(3);
+    let mut line = close.clone();
+    line.axis_label = false;
+    render_price_line(
+        painter,
+        price_rect,
+        price_map,
+        &line,
+        price_rect.left(),
+        false,
+        axis_right,
+    );
+    if visible(close.price) && close.axis_label {
+        rows.push((
+            0,
+            close_y,
+            {
+                let price = named_label(
+                    true,
+                    close_name,
+                    price_map.label(
+                        transform.to_scale(close.price),
+                        tag_decimals(price_map, close_y),
+                        formatter,
+                    ),
+                );
+                countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
+            },
+            close.color,
+        ));
+    }
+    if let Some((quote, color)) = session.filter(|(quote, _)| visible(quote.price)) {
+        let line = PriceLine::new(quote.price, color)
+            .with_style(crate::model::LineStyle::Dotted)
+            .with_axis_label(false)
+            .with_width(0.7);
+        render_price_line(
+            painter,
+            price_rect,
+            price_map,
+            &line,
+            price_rect.left(),
+            false,
+            axis_right,
+        );
+        let mut y = price_map.price_to_y(quote.price);
+        let separation = height
+            + if countdown.is_some() {
+                (height - TAG_PADDING.y * 2.0) / 2.0
+            } else {
+                0.0
+            };
+        if !allow_overlap && !rows.is_empty() && (y - close_y).abs() < separation {
+            y = close_y - separation;
+        }
+        let label = price_map.label(
+            transform.to_scale(quote.price),
+            tag_decimals(price_map, price_map.price_to_y(quote.price)),
+            formatter,
+        );
+        rows.push((1, y, format!("{} {label}", quote.qualifier), color));
+    }
+    if let Some((value, color)) = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0) {
+        rows.push((
+            2,
+            price_rect.bottom() - height / 2.0,
+            volume_formatter.map_or_else(
+                || {
+                    VolumeFormatter {
+                        precision: usize::from(volume_precision.unwrap_or(2)),
+                    }
+                    .format(value)
+                },
+                |formatter| formatter.format(value),
+            ),
+            color,
+        ));
+    }
+    let row_height = |text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), axis_font(painter.ctx()), Color32::WHITE)
+            .size()
+            .y
+            + TAG_PADDING.y * 2.0
+    };
+    if !allow_overlap {
+        while rows.iter().map(|row| row_height(&row.2)).sum::<f32>()
+            > price_rect.height() - reserved_top
+        {
+            if rows.pop().is_none() {
+                break;
+            }
+        }
+        rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut next = price_rect.top() + reserved_top;
+        for row in &mut rows {
+            let height = row_height(&row.2);
+            row.1 = row.1.max(next + height / 2.0);
+            next = row.1 + height / 2.0;
+        }
+        next = price_rect.bottom();
+        for row in rows.iter_mut().rev() {
+            let height = row_height(&row.2);
+            row.1 = row.1.min(next - height / 2.0);
+            next = row.1 - height / 2.0;
+        }
+    } else {
+        rows.retain(|row| row_height(&row.2) <= price_rect.height() - reserved_top);
+        for row in &mut rows {
+            let height = row_height(&row.2);
+            row.1 = row.1.clamp(
+                price_rect.top() + reserved_top + height / 2.0,
+                price_rect.bottom() - height / 2.0,
+            );
+        }
+    }
+    // Keep paint order stable even when the price coordinates reverse the row order.
+    rows.sort_by_key(|row| row.0);
+    for (slot, y, text, fill) in rows {
+        let (anchor, align) = price_tag_anchor(price_rect, axis_right, y);
+        tags[slot] = Some(paint_axis_tag(
+            painter,
+            anchor,
+            align,
+            axis_right,
+            text,
+            tag_text_color(fill),
+            fill,
+        ));
+    }
+    tags
+}
+
+/// Paints a 26 by 20 point circled-plus button joined to the left of `tag`.
+/// A click returns `price` for the host's alert, order or price-line menu. The tag itself
+/// remains available for price-axis drags. Uses the theme's tag fill and `foreground` ink;
+/// call before handling price-axis drags.
+#[cfg(feature = "icons")]
+#[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
+pub fn crosshair_price_action(
+    ui: &mut egui::Ui,
+    tag: Rect,
+    price: f64,
+    foreground: Color32,
+) -> Option<f64> {
+    crosshair_price_action_with_colors(
+        ui,
+        tag,
+        price,
+        (foreground, ui.ctx().active_theme().chart.crosshair_label_bg),
+    )
+}
+
+/// The joined button's target, shared by painting and chart gesture handling.
+pub(crate) fn crosshair_price_button_rect(tag: Rect) -> Rect {
+    Rect::from_center_size(
+        tag.left_center() - Vec2::new(13.0, 0.0),
+        Vec2::new(26.0, 20.0),
+    )
+}
+
+/// Keeps the public action's signature while the chart supplies its configured tag fill.
+#[cfg(feature = "icons")]
+pub(crate) fn crosshair_price_action_with_colors(
+    ui: &mut egui::Ui,
+    tag: Rect,
+    price: f64,
+    colors: (Color32, Color32),
+) -> Option<f64> {
+    let (foreground, fill) = colors;
+    let button = crosshair_price_button_rect(tag);
+    let response = ui.interact(
+        button,
+        ui.scope_id().with("crosshair_price_action"),
+        egui::Sense::click(),
+    );
+    ui.painter().rect_filled(button, 1.0, fill);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(button, 1.0, foreground.gamma_multiply(0.18));
+    }
+    let center = button.center();
+    let stroke = Stroke::new(1.0, foreground);
+    ui.painter().circle_stroke(center, 6.0, stroke);
+    for offset in [Vec2::new(3.0, 0.0), Vec2::new(0.0, 3.0)] {
+        ui.painter()
+            .line_segment([center - offset, center + offset], stroke);
+    }
+    let needs_info = response.clicked()
+        || response.double_clicked()
+        || response.triple_clicked()
+        || response.gained_focus()
+        || response.changed()
+        || ui
+            .ctx()
+            .accesskit_node_builder(response.id, |_| ())
+            .is_some();
+    #[cfg(debug_assertions)]
+    let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
+    if needs_info {
+        // Translation must run outside the context lock held by widget_info.
+        let label = crate::localization::lookup(ui.ctx(), "Add at price");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                label.as_deref().unwrap_or("Add at price"),
+            )
+        });
+    }
+    response
+        .on_hover_ui(|ui| {
+            ui.label(crate::localization::text(ui.ctx(), "Add at price"));
+        })
+        .clicked()
+        .then_some(price)
+}
+
+/// A 24-point scale-settings target in the price/time-axis corner. The caller opens its
+/// existing scale menu when the returned response is clicked, before handling scale drags.
+#[cfg(feature = "icons")]
+#[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
+pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
+    let target = Rect::from_center_size(corner.center(), Vec2::splat(24.0)).intersect(corner);
+    let response = ui.interact(
+        target,
+        ui.scope_id().with("axis_settings"),
+        egui::Sense::click(),
+    );
+    crate::icons::icons::SETTINGS
+        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().ui.text)
+        .paint_at(
+            ui,
+            Rect::from_center_size(target.center(), Vec2::splat(16.0)),
+        );
+    let needs_info = response.clicked()
+        || response.double_clicked()
+        || response.triple_clicked()
+        || response.gained_focus()
+        || response.changed()
+        || ui
+            .ctx()
+            .accesskit_node_builder(response.id, |_| ())
+            .is_some();
+    #[cfg(debug_assertions)]
+    let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
+    if needs_info {
+        // Translation must run outside the context lock held by widget_info.
+        let label = crate::localization::lookup(ui.ctx(), "Scale settings");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                label.as_deref().unwrap_or("Scale settings"),
+            )
+        });
+    }
+    response.on_hover_ui(|ui| {
+        ui.label(crate::localization::text(ui.ctx(), "Scale settings"));
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
+    use egui::{Context, RawInput, Shape};
+
+    fn texts<'a>(shape: &'a Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+            Shape::Text(text) => out.push(text),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn axis_font_scope_restores_nested_fonts_after_unwinding() {
+        let ctx = Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            FontFamily::Name("Nested".into()),
+            fonts.families[&FontFamily::Proportional].clone(),
+        );
+        ctx.set_fonts(fonts);
+        ctx.run_ui(RawInput::default(), |_| {})
+            .drop_without_applying_deltas();
+        let other = Context::default();
+        let default = axis_font(&ctx);
+        for size in [18.0, 24.0] {
+            let mut theme = ctx.active_theme();
+            theme.text.label = size;
+            {
+                let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
+                let _font = AxisFontScope::new(&ctx, &FontFamily::Monospace);
+                assert_eq!(axis_font(&ctx), FontId::monospace(size));
+                assert_eq!(axis_font(&other), default);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    theme.text.label = 30.0;
+                    let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
+                    let family = FontFamily::Name("Nested".into());
+                    let _font = AxisFontScope::new(&ctx, &family);
+                    assert_eq!(axis_font(&ctx), FontId::new(30.0, family));
+                    panic!("unwind the nested chart");
+                }));
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<&str>(),
+                    Some(&"unwind the nested chart")
+                );
+                assert_eq!(axis_font(&ctx), FontId::monospace(size));
+            }
+            assert_eq!(axis_font(&ctx), default);
+        }
+    }
+
+    #[test]
+    fn axis_labels_fall_back_from_an_uninstalled_family() {
+        use crate::widget::test_frames::chart;
+        use egui_kittest::Harness;
+
+        for (width, theme) in [
+            (320.0, crate::theme::Theme::light()),
+            (320.0, crate::theme::Theme::dark()),
+            (900.0, crate::theme::Theme::light()),
+            (900.0, crate::theme::Theme::dark()),
+        ] {
+            let family = FontFamily::Name("Not Installed".into());
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.set_theme_override(Some(theme));
+            chart.config_mut().axis_font_family = family.clone();
+            chart.config_mut().show_volume = false;
+            let time = chart.state.shown()[90].time;
+            chart.set_crosshair_position(Some((time, 105.0)));
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 600.0))
+                .build_ui_state(
+                    |ui, chart: &mut crate::widget::Chart| {
+                        chart.show(ui);
+                    },
+                    chart,
+                );
+            for installed in [false, true] {
+                if installed {
+                    let mut fonts = egui::FontDefinitions::default();
+                    fonts.families.insert(
+                        family.clone(),
+                        fonts.families[&FontFamily::Monospace].clone(),
+                    );
+                    harness.ctx.set_fonts(fonts);
+                }
+                harness.step();
+                let expected = if installed {
+                    &family
+                } else {
+                    &FontFamily::Proportional
+                };
+                let plot = harness.state().get_rendered_price_rect();
+                let mut counts = [0; 2];
+                let mut painted = Vec::new();
+                for shape in &harness.output().shapes {
+                    texts(&shape.shape, &mut painted);
+                }
+                for text in painted {
+                    let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                    let time = text.pos.y >= plot.bottom()
+                        && text.pos.y < plot.bottom() + 35.0
+                        && plot.x_range().contains(text.pos.x);
+                    if price || time {
+                        counts[usize::from(time)] += 1;
+                        for section in &text.galley.job.sections {
+                            assert_eq!(&section.format.font_id.family, expected);
+                        }
+                    }
+                }
+                assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+                assert_eq!(harness.state().config().axis_font_family, family);
+                #[cfg(feature = "ui")]
+                assert_eq!(
+                    harness
+                        .state()
+                        .snapshot()
+                        .unwrap()
+                        .config
+                        .unwrap()
+                        .axis_font_family,
+                    family
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn charts_keep_axis_families_local() {
+        use crate::widget::test_frames::chart;
+
+        let ctx = Context::default();
+        let family = FontFamily::Name("Host Mono".into());
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            family.clone(),
+            fonts.families[&FontFamily::Monospace].clone(),
+        );
+        ctx.set_fonts(fonts);
+        let host_style = ctx.global_style();
+        let mut charts = [chart(&[100.0], &[110.0]), chart(&[100.0], &[110.0])];
+        for chart in &mut charts {
+            chart.set_size(Some(Vec2::new(760.0, 260.0)));
+            chart.config_mut().show_volume = false;
+            let time = chart.state.shown()[90].time;
+            chart.set_crosshair_position(Some((time, 105.0)));
+        }
+        // Defaults, independent families, then a runtime change back to the defaults.
+        for families in [
+            [FontFamily::Proportional, FontFamily::Proportional],
+            [family.clone(), FontFamily::Proportional],
+            [FontFamily::Proportional, FontFamily::Proportional],
+        ] {
+            for (chart, family) in charts.iter_mut().zip(&families) {
+                chart.config_mut().axis_font_family = family.clone();
+            }
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 700.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.label("Host before");
+                    for chart in &mut charts {
+                        chart.show(ui);
+                    }
+                    ui.label("Host after");
+                },
+            );
+            let mut painted = Vec::new();
+            for shape in &output.shapes {
+                texts(&shape.shape, &mut painted);
+            }
+            for (chart, family) in charts.iter().zip(&families) {
+                let plot = chart.get_rendered_price_rect();
+                let mut counts = [0; 2];
+                for text in &painted {
+                    let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                    let time = text.pos.y >= plot.bottom()
+                        && text.pos.y < plot.bottom() + 35.0
+                        && plot.x_range().contains(text.pos.x);
+                    if price || time {
+                        counts[usize::from(time)] += 1;
+                        assert_eq!(&text.galley.job.sections[0].format.font_id.family, family);
+                    }
+                }
+                assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+            }
+            for label in ["Host before", "Host after"] {
+                let text = painted
+                    .iter()
+                    .find(|text| text.galley.text() == label)
+                    .unwrap();
+                assert_eq!(
+                    text.galley.job.sections[0].format.font_id,
+                    host_style.text_styles[&egui::TextStyle::Body]
+                );
+            }
+            assert_eq!(ctx.global_style(), host_style);
+            assert_eq!(
+                axis_font(&ctx),
+                FontId::proportional(ctx.active_theme().text.label)
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn price_line_follows_the_scale() {
+        use PriceScaleMode::{Logarithmic, Normal, Percentage};
+
+        // ln(100) is midway between ln(10) and ln(1000); +25% is 3/4 up -50%..50%.
+        let cases = [
+            (
+                "logarithmic",
+                Logarithmic,
+                0.0,
+                (10_f64.ln(), 1000_f64.ln()),
+                100.0,
+                true,
+                Some((50.0, Some("100.00"))),
+            ),
+            (
+                "percentage",
+                Percentage,
+                100.0,
+                (-50.0, 50.0),
+                125.0,
+                true,
+                Some((25.0, Some("+25.00%"))),
+            ),
+            (
+                "off the scale",
+                Normal,
+                0.0,
+                (100.0, 200.0),
+                250.0,
+                true,
+                None,
+            ),
+            (
+                "not finite",
+                Normal,
+                0.0,
+                (150.0, 150.0),
+                f64::NAN,
+                true,
+                None,
+            ),
+            ("flat range", Normal, 0.0, (150.0, 150.0), 250.0, true, None),
+            (
+                "hidden label",
+                Normal,
+                0.0,
+                (100.0, 200.0),
+                150.0,
+                false,
+                Some((50.0, None)),
+            ),
+        ];
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
+        let mut failures = Vec::new();
+        for (name, mode, base, (min, max), price, axis_label, expected) in cases {
+            let ctx = Context::default();
+            let map = PriceMap::new(
+                PriceTransform { mode, base },
+                PriceRange::new(min, max),
+                0.0,
+                100.0,
+                false,
+            );
+            let line = PriceLine::new(price, Color32::RED).with_axis_label(axis_label);
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                render_price_line(ui.painter(), pane, &map, &line, pane.min.x, true, 200.0);
+            });
+            let segments: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let Shape::LineSegment { points, .. } = &shape.shape {
+                        Some(*points)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let Shape::Text(text) = &shape.shape {
+                        Some(text.galley.text().to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let matches = match expected {
+                None => output.shapes.is_empty(),
+                Some((y, label)) => {
+                    !segments.is_empty()
+                        && segments.iter().flatten().all(|p| (p.y - y).abs() < 1e-3)
+                        && labels.iter().map(String::as_str).eq(label)
+                }
+            };
+            if !matches {
+                failures.push(format!("{name}: expected {expected:?}, segments {segments:?}, labels {labels:?}, {} shapes", output.shapes.len()));
+            }
+            output.drop_without_applying_deltas();
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+        for (fill, expected) in [
+            (Color32::from_rgb(241, 54, 69), Color32::WHITE),
+            (Color32::WHITE, Color32::BLACK),
+        ] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(700.0, 710.0),
+                    0.0,
+                    100.0,
+                    false,
+                )
+                .with_price_precision(Some(3));
+                render_price_line(
+                    ui.painter(),
+                    pane,
+                    &map,
+                    &PriceLine::new(704.125, fill),
+                    0.0,
+                    true,
+                    200.0,
+                );
+            });
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(text.galley.text(), "704.125");
+            assert_eq!(text.fallback_color, expected);
+            let tag = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Rect(rect) => Some(rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(tag.corner_radius.nw, 0);
+            assert_eq!(tag.corner_radius.sw, 0);
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// Price lines within one label height stack on the scale in price order.
+    #[test]
+    fn price_line_tags_stack_in_price_order() {
+        use crate::widget::test_frames::{chart, shapes};
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[120.0]);
+        chart.config.show_volume = false;
+        for price in [110.0, 110.2, 110.1, 109.9] {
+            chart.add_price_line(
+                crate::widget::SeriesId::MAIN,
+                PriceLine::new(price, Color32::GOLD),
+            );
+        }
+        shapes(&ctx, &mut chart, 0.0, vec![]);
+        let mut tags: Vec<_> = shapes(&ctx, &mut chart, 1.0, vec![])
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text)
+                    if ["110.00", "110.20", "110.10", "109.90"].contains(&text.galley.text()) =>
+                {
+                    Some((text.visual_bounding_rect(), text.galley.text().to_owned()))
+                }
+                _ => None,
+            })
+            .collect();
+        tags.sort_by(|a, b| a.0.top().total_cmp(&b.0.top()));
+        let order: Vec<_> = tags.iter().map(|tag| tag.1.as_str()).collect();
+        assert_eq!(order, ["110.20", "110.10", "110.00", "109.90"]);
+        for pair in tags.windows(2) {
+            assert!(pair[0].0.bottom() <= pair[1].0.top() + 0.01, "{tags:?}");
+        }
+    }
+
+    /// Current values stay independent and ordered when price coordinates coincide.
+    #[test]
+    fn quote_tags_separate_colliding_prices_and_volume() {
+        use crate::model::quote::SessionQuote;
+        let host =
+            crate::scales::CustomPriceFormatter::new(|value| format!("{value:.0} contracts"));
+        for allow_overlap in [false, true] {
+            for host_volume in [false, true] {
+                let volume_formatter =
+                    host_volume.then_some(&host as &dyn crate::scales::PriceFormatter);
+                for (close, session_price, font_size, pane_height, show_close, slots, countdown) in [
+                    (704.61, 704.64, 12.0, 100.0, true, [true, true, true], None),
+                    (709.99, 709.99, 12.0, 100.0, true, [true, true, true], None),
+                    (700.01, 700.01, 12.0, 100.0, true, [true, true, true], None),
+                    (704.61, 704.64, 24.0, 100.0, true, [true, true, true], None),
+                    (709.99, 700.01, 12.0, 100.0, true, [true, true, true], None),
+                    (720.0, 704.64, 12.0, 100.0, true, [false, true, true], None),
+                    (
+                        704.61,
+                        704.64,
+                        12.0,
+                        100.0,
+                        false,
+                        [false, true, true],
+                        None,
+                    ),
+                    (704.61, 704.64, 12.0, 25.0, true, [true, false, false], None),
+                    (
+                        704.61,
+                        704.64,
+                        12.0,
+                        100.0,
+                        true,
+                        [true, true, true],
+                        Some("00:15"),
+                    ),
+                ] {
+                    let slots = if allow_overlap && pane_height == 25.0 {
+                        [true, true, true]
+                    } else {
+                        slots
+                    };
+                    for mut theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, pane_height));
+                        let map = PriceMap::new(
+                            PriceTransform::default(),
+                            PriceRange::new(700.0, 710.0),
+                            0.0,
+                            pane_height,
+                            false,
+                        )
+                        .with_price_precision(Some(2));
+                        let session = SessionQuote::new(session_price, "EXT");
+                        let ctx = Context::default();
+                        theme.text.label = font_size;
+                        crate::theme::apply_to_egui(&ctx, &theme);
+                        let mut tags = [None; 3];
+                        let mut width = 0.0;
+                        let text = [
+                            countdown.map_or_else(
+                                || format!("{close:.2}"),
+                                |time| format!("{close:.2}\n{time}"),
+                            ),
+                            format!("EXT {session_price:.2}"),
+                            if host_volume {
+                                "1590000 contracts".into()
+                            } else {
+                                "1.59M".into()
+                            },
+                        ];
+                        let output = ctx.run_ui(RawInput::default(), |ui| {
+                            width = price_axis_width(
+                                ui.painter(),
+                                &map,
+                                &text.iter().map(String::as_str).collect::<Vec<_>>(),
+                                None,
+                            );
+                            tags = render_quote_tags_with_countdown(
+                                ui.painter(),
+                                pane,
+                                &map,
+                                &PriceLine::new(close, Color32::RED).with_axis_label(show_close),
+                                Some((&session, Color32::from_rgb(251, 142, 1))),
+                                Some((1_590_000.0, Color32::RED)),
+                                pane.right() + width,
+                                countdown,
+                                None,
+                                0.0,
+                                None,
+                                volume_formatter,
+                                allow_overlap,
+                                "",
+                            );
+                        });
+                        let labels: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                Shape::Text(text) => Some(text.galley.text().to_owned()),
+                                _ => None,
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                        assert_eq!(tags.map(|tag| tag.is_some()), slots);
+                        let rects: Vec<_> = tags.into_iter().flatten().collect();
+                        assert!(
+                            rects
+                                .iter()
+                                .all(|rect| rect.top() >= 0.0 && rect.bottom() <= pane_height)
+                        );
+                        assert!(
+                            rects
+                                .iter()
+                                .all(|rect| rect.left() >= pane.right()
+                                    && rect.width() + 5.0 <= width)
+                        );
+                        assert!(
+                            allow_overlap
+                                || rects.iter().enumerate().all(|(i, a)| rects
+                                    .iter()
+                                    .skip(i + 1)
+                                    .all(|b| a.bottom() <= b.top() || b.bottom() <= a.top())),
+                            "{rects:?}"
+                        );
+                        let expected: Vec<_> = text
+                            .into_iter()
+                            .zip(slots)
+                            .filter_map(|(text, shown)| shown.then_some(text))
+                            .collect();
+                        assert_eq!(labels, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Add and settings cells emit their own clicks without a chart drag.
+    #[cfg(feature = "icons")]
+    #[test]
+    fn axis_controls_emit_their_actions() {
+        use egui::{Event, Modifiers, PointerButton};
+        let mut custom = crate::theme::Theme::dark();
+        custom.ui.text = Color32::from_rgb(123, 100, 90);
+        for theme in crate::theme::presets()
+            .into_iter()
+            .map(|(_, theme)| theme)
+            .chain([custom])
+        {
+            let ctx = Context::default();
+            crate::icons::install_loader(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
+            let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+            let mut actions = Vec::new();
+            for (pos, expected) in [
+                (Pos2::new(87.0, 110.5), Some("add")),
+                (tag.center(), None),
+                (corner.center(), Some("settings")),
+            ] {
+                let before = actions.len();
+                for pressed in [None, Some(true), Some(false)] {
+                    let mut input = RawInput::default();
+                    input.events.push(Event::PointerMoved(pos));
+                    if let Some(pressed) = pressed {
+                        input.events.push(Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    let output = ctx.run_ui(input, |ui| {
+                        if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE)
+                        {
+                            assert_eq!(price, 704.64);
+                            actions.push("add");
+                        }
+                        if axis_settings_button(ui, corner).clicked() {
+                            actions.push("settings");
+                        }
+                    });
+                    let ink = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.brush.is_some() => Some(rect.fill),
+                        _ => None,
+                    });
+                    assert_eq!(ink, Some(theme.ui.text));
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(actions[before..].first().copied(), expected);
+            }
+            assert_eq!(actions, ["add", "settings"]);
+        }
+    }
+
+    /// Study tags keep their optional names and choose readable text for the plot fill.
+    #[test]
+    fn study_value_tags_use_plot_contrast_and_optional_names() {
+        use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let mut study = CustomIndicator::new("Mine", |_| vec![IndicatorValue::Single(50.0)]);
+        study.calculate(&[]);
+        let plot = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
+        // White contrast is 1.63:1 on gold, 1.22:1 on yellow and 2.78:1 on green.
+        for (show_study_names, fill, text_color, expected) in [
+            (
+                false,
+                Color32::from_rgb(255, 193, 7),
+                Color32::BLACK,
+                "50.00",
+            ),
+            (
+                true,
+                Color32::from_rgb(255, 235, 59),
+                Color32::BLACK,
+                "Mine 50.00",
+            ),
+            (
+                true,
+                Color32::from_rgb(76, 175, 80),
+                Color32::WHITE,
+                "Mine 50.00",
+            ),
+        ] {
+            study.set_colors(vec![fill]);
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                render_study_tags(
+                    ui.painter(),
+                    plot,
+                    &map,
+                    &study,
+                    120.0,
+                    &mut Vec::new(),
+                    None,
+                    &crate::config::PriceAxisOptions {
+                        show_study_names,
+                        ..Default::default()
+                    },
+                );
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some((text.galley.text().to_owned(), text.fallback_color)),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(labels, [(expected.to_owned(), text_color)], "{fill:?}");
+        }
+    }
+}

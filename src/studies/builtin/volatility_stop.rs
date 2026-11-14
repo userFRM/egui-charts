@@ -29,7 +29,6 @@
 
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -68,7 +67,10 @@ impl VolatilityStop {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             uptrend: Vec::new(),
-            colors: [palette::TEAL, palette::RED],
+            colors: [
+                crate::studies::palette::DEEP_TEAL,
+                crate::studies::palette::BRIGHT_RED,
+            ],
             visible: true,
         }
     }

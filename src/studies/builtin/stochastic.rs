@@ -54,8 +54,8 @@ impl Stochastic {
             k_smooth: k_smooth.max(1),
             d_period: d_period.max(1),
             values: IndicatorValues::new(),
-            k_color: palette::BLUE,   // Blue
-            d_color: palette::ORANGE, // Orange
+            k_color: palette::BLUE,
+            d_color: palette::ORANGE,
             visible: true,
         }
     }
@@ -103,7 +103,7 @@ impl Stochastic {
                 let (highest, lowest) = (highest[i], lowest[i]);
                 let range = highest - lowest;
 
-                if range.abs() < 1e-10 {
+                if range == 0.0 {
                     raw_k.push(50.0); // Middle value when no range
                 } else {
                     let k = 100.0 * (data[i].close - lowest) / range;
@@ -117,7 +117,7 @@ impl Stochastic {
 
         // Build output values
         for i in 0..data.len() {
-            if smooth_k[i].is_nan() || d_values[i].is_nan() {
+            if smooth_k[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
                 values.push_lines(&[smooth_k[i], d_values[i]]);
@@ -188,15 +188,24 @@ impl Indicator for Stochastic {
         }
     }
 
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::LIGHT_BLUE.gamma_multiply_u8(26)
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
             range: Some((0.0, 100.0)),
             levels: vec![
-                (80.0, palette::DOWN, "Overbought"),
-                (20.0, palette::UP, "Oversold"),
+                (80.0, palette::MUTED, "Overbought"),
+                (20.0, palette::MUTED, "Oversold"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
             ],
-            fill_between_levels: false,
+            fill_between_levels: true,
         }
     }
 

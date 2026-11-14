@@ -32,9 +32,7 @@
 //! `drawings`. Toolbars and dialogs in `ui` are separate components placed and
 //! connected by the host.
 
-#[cfg(feature = "drawings")]
-use crate::chart::cursor_modes::CursorModeState;
-use crate::chart::renderers::ChartMapping;
+use crate::chart::rendering::ChartMapping;
 use crate::chart::selection::SelectionState;
 use crate::chart::series::SeriesSettings;
 use crate::config::{ChartConfig, ChartOptions};
@@ -44,25 +42,29 @@ use crate::drawings::DrawingManager;
 use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
 use crate::studies::ChartState;
+#[cfg(feature = "drawings")]
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 
-use crate::scales::{PriceMap, PriceScale};
-use crate::studies::IndicatorRegistry;
-use chrono::{DateTime, Utc};
-use std::collections::BTreeSet;
-mod indicator_pane;
-pub use crate::chart::renderers::{
-    Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, Watermark, WatermarkLine,
+pub use crate::chart::rendering::{
+    Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
+    WatermarkLine,
 };
 pub use crate::chart::selection::{ChartElementId, SeriesId};
+use crate::scales::{PriceMap, PriceScale};
+use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
+use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
-pub use export::{ChartImage, DataTable, ImageExportOptions};
-pub use indicator_pane::{
-    IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
-};
+#[cfg(feature = "ui")]
+pub(crate) use export::ColumnId;
+pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
+pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
+#[cfg(feature = "ui")]
+pub(crate) use readout::SeriesFingerprint;
+use std::collections::BTreeMap;
 
 // Re-export from logic layer
-use crate::chart::state;
+use pan_zoom::state;
 
 mod accessibility;
 #[cfg(feature = "drawings")]
@@ -84,21 +86,30 @@ mod marks;
 mod merge;
 mod signals;
 mod targets;
-pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use events::ImageRequest;
+pub use events::{
+    ChartEvent, ChartPointer, CursorDataPolicy, DataOperation, PointerKind, PointerTarget,
+};
 mod export;
+mod format;
 mod frame;
 mod history;
 pub(crate) mod interaction;
 pub(crate) mod keyboard;
 mod layout;
 mod navigation;
-mod palette;
+pub(crate) mod palette;
 pub(crate) mod pan_zoom;
-mod pane_layout;
-pub use pane_layout::{PaneId, PaneOptions};
-mod panes;
-mod price_series;
+mod pane;
+#[doc(inline)]
+pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod posts;
 mod primitives;
+#[cfg(feature = "png-export")]
 mod raster;
 mod readout;
 mod replay;
@@ -112,25 +123,42 @@ mod snapshot;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod stored_drawings;
 mod studies;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+mod study_templates;
 mod svg;
+#[cfg(feature = "studies")]
+mod trade_profile;
 
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod drawing_api;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
+    CustomPoint, PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit,
+    PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
-pub use pane_layout::VisualOrder;
-pub use price_series::SeriesOptions;
-pub use series::{BarsInRange, MismatchDirection, PriceLineId};
+pub use pane::VisualOrder;
+pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
+pub use series::{PaneScale, SeriesOptions};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{
-    ChartSnapshot, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
+    ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
-pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
+pub use layout::{
+    ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+};
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use layout::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use layout::{SymbolDrawing, SymbolDrawings};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
@@ -200,6 +228,7 @@ pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
     pub(crate) state: ChartState,
     replay: Option<replay::ReplayWindow>,
+    market_replay: Option<replay::MarketReplay>,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
     applied_config_scale_mode: crate::scales::PriceScaleMode,
@@ -207,14 +236,14 @@ pub struct Chart {
     pub(crate) main_series_visible: bool,
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
-    price_series: Vec<price_series::PriceSeries>,
+    price_series: Vec<series::PriceSeries>,
     heikin_ashi: crate::chart::rendering::candles::HeikinAshiCache,
     series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
     history: history::ChartHistory,
-    pane_layout: pane_layout::PaneLayout,
+    pane_layout: pane::PaneLayout,
     pane_options: PaneOptions,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
@@ -232,8 +261,8 @@ pub struct Chart {
     pub(crate) scroll_start_offset: Option<f64>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
-    /// Price-axis drag this frame: anchor y where the drag began, and the y movement (UI state only)
-    pub(crate) price_axis_drag: Option<(f32, f32)>,
+    /// Bar spacing when a time-axis drag began or was last rebased (UI state only)
+    pub(crate) scroll_start_spacing: Option<f32>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.
@@ -246,6 +275,8 @@ pub struct Chart {
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
     pub(crate) chart_type_params: ChartTypeParams,
+    #[cfg(feature = "studies")]
+    trade_profiles: trade_profile::TradeProfiles,
     pending_box_sizes: [bool; 4],
     /// Whether older source bars can contribute to the shown series.
     pub(crate) older_bars_drawn: bool,
@@ -255,12 +286,18 @@ pub struct Chart {
     pub(crate) mouse_in_chart: bool,
     /// Feed state of the main series; see [`Chart::feed_state`].
     pub(crate) feed: FeedState,
-    /// Times of main bars built from ticks, which a history bar of the same slot replaces.
-    pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
+    /// Origins of main bars built from ticks, distinguishing trades from empty heartbeats.
+    pub(crate) from_ticks: BTreeMap<DateTime<Utc>, crate::data::merge::Origin>,
     /// Optional oldest-bar eviction limits, unlimited when absent.
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    /// Changes when what the data table calculates from changes, unlike the steps of the chart's
+    /// own refresh, whose results the table does not read.
+    readout_revision: u64,
+    /// See [`Self::data_table_identity`].
+    #[cfg(feature = "ui")]
+    data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
@@ -278,6 +315,11 @@ pub struct Chart {
     pub(crate) study_inputs: Vec<String>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
+    /// For each study in `studies`, whether it must be recomputed from the first bar while its
+    /// values still hold: on the bars that remain after an eviction, after a drop of its
+    /// order-flow input's oldest bars or after a live bar of a history it reads. It draws them
+    /// until its recompute, which waits for `next_refresh` like a tail update.
+    pub(crate) stale: Vec<bool>,
     /// For each study in `studies`, the input time in seconds from which it may be recomputed
     /// in full again.
     pub(crate) next_refresh: Vec<f64>,
@@ -287,19 +329,27 @@ pub struct Chart {
     primitives: Vec<primitives::Attached>,
     /// Id of the next primitive attached.
     next_primitive: u64,
+    /// Omit the above-drawings primitive pass in an export snapshot.
+    hide_foreground: bool,
     /// The chart's drawings and the active drawing tool.
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,
     #[cfg(feature = "drawings")]
-    symbol_drawings: std::collections::HashMap<String, (DrawingManager, Vec<crate::model::Marker>)>,
+    symbol_drawings: std::collections::HashMap<
+        String,
+        (DrawingManager, marks::TimeOrdered<crate::model::Marker>),
+    >,
     #[cfg(not(feature = "drawings"))]
-    symbol_markers: std::collections::HashMap<String, Vec<crate::model::Marker>>,
+    symbol_markers: std::collections::HashMap<String, marks::TimeOrdered<crate::model::Marker>>,
     /// Where each symbol's drawings are kept; see [`Chart::set_storage`].
     #[cfg(feature = "drawings")]
     drawing_store: Option<stored_drawings::DrawingStore>,
     /// The id each study a snapshot saved has since [`Chart::restore`] added it again.
     #[cfg(feature = "drawings")]
     restored_studies: std::collections::HashMap<usize, usize>,
+    /// Original column ids of restored studies, retained for snapshots from earlier restores.
+    #[cfg(feature = "drawings")]
+    study_column_ids: std::collections::HashMap<usize, usize>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)
@@ -313,7 +363,6 @@ pub struct Chart {
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
-    watermark: Option<Watermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
@@ -346,19 +395,19 @@ pub struct Chart {
     restored_palettes: Vec<ChartConfig>,
     host_events: events::HostEvents,
     pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
-    events: Vec<crate::model::Marker>,
-    time_scale_events: Vec<crate::model::TimeScaleEvent>,
+    events: marks::TimeOrdered<crate::model::Marker>,
+    time_scale_events: marks::TimeOrdered<crate::model::TimeScaleEvent>,
+    /// How many of `time_scale_events`, at their end, an export froze from a mark source.
+    frozen_source_events: usize,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
+    #[cfg(feature = "drawings")]
+    post_source: Option<posts::PostSource>,
     signal_sources: Vec<signals::SignalSource>,
     targets: targets::TargetState,
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,
     event_click: Option<String>,
-    /// Bar marks with host IDs painted this frame, and those of the previous frame, which
-    /// clicks resolve against.
-    mark_hits: std::cell::RefCell<Vec<marks::MarkHit>>,
-    clickable_marks: Vec<marks::MarkHit>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
@@ -384,12 +433,27 @@ pub struct Chart {
     // =========================================================================
     // Multi-Chart Sync State
     // =========================================================================
+    /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
+    pub(crate) layout_inactive: bool,
+    /// The layout's field selectors occupy the right end of the status line's first row this frame.
+    pub(crate) layout_link_controls: bool,
+    /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
+    /// whose symbol and interval are no change for the layout to send to linked charts.
+    pub(crate) layout_identity: u64,
+    /// Host period, price and target, retained while a linked pointer takes precedence.
+    host_crosshair: Option<(sync::CrosshairPeriod, Option<f64>, Option<SeriesId>)>,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
-    /// Main-pane price of the external crosshair; `None` centres its horizontal line.
+    /// Source period retained by time-based setters and resolved against the current bars.
+    synced_crosshair_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Price of the external crosshair in its target's units; `None` centres its horizontal line.
     synced_crosshair_price: Option<f64>,
-    /// Time and main-pane price of the crosshair last drawn, for exported images.
+    /// Target bar series of a programmatic position; `None` uses the main scale.
+    synced_crosshair_series: Option<SeriesId>,
+    /// Time and target price of the crosshair last drawn, for exported images.
     last_crosshair: Option<(DateTime<Utc>, Option<f64>)>,
+    /// Series whose units the last drawn host position used; `None` uses the main scale.
+    last_crosshair_series: Option<SeriesId>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
 
@@ -397,11 +461,14 @@ pub struct Chart {
     // Marks (Widget API)
     // =========================================================================
     /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
-    pub(crate) marks: Vec<crate::model::Marker>,
+    pub(crate) marks: marks::TimeOrdered<crate::model::Marker>,
     /// Fit and layer of the main series' marks; see [`Chart::set_marker_options`].
     marker_options: crate::model::MarkerOptions,
     /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
     change_marks: Option<change_marks::ChangeMarks>,
+    /// Clock of the last frame that showed the chart, which dates change marks recorded while no
+    /// frame shows it.
+    frame_clock: Option<change_marks::FrameClock>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
     /// The number of price line handles issued.
@@ -494,73 +561,24 @@ pub enum RightClickTarget {
     },
 }
 
-/// Information about a rendered indicator pane, used for hit testing and coordinate mapping.
-///
-/// After calling [`Chart::show`], each visible separate-pane indicator
-/// (RSI, MACD, etc.) produces a `RenderedIndicatorPane` entry stored in the chart.
-/// Platform code can use these to implement click-on-indicator-line selection,
-/// tooltip display, or other interactive features.
-///
-/// Retrieve with [`Chart::get_rendered_indicator_panes`].
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct RenderedIndicatorPane {
-    /// Position of the study in [`Chart::indicators`] when the pane was drawn. After a pane's
-    /// close button removed its study, that pane stays in the list until the next frame, and it
-    /// and the panes after it point one position too far.
-    pub indicator_idx: usize,
-    /// Full panel rect (including y-axis labels)
-    pub panel_rect: Rect,
-    /// Chart drawing area rect (excluding y-axis labels)
-    pub chart_rect: Rect,
-    /// Y-axis minimum value
-    pub y_min: f64,
-    /// Y-axis maximum value
-    pub y_max: f64,
-    /// Coordinate parameters for x-axis calculation
-    pub coords: IndicatorCoordParams,
-    /// Full mapping, including manual ranges, scale modes and inversion.
-    pub mapping: crate::chart::coords::ChartMapping,
-}
-
-/// Pre-computed layout rectangles for the chart's sub-regions.
-///
-/// Use [`Chart::calculate_layout_rects`] to obtain these rects for a given
-/// widget area. They are useful for external hit-testing (e.g., determining
-/// whether a click landed on the price area, volume area, or legend).
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-pub struct ChartLayoutRects {
-    /// The overall widget rect (entire chart area including axes and padding).
-    pub widget_rect: Rect,
-    /// The main price/candle area where OHLC data is rendered.
-    pub price_rect: Rect,
-    /// The volume area inside the price pane (empty if volume is hidden).
-    pub volume_rect: Rect,
-    /// The legend/OHLC info area at the top of the chart.
-    pub legend_rect: Rect,
-}
-
-impl Default for ChartLayoutRects {
-    fn default() -> Self {
-        Self {
-            widget_rect: Rect::NOTHING,
-            price_rect: Rect::NOTHING,
-            volume_rect: Rect::NOTHING,
-            legend_rect: Rect::NOTHING,
-        }
-    }
-}
-
 impl Chart {
-    /// Supplies instrument metadata for a chart without a feed, including price precision.
+    /// Supplies instrument metadata for a chart without a feed, including price precision
+    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
+        if self.legend_instrument != instrument {
+            self.readout_revision = crate::model::next_revision();
+        }
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision);
-        self.state.price_scale_mut().set_price_precision(precision);
+        let tick_size = self
+            .instrument()
+            .and_then(|instrument| instrument.tick_size);
+        let scale = self.state.price_scale_mut();
+        scale.set_price_precision(precision);
+        scale.set_tick_size(tick_size);
     }
 
     /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
@@ -574,16 +592,21 @@ impl Chart {
         self.currency_choice.take()
     }
 
-    /// Supplies a host-owned instrument image for the legend. `None` hides it.
+    /// Supplies an image for the legend's symbol mark in place of
+    /// [`Instrument::logo`](crate::model::Instrument::logo). `None` shows the instrument's logo,
+    /// or the symbol's initial without one;
+    /// [`ChartConfig::show_legend_badge`](crate::config::ChartConfig::show_legend_badge) hides the mark.
     pub fn set_legend_badge(&mut self, badge: Option<egui::ImageSource<'static>>) {
         self.legend_badge = badge;
     }
 
     /// Paints `watermark` behind the series of the price pane, in addition to the symbol
     /// watermark of [`ChartConfig::show_watermark`](crate::config::ChartConfig::show_watermark).
-    /// `None` removes it.
+    /// `None` removes it. This assigns the pane currently holding the main series; use
+    /// [`Self::set_pane_watermark`] to address another pane. It stays with that pane when
+    /// series move.
     pub fn set_watermark(&mut self, watermark: Option<Watermark>) {
-        self.watermark = watermark;
+        self.set_pane_watermark(self.main_series_pane(), watermark);
     }
 
     /// Supplies status marks and their host-defined meaning and colours.
@@ -649,7 +672,7 @@ impl Chart {
 
     /// Supplies event badges at the time-axis boundary, separately from bar annotations.
     pub fn set_events(&mut self, events: Vec<crate::model::Marker>) {
-        self.events = events;
+        self.events = events.into();
     }
 
     /// Takes the ID of the last clicked event badge.
@@ -665,105 +688,6 @@ impl Chart {
     /// Takes the last legend quote click. No order is submitted by the chart.
     pub fn take_quote_action(&mut self) -> Option<QuoteSide> {
         self.quote_action.take()
-    }
-
-    /// Calculate the layout sub-rects for a given widget rect.
-    ///
-    /// Given the overall widget area, this computes where the price chart,
-    /// volume bars, and legend/OHLC header will be drawn. Useful for
-    /// external hit-testing, overlay placement, or custom drawing on top
-    /// of specific chart regions.
-    ///
-    /// The layout respects current config flags like `show_ohlc_info`,
-    /// `show_time_labels`, and `show_volume`.
-    pub fn calculate_layout_rects(&self, widget_rect: Rect) -> ChartLayoutRects {
-        self.pane_layout_rects(widget_rect, self.config.show_time_labels)
-    }
-
-    fn pane_layout_rects(&self, widget_rect: Rect, show_time_labels: bool) -> ChartLayoutRects {
-        let padding = self
-            .config
-            .padding
-            .max(0.0)
-            .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
-        let study_axes = if self.config.show_left_axis || self.config.show_right_axis {
-            self.studies
-                .indicators()
-                .iter()
-                .filter(|study| {
-                    study.is_visible()
-                        && study.is_overlay()
-                        && !study.is_volume()
-                        && study.scale() == crate::studies::StudyScale::Independent
-                })
-                .count() as f32
-                * self
-                    .measured_axis_width
-                    .max(self.config.right_axis_width)
-                    .max(self.config.left_axis_width)
-        } else {
-            0.0
-        };
-        let series_axes = self.series_axis_keys();
-        let series_left = series_axes
-            .iter()
-            .filter(|key| **key != crate::model::SeriesScale::Right)
-            .count() as f32
-            * self
-                .measured_axis_width
-                .max(self.config.right_axis_width)
-                .max(self.config.left_axis_width);
-        let series_right = if series_axes.contains(&crate::model::SeriesScale::Right) {
-            self.measured_axis_width.max(self.config.right_axis_width)
-        } else {
-            0.0
-        };
-        let study_axes = study_axes + series_left;
-        let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        };
-        let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        } + series_right;
-        let study_axes = study_axes
-            .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
-        let left_axis = left_axis + study_axes;
-        let bottom_padding = if show_time_labels {
-            self.time_axis_height()
-        } else {
-            0.0
-        };
-        let price_rect = Rect::from_min_size(
-            widget_rect.min + Vec2::new((padding + left_axis).min(widget_rect.width()), padding),
-            Vec2::new(
-                (widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0),
-                (widget_rect.height() - 2.0 * padding - bottom_padding).max(0.0),
-            ),
-        );
-        let legend_rect = if self.config.show_ohlc_info {
-            price_rect.shrink(8.0).intersect(Rect::from_min_size(
-                price_rect.min + Vec2::splat(8.0),
-                Vec2::new(price_rect.width(), 24.0),
-            ))
-        } else {
-            Rect::NOTHING
-        };
-        let volume_rect = if self.shows_volume() {
-            volume::overlay_rect(price_rect, &self.config)
-        } else {
-            Rect::ZERO
-        };
-
-        ChartLayoutRects {
-            widget_rect,
-            price_rect,
-            volume_rect,
-            legend_rect,
-        }
     }
 
     /// Activates or deactivates box-zoom mode.
@@ -804,26 +728,95 @@ impl Chart {
         self.chart_options.tooltip.enabled = enabled;
     }
 
+    /// The rising and falling body, border and wick colors of a chart type that series settings
+    /// offer from its own style, in that order; `None` for a type they keep in the chart
+    /// configuration.
+    fn candle_style_colors(
+        styles: &mut crate::model::ChartTypeStyles,
+        chart_type: ChartType,
+    ) -> Option<[&mut egui::Color32; 6]> {
+        match chart_type {
+            ChartType::Heikin => {
+                let style = &mut styles.heikin;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            ChartType::HollowCandles => {
+                let style = &mut styles.hollow;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            ChartType::VolumeCandles => {
+                let style = &mut styles.volume_candles;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            _ => None,
+        }
+    }
+
     /// Apply series settings to chart colors, price source and price scale.
     ///
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
     /// price source field from the given [`SeriesSettings`] into the chart's
     /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. A new scale mode returns the scale to auto-scaling and clears the
-    /// zoom history, whose ranges are in the old mode's units. Call this when
-    /// the user changes series appearance in a settings dialog.
+    /// scale. Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
+    /// candle colors in that chart type's style instead, a `None` border or wick meaning the
+    /// body color, and these colors win over the same colors in `chart_type_params`. A new
+    /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
+    /// are in the old mode's units. An ATR or percentage size whose method is unchanged keeps
+    /// its resolved value. Call this when the user changes series appearance in a settings
+    /// dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
-        self.config.bullish_color = settings.bullish_color;
-        self.config.bearish_color = settings.bearish_color;
-        self.config.bullish_border_color = settings.bullish_border_color;
-        self.config.bearish_border_color = settings.bearish_border_color;
-        self.config.bullish_wick_color = settings.bullish_wick_color;
-        self.config.bearish_wick_color = settings.bearish_wick_color;
+        let mut params = settings.chart_type_params.clone();
+        if let Some(
+            [
+                body_up,
+                body_down,
+                border_up,
+                border_down,
+                wick_up,
+                wick_down,
+            ],
+        ) = Self::candle_style_colors(&mut params.styles, settings.chart_type)
+        {
+            *body_up = settings.bullish_color;
+            *body_down = settings.bearish_color;
+            *border_up = settings.effective_bullish_border();
+            *border_down = settings.effective_bearish_border();
+            *wick_up = settings.effective_bullish_wick();
+            *wick_down = settings.effective_bearish_wick();
+        } else {
+            self.config.bullish_color = settings.bullish_color;
+            self.config.bearish_color = settings.bearish_color;
+            self.config.bullish_border_color = settings.bullish_border_color;
+            self.config.bearish_border_color = settings.bearish_border_color;
+            self.config.bullish_wick_color = settings.bullish_wick_color;
+            self.config.bearish_wick_color = settings.bearish_wick_color;
+        }
         self.config.price_source = settings.price_source;
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
-        self.set_chart_type_params(settings.chart_type_params.clone());
+        self.apply_chart_type_params(params);
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -835,9 +828,10 @@ impl Chart {
 
     /// Read the current appearance and chart type parameters for the series settings dialog.
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
-    /// [`Self::apply_series_settings`]. The active chart type is dialog context only.
+    /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
+    /// where the candle colors are read from and written to; applying keeps the chart's type.
     pub fn series_settings(&self) -> SeriesSettings {
-        SeriesSettings {
+        let mut settings = SeriesSettings {
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             bullish_color: self.config.bullish_color,
@@ -853,7 +847,26 @@ impl Chart {
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()
+        };
+        if let Some(
+            [
+                body_up,
+                body_down,
+                border_up,
+                border_down,
+                wick_up,
+                wick_down,
+            ],
+        ) = Self::candle_style_colors(&mut settings.chart_type_params.styles, self.chart_type)
+        {
+            settings.bullish_color = *body_up;
+            settings.bearish_color = *body_down;
+            settings.bullish_border_color = (*border_up != *body_up).then_some(*border_up);
+            settings.bearish_border_color = (*border_down != *body_down).then_some(*border_down);
+            settings.bullish_wick_color = (*wick_up != *body_up).then_some(*wick_up);
+            settings.bearish_wick_color = (*wick_down != *body_down).then_some(*wick_down);
         }
+        settings
     }
 
     /// Get a [`ChartMapping`] for coordinate conversions.
@@ -864,14 +877,16 @@ impl Chart {
     /// for drawing tool restoration and hit testing. On price-based chart types its indices
     /// count elements instead of source bars.
     pub fn get_chart_mapping(&self) -> ChartMapping {
-        ChartMapping::new(
+        let mut mapping = ChartMapping::new(
             self.last_rendered_price_rect,
             self.state.time_scale().bar_spacing(),
             self.start_idx,
             self.state.time_scale().base_idx(),
             self.state.time_scale().right_offset_precise(),
             self.last_price_map,
-        )
+        );
+        mapping.numeric_positions = self.state.time_scale().numeric_positions().cloned();
+        mapping
     }
 
     /// Returns a mutable reference to the chart's visual configuration.
@@ -886,25 +901,27 @@ impl Chart {
 
     /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
     ///
-    /// Other charts sharing the context follow the active theme on their next frame, keeping
-    /// colours the host has edited and any per-chart theme override.
+    /// Unedited chart type style colours follow the theme; edited ones stay. Other charts sharing
+    /// the context follow the active theme on their next frame, keeping colours the host has
+    /// edited and any per-chart theme override.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
         self.config = self.config.clone().with_theme(theme);
         self.theme_override = None;
-        self.inherited_theme = Some(theme.clone());
+        self.follow_chart_theme(theme);
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
     }
 
     /// Overrides this chart's palette and text sizes without changing sibling charts or egui.
     ///
-    /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
-    /// configuration edits made afterwards are kept. `None` follows the host's palette again,
-    /// retaining host-edited colours. `set_theme` clears this override and themes egui.
+    /// `Some(theme)` also applies its series colours to the chart configuration, and unedited
+    /// chart type style colours follow it while edited ones stay. Explicit configuration edits
+    /// made afterwards are kept. `None` follows the host's palette again, retaining host-edited
+    /// colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
             self.config = self.config.clone().with_theme(theme);
-            self.inherited_theme = Some(theme.clone());
+            self.follow_chart_theme(theme);
         }
         self.theme_override = theme;
     }
@@ -935,8 +952,11 @@ impl Chart {
     ///
     /// The view is kept: the bar spacing changes only when `time_scale.bar_spacing` changes or
     /// the new spacing bounds exclude it, and the chart scrolls only when `time_scale.right_offset`
-    /// or `right_offset_pixels` changes.
+    /// or `right_offset_pixels` changes. A non-finite `bar_spacing`, `right_offset` or
+    /// `right_offset_pixels` keeps its previous value, and a `kinetic_scroll.damping_coeff`
+    /// outside `0.0..1.0` is replaced by the default.
     pub fn set_chart_options(&mut self, options: ChartOptions) {
+        let options = self.normalize_chart_options(options);
         let (old, new) = (&self.chart_options.time_scale, &options.time_scale);
         if (
             old.bar_spacing,
@@ -978,6 +998,25 @@ impl Chart {
             }
         }
         self.chart_options = options;
+    }
+
+    /// Normalize numeric options before storing or comparing them, since NaN never equals itself.
+    fn normalize_chart_options(&self, mut options: ChartOptions) -> ChartOptions {
+        if !(0.0..1.0).contains(&options.kinetic_scroll.damping_coeff) {
+            options.kinetic_scroll.damping_coeff =
+                crate::config::KineticScrollOptions::default().damping_coeff;
+        }
+        let (old, new) = (&self.chart_options.time_scale, &mut options.time_scale);
+        if !new.bar_spacing.is_finite() {
+            new.bar_spacing = old.bar_spacing;
+        }
+        if !new.right_offset.is_finite() {
+            new.right_offset = old.right_offset;
+        }
+        if !new.right_offset_pixels.is_none_or(f32::is_finite) {
+            new.right_offset_pixels = old.right_offset_pixels;
+        }
+        options
     }
 
     /// Gives the chart an explicit size in points instead of filling the space `show` is given;
@@ -1027,7 +1066,7 @@ pub(crate) mod test_frames {
     use super::Chart;
     use crate::model::{Bar, BarData};
     use chrono::{TimeZone, Utc};
-    use egui::{Context, Event, Pos2, RawInput, Rect, Shape, Vec2};
+    use egui::{Context, CursorIcon, Event, Pos2, RawInput, Rect, Shape, Vec2};
 
     /// 100 daily bars; bar `i` opens at `lows[i % len]` and closes at `highs[i % len]`.
     pub(crate) fn chart(lows: &[f64], highs: &[f64]) -> Chart {
@@ -1043,13 +1082,12 @@ pub(crate) mod test_frames {
         Chart::new(BarData::from_bars(bars))
     }
 
-    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted.
-    pub(crate) fn shapes(
+    fn run(
         ctx: &Context,
         chart: &mut Chart,
         time: f64,
         events: Vec<Event>,
-    ) -> Vec<Shape> {
+    ) -> (Vec<Shape>, CursorIcon) {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
             time: Some(time),
@@ -1071,12 +1109,51 @@ pub(crate) mod test_frames {
         for clipped in std::mem::take(&mut output.shapes) {
             flatten(clipped.shape, &mut shapes);
         }
+        let cursor = output.platform_output.cursor_icon;
         output.drop_without_applying_deltas();
-        shapes
+        (shapes, cursor)
     }
 
-    /// Runs one frame at `time` seconds with `events`.
-    pub(crate) fn frame(ctx: &Context, chart: &mut Chart, time: f64, events: Vec<Event>) {
-        shapes(ctx, chart, time, events);
+    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted.
+    pub(crate) fn shapes(
+        ctx: &Context,
+        chart: &mut Chart,
+        time: f64,
+        events: Vec<Event>,
+    ) -> Vec<Shape> {
+        run(ctx, chart, time, events).0
+    }
+
+    /// The heights of the candles in `color` among `shapes`.
+    pub(crate) fn candle_ys(shapes: &[Shape], color: egui::Color32) -> Vec<f32> {
+        shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Vec(shapes) => candle_ys(shapes, color),
+                Shape::Rect(rect) if rect.fill == color => {
+                    vec![rect.rect.min.y, rect.rect.max.y]
+                }
+                Shape::LineSegment { points, stroke } if stroke.color == color => {
+                    points.iter().map(|point| point.y).collect()
+                }
+                Shape::Mesh(mesh) => mesh
+                    .vertices
+                    .iter()
+                    .filter(|vertex| vertex.color == color)
+                    .map(|vertex| vertex.pos.y)
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Runs one frame at `time` seconds with `events` and returns the cursor it asked for.
+    pub(crate) fn frame(
+        ctx: &Context,
+        chart: &mut Chart,
+        time: f64,
+        events: Vec<Event>,
+    ) -> CursorIcon {
+        run(ctx, chart, time, events).1
     }
 }

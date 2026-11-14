@@ -5,7 +5,7 @@
 //!
 //! # Calculation
 //! True Range = max(high - low, |high - prev_close|, |low - prev_close|)
-//! ATR = Exponential moving avg of True Range over N periods
+//! ATR = Wilder's average of True Range over N periods, or a simple, exponential or weighted one
 //!
 //! # Example
 //! ```
@@ -21,11 +21,29 @@ use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
+
+/// Average of the true range that [`ATR`] draws. Every smoothing has its first value on the
+/// `period`-th true range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AtrSmoothing {
+    /// Wilder's average, alpha 1/period, starting at the mean of the first `period` ranges.
+    #[default]
+    Wilder,
+    /// Mean of the last `period` ranges.
+    Simple,
+    /// Alpha 2/(period+1), starting at the mean of the first `period` ranges.
+    Exponential,
+    /// Linear weights 1 to `period` over the last `period` ranges, newest heaviest.
+    Weighted,
+}
 
 /// Avg True Range indicator
 #[derive(Clone)]
 pub struct ATR {
     period: usize,
+    smoothing: AtrSmoothing,
     values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
@@ -37,6 +55,8 @@ struct State {
     previous: Option<f64>,
     usable: usize,
     atr: f64,
+    /// The last `period` true ranges of a simple or weighted average.
+    window: VecDeque<f64>,
 }
 
 impl Default for State {
@@ -45,6 +65,7 @@ impl Default for State {
             previous: None,
             usable: 0,
             atr: -0.0,
+            window: VecDeque::new(),
         }
     }
 }
@@ -57,11 +78,18 @@ impl ATR {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            smoothing: AtrSmoothing::Wilder,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::CYAN, // Cyan
+            color: palette::DARK_RED,
             visible: true,
         }
+    }
+
+    /// Choose the average of the true range; Wilder's by default.
+    pub fn with_smoothing(mut self, smoothing: AtrSmoothing) -> Self {
+        self.smoothing = smoothing;
+        self
     }
 
     /// Set the indicator color
@@ -89,7 +117,8 @@ impl Default for ATR {
 
 impl Indicator for ATR {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        smoothing: choice("Smoothing", [AtrSmoothing::Wilder, AtrSmoothing::Simple, AtrSmoothing::Exponential, AtrSmoothing::Weighted])
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -110,7 +139,12 @@ impl Indicator for ATR {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let period = self.period;
-        let multiplier = 1.0 / period as f64;
+        let smoothing = self.smoothing;
+        let multiplier = if smoothing == AtrSmoothing::Exponential {
+            2.0 / (period as f64 + 1.0)
+        } else {
+            1.0 / period as f64
+        };
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 if ![bar.high, bar.low, bar.close].iter().all(|p| p.is_finite()) {
@@ -120,6 +154,22 @@ impl Indicator for ATR {
                     .previous
                     .map_or(bar.high - bar.low, |close| Self::true_range(bar, close));
                 state.previous = Some(bar.close);
+                if matches!(smoothing, AtrSmoothing::Simple | AtrSmoothing::Weighted) {
+                    state.window.push_back(tr);
+                    if state.window.len() > period {
+                        state.window.pop_front();
+                    }
+                    if state.window.len() < period {
+                        return IndicatorValue::None;
+                    }
+                    return IndicatorValue::Single(if smoothing == AtrSmoothing::Simple {
+                        state.window.iter().sum::<f64>() / period as f64
+                    } else {
+                        let weighted: f64 =
+                            (1..).zip(&state.window).map(|(w, tr)| w as f64 * tr).sum();
+                        weighted / (period as f64 * (period as f64 + 1.0) / 2.0)
+                    });
+                }
                 state.usable += 1;
                 if state.usable <= period {
                     state.atr += tr;
@@ -169,7 +219,12 @@ impl Indicator for ATR {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("ATR({})", self.period)]
+        vec![match self.smoothing {
+            AtrSmoothing::Wilder => format!("ATR({})", self.period),
+            AtrSmoothing::Simple => format!("ATR({}, SMA)", self.period),
+            AtrSmoothing::Exponential => format!("ATR({}, EMA)", self.period),
+            AtrSmoothing::Weighted => format!("ATR({}, WMA)", self.period),
+        }]
     }
 }
 
@@ -177,32 +232,6 @@ impl Indicator for ATR {
 mod tests {
     use super::*;
     use chrono::Utc;
-
-    #[test]
-    fn test_true_range_calculation() {
-        let bar = Bar {
-            time: Utc::now(),
-            open: 100.0,
-            high: 105.0,
-            low: 98.0,
-            close: 103.0,
-            volume: 1000.0,
-            colors: None,
-            payload: None,
-        };
-
-        // Case 1: Normal range (high - low is largest)
-        let tr = ATR::true_range(&bar, 100.0);
-        assert!((tr - 7.0).abs() < 0.001); // high - low = 105 - 98 = 7
-
-        // Case 2: Gap up (high - prev_close is largest)
-        let tr = ATR::true_range(&bar, 95.0);
-        assert!((tr - 10.0).abs() < 0.001); // high - prev = 105 - 95 = 10
-
-        // Case 3: Gap down (|low - prev_close| is largest)
-        let tr = ATR::true_range(&bar, 110.0);
-        assert!((tr - 12.0).abs() < 0.001); // |low - prev| = |98 - 110| = 12
-    }
 
     /// Wilder's ATR worked by hand. A bar's ATR does not depend on whether a later bar exists:
     /// with length 1 the first bar has its range. A bar with a non-finite price has no value,
@@ -234,8 +263,20 @@ mod tests {
         };
         let skipped = vec![None, Some(3.5), None, Some(4.75), Some(3.375)];
         // Ranges by hand: 102 - 98 = 4; for the second bar max(103 - 99, |103 - 100|, |99 - 100|) = 4.
-        let cases: [(usize, Vec<Bar>, Vec<Option<f64>>); 4] = [
+        let cases: [(usize, Vec<Bar>, Vec<Option<f64>>); 5] = [
             (1, vec![first.clone()], vec![Some(4.0)]),
+            // Normal, upward gap, downward gap: max(7,5,2)=7, max(2,8,6)=8,
+            // then max(2,12,14)=14. Length 1 exposes the true range itself.
+            (
+                1,
+                vec![
+                    first.clone(),
+                    bar(105.0, 98.0, 103.0),
+                    bar(111.0, 109.0, 110.0),
+                    bar(98.0, 96.0, 97.0),
+                ],
+                vec![Some(4.0), Some(7.0), Some(8.0), Some(14.0)],
+            ),
             (
                 1,
                 vec![first.clone(), bar(103.0, 99.0, 101.0)],

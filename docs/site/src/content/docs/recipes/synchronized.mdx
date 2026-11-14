@@ -1,0 +1,50 @@
+---
+title: Synchronize two charts
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/recipes.rs?raw';
+
+Share UTC times between charts, keeping each chart's price scale independent.
+Pixel positions, bar indices and spacing depend on the local data and width.
+The chart under the pointer leads. Forward a range only when that chart's view
+changes, so moving onto a chart does not send its view back to the other one.
+
+## Keep both charts and the last forwarded cursor
+
+Create two [first charts](../first-chart.mdx) once. Pass one to
+`Synchronized::new(other)` and retain the other as `chart`. Each frame call
+`synchronized.show(ui, &mut chart)`; this shows both charts in stacked regions,
+which also fits a narrow viewport. The scene makes the second chart a line so
+the two views are easy to distinguish.
+
+<Example scene="synchronized" title="Two charts sharing a UTC cursor and view"
+  task="Hover either plot, pan or zoom it, then move onto the other. Its price scale stays independent and the view does not jump on entry."
+  code={source.slice(source.indexOf('/// Share UTC'), source.indexOf('/// Return encoded')).trim()} />
+
+Both charts are shown before ranges are applied, because a target needs a known
+plot width. Comparing each visible range before and after `show` detects a local
+pan or zoom. The next frame starts with any forwarded range already applied,
+so it does not echo that range back. Repaint after changing a chart already drawn
+in this frame. Retaining the last source and time avoids repainting indefinitely
+while the pointer stays still.
+
+## Choose the position contract
+
+[`hover_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.hover_time)
+and
+[`set_synced_crosshair_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_synced_crosshair_time)
+forward a UTC instant without sharing a price. A receiver with coarser bars marks
+the bar whose period contains that time. `None` clears the synchronized cursor;
+the scene also clears it when the pointer leaves both plots. Programmatic cursors
+do not emit local `CrosshairMoved` events.
+
+[`visible_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.visible_time_range)
+returns the UTC plot edges after layout.
+[`apply_synced_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.apply_synced_time_range)
+maps those edges into the receiver's slots; available history and spacing limits
+can constrain the result. For a larger workspace,
+[`ChartLayout`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartLayout.html)
+provides grouped synchronization. The native
+[synchronized_charts example](https://github.com/userFRM/egui-charts/blob/main/examples/synchronized_charts.rs)
+also demonstrates different intervals.

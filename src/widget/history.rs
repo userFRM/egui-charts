@@ -1,7 +1,7 @@
 //! Chart history records UI actions, not ordinary host API calls.
 
-use super::price_series::{PriceSeries, SeriesOptions};
-use super::{Chart, ChartElementId, SeriesId};
+use super::series::{PriceSeries, SeriesOptions};
+use super::{Chart, ChartElementId, ChartEvent, SeriesId};
 use crate::config::{ChartConfig, ChartOptions};
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
@@ -10,12 +10,19 @@ use crate::drawings::services::HistoryService;
 use crate::model::{ChartType, ChartTypeParams, SeriesAlerts, SeriesScale, Timeframe};
 use crate::scales::PriceScale;
 use crate::studies::{Indicator, StudySettingsSnapshot};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
+    /// Expires when the divider drag ends or its layout is dropped.
+    pub(super) resizing: std::sync::Weak<()>,
+    /// Split size and link membership steps undone or redone since a layout last showed the
+    /// chart, for that layout to apply in the order of their process-wide numbers.
+    pub(super) size_steps: Vec<(u64, Arc<Mutex<super::layout::SizeChange>>)>,
+    pub(super) link_steps: Vec<(u64, Arc<Mutex<super::layout::LinkChange>>)>,
     changed: bool,
     /// User edits recorded, undone or redone, kept when the history is cleared.
     pub(super) edits: u64,
@@ -29,37 +36,132 @@ struct Pending {
     #[cfg(feature = "drawings")]
     standalone_drawings: HistoryService,
     study_order: Vec<SeriesId>,
-    /// Added series removed during the action, with their bars.
-    removed_series: Vec<PriceSeries>,
+    /// Added series removed during the action, with their bars, price formatters and bar limits.
+    removed_series: Vec<HeldSeries>,
+    /// The palette the chart's unedited colours followed when the action began.
+    palette: ChartConfig,
 }
 
 #[derive(Default)]
 struct Action {
+    layout_sizes: Option<Arc<Mutex<super::layout::SizeChange>>>,
+    layout_links: Option<Arc<Mutex<super::layout::LinkChange>>>,
+    /// The cross-chart edit this action is one chart's part of.
+    layout_edit: Option<super::layout::LayoutEditLink>,
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
+    /// The palette that the unedited colours of `config` and `chart_type` follow.
+    palette: Option<ChartConfig>,
+    /// The main series of the other state, when the action removed it.
+    main_series: Option<MainSeries>,
     main_series_visible: Option<bool>,
     price_targets_visible: Option<bool>,
+    event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
+    order_flow: Option<FeedDisplay>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
     /// Scales that differ from the chart's, by assignment; `None` where the chart has none.
     series_scales: std::collections::HashMap<crate::model::SeriesScale, Option<PriceScale>>,
-    panes: Option<super::pane_layout::PaneLayout>,
+    panes: Option<super::pane::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
+    extended_hours: Option<bool>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
+    /// The drawings removed from a symbol the chart did not show, whose undo reaches them there.
+    #[cfg(feature = "drawings")]
+    unshown: Option<super::layout::UnshownDeletion>,
+}
+
+impl Action {
+    fn is_empty(&self) -> bool {
+        self.view.is_none() && self.keeps_all_but_the_view()
+    }
+
+    /// Whether the action is a navigation step: it only moved the view.
+    fn is_navigation(&self) -> bool {
+        self.view.is_some() && self.keeps_all_but_the_view()
+    }
+
+    fn keeps_all_but_the_view(&self) -> bool {
+        #[cfg(feature = "drawings")]
+        let drawings_changed = self.drawings.can_undo() || self.unshown.is_some();
+        #[cfg(not(feature = "drawings"))]
+        let drawings_changed = false;
+        self.layout_sizes.is_none()
+            && self.layout_links.is_none()
+            && self.layout_edit.is_none()
+            && self.symbol.is_none()
+            && self.series.is_none()
+            && self.config.is_none()
+            && self.main_series.is_none()
+            && self.main_series_visible.is_none()
+            && self.price_targets_visible.is_none()
+            && self.event_visibility.is_none()
+            && self.options.is_none()
+            && self.order_flow.is_none()
+            && self.scale.is_none()
+            && self.series_scales.is_empty()
+            && self.panes.is_none()
+            && self.chart_type.is_none()
+            && self.interval.is_none()
+            && self.extended_hours.is_none()
+            && self.studies.is_empty()
+            && !drawings_changed
+    }
+}
+
+#[derive(PartialEq)]
+struct FeedDisplay {
+    settings: super::settings::OrderFlowSettings,
+    // Preserve whether the book follows the heatmap or has an explicit visibility setting.
+    book_visible: Option<bool>,
+}
+
+impl FeedDisplay {
+    fn capture(chart: &Chart) -> Option<Self> {
+        Some(Self {
+            book_visible: chart.feed_link.as_ref()?.book_visible,
+            settings: super::settings::ChartSettingsState::from_chart(chart).order_flow,
+        })
+    }
+
+    fn swap(&mut self, chart: &mut Chart) {
+        let Some(current) = Self::capture(chart) else {
+            return;
+        };
+        chart.set_liquidity_heatmap_config(self.settings.heatmap);
+        chart.set_liquidity_heatmap(self.settings.show_heatmap);
+        chart.set_order_book_view(self.settings.order_book.clone());
+        chart.set_volume_bubbles(
+            self.settings
+                .show_volume_bubbles
+                .then(|| self.settings.volume_bubbles.clone()),
+        );
+        if let Some(link) = &mut chart.feed_link {
+            link.book_visible = self.book_visible;
+            link.bubbles_config = self.settings.volume_bubbles.clone();
+        }
+        *self = current;
+    }
 }
 
 /// The added series of one state of the chart: their draw order, display settings and
-/// visibility, the scale of the main series, and the series the other state lacks, whole.
+/// visibility, the scale, alerts and price line colour of the main series, and the series the
+/// other state lacks, whole, with their price formatters and bar limits. A series in neither
+/// state was added outside history, and an exchange leaves it alone.
 struct SeriesSet {
     props: Vec<(SeriesId, SeriesOptions, bool)>,
+    /// The added series of the other state.
+    other: Vec<SeriesId>,
     main_scale: SeriesScale,
     main_alerts: SeriesAlerts,
-    held: Vec<PriceSeries>,
+    /// The colour of the main series' price line and the bar it follows.
+    main_price_line: (Option<egui::Color32>, crate::model::PriceLineSource),
+    held: Vec<HeldSeries>,
 }
 
 impl SeriesSet {
@@ -70,17 +172,48 @@ impl SeriesSet {
                 .iter()
                 .map(|item| (item.id, item.options.clone(), item.visible))
                 .collect(),
+            other: Vec::new(),
             main_scale: chart.main_series_scale,
             main_alerts: chart.main_series_style.alerts,
+            main_price_line: (
+                chart.main_series_style.price_line_color,
+                chart.main_series_style.price_line_source,
+            ),
             held: Vec::new(),
         }
+    }
+
+    fn ids(&self) -> Vec<SeriesId> {
+        self.props.iter().map(|(id, ..)| *id).collect()
     }
 
     fn same(&self, other: &Self) -> bool {
         self.main_scale == other.main_scale
             && self.main_alerts == other.main_alerts
+            && self.main_price_line == other.main_price_line
             && self.props == other.props
     }
+}
+
+/// An added series that one state of the chart lacks, with all its bars, whatever the replay
+/// cutoff, and the price formatter and bar limit that the chart keeps apart from it.
+struct HeldSeries {
+    series: PriceSeries,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    bar_limit: Option<std::num::NonZeroUsize>,
+}
+
+/// Whether the main series is present in one state of the chart, with the price lines and price
+/// formatter that the state without it lacks. Its bars, bar limit and markers stay in the chart,
+/// which reads the markers only while the series is present and the limit while its bars take
+/// data; the bars also give the remaining series their time axis while it is absent.
+#[derive(Default)]
+struct MainSeries {
+    present: bool,
+    price_lines: Vec<(super::PriceLineId, crate::model::PriceLine)>,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    /// The time axis the absent state kept, for the redo of a removal whose undo reloads the feed.
+    bars: Vec<crate::model::Bar>,
 }
 
 struct StudyChange {
@@ -97,6 +230,64 @@ struct Study {
 }
 
 impl ChartHistory {
+    fn blocked(&self) -> bool {
+        self.pending.is_some() || self.resizing.strong_count() > 0
+    }
+
+    /// Whether either stack holds this chart's part of cross-chart edit `id`.
+    pub(super) fn holds_layout_edit(&self, id: u64) -> bool {
+        self.undo.iter().chain(&self.redo).any(|action| {
+            action
+                .layout_edit
+                .as_ref()
+                .is_some_and(|edit| edit.id == id)
+        })
+    }
+
+    pub(super) fn record_links(&mut self, change: super::layout::LinkChange) {
+        self.push(Action {
+            layout_links: Some(Arc::new(Mutex::new(change))),
+            ..Action::default()
+        });
+    }
+
+    /// Records in the action in progress the drawings it removed from an unshown symbol.
+    #[cfg(feature = "drawings")]
+    pub(super) fn record_unshown_deletion(&mut self, deletion: super::layout::UnshownDeletion) {
+        if let Some(pending) = &mut self.pending {
+            pending.before.unshown = Some(deletion);
+        }
+    }
+
+    /// Makes the action in progress this chart's part of a cross-chart edit.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(super) fn join_layout_edit(&mut self, edit: super::layout::LayoutEditLink) {
+        if let Some(pending) = &mut self.pending {
+            pending.before.layout_edit = Some(edit);
+        }
+    }
+
+    /// Makes every state of drawing `id` that an undo or redo of the shown symbol's actions can
+    /// bring back saveable, once the drawing is stored on this chart, so that neither leaves it
+    /// stored nowhere.
+    #[cfg(feature = "drawings")]
+    pub(super) fn keep_saveable(&mut self, id: usize) {
+        // An action's drawings belong to the symbol shown while it is on top of its stack; those
+        // past a symbol change are another symbol's, whose ids are their own.
+        for stack in [&mut self.undo, &mut self.redo] {
+            for action in stack.iter_mut().rev().take_while(|a| a.symbol.is_none()) {
+                action.drawings.keep_saveable(id);
+            }
+        }
+    }
+
+    pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
+        self.push(Action {
+            layout_sizes: Some(Arc::new(Mutex::new(change))),
+            ..Action::default()
+        });
+    }
+
     #[cfg(feature = "drawings")]
     pub(super) fn visit_chart_points(
         &mut self,
@@ -121,6 +312,9 @@ impl ChartHistory {
         *self = Self {
             edits: self.edits,
             drawing_edits: self.drawing_edits,
+            // Already undone or redone; the layout still has to apply them.
+            size_steps: std::mem::take(&mut self.size_steps),
+            link_steps: std::mem::take(&mut self.link_steps),
             ..Self::default()
         };
     }
@@ -131,7 +325,14 @@ impl ChartHistory {
         if action.drawings.can_undo() {
             self.drawing_edits += 1;
         }
-        self.redo.clear();
+        // Moving the view costs the user neither the edits they could undo nor those they could
+        // redo: a navigation step keeps redo, and the one under it already restores the view
+        // from before both.
+        if !action.is_navigation() {
+            self.redo.clear();
+        } else if self.undo.last().is_some_and(Action::is_navigation) {
+            return;
+        }
         if self.undo.len() == 100 {
             self.undo.remove(0);
         }
@@ -157,9 +358,23 @@ impl ChartHistory {
         drawings: &mut DrawingManager,
         history: Option<HistoryService>,
     ) {
+        let placement = drawings.finished_text_placement.take();
         if let Some(mut history) = history {
             drawings.swap_history(&mut history);
-            if history.can_undo() {
+            if let Some(id) = placement
+                && let Some(index) = self.undo.iter().rposition(|action| action.drawings.can_undo())
+                && let drawing = drawings.drawings.iter().find(|drawing| drawing.id == id)
+                // Cancelling empty text must not undo unrelated chart settings first.
+                && (drawing.is_none() || index + 1 == self.undo.len())
+                && self.undo[index].drawings.merge_text_placement(id, &mut history, drawing)
+            {
+                if self.undo[index].is_empty() {
+                    self.undo.remove(index);
+                }
+                self.edits += 1;
+                self.drawing_edits += 1;
+                self.redo.clear();
+            } else if history.can_undo() {
                 self.push(Action {
                     drawings: history,
                     ..Action::default()
@@ -192,9 +407,24 @@ impl Study {
     }
 }
 
+/// Whether a scale keeps the options, precision, manual range and ratio lock it was captured
+/// with. A fitted range follows the data rather than the action, so it does not count.
+fn same_scale(a: &crate::scales::PriceScale, b: &crate::scales::PriceScale) -> bool {
+    a.options() == b.options()
+        && a.price_precision() == b.price_precision()
+        && a.bar_ratio() == b.bar_ratio()
+        && a.is_manual() == b.is_manual()
+        && (!a.is_manual() || a.range() == b.range())
+}
+
 impl Chart {
     /// Apply one user action from a host toolbar, menu, dialog or intent as one undo step.
     /// Nested actions belong to the outer action. Unchanged chart/study settings add no history.
+    ///
+    /// An action that only moves the view, such as an arrow-key pan or a navigation button, is a
+    /// navigation step. Consecutive navigation steps are one undo step, which restores the view
+    /// from before the first of them, and a navigation step leaves redo available. Any other
+    /// action is a step of its own and clears redo.
     ///
     /// Chart-owned drawing interactions and shortcuts record themselves. Ordinary host calls
     /// (including data/feed updates, setters and `drawings_mut`) do not enter chart history;
@@ -231,7 +461,9 @@ impl Chart {
                 config: Some(self.config.clone()),
                 main_series_visible: Some(self.main_series_visible),
                 price_targets_visible: Some(self.show_price_targets),
+                event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
+                order_flow: FeedDisplay::capture(self),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
                 series_scales: self
@@ -242,12 +474,14 @@ impl Chart {
                 panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
+                extended_hours: Some(self.extended_hours),
                 ..Action::default()
             },
             #[cfg(feature = "drawings")]
             standalone_drawings,
             study_order: self.study_ids.clone(),
             removed_series: Vec::new(),
+            palette: self.followed_palette(),
         });
     }
 
@@ -281,18 +515,33 @@ impl Chart {
             action.symbol = None;
         }
         if let Some(before) = &mut action.series {
-            if before.same(&SeriesSet::capture(self)) {
+            let after = SeriesSet::capture(self);
+            if before.same(&after) {
                 action.series = None;
             } else {
+                before.other = after.ids();
                 before.held = pending
                     .removed_series
                     .into_iter()
-                    .filter(|item| before.props.iter().any(|(id, ..)| *id == item.id))
+                    .filter(|item| before.props.iter().any(|(id, ..)| *id == item.series.id))
                     .collect();
             }
         }
-        if action.view == Some(self.get_time_scale_state()) {
+        // A symbol's asynchronous history can change its view after this action ends.
+        if action.symbol.is_none() && action.view == Some(self.get_time_scale_state()) {
             action.view = None;
+        }
+        // A theme change during the action is not an edit: the colours recorded before it
+        // follow it, as the chart's did.
+        let palette = self.followed_palette();
+        if pending.palette != palette {
+            let old = std::slice::from_ref(&pending.palette);
+            if let Some(config) = &mut action.config {
+                super::palette::follow_palette(config, old, &palette);
+            }
+            if let Some((_, params)) = &mut action.chart_type {
+                super::palette::follow_candle_colors(&mut params.styles, old, &palette);
+            }
         }
         if action.config.as_ref() == Some(&self.config) {
             action.config = None;
@@ -300,11 +549,17 @@ impl Chart {
         if action.price_targets_visible == Some(self.show_price_targets) {
             action.price_targets_visible = None;
         }
+        if action.event_visibility.as_ref() == Some(&self.event_visibility) {
+            action.event_visibility = None;
+        }
         if action.main_series_visible == Some(self.main_series_visible) {
             action.main_series_visible = None;
         }
         if action.options.as_ref() == Some(&self.chart_options) {
             action.options = None;
+        }
+        if action.order_flow == FeedDisplay::capture(self) {
+            action.order_flow = None;
         }
         if action.chart_type.as_ref() == Some(&(self.chart_type, self.chart_type_params.clone())) {
             action.chart_type = None;
@@ -312,23 +567,23 @@ impl Chart {
         if action.interval == Some(self.timeframe) {
             action.interval = None;
         }
-        if let Some(scale) = &action.scale {
-            let current = self.state.price_scale();
-            if scale.options() == current.options()
-                && scale.is_manual() == current.is_manual()
-                && (!scale.is_manual() || scale.range() == current.range())
-            {
-                action.scale = None;
-            }
+        if action.extended_hours == Some(self.extended_hours) {
+            action.extended_hours = None;
+        }
+        if action.config.is_some() || action.chart_type.is_some() {
+            action.palette = Some(palette);
+        }
+        if let Some(scale) = &action.scale
+            && same_scale(scale, self.state.price_scale())
+        {
+            action.scale = None;
         }
         let known: Vec<_> = action.series_scales.keys().copied().collect();
         action.series_scales.retain(|id, scale| {
             let (Some(scale), Some(current)) = (scale, self.series_scales.get(id)) else {
                 return true;
             };
-            scale.options() != current.options()
-                || scale.is_manual() != current.is_manual()
-                || (scale.is_manual() && scale.range() != current.range())
+            !same_scale(scale, current)
         });
         for id in self.series_scales.keys().filter(|id| !known.contains(id)) {
             action.series_scales.insert(*id, None);
@@ -348,9 +603,13 @@ impl Chart {
                         && a.height == b.height
                         && a.preserve == b.preserve
                         && a.collapsed == b.collapsed
-                        && a.scale.options() == b.scale.options()
-                        && a.scale.is_manual() == b.scale.is_manual()
-                        && (!a.scale.is_manual() || a.scale.range() == b.scale.range())
+                        && a.axes == b.axes
+                        && same_scale(&a.scale, &b.scale)
+                        && a.scales.len() == b.scales.len()
+                        && a.scales
+                            .iter()
+                            .zip(&b.scales)
+                            .all(|(a, b)| a.0 == b.0 && same_scale(&a.1, &b.1))
                 })
         {
             action.panes = None;
@@ -362,25 +621,7 @@ impl Chart {
                 _ => true,
             },
         );
-        #[cfg(feature = "drawings")]
-        let drawings_changed = action.drawings.can_undo();
-        #[cfg(not(feature = "drawings"))]
-        let drawings_changed = false;
-        if action.symbol.is_none()
-            && action.series.is_none()
-            && action.view.is_none()
-            && action.config.is_none()
-            && action.main_series_visible.is_none()
-            && action.price_targets_visible.is_none()
-            && action.options.is_none()
-            && action.scale.is_none()
-            && action.series_scales.is_empty()
-            && action.panes.is_none()
-            && action.chart_type.is_none()
-            && action.interval.is_none()
-            && action.studies.is_empty()
-            && !drawings_changed
-        {
+        if action.is_empty() {
             return;
         }
         // Edits after a symbol change belong to the new symbol, so they are undone first.
@@ -430,11 +671,101 @@ impl Chart {
         }
     }
 
-    /// Keeps a bar series removed by the pending action, bars included, so undo restores it.
+    /// Keeps a bar series removed by the pending action, bars, price formatter and bar limit
+    /// included, so undo restores it. Outside an action they are dropped.
     pub(super) fn retain_removed_series(&mut self, series: PriceSeries) {
+        let held = self.hold_series(series);
         if let Some(pending) = &mut self.history.pending {
-            pending.removed_series.push(series);
+            pending.removed_series.push(held);
         }
+    }
+
+    /// Takes `series`, which has left the chart, with all its bars, its price formatter and its
+    /// bar limit.
+    fn hold_series(&mut self, mut series: PriceSeries) -> HeldSeries {
+        // Removed during a market replay, a fed series takes the live bars its window keeps for
+        // the exit, which its stamp does not describe.
+        if self.market_replay.is_some() && series.fed {
+            series.filled = None;
+        }
+        self.replay_release(&mut series);
+        let mut held = HeldSeries {
+            series,
+            formatter: None,
+            bar_limit: None,
+        };
+        self.swap_series_settings(held.series.id, &mut held.formatter, &mut held.bar_limit);
+        held
+    }
+
+    /// Gives a held series its price formatter and bar limit back as it enters the chart, under
+    /// the cutoff of a running replay. The bars of a fed series stand in for its history until the
+    /// feed answers it.
+    fn restore_series(&mut self, mut held: HeldSeries) -> PriceSeries {
+        self.swap_series_settings(held.series.id, &mut held.formatter, &mut held.bar_limit);
+        self.replay_admit(&mut held.series);
+        held.series.restored = true;
+        held.series
+    }
+
+    /// Takes the main series out of the chart and pauses its feed unless its bars stay live. The
+    /// pending action keeps its price lines and formatter, so undo restores them.
+    pub(super) fn remove_main_series(&mut self) {
+        let mut removed = MainSeries::default();
+        self.swap_main_series(&mut removed);
+        if let Some(pending) = &mut self.history.pending {
+            pending.before.main_series = Some(removed);
+        }
+    }
+
+    /// Exchanges the main series' presence, price lines and formatter with `main`, so the
+    /// exchange reverses itself, and pauses or resumes the feed to match. Removing the series
+    /// again before the resumed feed sent its bars, or after it failed to, restores the bars the
+    /// series left behind, so the remaining series keep their time axis.
+    fn swap_main_series(&mut self, main: &mut MainSeries) {
+        std::mem::swap(&mut self.main_series_present, &mut main.present);
+        std::mem::swap(&mut self.price_lines, &mut main.price_lines);
+        // The bar limit stays with the bars, which take data again without the original pane.
+        self.swap_formatter(SeriesId::MAIN, &mut main.formatter);
+        self.follow_feed_pause();
+        if self.main_series_present {
+            // A resumed feed that reloads empties the bars until its page arrives.
+            if self.feed_link.as_ref().is_some_and(|link| !link.paused) {
+                main.bars = self.state.data().bars.clone();
+            }
+        } else {
+            let kept = std::mem::take(&mut main.bars);
+            if self.state.data().bars.is_empty() && !kept.is_empty() {
+                self.replace_main_data(kept);
+            }
+        }
+    }
+
+    /// Exchanges the price formatter and bar limit of the bar series `id` with `formatter` and
+    /// `bar_limit`, so the exchange reverses itself.
+    fn swap_series_settings(
+        &mut self,
+        id: SeriesId,
+        formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+        bar_limit: &mut Option<std::num::NonZeroUsize>,
+    ) {
+        self.swap_formatter(id, formatter);
+        *bar_limit = match bar_limit.take() {
+            Some(limit) => self.bar_limits.insert(id, limit),
+            None => self.bar_limits.remove(&id),
+        };
+    }
+
+    /// Exchanges the price formatter of the bar series `id` with `formatter`.
+    fn swap_formatter(
+        &mut self,
+        id: SeriesId,
+        formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        *formatter = match formatter.take() {
+            Some(formatter) => self.series_formatters.insert(id, formatter),
+            None => self.series_formatters.remove(&id),
+        };
     }
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
@@ -490,28 +821,64 @@ impl Chart {
     }
 
     /// Exchanges the added series with those of `set`. A series the chart lacks comes from the
-    /// set whole, and one the set lacks goes into it, so the exchange reverses itself.
+    /// set whole, and one that only the set's other state has goes into it, so the exchange
+    /// reverses itself. A series in neither state stays, after the others.
     fn swap_series(&mut self, set: &mut SeriesSet) {
-        let now = SeriesSet::capture(self);
+        let mut now = SeriesSet::capture(self);
+        let restored = set.ids();
         let mut pool = std::mem::take(&mut self.price_series);
-        pool.append(&mut set.held);
+        let mut held = std::mem::take(&mut set.held);
         for (id, options, visible) in set.props.drain(..) {
-            if let Some(at) = pool.iter().position(|item| item.id == id) {
-                let mut item = pool.swap_remove(at);
-                item.options = options;
-                item.visible = visible;
-                item.revision = crate::model::next_revision();
+            let mut item = if let Some(at) = pool.iter().position(|item| item.id == id) {
+                pool.remove(at)
+            } else if let Some(at) = held.iter().position(|item| item.series.id == id) {
+                self.restore_series(held.swap_remove(at))
+            } else {
+                continue;
+            };
+            item.options = options;
+            item.visible = visible;
+            item.revision = crate::model::next_revision();
+            self.price_series.push(item);
+        }
+        for item in pool {
+            if set.other.contains(&item.id) {
+                // They leave the chart with their formatters and limits.
+                held.push(self.hold_series(item));
+            } else {
                 self.price_series.push(item);
             }
         }
         self.main_series_scale = set.main_scale;
         self.main_series_style.alerts = set.main_alerts;
-        *set = SeriesSet { held: pool, ..now };
+        (
+            self.main_series_style.price_line_color,
+            self.main_series_style.price_line_source,
+        ) = set.main_price_line;
+        // `now.props` lists the series shown before the exchange, in draw order.
+        for (id, ..) in &now.props {
+            if self.price_series.iter().all(|item| item.id != *id) {
+                self.host_events.push(ChartEvent::SeriesRemoved(*id));
+            }
+        }
+        for item in &self.price_series {
+            if now.props.iter().all(|(id, ..)| *id != item.id) {
+                self.host_events.push(ChartEvent::SeriesAdded(item.id));
+            }
+        }
+        now.props
+            .retain(|(id, ..)| restored.contains(id) || set.other.contains(id));
+        *set = SeriesSet {
+            held,
+            other: restored,
+            ..now
+        };
         if let Some(ChartElementId::Series(id)) = self.selection.selected_id()
             && self.price_series.iter().all(|item| item.id != id)
         {
             self.selection.deselect();
         }
+        self.fill_fed_series();
     }
 
     /// Whether a chart user action can be undone (also drives toolbar availability).
@@ -525,19 +892,25 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
-    /// Returns false while a user action is in progress; finish that action first.
+    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
+    /// finish it first.
     pub fn undo(&mut self) -> bool {
         self.step_chart_history(false)
     }
 
     /// Redo the most recently undone chart user action.
-    /// Returns false while a user action is in progress; finish that action first.
+    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
+    /// finish it first.
     pub fn redo(&mut self) -> bool {
         self.step_chart_history(true)
     }
 
     /// Drain a notification that undo/redo changed chart state. Hosts that own the data must
-    /// reload it if [`Self::timeframe`] or [`Self::bar_clock`] changed, and synchronize their UI.
+    /// reload it if [`Self::timeframe`], [`Self::bar_clock`] or [`Self::extended_hours`] changed,
+    /// and synchronize their UI.
+    /// Added series that the step removed or brought back are reported by
+    /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
+    /// [`ChartEvent::SeriesAdded`].
     pub fn take_history_changed(&mut self) -> bool {
         std::mem::take(&mut self.history.changed)
     }
@@ -549,8 +922,40 @@ impl Chart {
         self.history.edits
     }
 
+    /// Takes this chart's part of cross-chart edit `id` through the same step, with any later
+    /// edit of this chart first, as the action cannot leave its stack out of order.
+    pub(super) fn step_layout_edit(&mut self, id: u64, redo: bool) {
+        loop {
+            let stack = if redo {
+                &self.history.redo
+            } else {
+                &self.history.undo
+            };
+            let holds = stack.iter().any(|action| {
+                action
+                    .layout_edit
+                    .as_ref()
+                    .is_some_and(|edit| edit.id == id)
+            });
+            if !holds || !self.step_chart_history(redo) {
+                return;
+            }
+        }
+    }
+
+    /// Whether undo and redo wait for a user action, a divider drag or a drawing drag to end. The
+    /// end of a drawing drag records the drawing as the drag found it, which a step taken
+    /// meanwhile would no longer lead back to.
+    pub(super) fn history_blocked(&self) -> bool {
+        #[cfg(feature = "drawings")]
+        if self.drawings.drag_in_progress() {
+            return true;
+        }
+        self.history.blocked()
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history.pending.is_some() {
+        if self.history_blocked() {
             return false;
         }
         let stack = if redo {
@@ -584,7 +989,10 @@ impl Chart {
                             .find_map(|change| change.before.as_ref()?.indicator.as_deref())
                     })?;
                 let mut indicator = original.clone_box();
-                indicator.restore_settings(&study.settings).ok()?;
+                let mut settings = study.settings.clone();
+                // Editing permission belongs to the host, independently of user history.
+                settings.settings.user_edit_enabled = original.settings().user_edit_enabled;
+                indicator.restore_settings(&settings).ok()?;
                 Some((
                     id,
                     study.index,
@@ -603,6 +1011,15 @@ impl Chart {
             return false;
         };
         let current_view = self.get_time_scale_state();
+        // Steps of one preset or slot on different charts only restore it in the order taken.
+        static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let order = ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(sizes) = &action.layout_sizes {
+            self.history.size_steps.push((order, Arc::clone(sizes)));
+        }
+        if let Some(links) = &action.layout_links {
+            self.history.link_steps.push((order, Arc::clone(links)));
+        }
         let mut current: Vec<_> = action
             .studies
             .iter()
@@ -629,16 +1046,37 @@ impl Chart {
             }
             *interval = current;
         }
+        if let Some(extended_hours) = &mut action.extended_hours {
+            let current = self.extended_hours;
+            // The setter reloads the history and the subscription of the restored session.
+            self.set_extended_hours(*extended_hours);
+            *extended_hours = current;
+        }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
         }
+        // The theme is not part of an action: the colours brought back follow the chart's.
+        if let Some(palette) = &mut action.palette {
+            let recorded = std::mem::replace(palette, self.followed_palette());
+            self.follow_recorded_palette(recorded);
+        }
         if let Some(visible) = &mut action.price_targets_visible {
             std::mem::swap(&mut self.show_price_targets, visible);
+        }
+        if let Some(visibility) = &mut action.event_visibility {
+            std::mem::swap(&mut self.event_visibility, visibility);
+        }
+        // Before the visibility, which an absent main series ignores.
+        if let Some(main) = &mut action.main_series {
+            self.swap_main_series(main);
         }
         if let Some(visible) = &mut action.main_series_visible {
             let current = self.main_series_visible;
             self.set_main_series_visible(*visible);
             *visible = current;
+        }
+        if let Some(order_flow) = &mut action.order_flow {
+            order_flow.swap(self);
         }
         if let Some(options) = &mut action.options {
             std::mem::swap(&mut self.chart_options, options);
@@ -700,6 +1138,7 @@ impl Chart {
             self.study_inputs.insert(at, inputs);
             self.study_autoscale.insert(at, autoscale);
             self.pending_from.insert(at, None);
+            self.stale.insert(at, false);
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
         self.recalculate_studies();
@@ -710,6 +1149,14 @@ impl Chart {
         }
         if let Some(panes) = &mut action.panes {
             std::mem::swap(&mut self.pane_layout, panes);
+            // Watermarks are host state, not an edit: a surviving pane keeps its current one.
+            for pane in &mut self.pane_layout.panes {
+                if let Some(current) = panes.panes.iter_mut().find(|other| other.id == pane.id) {
+                    std::mem::swap(&mut pane.watermark, &mut current.watermark);
+                }
+            }
+            // The original pane coming or going decides whether a removed main series is fed.
+            self.follow_feed_pause();
         }
         self.sync_panes();
         if let Some(ChartElementId::Indicator(id)) = self.selection.selected_id()
@@ -726,11 +1173,17 @@ impl Chart {
                 while self.drawings.undo() {}
             }
             self.drawings.swap_history(&mut action.drawings);
+            if let Some(deletion) = &mut action.unshown {
+                self.step_unshown_deletion(deletion, redo);
+            }
         }
         self.history.edits += 1;
         #[cfg(feature = "drawings")]
         if action.drawings.can_undo() || action.drawings.can_redo() {
             self.history.drawing_edits += 1;
+        }
+        if let Some(edit) = &action.layout_edit {
+            edit.request(redo);
         }
         if redo {
             self.history.undo.push(action);
@@ -755,6 +1208,14 @@ mod tests {
     use egui::Color32;
     #[cfg(feature = "drawings")]
     use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// A valid host trend line for history actions that do not test its geometry.
+    #[cfg(feature = "drawings")]
+    fn host_line() -> Drawing {
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(1.0, 15.0), ChartPoint::new(2.0, 16.0)];
+        drawing
+    }
 
     #[test]
     fn study_history_records_settings_without_cloning_calculations() {
@@ -787,7 +1248,11 @@ mod tests {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
                 self.0.inputs()
             }
-            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+            fn set_input(
+                &mut self,
+                id: &str,
+                value: InputValue,
+            ) -> Result<(), crate::studies::StudyError> {
                 self.0.set_input(id, value)
             }
             fn clone_box(&self) -> Box<dyn Indicator> {
@@ -921,12 +1386,20 @@ mod tests {
         for redo in [false, true, false, true] {
             assert!(if redo { chart.redo() } else { chart.undo() });
             let study = chart.indicators().next().unwrap().1;
+            let input = |id: &str| {
+                study
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == id)
+                    .unwrap()
+                    .value
+            };
             assert_eq!(
-                study.inputs()[0].value,
+                input("period_0"),
                 InputValue::Length(if redo { 2 } else { 1 })
             );
             assert_eq!(
-                study.inputs()[1].value,
+                input("kind_0"),
                 InputValue::Choice(if redo { 5 } else { 0 })
             );
             assert_eq!(
@@ -1010,6 +1483,32 @@ mod tests {
             assert!(chart.redo());
             assert_eq!(chart.study_ids, [host]);
         }
+    }
+
+    /// A pane watermark is host state: undoing and redoing a pane edit leaves the watermarks
+    /// the host set since, and does not bring back or drop earlier ones.
+    #[test]
+    fn pane_edits_in_history_leave_host_watermarks_alone() {
+        use crate::widget::{Watermark, WatermarkLine};
+        let mut chart = chart(&[100.0], &[110.0]);
+        let pane = chart.add_pane();
+        let text = |chart: &Chart| {
+            chart.pane_layout.panes[1]
+                .watermark
+                .as_ref()
+                .map(|watermark| watermark.lines[0].text.clone())
+        };
+        let mark = |text: &str| {
+            Watermark::default().with_line(WatermarkLine::new(text, 10.0, Color32::RED))
+        };
+        assert!(chart.set_pane_watermark(pane, Some(mark("before"))));
+        chart.user_action(|chart| assert!(chart.set_pane_height(pane, 200.0)));
+        assert!(chart.set_pane_watermark(pane, Some(mark("after"))));
+        assert!(chart.undo());
+        assert_eq!(text(&chart).as_deref(), Some("after"));
+        assert!(chart.set_pane_watermark(pane, None));
+        assert!(chart.redo());
+        assert_eq!(text(&chart), None);
     }
 
     #[test]
@@ -1148,6 +1647,50 @@ mod tests {
         assert_eq!(chart.get_time_scale_state(), (15.0, -11.0));
     }
 
+    /// Undo and redo restore what the user edited and leave the colours that follow the theme on
+    /// the active one: the grid hidden under the dark theme comes back under the light theme on
+    /// its white background with its light lines, and axis text set to blue before the switch
+    /// comes back blue.
+    #[test]
+    fn undo_after_a_theme_change_keeps_the_active_theme_colours() {
+        use crate::theme::{Theme, apply_to_egui};
+        use crate::widget::test_frames::frame;
+        const LIGHT_GRID: Color32 = Color32::from_rgb(229, 229, 229);
+        for edited in [false, true] {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &Theme::dark());
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(chart.config().background_color, Color32::BLACK);
+            if edited {
+                chart.user_action(|chart| chart.config_mut().text_color = Color32::BLUE);
+            }
+            chart.user_action(|chart| chart.config_mut().show_grid = false);
+            apply_to_egui(&ctx, &Theme::light());
+            frame(&ctx, &mut chart, 1.0, vec![]);
+            let text = if edited {
+                Color32::BLUE
+            } else {
+                Color32::BLACK
+            };
+            for (redo, grid) in [(false, true), (true, false)] {
+                assert!(if redo { chart.redo() } else { chart.undo() });
+                let config = chart.config();
+                assert_eq!(config.show_grid, grid, "edited {edited}, redo {redo}");
+                assert_eq!(config.background_color, Color32::WHITE);
+                assert_eq!(config.grid_color, LIGHT_GRID);
+                assert_eq!(config.text_color, text);
+            }
+            if edited {
+                // The colour edit is undone to the colour the text has under the active theme.
+                assert!(chart.undo());
+                assert!(chart.undo());
+                assert_eq!(chart.config().text_color, Color32::BLACK);
+                assert_eq!(chart.config().background_color, Color32::WHITE);
+            }
+        }
+    }
+
     #[test]
     #[cfg(feature = "drawings")]
     fn host_updates_and_unchanged_actions_do_not_enter_or_clear_history() {
@@ -1155,9 +1698,15 @@ mod tests {
         chart.set_timeframe(Timeframe::Min1);
         chart.config_mut().show_grid = false;
         let host = chart.add_indicator(Box::new(SMA::new(3)));
+        // As restored from settings saved without an editing permission.
+        let study = chart.indicator_mut(host).unwrap();
+        let mut legacy = study.settings();
+        legacy.user_edit_enabled = None;
+        study.apply_settings(&[], legacy).unwrap();
         chart
             .drawings_mut()
-            .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine));
+            .add_synced_drawing(host_line())
+            .unwrap();
         assert!(!chart.can_undo());
         chart.user_action(|chart| {
             chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
@@ -1173,7 +1722,10 @@ mod tests {
                 "an open action cannot consume completed history"
             );
             chart.set_timeframe(Timeframe::Min1);
-            chart.indicator_mut(host).unwrap().set_overlay(true);
+            let study = chart.indicator_mut(host).unwrap();
+            let unchanged = study.settings();
+            study.apply_settings(&[], unchanged).unwrap();
+            study.set_overlay(true);
             chart.set_indicator_scale(host, crate::studies::StudyScale::Main);
             chart
                 .set_indicator_source(
@@ -1204,12 +1756,12 @@ mod tests {
         chart.user_action(|chart| {
             let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
             drawing.chart_points = vec![ChartPoint::new(1.0, 15.0)];
-            chart.drawings_mut().add_synced_drawing(drawing);
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
         });
         chart.user_action(|chart| chart.drawings_mut().clear_all());
-        let mut host = Drawing::new(0, DrawingToolType::TrendLine);
+        let mut host = host_line();
         host.stored_id = Some("host".into());
-        chart.drawings_mut().add_synced_drawing(host);
+        chart.drawings_mut().add_synced_drawing(host).unwrap();
         chart.drawings.pending_sync.lock().unwrap().clear();
         // Prepending real bars remaps commands on both stacks, as it does live drawings.
         let prepend = |chart: &mut Chart, count| {
@@ -1270,7 +1822,8 @@ mod tests {
             chart.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine))
+                    .add_synced_drawing(host_line())
+                    .unwrap()
             });
             let id = chart.user_action(|chart| chart.add_indicator(Box::new(RSI::new(14))));
             for (key, shift, studies, drawings) in [
@@ -1314,8 +1867,97 @@ mod tests {
         }
     }
 
+    /// Undo waits for a drawing drag to end, and the release records the drag as one step: a
+    /// line added at 15.0 and dragged 20 px down with Ctrl+Z pressed before the release goes
+    /// back to 15.0 on the first undo and leaves the chart on the second.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn undo_waits_for_a_drawing_drag_to_end() {
+        use crate::widget::test_frames::frame;
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.user_action(|chart| {
+            let mut line = host_line();
+            line.chart_points = vec![ChartPoint::new(30.0, 15.0), ChartPoint::new(60.0, 15.0)];
+            chart.drawings_mut().add_synced_drawing(line).unwrap();
+        });
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let prices = |chart: &Chart| -> Vec<f64> {
+            let drawings = &chart.drawings().drawings;
+            drawings
+                .iter()
+                .flat_map(|drawing| &drawing.chart_points)
+                .map(|point| point.price)
+                .collect()
+        };
+        let start = egui::pos2(
+            chart.get_chart_mapping().idx_to_x(45),
+            chart.last_price_map.price_to_y(15.0),
+        );
+        let end = start + egui::vec2(0.0, 20.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let command = Modifiers::COMMAND | Modifiers::CTRL;
+        for (step, events) in [
+            vec![Event::PointerMoved(start), button(start, true)],
+            vec![Event::PointerMoved(end)],
+            vec![Event::Key {
+                key: Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: command,
+            }],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+        }
+        assert!(!chart.undo(), "a toolbar button follows the same rule");
+        frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+        let moved = prices(&chart);
+        assert_eq!(moved.len(), 2, "the line is still on the chart");
+        assert!(moved.iter().all(|price| *price < 15.0), "{moved:?}");
+        assert!(chart.undo());
+        assert_eq!(prices(&chart), [15.0, 15.0]);
+        assert!(chart.undo());
+        assert!(prices(&chart).is_empty());
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        assert_eq!(prices(&chart), [15.0, 15.0]);
+        assert!(chart.redo());
+        assert_eq!(prices(&chart), moved);
+        assert!(!chart.can_redo());
+    }
+
+    #[test]
+    fn symbol_navigation_restores_the_view_after_later_feed_updates() {
+        let mut chart = chart(&[10.0, 11.0], &[20.0, 21.0]);
+        chart.set_symbol("AAA");
+        chart.apply_synced_time_scale(8.0, -30.0);
+        let before = chart.get_time_scale_state();
+        chart.user_action(|chart| chart.set_symbol("BBB"));
+        assert_eq!(chart.get_time_scale_state(), before);
+        // Feed completion and navigation happen after the symbol action was recorded.
+        chart.apply_synced_time_scale(7.0, -100.0);
+        let after = chart.get_time_scale_state();
+        assert!(chart.undo());
+        assert_eq!(chart.symbol(), "AAA");
+        assert_eq!(chart.get_time_scale_state(), before);
+        assert!(chart.redo());
+        assert_eq!(chart.symbol(), "BBB");
+        assert_eq!(chart.get_time_scale_state(), after);
+    }
+
     /// A user's symbol navigation and comparison edits undo and redo in order, each step finding
-    /// the drawings, series, scales and symbol it was recorded against.
+    /// the drawings, series, scales and symbol it was recorded against, and a removed comparison
+    /// coming back with its price formatter and bar limit.
     #[test]
     #[cfg(feature = "drawings")]
     fn symbol_navigation_and_comparison_edits_undo_and_redo_in_order() {
@@ -1327,7 +1969,8 @@ mod tests {
             chart.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .add_synced_drawing(Drawing::new(0, DrawingToolType::TrendLine))
+                    .add_synced_drawing(host_line())
+                    .unwrap()
             })
         };
         draw(&mut chart);
@@ -1335,9 +1978,15 @@ mod tests {
         assert!(chart.drawings().drawings.is_empty());
         let bars = chart.bars(SeriesId::MAIN).to_vec();
         let mode = chart.state.price_scale().options().mode;
+        let limit = std::num::NonZeroUsize::new(1000);
         let comparison = chart.user_action(|chart| {
             let id = chart.add_comparison("CCC", Color32::GOLD);
             chart.set_data(id, bars.clone());
+            chart.set_bar_limit(id, limit);
+            assert!(chart.set_series_formatter(
+                id,
+                Some(std::sync::Arc::new(crate::scales::CurrencyFormatter::usd())),
+            ));
             id
         });
         chart.user_action(|chart| {
@@ -1349,13 +1998,36 @@ mod tests {
         });
         draw(&mut chart);
 
+        let series_events = |chart: &mut Chart| {
+            chart
+                .drain_events()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        ChartEvent::SeriesAdded(_) | ChartEvent::SeriesRemoved(_)
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Undo reverses removal then addition; redo follows the original edits.
+        let added_then_removed = [
+            ChartEvent::SeriesAdded(comparison),
+            ChartEvent::SeriesRemoved(comparison),
+        ];
+        assert_eq!(series_events(&mut chart), added_then_removed);
+
         let comparison_state = |chart: &Chart| {
             (
                 chart.series_scale(comparison),
                 chart.is_series_visible(comparison),
                 chart.bars(comparison).len(),
+                chart.bar_limit(comparison),
+                chart
+                    .series_label_formatter(comparison, PriceScaleMode::Normal)
+                    .is_some(),
             )
         };
+        let absent = (None, false, 0, None, false);
         let undo = |chart: &mut Chart| assert!(chart.undo());
         undo(&mut chart);
         assert_eq!(
@@ -1365,12 +2037,12 @@ mod tests {
         undo(&mut chart);
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Left), false, bars.len())
+            (Some(SeriesScale::Left), false, bars.len(), limit, true)
         );
         undo(&mut chart);
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Right), true, bars.len())
+            (Some(SeriesScale::Right), true, bars.len(), limit, true)
         );
         assert_eq!(
             chart.state.price_scale().options().mode,
@@ -1378,6 +2050,7 @@ mod tests {
         );
         undo(&mut chart);
         assert_eq!(chart.series().count(), 0);
+        assert_eq!(comparison_state(&chart), absent);
         assert_eq!(chart.state.price_scale().options().mode, mode);
         undo(&mut chart);
         assert_eq!(
@@ -1388,6 +2061,7 @@ mod tests {
         assert!(chart.drawings().drawings.is_empty());
         assert!(!chart.can_undo());
 
+        assert_eq!(series_events(&mut chart), added_then_removed);
         assert!(chart.redo());
         assert_eq!(
             (chart.symbol(), chart.drawings().drawings.len()),
@@ -1401,27 +2075,29 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Right), true, bars.len())
+            (Some(SeriesScale::Right), true, bars.len(), limit, true)
         );
         assert!(chart.redo());
         assert_eq!(
             comparison_state(&chart),
-            (Some(SeriesScale::Left), false, bars.len())
+            (Some(SeriesScale::Left), false, bars.len(), limit, true)
         );
         assert!(chart.redo());
         assert_eq!(chart.series().count(), 0);
+        assert_eq!(comparison_state(&chart), absent);
         assert!(chart.redo());
         assert_eq!(
             (chart.symbol(), chart.drawings().drawings.len()),
             ("BBB", 1)
         );
         assert!(!chart.can_redo());
+        assert_eq!(series_events(&mut chart), added_then_removed);
     }
 
     #[test]
     fn series_alert_styles_stay_distinct_through_undo_and_snapshot() {
         let mut chart = chart(&[1.0], &[2.0]);
-        let other = chart.add_series(crate::widget::price_series::SeriesOptions::default());
+        let other = chart.add_series(crate::widget::series::SeriesOptions::default());
         let main_alerts = SeriesAlerts {
             visible: false,
             labels: false,
@@ -1439,11 +2115,14 @@ mod tests {
         });
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
-        let mut restored = super::super::Chart::new(BarData::default());
-        restored
-            .restore(&chart.snapshot().unwrap())
-            .expect("snapshot restores");
-        assert_eq!(restored.series_settings().alerts, main_alerts);
+        #[cfg(feature = "ui")]
+        {
+            let mut restored = super::super::Chart::new(BarData::default());
+            restored
+                .restore(&chart.snapshot().unwrap())
+                .expect("snapshot restores");
+            assert_eq!(restored.series_settings().alerts, main_alerts);
+        }
         assert!(chart.undo());
         assert_eq!(chart.series_settings().alerts, SeriesAlerts::default());
         assert_eq!(
@@ -1453,5 +2132,282 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
+    }
+
+    /// A series the host adds after an action, outside history, is no part of it: undoing and
+    /// redoing that action leave it in the chart after the action's series, with the options the
+    /// host gave it and no series events, while the series the action added or removed still
+    /// leave and come back.
+    #[test]
+    fn undo_keeps_series_added_outside_history() {
+        use crate::widget::series::SeriesOptions;
+        use crate::widget::settings::ChartSettingsState;
+        /// Makes the action's change and returns the added series it leaves.
+        type Change = fn(&mut Chart, SeriesId) -> Vec<SeriesId>;
+        let rows: [(&str, Change); 6] = [
+            ("settings with a price line colour", |chart, earlier| {
+                let mut settings = ChartSettingsState::from_chart(chart);
+                settings.chart_basic_styles.background_color = Color32::from_rgb(1, 2, 3);
+                settings.scales_and_lines.symbol_price_color = Some(Color32::GOLD);
+                settings.apply_to_chart(chart).unwrap();
+                vec![earlier]
+            }),
+            ("main series alerts", |chart, earlier| {
+                let mut settings = chart.series_settings();
+                settings.alerts.color = Color32::RED;
+                chart.apply_series_settings(&settings);
+                vec![earlier]
+            }),
+            ("main series scale", |chart, earlier| {
+                assert!(chart.set_series_scale(SeriesId::MAIN, SeriesScale::Left));
+                vec![earlier]
+            }),
+            ("edit of an added series", |chart, earlier| {
+                assert!(chart.set_series_visible(earlier, false));
+                vec![earlier]
+            }),
+            ("an added series", |chart, earlier| {
+                vec![earlier, chart.add_series(SeriesOptions::default())]
+            }),
+            ("a removed series", |chart, earlier| {
+                assert!(chart.remove_series(earlier));
+                vec![]
+            }),
+        ];
+        for (name, action) in rows {
+            let mut chart = chart(&[1.0], &[2.0]);
+            let earlier = chart.add_series(SeriesOptions::default());
+            let after = chart.user_action(|chart| action(chart, earlier));
+            let host = chart.add_series(SeriesOptions::default());
+            chart.set_series_visible(host, false);
+            chart.drain_events().for_each(drop);
+            let order = |chart: &Chart| chart.series().map(|(id, _)| id).collect::<Vec<_>>();
+            let events = |chart: &mut Chart| {
+                chart
+                    .drain_events()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            ChartEvent::SeriesAdded(_) | ChartEvent::SeriesRemoved(_)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            // Undo goes from the series the action left to the one it found, and redo back.
+            let added = after.iter().copied().filter(|id| *id != earlier);
+            let removed = (!after.contains(&earlier)).then_some(earlier);
+            let undone: Vec<_> = added
+                .clone()
+                .map(ChartEvent::SeriesRemoved)
+                .chain(removed.map(ChartEvent::SeriesAdded))
+                .collect();
+            let redone: Vec<_> = removed
+                .map(ChartEvent::SeriesRemoved)
+                .into_iter()
+                .chain(added.map(ChartEvent::SeriesAdded))
+                .collect();
+
+            assert!(chart.undo(), "{name}");
+            assert_eq!(order(&chart), [earlier, host], "{name}: order after undo");
+            assert_eq!(events(&mut chart), undone, "{name}: events of the undo");
+            assert!(!chart.is_series_visible(host), "{name}: options after undo");
+
+            chart.set_series_visible(host, true);
+            assert!(chart.redo(), "{name}");
+            let mut shown = after.clone();
+            shown.push(host);
+            assert_eq!(order(&chart), shown, "{name}: order after redo");
+            assert_eq!(events(&mut chart), redone, "{name}: events of the redo");
+            assert!(chart.is_series_visible(host), "{name}: options after redo");
+        }
+    }
+
+    /// Feed display edits undo without turning inherited book visibility into an override.
+    #[test]
+    fn feed_display_changes_preserve_inherited_book_visibility_through_history() {
+        use crate::chart::overlays::BookProfile;
+        use crate::widget::settings::ChartSettingsState;
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                _: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+            }
+        }
+        for visible in [None, Some(false), Some(true)] {
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.attach_feed(std::sync::Arc::new(Feed), 1);
+            chart.feed_link.as_mut().unwrap().book_visible = visible;
+            chart.user_action(|chart| {
+                chart.set_liquidity_heatmap(true);
+                let mut view = chart.order_book_view();
+                view.profile = BookProfile::LargestOrder;
+                chart.set_order_book_view(view);
+                chart.set_volume_bubbles(Some(Default::default()));
+            });
+            assert!(chart.undo());
+            let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert!(!settings.show_heatmap);
+            assert!(!settings.show_volume_bubbles);
+            assert_eq!(settings.order_book.profile, BookProfile::Total);
+            assert_eq!(chart.feed_link.as_ref().unwrap().book_visible, visible);
+            assert!(chart.redo());
+            let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert!(settings.show_heatmap && settings.show_volume_bubbles);
+            assert_eq!(settings.order_book.profile, BookProfile::LargestOrder);
+            chart.set_liquidity_heatmap(false);
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart)
+                    .order_flow
+                    .show_order_book,
+                visible.unwrap_or(false)
+            );
+        }
+    }
+
+    /// Undo of the main series' removal, as its legend row's Remove control records it, brings
+    /// back its 100 bars, its visibility, its marker, its price line, its formatter and its bar
+    /// limit, and the feed follows the host's pause again: running when the host left it
+    /// running, also after a replay that began while the series was removed, and paused when
+    /// the host paused it. Redo removes the series again, and a second undo restores it again.
+    #[test]
+    fn undoing_the_main_series_removal_restores_it_and_its_feed() {
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                _: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+            }
+        }
+        for (host_paused, replay) in [(false, false), (true, false), (false, true)] {
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.attach_feed(std::sync::Arc::new(Feed), 1);
+            chart.set_feed_paused(host_paused);
+            let first = chart.bars(SeriesId::MAIN)[0].time;
+            let cutoff = chart.bars(SeriesId::MAIN)[50].time;
+            chart.set_markers(SeriesId::MAIN, vec![crate::model::Marker::new(first)]);
+            let line = chart
+                .add_price_line(
+                    SeriesId::MAIN,
+                    crate::model::PriceLine::new(15.0, Color32::RED),
+                )
+                .unwrap();
+            let limit = std::num::NonZeroUsize::new(1000);
+            chart.set_bar_limit(SeriesId::MAIN, limit);
+            assert!(chart.set_series_formatter(
+                SeriesId::MAIN,
+                Some(std::sync::Arc::new(crate::scales::CurrencyFormatter::usd())),
+            ));
+            let state = |chart: &Chart| {
+                (
+                    chart.bars(SeriesId::MAIN).len(),
+                    chart.is_main_series_visible(),
+                    chart.markers(SeriesId::MAIN).len(),
+                    chart.price_line(line).is_some(),
+                    chart.bar_limit(SeriesId::MAIN),
+                    chart
+                        .series_label_formatter(
+                            SeriesId::MAIN,
+                            crate::scales::PriceScaleMode::Normal,
+                        )
+                        .is_some(),
+                    chart.feed_link.as_ref().unwrap().paused,
+                )
+            };
+            let restored = (100, true, 1, true, limit, true, host_paused);
+            let removed = (0, false, 0, false, None, false, true);
+            let case = format!("host paused {host_paused}, replay {replay}");
+            assert_eq!(state(&chart), restored, "{case}: before");
+            assert!(chart.user_action(|chart| chart.remove_series(SeriesId::MAIN)));
+            assert_eq!(state(&chart), removed, "{case}: removed");
+            if replay {
+                chart.set_replay_time(Some(cutoff));
+            }
+            assert!(chart.undo());
+            if replay {
+                assert!(
+                    chart.feed_link.as_ref().unwrap().paused,
+                    "{case}: in replay"
+                );
+                chart.set_replay_time(None);
+            }
+            assert_eq!(state(&chart), restored, "{case}: undone");
+            assert!(chart.redo());
+            assert_eq!(state(&chart), removed, "{case}: redone");
+            assert!(chart.undo());
+            assert_eq!(state(&chart), restored, "{case}: undone again");
+        }
+    }
+
+    /// A user action that changes any scale of a pane is one undo step that restores its options,
+    /// manual range and lock, whichever axis shows the scale and whichever pane holds it.
+    #[test]
+    fn secondary_pane_named_scale_edits_are_undoable() {
+        use crate::model::SeriesScale::{self, Left, Right, Separate};
+        use crate::scales::{PriceScale, PriceScaleMode};
+        use crate::widget::{PaneId, PaneScale, SeriesOptions};
+        type Edit = fn(&mut PriceScale);
+        let edits: [(&str, Edit); 5] = [
+            ("mode", |scale| {
+                scale.reset();
+                scale.options_mut().mode = PriceScaleMode::Logarithmic;
+            }),
+            ("invert", |scale| scale.options_mut().invert_scale = true),
+            ("range", |scale| scale.set_range(3.0, 4.0)),
+            ("auto", |scale| scale.reset()),
+            ("lock", |scale| {
+                scale.set_bar_ratio_locked(true, 10.0, 500.0)
+            }),
+        ];
+        let axes: [(bool, SeriesScale); 5] = [
+            (true, Left),
+            (true, Separate(1)),
+            (true, Right),
+            (false, Left),
+            (false, Right),
+        ];
+        for (secondary, key) in axes {
+            for (edit, apply) in edits {
+                let case = format!("secondary {secondary}, {key:?}, {edit}");
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.config.show_volume = false;
+                let pane = if secondary {
+                    chart.add_pane()
+                } else {
+                    PaneId::MAIN
+                };
+                let id = chart.add_series(SeriesOptions {
+                    scale: key,
+                    ..Default::default()
+                });
+                assert!(chart.move_series_to_pane(id, pane), "{case}");
+                let axis = PaneScale::Named(key);
+                chart
+                    .pane_scale_mut(pane, axis)
+                    .unwrap()
+                    .set_range(1.0, 2.0);
+                let state = |chart: &Chart| {
+                    let scale = chart.pane_scale(pane, axis).unwrap();
+                    (
+                        *scale.options(),
+                        scale.is_manual(),
+                        scale.range(),
+                        scale.bar_ratio(),
+                    )
+                };
+                let before = state(&chart);
+                chart.user_action(|chart| apply(chart.pane_scale_mut(pane, axis).unwrap()));
+                let after = state(&chart);
+                assert_ne!(before, after, "{case}");
+                assert!(chart.undo(), "{case}: undo");
+                assert_eq!(state(&chart), before, "{case}: undone");
+                assert!(chart.redo(), "{case}: redo");
+                assert_eq!(state(&chart), after, "{case}: redone");
+            }
+        }
     }
 }

@@ -2,11 +2,11 @@
 
 use super::Chart;
 use crate::drawings::persistence::{
-    DrawingStorage, SaveError, SkippedDrawing, StoredCoord, drawing_to_stored_with,
-    stored_to_drawing_with,
+    DrawingStorage, LoadError, SaveError, SkipReason, SkippedDrawing, StoredCoord, StoredDrawing,
+    drawing_to_stored_with, stored_to_drawing_with,
 };
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
-use crate::model::{index_at, time_at};
+use crate::model::{index_at_with_timeframe, time_at_with_timeframe};
 
 impl Chart {
     /// UTC time behind a drawing anchor, retaining fractional and repeated-time positions.
@@ -16,7 +16,7 @@ impl Chart {
             .time_anchor
             .filter(|(_, index)| *index == point.bar_idx)
             .map(|(time, _)| time)
-            .or_else(|| time_at(self.state.shown(), point.bar_idx as f64))
+            .or_else(|| self.index_to_time(point.bar_idx as f64))
     }
 
     /// Map a UTC time and price into drawing coordinates, including times outside loaded bars.
@@ -26,7 +26,7 @@ impl Chart {
         time: chrono::DateTime<chrono::Utc>,
         price: f64,
     ) -> Option<ChartPoint> {
-        let index = index_at(self.state.shown(), time)? as f32;
+        let index = self.time_to_index(time)? as f32;
         if !index.is_finite() || !price.is_finite() {
             return None;
         }
@@ -38,13 +38,20 @@ impl Chart {
     /// Captures edited indices before the bars or the rendered element sequence change.
     pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();
+        let timeframe = self.calendar_timeframe();
+        let timezone = self.calendar_timezone();
         let mut anchor = |point: &mut ChartPoint| {
             if point
                 .time_anchor
                 .is_none_or(|(_, projected)| projected != point.bar_idx)
             {
-                point.time_anchor =
-                    time_at(bars, point.bar_idx as f64).map(|time| (time, point.bar_idx));
+                point.time_anchor = time_at_with_timeframe(
+                    bars,
+                    point.bar_idx as f64,
+                    timeframe,
+                    timezone.as_ref(),
+                )
+                .map(|time| (time, point.bar_idx));
             }
         };
         self.drawings.visit_chart_points(&mut anchor);
@@ -54,6 +61,8 @@ impl Chart {
     /// Projects retained timestamps against the current rendered bars, including whitespace.
     pub(super) fn project_drawing_points(&mut self) {
         let bars = self.state.shown();
+        let timeframe = self.calendar_timeframe();
+        let timezone = self.calendar_timezone();
         let state = &self.state;
         let chart_type = self.chart_type;
         let params = &self.chart_type_params;
@@ -68,10 +77,16 @@ impl Chart {
                     time,
                 )
                 .map(|index| index as f64)
-                .or_else(|| index_at(bars, time));
+                .or_else(|| index_at_with_timeframe(bars, time, timeframe, timezone.as_ref()));
                 if let Some(index) = index {
                     // Keep the rank of an anchor already on one of several equal-time elements.
-                    if time_at(bars, point.bar_idx as f64) != Some(time) {
+                    if time_at_with_timeframe(
+                        bars,
+                        point.bar_idx as f64,
+                        timeframe,
+                        timezone.as_ref(),
+                    ) != Some(time)
+                    {
                         point.bar_idx = index as f32;
                         point.time_anchor = Some((time, point.bar_idx));
                     }
@@ -83,9 +98,13 @@ impl Chart {
     }
 
     /// Exports the current symbol's drawings with timestamps, using the chart's own mapping.
-    /// Between bars time is interpolated; outside them the nearest distinct pair is extended
-    /// (one second per index for a single bar). Empty charts can export retained time anchors;
-    /// an index with no loaded mapping returns an error rather than clamping or inventing time.
+    /// Between bars time is interpolated; outside them the known timeframe duration or most
+    /// common positive spacing among the outermost 16 bars is extended (shorter spacing breaks
+    /// ties, one second if none), retaining repeated-edge ranks. Known month and year intervals
+    /// step by calendar months in the display time zone. Numeric and custom axes use key
+    /// spacing regardless of the chart timeframe. Empty charts export retained
+    /// anchors; an index with no loaded mapping returns an error rather than clamping or
+    /// inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
             self.drawings
@@ -108,7 +127,7 @@ impl Chart {
                 if point
                     .time_anchor
                     .is_none_or(|(_, index)| index != point.bar_idx)
-                    && time_at(self.state.shown(), point.bar_idx as f64).is_none()
+                    && self.index_to_time(point.bar_idx as f64).is_none()
                 {
                     return Err(SaveError::UnmappedAnchor {
                         id: drawing
@@ -119,12 +138,17 @@ impl Chart {
                     });
                 }
             }
-            storage.add_drawing(drawing_to_stored_with(drawing, |index, price| {
+            let mut stored = drawing_to_stored_with(drawing, |index, price| {
                 StoredCoord::from_time(
-                    time_at(self.state.shown(), index as f64).expect("validated anchor"),
+                    self.index_to_time(index as f64).expect("validated anchor"),
                     price,
                 )
-            }));
+            });
+            // A drawing without an owner is stored for the price pane, wherever that pane is.
+            stored.pane = self
+                .owner_pane(drawing)
+                .and_then(|pane| self.stored_pane(pane));
+            storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.
         storage.to_json()?;
@@ -133,16 +157,28 @@ impl Chart {
 
     /// Replaces the current symbol's drawings from a saved file, clears chart undo history
     /// and reports skipped records.
-    /// Rejects a different symbol or an unreadable file without changing the current drawings.
+    /// Rejects a different symbol or an unreadable file without changing the current drawings,
+    /// with a [`LoadError`] that tells a file from a newer release
+    /// ([`LoadError::UnsupportedVersion`]) from damaged data; each skipped record carries its
+    /// [`SkipReason`].
     /// Can run before history arrives: timestamp anchors are projected when bars load.
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
-    pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, serde_json::Error> {
-        let (storage, skipped) = DrawingStorage::from_json(json)?;
+    pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, LoadError> {
+        self.load_drawings_remapped(json, false)
+    }
+
+    /// [`Self::load_drawings`]; with `remap`, a drawing whose study was replaced when a snapshot
+    /// was restored takes the replacement before its stored pane is matched, since a study's
+    /// input naming another study as its source holds that study's local id.
+    pub(super) fn load_drawings_remapped(
+        &mut self,
+        json: &str,
+        remap: bool,
+    ) -> Result<Vec<SkippedDrawing>, LoadError> {
+        let (storage, mut skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
-            return Err(serde::de::Error::custom(
-                "drawing storage belongs to a different symbol",
-            ));
+            return Err(LoadError::OtherSymbol);
         }
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
@@ -156,22 +192,49 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
-        for stored in storage.drawings() {
-            let drawing = stored_to_drawing_with(
-                stored,
-                |point| {
-                    point
-                        .time()
-                        .and_then(|time| index_at(self.state.shown(), time))
-                        .unwrap_or(0.0) as f32
-                },
-                0,
-            );
-            manager.add_synced_drawing(drawing);
+        let mut refused = Vec::new();
+        // The n-th loaded drawing is the n-th entry of the file that was not skipped.
+        let read = (0..).filter(|index| skipped.iter().all(|s| s.index != *index));
+        for (index, stored) in read.zip(storage.drawings()) {
+            if let Err(error) = manager.add_synced_drawing(self.restored_drawing(stored, remap)) {
+                refused.push(SkippedDrawing {
+                    index,
+                    id: Some(stored.id.clone()),
+                    error: SkipReason::Invalid(serde::de::Error::custom(error)),
+                });
+            }
         }
+        skipped.extend(refused);
+        skipped.sort_by_key(|skipped| skipped.index);
         self.drawings = manager;
         self.history.clear();
         Ok(skipped)
+    }
+
+    /// `stored` as a drawing of this chart: anchors at the bars of their times, exact once bars
+    /// load, and in the pane of its study when the chart shows that study, else in the price pane.
+    /// With `remap`, see [`Self::load_drawings_remapped`].
+    pub(super) fn restored_drawing(&self, stored: &StoredDrawing, remap: bool) -> Drawing {
+        let mut drawing = stored_to_drawing_with(
+            stored,
+            |point| {
+                point
+                    .time()
+                    .and_then(|time| self.time_to_index(time))
+                    .unwrap_or(0.0) as f32
+            },
+            0,
+        );
+        if let Some(id) = drawing
+            .pane
+            .filter(|_| remap)
+            .and_then(|pane| self.restored_studies.get(&pane))
+        {
+            drawing.pane = Some(*id);
+        } else if let Some(pane) = &stored.pane {
+            drawing.pane = self.stored_pane_owner(pane);
+        }
+        drawing
     }
 }
 
@@ -182,6 +245,299 @@ mod tests {
     use crate::model::{Bar, BarData};
     use crate::widget::SeriesId;
     use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn custom_key_drawing_anchors_ignore_the_timeframe() {
+        use crate::model::Timeframe;
+        use chrono::Duration;
+
+        let date = |y, m, d| Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap();
+        let hourly = [
+            (4, 9, 30),
+            (4, 10, 0),
+            (4, 11, 0),
+            (4, 12, 0),
+            (4, 13, 0),
+            (4, 14, 0),
+            (4, 15, 0),
+            (5, 9, 30),
+            (5, 10, 0),
+            (5, 11, 0),
+        ]
+        .map(|(day, hour, minute)| Utc.with_ymd_and_hms(2024, 3, day, hour, minute, 0).unwrap())
+        .to_vec();
+        let bar = |time| Bar::new(time, 10.0, 12.0, 9.0, 11.0, 1.0);
+        for ((times, timeframe, timezone, expected_left, expected_right, next), custom) in [
+            // Thursday, Friday, Monday: the weekend cannot turn one slot into three days.
+            (
+                vec![date(2024, 2, 8), date(2024, 2, 9), date(2024, 2, 12)],
+                None,
+                "UTC",
+                date(2024, 2, 7),
+                date(2024, 2, 13),
+                date(2024, 2, 13),
+            ),
+            // Friday, Monday, Tuesday: the same rule applies to prepended history.
+            (
+                vec![date(2024, 2, 2), date(2024, 2, 5), date(2024, 2, 6)],
+                None,
+                "UTC",
+                date(2024, 2, 1),
+                date(2024, 2, 7),
+                date(2024, 2, 7),
+            ),
+            (
+                vec![
+                    date(2024, 1, 2) + Duration::minutes(1258),
+                    date(2024, 1, 2) + Duration::minutes(1259),
+                    date(2024, 1, 3) + Duration::minutes(870),
+                ],
+                Some(Timeframe::Min1),
+                "UTC",
+                date(2024, 1, 2) + Duration::minutes(1257),
+                date(2024, 1, 3) + Duration::minutes(871),
+                date(2024, 1, 3) + Duration::minutes(871),
+            ),
+            (
+                vec![date(2024, 2, 1), date(2024, 3, 1), date(2024, 4, 1)],
+                Some(Timeframe::Month1),
+                "UTC",
+                date(2024, 1, 1),
+                date(2024, 5, 1),
+                date(2024, 5, 1),
+            ),
+            (
+                vec![date(2024, 7, 1), date(2024, 10, 1), date(2025, 1, 1)],
+                Some("3month".parse().unwrap()),
+                "UTC",
+                date(2024, 4, 1),
+                date(2025, 4, 1),
+                date(2025, 4, 1),
+            ),
+            (
+                vec![date(2023, 12, 31), date(2024, 1, 31), date(2024, 2, 29)],
+                Some(Timeframe::Month1),
+                "UTC",
+                date(2023, 11, 30),
+                date(2024, 3, 31),
+                date(2024, 3, 31),
+            ),
+            (
+                vec![date(2023, 1, 1), date(2024, 1, 1), date(2025, 1, 1)],
+                Some("12month".parse().unwrap()),
+                "UTC",
+                date(2022, 1, 1),
+                date(2026, 1, 1),
+                date(2026, 1, 1),
+            ),
+            // Local month starts follow the clock change in November.
+            #[cfg(feature = "timezones")]
+            (
+                vec![
+                    date(2024, 9, 1) + Duration::hours(4),
+                    date(2024, 10, 1) + Duration::hours(4),
+                    date(2024, 11, 1) + Duration::hours(4),
+                ],
+                Some(Timeframe::Month1),
+                "America/New_York",
+                date(2024, 8, 1) + Duration::hours(4),
+                date(2024, 12, 1) + Duration::hours(5),
+                date(2024, 12, 1) + Duration::hours(5),
+            ),
+            // Months keyed at UTC midnight stay at UTC midnight across the clock change.
+            #[cfg(feature = "timezones")]
+            (
+                vec![date(2024, 1, 1), date(2024, 2, 1), date(2024, 3, 1)],
+                Some(Timeframe::Month1),
+                "America/New_York",
+                date(2023, 12, 1),
+                date(2024, 4, 1),
+                date(2024, 4, 1),
+            ),
+            // The half-hour opening bar as the last bar keeps the slots on the hourly grid.
+            (
+                hourly[..8].to_vec(),
+                Some(Timeframe::Hour1),
+                "UTC",
+                Utc.with_ymd_and_hms(2024, 3, 4, 9, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 10, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 10, 0, 0).unwrap(),
+            ),
+            (
+                hourly[..8].to_vec(),
+                None,
+                "UTC",
+                Utc.with_ymd_and_hms(2024, 3, 4, 9, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 10, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 10, 0, 0).unwrap(),
+            ),
+            // Clock-aligned hours keep the half-hour opening bar out of the step.
+            (
+                hourly.clone(),
+                Some(Timeframe::Hour1),
+                "UTC",
+                Utc.with_ymd_and_hms(2024, 3, 4, 9, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+            ),
+            (
+                hourly,
+                None,
+                "UTC",
+                Utc.with_ymd_and_hms(2024, 3, 4, 9, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 3, 5, 12, 0, 0).unwrap(),
+            ),
+            // A holiday shifts the weekly keys without changing the known duration.
+            (
+                vec![date(2024, 1, 8), date(2024, 1, 16), date(2024, 1, 22)],
+                Some(Timeframe::Week1),
+                "UTC",
+                date(2024, 1, 1),
+                date(2024, 1, 29),
+                date(2024, 1, 29),
+            ),
+            // Quarter-second bars keep their milliseconds on both sides.
+            (
+                [0, 250, 500]
+                    .map(|ms| date(2024, 3, 4) + Duration::milliseconds(ms))
+                    .to_vec(),
+                Some(Timeframe::Ms250),
+                "UTC",
+                date(2024, 3, 4) - Duration::milliseconds(250),
+                date(2024, 3, 4) + Duration::milliseconds(750),
+                date(2024, 3, 4) + Duration::milliseconds(750),
+            ),
+        ]
+        .into_iter()
+        .map(|row| (row, false))
+        // Custom ranks remain one second apart under any displayed calendar interval.
+        .chain(
+            [None, Some(Timeframe::Day1), Some(Timeframe::Month1)].map(|timeframe| {
+                let key = |rank| Utc.timestamp_opt(rank, 0).unwrap();
+                (
+                    (
+                        (0..3).map(key).collect(),
+                        timeframe,
+                        "UTC",
+                        key(-1),
+                        key(4),
+                        key(3),
+                    ),
+                    true,
+                )
+            }),
+        ) {
+            let last = times.len() - 1;
+            let right_index = (last + if custom { 2 } else { 1 }) as f32;
+            let mut chart = Chart::new(BarData::from_bars(times.into_iter().map(bar).collect()));
+            if custom {
+                chart.set_horizontal_scale(Some(std::sync::Arc::new(
+                    crate::scales::CustomHorizontalScale::new(0..6_u8, |key| key.to_string()),
+                )));
+            }
+            if let Some(timeframe) = timeframe {
+                chart.set_timeframe(timeframe);
+            }
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone(timezone.parse().unwrap());
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![
+                ChartPoint::new(-1.0, 10.0),
+                ChartPoint::new(right_index, 11.0),
+            ];
+            drawing.completed = true;
+            chart.drawings_mut().drawings.push(drawing);
+            for (index, expected) in [(right_index, expected_right), (-1.0, expected_left)] {
+                assert_eq!(
+                    chart.drawing_point_time(&ChartPoint::new(index, 10.0)),
+                    Some(expected),
+                    "{timeframe:?}"
+                );
+                assert_eq!(
+                    chart.drawing_point_at(expected, 10.0).unwrap().bar_idx,
+                    index
+                );
+                assert_eq!(chart.index_to_time(index as f64), Some(expected));
+            }
+            for (index, left, right) in [
+                (-0.5, expected_left, chart.state.shown()[0].time),
+                (
+                    (last as f64 + f64::from(right_index)) / 2.0,
+                    chart.state.shown()[last].time,
+                    expected_right,
+                ),
+            ] {
+                let midpoint = left + (right - left) / 2;
+                assert_eq!(chart.index_to_time(index), Some(midpoint));
+                assert_eq!(chart.time_to_index(midpoint), Some(index));
+            }
+            // The label keys must agree on both sides even if only the final bar is visible.
+            let ctx = egui::Context::default();
+            let painter =
+                egui::Painter::new(ctx, egui::LayerId::background(), egui::Rect::EVERYTHING);
+            // 20 slots of 100 points reach before the first bar of every series here.
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2000.0, 300.0));
+            let price = crate::scales::PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(9.0, 12.0),
+                0.0,
+                300.0,
+                false,
+            );
+            for start in [0, last].into_iter().filter(|_| !custom) {
+                let coords = crate::chart::rendering::ChartMapping::new(
+                    rect, 100.0, start, last, 5.0, price,
+                );
+                let (_, keys, axis) = crate::chart::rendering::time_axis_marks(
+                    &crate::chart::rendering::RenderContext::new(&painter, rect),
+                    &chart.state.shown()[start..],
+                    &coords,
+                    &chart.build_time_formatter(),
+                    &chart.chart_options.time_scale,
+                    Chart::calendar_zone(chart.label_timezone(|| chart.time_label_seconds()))
+                        .as_ref(),
+                    |index| chart.index_to_time(index),
+                );
+                // Key indices are shifted by the slots the keys reach before the first bar.
+                let shift = (axis.base_idx - coords.base_idx) as f32;
+                for (index, expected) in [(-1.0, expected_left), (right_index, expected_right)] {
+                    assert_eq!(
+                        keys.iter()
+                            .find(|(_, key)| *key as f32 - shift == index)
+                            .map(|(time, _)| *time),
+                        Some(expected),
+                        "{timeframe:?}, key {index}"
+                    );
+                }
+            }
+            chart.update(SeriesId::MAIN, bar(next));
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index,
+                "custom={custom}, {timeframe:?}, before save/load"
+            );
+            assert_eq!(
+                chart.drawing_points(7).unwrap()[1].0,
+                expected_right,
+                "custom={custom}, {timeframe:?}"
+            );
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            chart.load_drawings(&saved).unwrap();
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index
+            );
+            let mut extended = vec![bar(expected_left)];
+            extended.extend_from_slice(&chart.state.data().bars);
+            chart.set_data(SeriesId::MAIN, extended);
+            assert_eq!(chart.drawings().drawings[0].chart_points[0].bar_idx, 0.0);
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index + 1.0
+            );
+        }
+    }
 
     /// Millisecond JSON fields must not collapse execution bars one nanosecond apart.
     #[test]
@@ -286,14 +642,14 @@ mod tests {
         assert_eq!(chart.drawings().drawings.len(), 2);
         assert!(chart.undo());
         assert_eq!(chart.drawings().drawings.len(), 1);
-        // -0.5 * 60 = -30 s; 60 + 0.5 * 120 = 120 s; 180 + 1.5 * 120 = 360 s.
+        // -0.5 * 60 = -30 s; 60 + 0.5 * 120 = 120 s; 180 + 1.5 * 60 = 270 s.
         assert_eq!(
             saved.drawings[0]
                 .points
                 .iter()
                 .map(|p| p.ts_ms)
                 .collect::<Vec<_>>(),
-            [-30_000, 120_000, 360_000]
+            [-30_000, 120_000, 270_000]
         );
         let mut json = serde_json::to_value(&saved).unwrap();
         let valid = json["drawings"][0].clone();
@@ -325,10 +681,169 @@ mod tests {
             chart.drawings().drawings[0].chart_points
         );
         json["symbol"] = "B".into();
-        assert!(restored.load_drawings(&json.to_string()).is_err());
+        assert!(matches!(
+            restored.load_drawings(&json.to_string()),
+            Err(LoadError::OtherSymbol)
+        ));
         assert_eq!(restored.drawings().drawings.len(), 1);
         let mut empty = Chart::new(BarData::new());
         empty.drawings_mut().drawings = chart.drawings().drawings.clone();
         assert!(empty.save_drawings().is_err());
+    }
+
+    /// A paste refuses other text, drawings that could not all be read and a chart without
+    /// bars to place them, each with its own reason, before changing any drawing.
+    #[test]
+    fn a_refused_paste_reports_why() {
+        use crate::drawings::persistence::{LoadError, SkipReason};
+        use crate::widget::test_frames;
+        let mut source = test_frames::chart(&[100.0], &[110.0]);
+        source.set_symbol("A");
+        let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+        line.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+        let id = source.drawings_mut().add_drawing(line).unwrap();
+        source.drawings_mut().select(id);
+        let copied = source.copy_selected_drawings().unwrap().unwrap();
+        let newer = copied.replace("\"TrendLine\"", "\"NewerTool\"");
+        type Refused = fn(&LoadError) -> bool;
+        let cases: [(&str, &str, bool, Refused); 3] = [
+            ("hello", "A", true, |e| matches!(e, LoadError::NotClipboard)),
+            (&newer, "A", true, |e| {
+                matches!(e, LoadError::Skipped(s) if s.len() == 1
+                    && matches!(&s[0].error, SkipReason::UnknownTool(t) if t.input == "NewerTool"))
+            }),
+            (&copied, "A", false, |e| {
+                matches!(e, LoadError::NeedsHistory)
+            }),
+        ];
+        for (text, symbol, bars, refused) in cases {
+            let mut target = if bars {
+                test_frames::chart(&[100.0], &[110.0])
+            } else {
+                Chart::new(BarData::new())
+            };
+            target.set_symbol(symbol);
+            let error = target.paste_drawings(text).unwrap_err();
+            assert!(refused(&error), "{symbol}: {error:?}");
+            assert!(target.drawings().drawings.is_empty(), "{error}");
+        }
+    }
+
+    /// A drawing stored in a study pane opens in that pane after a later release changes the
+    /// study's inputs. Inputs renamed since, such as the RSI average's `ma_type` and `ma_length`,
+    /// are read as a study template reads them; then an input the record does not list must hold
+    /// the default its study declares. A different value puts the drawing in the price pane, and
+    /// a host study under a built-in's name, which never had the renamed inputs, is matched as
+    /// stored. Loading and pasting agree.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn stored_pane_survives_a_new_study_input() {
+        use crate::studies::{CustomIndicator, IndicatorValue, InputValue, RSI};
+        let bars = [0, 60, 180]
+            .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
+            .to_vec();
+        let chart = |host: bool| {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_symbol("A");
+            let rsi = if host {
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("RSI", |bars: &[Bar]| {
+                        vec![IndicatorValue::Single(50.0); bars.len()]
+                    })
+                    .with_overlay(false),
+                ))
+            } else {
+                chart.add_indicator(Box::new(RSI::new(14)))
+            };
+            (chart, rsi)
+        };
+        let copied = |host: bool| {
+            let (mut source, rsi) = chart(host);
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(1.0, 50.0)];
+            line.completed = true;
+            line.pane = Some(rsi.0);
+            let id = source.drawings_mut().add_drawing(line).unwrap();
+            source.drawings_mut().select(id);
+            source.copy_selected_drawings().unwrap().unwrap()
+        };
+        // A record written before the study had input `id`.
+        let without = |id: &'static str| {
+            move |inputs: &mut Vec<serde_json::Value>| {
+                let before = inputs.len();
+                inputs.retain(|input| input[0] != id);
+                assert_eq!(inputs.len() + 1, before, "{id}");
+            }
+        };
+        // The RSI average as written before the shared smoothing inputs: `choice` of None, SMA
+        // and EMA under `ma_type`, its length under `ma_length`, and no band deviation.
+        let earlier = |choice: usize| {
+            move |inputs: &mut Vec<serde_json::Value>| {
+                without("smoothing_deviation")(inputs);
+                let average = serde_json::to_value(InputValue::Choice(choice)).unwrap();
+                for (from, to) in [("smoothing", "ma_type"), ("smoothing_length", "ma_length")] {
+                    let input = inputs.iter_mut().find(|input| input[0] == from).unwrap();
+                    input[0] = to.into();
+                    if to == "ma_type" {
+                        input[1] = average.clone();
+                    }
+                }
+            }
+        };
+        let other_period = |inputs: &mut Vec<serde_json::Value>| {
+            let period = inputs
+                .iter_mut()
+                .find(|input| input[0] == "period")
+                .unwrap();
+            period[1] = serde_json::to_value(InputValue::Length(21)).unwrap();
+        };
+        let unchanged = |_: &mut Vec<serde_json::Value>| {};
+        let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
+        let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
+        let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
+        let smoothing = |choice| Some(("smoothing", InputValue::Choice(choice)));
+        // (host study, stored inputs edit, chart's input, study pane expected)
+        type Case<'a> = (
+            bool,
+            &'a dyn Fn(&mut Vec<serde_json::Value>),
+            Option<(&'a str, InputValue)>,
+            bool,
+        );
+        let cases: [Case<'_>; 8] = [
+            // From before an input existed: the last one, which the chart adds after the study's
+            // own, or one of the study's own, which comes before the chart's.
+            (false, &last, None, true),
+            (false, &inner, None, true),
+            (false, &last, wait(false), false),
+            (false, &other_period, None, false),
+            // From before the RSI average took the shared smoothing inputs, where EMA was 2.
+            (false, &sma, smoothing(1), true),
+            (false, &ema, smoothing(3), true),
+            // From before the RSI had an average: it drew none, whatever the default is now.
+            (false, &no_average, smoothing(1), false),
+            // A host study named like the built-in, without the inputs its upgrade adds.
+            (true, &unchanged, None, true),
+        ];
+        for (at, (host, edit, input, shown)) in cases.into_iter().enumerate() {
+            let text = copied(host);
+            let (prefix, json) = text.split_once('\n').unwrap();
+            let mut json: serde_json::Value = serde_json::from_str(json).unwrap();
+            let inputs = &mut json["drawings"][0]["pane"]["studies"][0][1];
+            edit(inputs.as_array_mut().unwrap());
+            for paste in [false, true] {
+                let (mut target, rsi) = chart(host);
+                if let Some((id, value)) = &input {
+                    let study = target.indicator_mut(rsi).unwrap();
+                    study.set_input(id, value.clone()).unwrap();
+                }
+                if paste {
+                    target.paste_drawings(&format!("{prefix}\n{json}")).unwrap();
+                } else {
+                    target.load_drawings(&json.to_string()).unwrap();
+                }
+                let pane = target.drawings().drawings[0].pane;
+                assert_eq!(pane, shown.then_some(rsi.0), "case {at}, paste {paste}");
+            }
+        }
     }
 }

@@ -21,7 +21,7 @@ impl SmoothedMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::ORANGE,
+            color: palette::DEEP_PURPLE,
             visible: true,
         }
     }
@@ -35,7 +35,7 @@ impl SmoothedMA {
 
 impl Default for SmoothedMA {
     fn default() -> Self {
-        Self::new(14)
+        Self::new(7)
     }
 }
 

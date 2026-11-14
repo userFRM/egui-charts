@@ -14,16 +14,19 @@ mod time_formatter;
 mod timescale_marks;
 
 pub use countdown::bar_countdown;
-pub use horizontal::{
-    HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
-};
 #[cfg(feature = "widget")]
-pub(crate) use price_formatter::price_decimals;
+pub(crate) use horizontal::median_bar_duration;
+pub use horizontal::{
+    CustomHorizontalScale, HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout,
+    key_time, time_key,
+};
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
     instrument_price_precision,
 };
+#[cfg(feature = "widget")]
+pub(crate) use price_formatter::{decimals, group_thousands, price_decimals, to_step};
 #[cfg(feature = "widget")]
 pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{
@@ -34,7 +37,7 @@ pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConf
 pub use study_format::StudyFormat;
 pub use time_formatter::{
     CustomTimeFormatter, DefaultTimeFormatter, LocaleTimeFormatter, RelativeTimeFormatter,
-    TimeFormatter, TimeFormatterBuilder, TimezoneMode,
+    TickMarkContext, TimeFormatter, TimeFormatterBuilder, TimezoneMode,
 };
 pub use timescale_marks::{
     TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,

@@ -4,23 +4,34 @@
 //! For persistence across history or interval changes, use timestamp anchors through
 //! [`persistence`](super::persistence) or the chart's drawing APIs.
 
+mod alert_levels;
+mod bars_pattern;
 mod coordinates;
 mod drawing;
+mod elliott;
 mod gann;
 mod ghost_feed;
+mod image;
 mod options;
 mod pitchfork;
 mod template;
+mod vwap;
 
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
+pub use bars_pattern::{BarsPatternConfig, BarsPatternMode};
 pub use coordinates::ChartPoint;
-pub use drawing::Drawing;
-pub use gann::{GannConfig, GannFanDirection};
-pub(crate) use ghost_feed::GhostCandleScreen;
+pub use drawing::{Drawing, FolderSync};
+pub use elliott::ElliottDegree;
+pub(crate) use gann::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
+pub use gann::{GannConfig, GannFanDirection, GannLevel};
 pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
+pub use image::ImageConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
-    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
+    LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign, LineTextOrientation,
+    LineTextVerticalAlign, NoteTextStyle, PositionReadout, PositionSize, PositionSizing,
+    PositionStyle, RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;
+pub use vwap::{VwapBand, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};

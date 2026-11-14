@@ -1,15 +1,78 @@
 ---
 title: API reference
+description: Find the main Rust API, panes, markers, extensions and integration recipes for egui 0.37.
 ---
 
-[Open the Rust API reference →](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html)
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+[Open the main API (rustdoc) →](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html)
 
 Browse public types, method signatures, configuration fields and module-level
-contracts with all crate features available.
+contracts for **main (0.3 in development), egui/eframe 0.37**, with all crate
+features available. Rustdoc has its own symbol search: use it for names such as
+[`Chart::add_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_pane). The guide's Search finds explanations and tasks.
+
+For the published **0.2.0** crate, which uses **egui/eframe 0.33.3**, open
+[the separate release API on docs.rs](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+
+## Panes
+
+Panes share the chart's time axis and hold series or studies on their own price
+scales. Overlays start in the price pane; oscillators can create separate panes.
+Use [`Chart::add_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_pane)
+and [`move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
+to place a series. Resize or reorder panes with [`set_pane_height`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_pane_height) and [`move_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_pane);
+[`PaneOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneOptions.html)
+controls separator interaction. Start with [a built-in study](studies.mdx#attach-a-built-in-study).
+
+## Markers
+
+Attach trade signals or events to a bar series with
+[`Chart::set_markers`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_markers).
+[`Marker`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Marker.html)
+sets the time, position, shape, colour and text; [`set_marker_options`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_marker_options) controls
+autoscaling and drawing order. Markers belong to bar series, rather than study
+outputs. For missing observations, use [whitespace bars](data-model.mdx#bars-and-series).
+
+## Extensions
+
+<CardGrid>
+  <LinkCard title="Custom studies" href="/egui-charts/docs/studies/#write-a-custom-study" description="Implement Indicator or supply a CustomIndicator calculation, with one value per source bar." />
+  <LinkCard title="Custom series and primitives" href="/egui-charts/docs/extensions/" description="Draw host geometry with Primitive and Chart::attach_primitive on a series' pane and scale, or build a series from a study." />
+  <LinkCard title="Custom drawing tools" href="/egui-charts/docs/api/egui_charts/drawings/registry/struct.DrawingToolRegistry.html" description="Register a DrawingRenderer under a stable host-owned id before loading saved drawings." />
+  <LinkCard title="Themes and formatters" href="/egui-charts/docs/theming/" description="Use the theme presets, host translations and chart formatters to fit your application." />
+</CardGrid>
+
+Attach a renderer with
+[`Chart::attach_primitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.attach_primitive),
+or implement [`DrawingRenderer`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/registry/trait.DrawingRenderer.html)
+for a custom drawing tool.
+
+## Recipes
+
+<CardGrid>
+  <Card title="Load history and stream bars" icon="setting">
+    [Page history through a feed](data.mdx#page-history-through-a-feed),
+    [stream live updates](data.mdx#stream-through-the-subscription-sink), or
+    [connect HTTP column endpoints](../../../../builder-guide.md#http-endpoint-contract).
+    Your host supplies the historical and streaming data.
+  </Card>
+  <Card title="Keep a workspace" icon="window">
+    [Save and load drawings](../../../../builder-guide.md#save-and-load-drawings),
+    [synchronize charts](../../../../builder-guide.md#synchronize-charts), and
+    [compose the application UI](application-ui.mdx).
+    Accounts and durable storage belong to your application.
+  </Card>
+</CardGrid>
+
+For full applications using the public API, browse the
+[runnable examples](https://github.com/userFRM/egui-charts/tree/main/examples).
+
+## Modules
 
 | Module | Use it for |
 | --- | --- |
-| [`widget`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/index.html) | `Chart`, `ChartBuilder`, series and interaction |
+| [`widget`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/index.html) | [`Chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html), [`ChartBuilder`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartBuilder.html), series and interaction |
 | [`model`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/index.html) | Bars, instruments, intervals, transforms and strategy results |
 | [`data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/index.html) | Feeds, replies, sinks, trades, depth, recording and replay |
 | [`studies`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/index.html) | Indicator contracts, built-ins and custom studies |
@@ -19,7 +82,3 @@ contracts with all crate features available.
 | [`theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/index.html) | Theme presets and egui styling |
 | [`services`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/index.html) | Host storage, search, signals, alerts and trading |
 | [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html) | Application components and their actions |
-
-For the published 0.2.0 release, use [docs.rs](https://docs.rs/egui-charts/0.2.0).
-For full applications using the public API, browse the
-[examples](https://github.com/userFRM/egui-charts/tree/main/examples).

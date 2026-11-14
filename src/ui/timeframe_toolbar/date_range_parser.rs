@@ -223,28 +223,24 @@ mod tests {
     }
 
     #[test]
-    fn test_preset_case_insensitive() {
-        assert!(parse_date_range("ytd").is_ok());
-        assert!(parse_date_range("1m").is_ok());
-        assert!(parse_date_range("MAX").is_ok());
-    }
-
-    #[test]
-    fn test_relative_days() {
-        let result = parse_date_range("last 30 days");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_relative_months() {
-        let result = parse_date_range("last 6 months");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_relative_years() {
-        let result = parse_date_range("last 1 year");
-        assert!(result.is_ok());
+    fn parses_relative_and_preset_ranges() {
+        for (input, days) in [
+            ("last 30 days", Some(30)),
+            ("last 6 months", Some(180)),
+            ("last 1 year", Some(365)),
+            ("ytd", None),
+            ("1M", Some(30)),
+            ("MAX", Some(7300)),
+        ] {
+            let (start, end) = parse_date_range(input).unwrap();
+            if let Some(days) = days {
+                assert_eq!(end - start, days * 86_400, "{input}");
+            } else {
+                let year = Utc.timestamp_opt(end, 0).unwrap().year();
+                let january = Utc.with_ymd_and_hms(year, 1, 1, 0, 0, 0).unwrap();
+                assert_eq!(start, january.timestamp(), "{input}");
+            }
+        }
     }
 
     #[test]

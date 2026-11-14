@@ -1,12 +1,17 @@
 //! Keltner Channels Indicator
 //!
-//! Keltner Channels are volatility-based bands set above and below an EMA.
-//! The bands are based on ATR (Avg True Range).
+//! Keltner Channels are volatility-based bands set above and below a moving average.
 //!
 //! # Components
-//! - Middle Line: EMA of close price
-//! - Upper Band: EMA + (ATR multiplier * ATR)
-//! - Lower Band: EMA - (ATR multiplier * ATR)
+//! - Middle Line: an exponential average of the source, close by default, seeded with the mean
+//!   of its first `length` values, or a simple average of the source.
+//! - Upper and Lower Bands: the middle line plus and minus the multiplier times the band
+//!   distance, which is Wilder's average true range over the ATR length (the default), the
+//!   bar's own true range, or Wilder's average of the bar's high minus low over the middle
+//!   line's length.
+//!
+//! A bar with a non-finite high, low or close is skipped. A missing source leaves a gap in
+//! the basis while the band distance continues to read the original bars.
 //!
 //! # Interpretation
 //! - Price above upper band: Strong uptrend or overbought
@@ -23,12 +28,28 @@
 //! ```
 
 use super::clamp_param;
+use super::price_oscillator::{Mean, OscillatorAverage};
 use super::smoothing::Smoothing;
-use crate::model::Bar;
+use crate::model::{Bar, PriceSource};
+use crate::studies::inputs::input_spec;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{
+    ATR, Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyError, StudyInput,
+};
 use egui::Color32;
+
+/// How far the bands of [`KeltnerChannels`] lie from the middle line, before the multiplier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum KeltnerBand {
+    /// Wilder's average of the true range over the ATR length.
+    AverageTrueRange,
+    /// The bar's own true range; high minus low on the first bar.
+    TrueRange,
+    /// Wilder's average of the bar's high minus low over the middle line's length.
+    Range,
+}
 
 /// Keltner Channels indicator
 #[derive(Clone)]
@@ -36,20 +57,24 @@ pub struct KeltnerChannels {
     ema_period: usize,
     atr_period: usize,
     multiplier: f64,
+    source: PriceSource,
+    average: OscillatorAverage,
+    band: KeltnerBand,
     values: IndicatorValues,
     stepper: Stepper<State>,
     upper_color: Color32,
     middle_color: Color32,
     lower_color: Color32,
+    fill_color: Color32,
     visible: bool,
 }
 
 #[derive(Clone, Default)]
 struct State {
+    bar: usize,
     previous: Option<f64>,
-    ema: Smoothing,
-    atr: f64,
-    count: usize,
+    middle: Mean,
+    band: Smoothing,
 }
 
 impl KeltnerChannels {
@@ -64,11 +89,15 @@ impl KeltnerChannels {
             ema_period: ema_period.max(1),
             atr_period: atr_period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            source: PriceSource::Close,
+            average: OscillatorAverage::Exponential,
+            band: KeltnerBand::AverageTrueRange,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            upper_color: palette::PINK,    // Pink
-            middle_color: palette::PURPLE, // Purple
-            lower_color: palette::PINK,    // Pink
+            upper_color: palette::BLUE,
+            middle_color: palette::BLUE,
+            lower_color: palette::BLUE,
+            fill_color: palette::LIGHT_BLUE.gamma_multiply_u8(13),
             visible: true,
         }
     }
@@ -83,7 +112,65 @@ impl KeltnerChannels {
         self.upper_color = upper;
         self.middle_color = middle;
         self.lower_color = lower;
+        self.fill_color = Color32::from_rgba_unmultiplied(upper.r(), upper.g(), upper.b(), 16);
         self
+    }
+
+    /// Average `source` for the middle line instead of the close. The bands keep using the bars.
+    pub fn with_source(mut self, source: PriceSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// Use an exponential (the default) or simple average for the middle line.
+    pub fn with_average(mut self, average: OscillatorAverage) -> Self {
+        self.average = average;
+        self
+    }
+
+    /// Measure the band distance with `band` instead of the average true range.
+    pub fn with_band(mut self, band: KeltnerBand) -> Self {
+        self.band = band;
+        self
+    }
+
+    fn update_prices(&mut self, data: &[Bar], from: usize, source: Option<&[f64]>) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bar;
+                state.bar += 1;
+                let price = source.map_or_else(
+                    || self.source.compute(bar.open, bar.high, bar.low, bar.close),
+                    |source| source.get(index).copied().unwrap_or(f64::NAN),
+                );
+                if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let tr = state
+                    .previous
+                    .map_or(bar.high - bar.low, |close| ATR::true_range(bar, close));
+                state.previous = Some(bar.close);
+                let middle = state.middle.next(self.average, price, self.ema_period);
+                let band = match self.band {
+                    KeltnerBand::AverageTrueRange => {
+                        state
+                            .band
+                            .next(tr, self.atr_period, 1.0 / self.atr_period as f64)
+                    }
+                    KeltnerBand::TrueRange => tr,
+                    KeltnerBand::Range => state.band.next(
+                        bar.high - bar.low,
+                        self.ema_period,
+                        1.0 / self.ema_period as f64,
+                    ),
+                };
+                // Only NaN is missing here: infinite bands from a huge multiplier keep the middle line.
+                if middle.is_nan() || band.is_nan() {
+                    return IndicatorValue::None;
+                }
+                let width = self.multiplier * band;
+                IndicatorValue::Multiple(vec![middle, middle + width, middle - width])
+            });
     }
 }
 
@@ -95,18 +182,113 @@ impl Default for KeltnerChannels {
 }
 
 impl Indicator for KeltnerChannels {
-    crate::studies::inputs::study_inputs!(self;
-        ema_period: length("EMA period", 1, usize::MAX),
-        atr_period: length("ATR period", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX)
-    ; {});
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
+
+    /// Only the basis uses the aligned source; ranges retain the bars' own high, low and close.
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.update_prices(data, from, Some(source));
+    }
+
+    fn inputs(&self) -> Vec<StudyInput> {
+        let defaults = Self::default();
+        vec![
+            input_spec!(
+                "ema_period",
+                self.ema_period,
+                length("Length", 1, usize::MAX)
+            )
+            .with_default(InputValue::Length(defaults.ema_period)),
+            input_spec!(
+                "multiplier",
+                self.multiplier,
+                number("Multiplier", 0.0, f64::MAX)
+            )
+            .with_default(InputValue::Number(defaults.multiplier)),
+            input_spec!("source", self.source, choice("Source", PriceSource::all())).with_default(
+                InputValue::Choice(
+                    PriceSource::all()
+                        .iter()
+                        .position(|source| *source == defaults.source)
+                        .unwrap_or(0),
+                ),
+            ),
+            StudyInput::new(
+                "average",
+                "Exponential basis",
+                InputValue::Toggle(self.average == OscillatorAverage::Exponential),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(
+                defaults.average == OscillatorAverage::Exponential,
+            )),
+            input_spec!(
+                "band",
+                self.band,
+                choice(
+                    "Band style",
+                    [
+                        KeltnerBand::AverageTrueRange,
+                        KeltnerBand::TrueRange,
+                        KeltnerBand::Range
+                    ]
+                )
+            )
+            .with_default(InputValue::Choice(0)),
+            input_spec!(
+                "atr_period",
+                self.atr_period,
+                length("ATR length", 1, usize::MAX)
+            )
+            .with_default(InputValue::Length(defaults.atr_period)),
+        ]
+    }
+
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
+        let value = match (id, value) {
+            ("average", InputValue::Choice(1)) => InputValue::Toggle(false),
+            ("average", InputValue::Choice(0)) => InputValue::Toggle(true),
+            (_, value) => value,
+        };
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| StudyError::UnknownInput(id.into()))?;
+        if !schema.accepts(&value) {
+            return Err(StudyError::invalid_input(id));
+        }
+        match (id, value) {
+            ("ema_period", InputValue::Length(value)) => self.ema_period = value,
+            ("multiplier", InputValue::Number(value)) => self.multiplier = value,
+            ("source", InputValue::Choice(value)) => self.source = PriceSource::all()[value],
+            ("band", InputValue::Choice(value)) => {
+                self.band = [
+                    KeltnerBand::AverageTrueRange,
+                    KeltnerBand::TrueRange,
+                    KeltnerBand::Range,
+                ][value]
+            }
+            ("atr_period", InputValue::Length(value)) => self.atr_period = value,
+            ("average", InputValue::Toggle(value)) => {
+                self.average = if value {
+                    OscillatorAverage::Exponential
+                } else {
+                    OscillatorAverage::Simple
+                }
+            }
+            _ => unreachable!("validated study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
-        let color = self.upper_color;
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(1),
             second: crate::studies::FillBoundary::Plot(2),
-            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+            color: self.fill_color,
             inverted_color: None,
         }]
     }
@@ -124,35 +306,7 @@ impl Indicator for KeltnerChannels {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                if !bar.high.is_finite() || !bar.low.is_finite() || !bar.close.is_finite() {
-                    return IndicatorValue::None;
-                }
-                let tr = state
-                    .previous
-                    .map_or(bar.high - bar.low, |close| ATR::true_range(bar, close));
-                state.previous = Some(bar.close);
-                let middle = state.ema.next(
-                    bar.close,
-                    self.ema_period,
-                    2.0 / (self.ema_period as f64 + 1.0),
-                );
-                state.count += 1;
-                if state.count <= self.atr_period {
-                    state.atr += tr;
-                    if state.count == self.atr_period {
-                        state.atr /= self.atr_period as f64;
-                    }
-                } else {
-                    state.atr += (1.0 / self.atr_period as f64) * (tr - state.atr);
-                }
-                if state.count < self.ema_period.max(self.atr_period) {
-                    return IndicatorValue::None;
-                }
-                let width = self.multiplier * state.atr;
-                IndicatorValue::Multiple(vec![middle, middle + width, middle - width])
-            });
+        self.update_prices(data, from, None);
     }
 
     fn is_incremental(&self) -> bool {
@@ -164,7 +318,12 @@ impl Indicator for KeltnerChannels {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.middle_color, self.upper_color, self.lower_color]
+        vec![
+            self.middle_color,
+            self.upper_color,
+            self.lower_color,
+            self.fill_color,
+        ]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
@@ -176,6 +335,12 @@ impl Indicator for KeltnerChannels {
         }
         if colors.len() > 2 {
             self.lower_color = colors[2];
+        }
+        if let Some(&color) = colors.get(3) {
+            self.fill_color = color;
+        } else if colors.len() > 1 {
+            let color = self.upper_color;
+            self.fill_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16);
         }
     }
 
@@ -200,10 +365,19 @@ impl Indicator for KeltnerChannels {
     }
 
     fn line_names(&self) -> Vec<String> {
+        let average = match self.average {
+            OscillatorAverage::Exponential => "EMA",
+            OscillatorAverage::Simple => "SMA",
+        };
+        let band = match self.band {
+            KeltnerBand::AverageTrueRange => "ATR",
+            KeltnerBand::TrueRange => "TR",
+            KeltnerBand::Range => "Range",
+        };
         vec![
-            format!("EMA({})", self.ema_period),
-            format!("Upper({}x ATR)", self.multiplier),
-            format!("Lower({}x ATR)", self.multiplier),
+            format!("{average}({})", self.ema_period),
+            format!("Upper({}x {band})", self.multiplier),
+            format!("Lower({}x {band})", self.multiplier),
         ]
     }
 }

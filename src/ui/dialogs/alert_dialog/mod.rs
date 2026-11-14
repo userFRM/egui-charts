@@ -5,6 +5,7 @@
 mod actions;
 mod config;
 mod dialog;
+mod preset;
 
 pub use actions::AlertDialogAction;
 pub use config::AlertDialogConfig;

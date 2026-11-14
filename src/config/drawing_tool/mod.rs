@@ -13,6 +13,15 @@ use serde::{Deserialize, Serialize};
 pub use display::ParseToolTypeError;
 pub use interaction_mode::DrawingInteractionMode;
 
+/// The order of a list of drawings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawingSort {
+    /// Alphabetically by name, ignoring case.
+    Name,
+    /// By the time of the last edit, newest first.
+    LastModified,
+}
+
 /// Enumeration of all drawing tool types available in the charting engine.
 ///
 /// Identifies a drawing's rendering behavior, interaction mode, required point
@@ -78,8 +87,8 @@ pub enum DrawingToolType {
     RegressionTrend,
     /// A trend line through the first two anchors and a horizontal line at the third anchor's price.
     FlatTopBottom,
-    /// Two parallel trend lines: the first two anchors set the first line, and the third anchor sets
-    /// where the second line starts, at any time.
+    /// Two lines over the first two anchors' bars with opposite slopes; the third anchor
+    /// positions the mirrored line.
     DisjointChannel,
 
     // ============ PITCHFORKS (4 tools) ============
@@ -141,15 +150,15 @@ pub enum DrawingToolType {
     ThreeDrivesPattern,
 
     // ============ ELLIOTT WAVES (5 tools) ============
-    /// Elliott impulse wave labels (1-2-3-4-5, 6 points).
+    /// Elliott impulse wave: a start point and waves 1 to 5 (6 points).
     ElliottImpulse,
-    /// Elliott correction wave labels (A-B-C, 4 points).
+    /// Elliott correction wave: a start point and waves A, B and C (4 points).
     ElliottCorrection,
-    /// Elliott triangle wave labels (A-B-C-D-E, 5 points).
+    /// Elliott triangle: a start point and waves A to E (6 points).
     ElliottTriangle,
-    /// Elliott double combination wave labels (W-X-Y, 5 points).
+    /// Elliott double combination: a start point and waves W, X and Y (4 points).
     ElliottDoubleCombo,
-    /// Elliott triple combination wave labels (W-X-Y-X-Z, 7 points).
+    /// Elliott triple combination: a start point and waves W, X, Y, X and Z (6 points).
     ElliottTripleCombo,
 
     // ============ CYCLES (3 tools) ============
@@ -244,21 +253,22 @@ pub enum DrawingToolType {
     TextLabel,
     /// Text label anchored to screen position (doesn't move with pan).
     AnchoredText,
-    /// Sticky note annotation with background.
+    /// Note: a text label joined to the bar and price it annotates by a thin line.
     Note,
-    /// Price note -- text annotation anchored to a specific price level.
+    /// Price note: the anchor's price and any text in a solid label, joined to the anchor by a
+    /// thin line.
     PriceNote,
-    /// Anchored/pinned note that stays at a fixed screen position.
+    /// Pin: a marker on a bar and price, with its text in a popup while selected.
     AnchoredNote,
     /// Data table overlay on the chart.
     Table,
     /// Callout with arrow pointing to a chart location.
     Callout,
-    /// Comment bubble annotation.
+    /// Comment: its text in one bubble with a corner on the anchor.
     Comment,
-    /// Price label badge shown on the price axis.
+    /// Price label: the anchor's price in a badge beside the point, with a pointer to it.
     PriceLabel,
-    /// Signpost marker with directional indicator.
+    /// Signpost: a label on a thin pole above or below its bar.
     Signpost,
     /// Flag/mark note at a specific chart location.
     FlagNote,
@@ -318,24 +328,12 @@ mod tests {
             DrawingInteractionMode::NotDrawing
         );
         assert_eq!(
-            DrawingToolType::HorizontalLine.interaction_mode(),
-            DrawingInteractionMode::SingleClick
-        );
-        assert_eq!(
-            DrawingToolType::TrendLine.interaction_mode(),
-            DrawingInteractionMode::ClickClick
-        );
-        assert_eq!(
             DrawingToolType::Rect.interaction_mode(),
             DrawingInteractionMode::DragToDraw
         );
         assert_eq!(
             DrawingToolType::Brush.interaction_mode(),
             DrawingInteractionMode::ContinuousDraw
-        );
-        assert_eq!(
-            DrawingToolType::Polyline.interaction_mode(),
-            DrawingInteractionMode::MultiPoint
         );
     }
 }

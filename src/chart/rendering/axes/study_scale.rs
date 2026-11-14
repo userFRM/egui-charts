@@ -1,0 +1,344 @@
+//! Independent study mapping and its axis beside the price pane.
+
+use super::super::ChartMapping;
+use crate::scales::{PriceMap, PriceRange, PriceTransform};
+use crate::studies::{Indicator, PlotType, StudyScale};
+use egui::{Align2, Painter, Pos2, Rect};
+
+/// Keep independent study units out of the main price map, including hidden scales.
+pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> ChartMapping {
+    if let StudyScale::Shared(_) = study.scale() {
+        return ChartMapping {
+            price: study
+                .scale_mapping()
+                .unwrap_or(coords.price)
+                .with_bounds(coords.rect.top(), coords.rect.bottom()),
+            ..coords.clone()
+        };
+    }
+    if study.scale() == StudyScale::Main {
+        return coords.clone();
+    }
+    if let Some(price) = study.scale_mapping() {
+        return ChartMapping {
+            price: price.with_bounds(coords.rect.top(), coords.rect.bottom()),
+            ..coords.clone()
+        };
+    }
+    fit_study_mapping(study, coords, None)
+}
+
+/// Fit a study's own scale to its visible values, volume profiles, drawing prices and `extra`.
+pub(crate) fn fit_study_mapping(
+    study: &dyn Indicator,
+    coords: &ChartMapping,
+    extra: Option<(f64, f64)>,
+) -> ChartMapping {
+    let start = coords.x_to_idx(coords.rect.left()).saturating_sub(1);
+    let end = coords.x_to_idx(coords.rect.right()).saturating_add(2);
+    let mut low = f64::INFINITY;
+    let mut high = f64::NEG_INFINITY;
+    for line in 0..study.line_count() {
+        let plot = study.plot_style(line);
+        if !plot.visible
+            || matches!(
+                plot.plot_type,
+                PlotType::BarColor | PlotType::BackgroundColor
+            )
+        {
+            continue;
+        }
+        for bar in start..end {
+            if let Some(value) = study.plot_value(line, bar) {
+                low = low.min(value);
+                high = high.max(value);
+            }
+        }
+        if low.is_finite()
+            && matches!(
+                plot.plot_type,
+                PlotType::Histogram | PlotType::Columns | PlotType::Area
+            )
+        {
+            low = low.min(0.0);
+            high = high.max(0.0);
+        }
+    }
+    for price in crate::studies::plots::fill_prices(study, start..end) {
+        low = low.min(price);
+        high = high.max(price);
+    }
+    for plot in study.volume_profiles(crate::chart::rendering::volume_profile::profile_range(
+        coords,
+    )) {
+        low = low.min(plot.profile.low());
+        high = high.max(plot.profile.high());
+    }
+    #[cfg(feature = "drawings")]
+    for price in crate::studies::plots::drawing_prices(study, start..end) {
+        low = low.min(price);
+        high = high.max(price);
+    }
+    if let Some((lowest, highest)) = extra {
+        low = low.min(lowest);
+        high = high.max(highest);
+    }
+    if !low.is_finite() {
+        low = 0.0;
+        high = 1.0;
+    }
+    let padding = crate::scales::auto_scale_span(low, high) * 0.1;
+    let price = PriceMap::new(
+        PriceTransform::default(),
+        PriceRange::new(
+            (low - padding).max(-f64::MAX),
+            (high + padding).min(f64::MAX),
+        ),
+        coords.rect.top(),
+        coords.rect.bottom(),
+        false,
+    )
+    .with_price_precision(Some(study.precision().unwrap_or(2).min(18) as u8));
+    ChartMapping {
+        price,
+        ..coords.clone()
+    }
+}
+
+/// Paint an independent study axis in its reserved gutter beside the plot. Each label is in
+/// `text`, or in the colour that reads on its tag, on a plate in the colour `background` gives
+/// for the chart background behind it.
+pub(crate) fn render_study_axis(
+    painter: &Painter,
+    studies: &[&dyn Indicator],
+    coords: &ChartMapping,
+    axis: Rect,
+    axis_options: &crate::config::PriceAxisOptions,
+    relative_formatter: Option<&dyn crate::scales::PriceFormatter>,
+    text: egui::Color32,
+    background: &dyn Fn(Pos2) -> egui::Color32,
+) -> f32 {
+    let Some(&study) = studies.first() else {
+        return 0.0;
+    };
+    let painter = painter.with_clip_rect(axis);
+    let font = crate::chart::rendering::axes::axis_font(painter.ctx());
+    let (x, align) = if axis.left() >= coords.rect.right() {
+        (axis.left() + 8.0, Align2::LEFT_CENTER)
+    } else {
+        (axis.right() - 8.0, Align2::RIGHT_CENTER)
+    };
+    let mut width = 0.0_f32;
+    let mut labels = Vec::new();
+    for &member in studies {
+        if !axis_options.show_study_values {
+            continue;
+        }
+        let Some(bar) = member.values().len().checked_sub(1) else {
+            continue;
+        };
+        for line in 0..member.line_count() {
+            let plot = member.plot_style(line);
+            if plot.visible
+                && member.plot_tagged(line)
+                && !matches!(
+                    plot.plot_type,
+                    PlotType::BarColor | PlotType::BackgroundColor
+                )
+                && let Some(value) = member.plot_value(line, bar)
+            {
+                let transform = coords.price.transform();
+                let relative = matches!(
+                    transform.mode,
+                    crate::scales::PriceScaleMode::Percentage
+                        | crate::scales::PriceScaleMode::IndexedTo100
+                );
+                let label = if relative {
+                    transform.label(transform.to_scale(value), 2, relative_formatter)
+                } else {
+                    member.format_plot_value(line, value)
+                };
+                labels.push((
+                    coords.price_to_y(value),
+                    Some(
+                        axis_options
+                            .study_value_color
+                            .unwrap_or(member.plot_style(line).color),
+                    ),
+                    crate::chart::rendering::axes::named_label(
+                        axis_options.show_study_names,
+                        member.name(),
+                        label,
+                    ),
+                ));
+            }
+        }
+    }
+    let mut occupied = Vec::new();
+    let relative = matches!(
+        coords.price.transform().mode,
+        crate::scales::PriceScaleMode::Percentage | crate::scales::PriceScaleMode::IndexedTo100
+    );
+    let marks = super::price_marks(&coords.price, relative_formatter.filter(|_| relative));
+    for (y, color, label) in labels.into_iter().chain(marks.into_iter().map(|mark| {
+        let label = if relative {
+            mark.label
+        } else {
+            study.format_value(mark.price)
+        };
+        (mark.y_coord, None, label)
+    })) {
+        let galley = painter.layout_no_wrap(
+            label,
+            font.clone(),
+            color.map_or(text, crate::chart::rendering::axes::tag_text_color),
+        );
+        let rect = align
+            .anchor_size(Pos2::new(x, y), galley.size())
+            .expand(2.0);
+        width = width.max(rect.width() + 8.0);
+        if !axis.contains_rect(rect)
+            || (!axis_options.allow_label_overlap
+                && occupied.iter().any(|other: &Rect| other.intersects(rect)))
+        {
+            continue;
+        }
+        painter.rect_filled(
+            rect,
+            0.0,
+            color.unwrap_or_else(|| background(rect.center())),
+        );
+        painter.galley(rect.min + egui::vec2(2.0, 2.0), galley, text);
+        occupied.push(rect);
+    }
+    width
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chart::rendering::{IndicatorRenderer, RenderContext};
+    use crate::scales::StudyFormat;
+    use crate::studies::{ConfiguredStudy, CustomIndicator, IndicatorValue};
+
+    #[test]
+    fn independent_and_hidden_scales_map_volume_without_price_units() {
+        let rect = Rect::from_min_max(Pos2::new(80.0, 0.0), Pos2::new(280.0, 120.0));
+        let main = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(100.0, 200.0),
+            0.0,
+            120.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 40.0, 0, 1, 0.0, main);
+        for (scale, tagged, right) in [
+            (StudyScale::Independent, true, false),
+            (StudyScale::Independent, false, false),
+            (StudyScale::Independent, true, true),
+            (StudyScale::None, true, false),
+        ] {
+            let mut study = CustomIndicator::new("Volume overlay", |_| {
+                vec![
+                    IndicatorValue::Single(1000.0),
+                    IndicatorValue::Single(3000.0),
+                ]
+            })
+            .with_color(egui::Color32::BLUE)
+            .with_value_format(StudyFormat::Volume)
+            .with_scale(scale);
+            study.calculate(&[]);
+            let study: Box<dyn Indicator> = if tagged {
+                Box::new(study)
+            } else {
+                let mut study = ConfiguredStudy::new(Box::new(study));
+                let mut settings = study.settings();
+                settings.untagged_plots = vec![0];
+                study.apply_settings(&[], settings).unwrap();
+                Box::new(study)
+            };
+            let mapping = study_mapping(study.as_ref(), &coords);
+            // Visible values 1000..3000 plus 10% padding give 800..3200.
+            assert!((mapping.price_to_y(1000.0) - 110.0).abs() < 0.001);
+            assert!((mapping.price_to_y(3000.0) - 10.0).abs() < 0.001);
+            let bars =
+                vec![
+                    crate::model::Bar::new(chrono::Utc::now(), 150.0, 150.0, 150.0, 150.0, 1.0);
+                    2
+                ];
+            let indicators = vec![study];
+            let axis = Rect::from_x_y_ranges(
+                if right { 280.0..=360.0 } else { 0.0..=80.0 },
+                rect.y_range(),
+            );
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                IndicatorRenderer::render(
+                    &RenderContext::new(ui.painter(), rect),
+                    &indicators,
+                    &bars,
+                    &main,
+                    &coords,
+                );
+                if scale == StudyScale::Independent {
+                    render_study_axis(
+                        ui.painter(),
+                        &[indicators[0].as_ref()],
+                        &mapping,
+                        axis,
+                        &Default::default(),
+                        None,
+                        egui::Color32::WHITE,
+                        &|_| egui::Color32::BLACK,
+                    );
+                }
+            });
+            let painted = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(egui::Color32::BLUE)
+                        && path.points.len() == 2
+                        && (path.points[0].y - 110.0).abs() < 0.001
+                        && (path.points[1].y - 10.0).abs() < 0.001)
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            let tag = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == egui::Color32::BLUE)
+            });
+            let edge = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "3.00K" => Some(if right {
+                    text.pos.x
+                } else {
+                    text.pos.x + text.galley.size().x
+                }),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            if scale == StudyScale::Independent {
+                let edge = edge.expect("the axis has a volume label");
+                let expected = if right {
+                    axis.left() + 8.0
+                } else {
+                    axis.right() - 8.0
+                };
+                assert!(
+                    (edge - expected).abs() < 0.001,
+                    "right={right}: {edge} != {expected}"
+                );
+            }
+            assert!(painted);
+            assert_eq!(tag, scale == StudyScale::Independent && tagged);
+            assert_eq!(
+                labels.iter().any(|label| label == "3.00K"),
+                scale == StudyScale::Independent,
+                "{labels:?}"
+            );
+        }
+    }
+}

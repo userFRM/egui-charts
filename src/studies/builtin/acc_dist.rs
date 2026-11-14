@@ -23,7 +23,6 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -43,7 +42,7 @@ impl AccumulationDistribution {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::BLUE, // Blue
+            color: Color32::from_rgb(153, 153, 21), // Blue
             visible: true,
         }
     }

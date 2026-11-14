@@ -15,7 +15,8 @@ use egui::Color32;
 #[serde(default)]
 #[non_exhaustive]
 pub struct CandleColorConfig {
-    /// Colour each candle by its close against the previous close instead of its open.
+    /// Colour plain candles by their close against the previous close instead of their open.
+    /// Bars, volume candles and Heikin Ashi keep their rule in `ChartSettingsState::chart_type_params`.
     pub color_by_previous_close: bool,
     /// Whether candle bodies are filled.
     pub show_body: bool,
@@ -67,12 +68,16 @@ impl Default for CandleColorConfig {
 #[serde(default)]
 #[non_exhaustive]
 pub struct StatusLineOptions {
-    /// Whether the legend shows the host's instrument logo before the title.
+    /// Whether the legend shows the symbol's logo before the title, or its initial on a neutral
+    /// disc without one.
     pub show_logo: bool,
     /// Whether the legend shows the instrument title.
     pub show_symbol: bool,
     /// Display the description instead of the ticker.
     pub title_as_description: bool,
+    /// Whether the legend shows the market status after the title: the session's state and
+    /// delayed or end-of-day data.
+    pub show_market_status: bool,
     /// Display current bid and ask controls.
     pub show_quote_boxes: bool,
     /// Display study names.
@@ -101,6 +106,7 @@ impl Default for StatusLineOptions {
             show_logo: true,
             show_symbol: true,
             title_as_description: true,
+            show_market_status: true,
             show_quote_boxes: true,
             show_indicator_titles: true,
             show_indicator_inputs: true,
@@ -110,7 +116,7 @@ impl Default for StatusLineOptions {
             show_change_percent: true,
             show_volume: true,
             show_last_day_change: false,
-            indicator_background_opacity: 100,
+            indicator_background_opacity: 60,
         }
     }
 }
@@ -204,11 +210,16 @@ impl Default for WatermarkSettings {
 
 /// Canvas tab: Scales appearance settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ScalesAppearanceSettings {
     /// Text color.
     pub text_color: Color32,
     /// Font size in logical pixels.
     pub font_size: u8,
+    /// Font family of the axis labels and tags. `None` keeps the chart's family, as do settings
+    /// saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<egui::FontFamily>,
     /// Axis line color.
     pub lines_color: Color32,
 }
@@ -218,6 +229,7 @@ impl Default for ScalesAppearanceSettings {
         Self {
             text_color: crate::theme::Theme::default().ui.text_secondary,
             font_size: 12,
+            font_family: None,
             lines_color: Color32::TRANSPARENT,
         }
     }
@@ -248,18 +260,38 @@ pub struct MarginsSettings {
     pub top_percent: f32,
     /// Empty space below prices, as a percentage of pane height.
     pub bottom_percent: f32,
-    /// Empty space after the latest bar, in bars.
-    pub right_bars: u32,
+    /// Empty space after the latest bar, in bars; a margin set in pixels reads as its width in
+    /// bars at the current bar spacing. Settings without
+    /// [`ScalesAppearanceSettings::font_family`], as saved when this held whole bars, keep the
+    /// chart's margin when this equals its whole bars.
+    pub right_bars: f32,
 }
 
 impl Default for MarginsSettings {
+    /// The margins of a new chart, read as the settings read a chart's.
     fn default() -> Self {
+        let price = crate::scales::PriceScaleMargins::default();
         Self {
-            top_percent: 10.0,
-            bottom_percent: 8.0,
-            right_bars: 10,
+            top_percent: (price.top * 100.0) as f32,
+            bottom_percent: (price.bottom * 100.0) as f32,
+            right_bars: crate::config::TimeScaleOptions::default().right_offset,
         }
     }
+}
+
+/// The character that groups the thousands of the built-in price labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ThousandsSeparator {
+    /// Plain digits: `42541.77`.
+    Off,
+    /// A comma: `42,541.77`.
+    Comma,
+    /// A space: `42 541.77`.
+    Space,
+    /// An apostrophe: `42'541.77`.
+    Apostrophe,
+    /// A character the host set as `ChartConfig::thousands_sep`.
+    Other(char),
 }
 
 /// Scales and lines tab settings
@@ -267,6 +299,8 @@ impl Default for MarginsSettings {
 #[serde(default)]
 #[non_exhaustive]
 pub struct ScalesAndLinesSettings {
+    /// Axis layout of the pane containing the main series.
+    pub axis_layout: crate::model::PaneAxisOptions,
     /// Display host-supplied currency metadata.
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
@@ -280,6 +314,8 @@ pub struct ScalesAndLinesSettings {
     /// Lock scale units per bar to `price_to_bar_ratio`.
     pub lock_price_to_bar_ratio: bool,
     /// Positive scale units per bar while locked; log scales use natural logarithms of prices.
+    /// Read from a chart that is not locked, it is the ratio of the view the chart shows, so ticking
+    /// the lock keeps that view; 1 for a chart not drawn yet.
     pub price_to_bar_ratio: f64,
     /// Last price tag and line colour, or the candle direction colour when unset.
     pub symbol_price_color: Option<Color32>,
@@ -313,6 +349,12 @@ pub struct ScalesAndLinesSettings {
     pub show_prev_close_label: bool,
     /// Whether to show price line.
     pub show_price_line: bool,
+    /// The bar whose close the last price line and label of the main series show. `None` keeps
+    /// the chart's choice, as do settings saved without this field.
+    pub price_line_source: Option<crate::model::PriceLineSource>,
+    /// The thousands separator of price labels. `None` keeps the chart's separator, as do
+    /// settings saved without this field.
+    pub thousands_sep: Option<ThousandsSeparator>,
     /// Whether to show countdown.
     pub show_countdown: bool,
     /// Whether to show bid ask.
@@ -326,6 +368,7 @@ pub struct ScalesAndLinesSettings {
 impl Default for ScalesAndLinesSettings {
     fn default() -> Self {
         Self {
+            axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
             show_scale_mode_buttons: true,
@@ -348,6 +391,8 @@ impl Default for ScalesAndLinesSettings {
             show_last_price_label: true,
             show_prev_close_label: false,
             show_price_line: true,
+            price_line_source: None,
+            thousands_sep: None,
             show_countdown: true,
             show_bid_ask: false,
             show_high_low: false,
@@ -359,7 +404,7 @@ impl Default for ScalesAndLinesSettings {
 /// Trading tab settings: the Buy and Sell buttons' behaviour, notifications and the layers
 /// `ui::trading::Trading::show` draws through `Trading::display` with the `ui` feature.
 /// The Buy and Sell buttons themselves are [`StatusLineOptions::show_quote_boxes`].
-/// Saved settings without a field take its default.
+/// Saved settings without a field take its default, unless the field says otherwise.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -401,7 +446,9 @@ pub struct TradingSettings {
     pub bracket_pnl_unit: PnlUnit,
     /// Draw the fills on their bars.
     pub show_executions: bool,
-    /// Write the quantity and average price beside each fill's mark.
+    /// Write the side and total quantity beside each fill's mark. On for new settings; settings
+    /// saved without this field keep labels off, as they were drawn when saved.
+    #[serde(default)]
     pub show_execution_labels: bool,
 }
 
@@ -425,7 +472,7 @@ impl Default for TradingSettings {
             bracket_pnl: true,
             bracket_pnl_unit: PnlUnit::Money,
             show_executions: true,
-            show_execution_labels: false,
+            show_execution_labels: true,
         }
     }
 }
@@ -487,16 +534,36 @@ impl Default for AlertsSettings {
             sound_volume: 1.0,
             show_alerts: true,
             show_alert_labels: true,
-            alert_color: crate::studies::palette::ORANGE, // Orange
+            alert_color: crate::studies::palette::WARM_ORANGE,
             show_active_only: true,
             notification_seconds: 5,
         }
     }
 }
 
+/// Independent order-flow layers and their appearance. Missing saved fields keep layers off.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct OrderFlowSettings {
+    /// Draw sampled resting liquidity behind the price series.
+    pub show_heatmap: bool,
+    /// Brightness and resting-size range, retained while the heatmap is off.
+    pub heatmap: crate::chart::overlays::LiquidityHeatmapConfig,
+    /// Draw the live book's side profile independently of the heatmap.
+    pub show_order_book: bool,
+    /// Live book measure, order filter and size highlights.
+    pub order_book: crate::chart::overlays::OrderBookView,
+    /// Draw the supplied trades as volume bubbles.
+    pub show_volume_bubbles: bool,
+    /// Bubble grouping, colours and sizing, retained while bubbles are off.
+    pub volume_bubbles: crate::chart::overlays::VolumeBubblesConfig,
+}
+
 /// Serializable display settings shared by the chart and its settings dialog.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
+// The trait impls below wrap the derived ones.
+#[serde(remote = "Self")]
 pub struct ChartSettingsState {
     // Symbol tab
     /// Active representation used to select the Symbol controls. Applying settings keeps the chart type.
@@ -522,6 +589,11 @@ pub struct ChartSettingsState {
     /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
     #[serde(default)]
     pub adjust_for_dividends: bool,
+
+    // Order flow tab
+    /// Independent heatmap, live book and trade bubble settings; older documents keep them off.
+    #[serde(default)]
+    pub order_flow: OrderFlowSettings,
 
     // Status line tab
     /// Legend content and quote controls.
@@ -558,6 +630,32 @@ pub struct ChartSettingsState {
     // Events tab
     /// Visible event categories.
     pub events: crate::model::EventVisibility,
+    /// Whether session break lines are drawn. `None` keeps the chart's choice, as do settings
+    /// saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_session_breaks: Option<bool>,
+}
+
+impl serde::Serialize for ChartSettingsState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChartSettingsState {
+    /// A saved HLC area entry of the former format takes its colours from the saved candle
+    /// colours, which [`from_chart`](Self::from_chart) writes from the chart's.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::model::HlcAreaStyle::forget_former();
+        let mut state = Self::deserialize(deserializer)?;
+        if let Some(params) = &mut state.chart_type_params {
+            params
+                .styles
+                .hlc_area
+                .fill_former(state.candle_colors.body_up, state.candle_colors.body_down);
+        }
+        Ok(state)
+    }
 }
 
 impl Default for ChartSettingsState {
@@ -574,6 +672,8 @@ impl Default for ChartSettingsState {
             timezone: "UTC".to_string(),
             show_price_targets: false,
             adjust_for_dividends: false,
+
+            order_flow: OrderFlowSettings::default(),
 
             status_line: StatusLineOptions::default(),
 
@@ -592,6 +692,7 @@ impl Default for ChartSettingsState {
             alerts: AlertsSettings::default(),
 
             events: crate::model::EventVisibility::default(),
+            show_session_breaks: None,
         }
     }
 }

@@ -29,7 +29,7 @@ impl BalanceOfPower {
         Self {
             smooth_period: smooth_period.max(1),
             values: IndicatorValues::new(),
-            color: palette::UP, // Teal
+            color: palette::RED, // Teal
             visible: true,
         }
     }

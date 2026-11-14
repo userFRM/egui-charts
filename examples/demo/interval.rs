@@ -39,7 +39,7 @@ impl super::DemoApp {
                     self.user_action(|app| app.switch_timeframe(timeframe));
                     return;
                 }
-                Err(error) => self.notify(error),
+                Err(error) => self.notify(error.to_string()),
             }
         }
         if open {

@@ -33,11 +33,9 @@ fn main() -> eframe::Result {
             let written = match file.contents {
                 ExportContents::Png(bytes) => std::fs::write(&path, bytes),
                 ExportContents::Text(text) => std::fs::write(&path, text),
-                _ => return,
+                _ => return Err("Unsupported export contents".into()),
             };
-            if let Err(error) = written {
-                eprintln!("Could not save {}: {error}", path.display());
-            }
+            written.map_err(|error| format!("Could not save {}: {error}", path.display()))
         });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 900.0]),

@@ -3,7 +3,7 @@
 use crate::localization as l10n;
 use egui::{Align, Color32, Label, Layout, Rect, Response, RichText, Sense, Ui, UiBuilder, vec2};
 
-use super::watchlist::ROW_HEIGHT;
+use super::ROW_HEIGHT;
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 

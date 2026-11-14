@@ -46,7 +46,8 @@
 //! [`AccumulationDistribution`], [`ChaikinMoneyFlow`],
 //! [`VolumeRateOfChange`], [`KlingerOscillator`], [`CVD`],
 //! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`], [`TimeWeightedAvgPrice`],
-//! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
+//! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`], [`VolumeDelta`],
+//! [`CumulativeVolumeDelta`]
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
@@ -66,6 +67,8 @@
 
 use crate::model::Bar;
 mod footprint_studies;
+#[cfg(feature = "widget")]
+pub(crate) use footprint_studies::footprint_studies_on_rows;
 pub use footprint_studies::{
     FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
     footprint_studies,
@@ -309,6 +312,7 @@ mod woodies_cci;
 pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
 pub use technical_ratings::TechnicalRatings;
 // Time studies
+mod lower_interval;
 mod performance;
 mod relative_volume_at_time;
 mod seasonality;
@@ -316,6 +320,7 @@ mod trading_sessions;
 mod up_down_volume;
 mod visible_average_price;
 mod volume_24h;
+mod volume_delta;
 
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
@@ -338,7 +343,7 @@ pub use wma::WMA;
 
 // Re-exports - Momentum indicators
 pub use aroon::Aroon;
-pub use atr::ATR;
+pub use atr::{ATR, AtrSmoothing};
 pub use awesome_oscillator::AwesomeOscillator;
 pub use cci::CCI;
 pub use momentum::Momentum;
@@ -357,6 +362,7 @@ pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
+pub(crate) use volume_profile::time_text;
 pub use volume_profile::{
     ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
     VolProfileSession, VolProfileVisible,
@@ -372,7 +378,7 @@ pub use supertrend::SuperTrend;
 
 // Re-exports - Channel indicators
 pub use donchian::DonchianChannels;
-pub use keltner::KeltnerChannels;
+pub use keltner::{KeltnerBand, KeltnerChannels};
 
 // Re-exports - Volatility indicators
 pub use std_dev::StandardDeviation;
@@ -388,14 +394,14 @@ pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
 pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
 pub use missed_pivots::MissedPivots;
-pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+pub use pivot_points::{PivotLabelSide, PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use projected_pivot_points::ProjectedPivotPoints;
 pub use reversal::Reversal;
 pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
-pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
+pub use zigzag::{ZigZag, ZigZagChange, ZigZagMode, ZigZagPivot};
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;
@@ -477,7 +483,7 @@ pub use parkinson_vol::ParkinsonVol;
 pub use zero_trend_vol::ZeroTrendVol;
 
 // Re-exports - Ninth batch (Moving average variants and cross indicators)
-pub use envelopes::Envelopes;
+pub use envelopes::{EnvelopeAverage, Envelopes};
 pub use guppy_ma::GuppyMA;
 pub use ma_channel::MAChannel;
 pub use ma_combination::{AverageLine, AverageType, MACombination};
@@ -489,7 +495,7 @@ pub use ma_presets::{MARibbon, MixedMACross, TripleMA};
 pub use smoothed_ma::SmoothedMA;
 
 // Re-exports - Tenth batch (Statistics)
-pub use majority_rule::MajorityRule;
+pub use majority_rule::{MajorityMode, MajorityRule};
 pub use rank_correlation::RankCorrelationIndex;
 pub use standard_error::StandardError;
 pub use standard_error_bands::StandardErrorBands;
@@ -525,6 +531,7 @@ pub use trading_sessions::TradingSessions;
 pub use up_down_volume::UpDownVolume;
 pub use visible_average_price::VisibleAveragePrice;
 pub use volume_24h::Volume24h;
+pub use volume_delta::{CumulativeVolumeDelta, VolumeDelta};
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.
@@ -558,7 +565,9 @@ fn over_finite_bars(
 }
 
 mod trade_profile;
-pub use trade_profile::{TradeProfile, TradeProfileRanges, trade_profiles};
+pub use trade_profile::{
+    TradeProfile, TradeProfileRanges, trade_profiles, trade_profiles_with_rows,
+};
 
 mod order_flow;
 pub use order_flow::OrderFlowStudy;

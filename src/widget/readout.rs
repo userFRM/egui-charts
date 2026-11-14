@@ -1,9 +1,47 @@
 //! Study readouts for host data windows and chart tooltips.
 
-use super::{Chart, SeriesId};
-use crate::chart::renderers::StudyValue;
+use super::{Chart, CursorDataPolicy, SeriesId};
+use crate::chart::rendering::StudyValue;
+
+/// What the data table reads of a visible added series: id, title, bar revision and last bar
+/// (time in nanoseconds, close bits).
+#[cfg(feature = "ui")]
+pub(crate) type SeriesFingerprint = (usize, String, u64, Option<(i64, u64)>);
 
 impl Chart {
+    /// The table is current while this is unchanged: the history revision and a revision moved
+    /// by edits of the last bar, study edits, host-fed study data and the instrument.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_revision(&self) -> (u64, u64) {
+        (self.state.revision(), self.readout_revision)
+    }
+
+    /// What the table lists of each visible added series: its id, title, bar revision and last
+    /// bar, which the revision leaves out. The table is current while this is unchanged too.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_series(&self) -> Vec<SeriesFingerprint> {
+        self.price_series
+            .iter()
+            .filter(|item| item.visible)
+            .map(|item| {
+                let last = item.bars.last().map(|bar| {
+                    (
+                        bar.time.timestamp_nanos_opt().unwrap_or_default(),
+                        bar.close.to_bits(),
+                    )
+                });
+                (item.id.0, item.options.name.clone(), item.revision, last)
+            })
+            .collect()
+    }
+
+    /// Tells this chart from the others a host shows one data table over, through a restore of
+    /// its saved state, which adds its studies again under new ids.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_identity(&self) -> u64 {
+        self.data_table_identity
+    }
+
     /// Takes the source preselection requested by a study menu's Add indicator action.
     /// Open the host indicator chooser with this source, then call `set_indicator_source`
     /// on the added study. The chart owns no chooser or account service.
@@ -45,6 +83,15 @@ impl Chart {
 
     /// [`Self::study_values_at`] with the id of each row's study.
     pub(super) fn study_rows_at(&self, index: usize) -> Vec<(SeriesId, StudyValue)> {
+        self.study_rows_at_with_policy(index, CursorDataPolicy::Visible)
+    }
+
+    /// Study readouts with stable ids and the host's cursor visibility policy.
+    pub(super) fn study_rows_at_with_policy(
+        &self,
+        index: usize,
+        policy: CursorDataPolicy,
+    ) -> Vec<(SeriesId, StudyValue)> {
         if index >= self.state.shown().len() {
             return Vec::new();
         }
@@ -53,15 +100,17 @@ impl Chart {
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
-            .filter(|(_, study)| study.is_visible())
+            .filter(|(_, study)| policy == CursorDataPolicy::IncludeHidden || study.is_visible())
         {
             let names = study.line_names();
             let colors = study.colors();
-            for line in (0..study.line_count()).filter(|line| study.plot_style(*line).visible) {
+            for line in (0..study.line_count()).filter(|line| {
+                policy == CursorDataPolicy::IncludeHidden || study.plot_style(*line).visible
+            }) {
                 let row = StudyValue {
                     formatted: study
                         .plot_value(line, index)
-                        .map(|value| study.format_value(value)),
+                        .map(|value| study.format_plot_value(line, value)),
                     study: study.name().to_owned(),
                     format: study.value_format(),
                     plot: names.get(line).cloned().unwrap_or_default(),

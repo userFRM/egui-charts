@@ -34,6 +34,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct DonchianChannels {
     period: usize,
+    offset: i32,
     values: IndicatorValues,
     upper_color: Color32,
     middle_color: Color32,
@@ -49,10 +50,11 @@ impl DonchianChannels {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            offset: 0,
             values: IndicatorValues::new(),
-            upper_color: palette::BLUE,    // Blue
-            middle_color: palette::PURPLE, // Purple
-            lower_color: palette::BLUE,    // Blue
+            upper_color: palette::BLUE,
+            middle_color: palette::ORANGE,
+            lower_color: palette::BLUE,
             visible: true,
         }
     }
@@ -62,6 +64,12 @@ impl DonchianChannels {
         self.upper_color = upper;
         self.middle_color = middle;
         self.lower_color = lower;
+        self
+    }
+
+    /// Draw every line `offset` bars later, earlier when negative.
+    pub fn with_offset(mut self, offset: i32) -> Self {
+        self.offset = offset;
         self
     }
 }
@@ -103,8 +111,22 @@ impl DonchianChannels {
 
 impl Indicator for DonchianChannels {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        offset: integer("Offset", i32::MIN, i32::MAX)
     ; {});
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(1),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: Color32::from_rgba_unmultiplied(33, 150, 243, 13),
+            inverted_color: None,
+        }]
+    }
+
+    fn plot_offset(&self, _line: usize) -> isize {
+        self.offset as isize
+    }
 
     fn name(&self) -> &str {
         "Donchian"
@@ -186,5 +208,70 @@ impl Indicator for DonchianChannels {
             "Upper".to_string(),
             "Lower".to_string(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::test_support::make_range_bar as make_bar;
+    use crate::studies::{InputValue, PriceChannel};
+
+    /// Period 2 over highs 1, 3, 2, 5 and lows 0, 1, 1, 2: from bar 1 the upper line is 3, 3, 5
+    /// and the middle line 1.5, 2, 3; the lower line is 0, 1, 1.
+    #[test]
+    fn channels_draw_their_lines_offset_bars_later() {
+        let bars = [
+            make_bar(1.0, 0.0, 0.5),
+            make_bar(3.0, 1.0, 2.0),
+            make_bar(2.0, 1.0, 1.5),
+            make_bar(5.0, 2.0, 3.0),
+        ];
+        type Build = fn(i32) -> Box<dyn Indicator>;
+        let rows: [(usize, usize, usize, Build); 2] = [
+            (1, 0, 2, |offset| {
+                Box::new(DonchianChannels::new(2).with_offset(offset))
+            }),
+            (0, 2, 1, |offset| {
+                Box::new(PriceChannel::new(2).with_offset(offset))
+            }),
+        ];
+        for (upper, middle, lower, build) in rows {
+            // Bar 1 at the upper line's first 3, bar 3 at the middle line's 3.
+            for (offset, first, last) in [(5, 6, 8), (-1, 0, 2)] {
+                let mut typed = build(0);
+                typed
+                    .set_input("offset", InputValue::Integer(offset))
+                    .unwrap();
+                for mut study in [build(offset), typed] {
+                    study.calculate(&bars);
+                    if study.name() == "Donchian" {
+                        let fills = study.fills();
+                        assert_eq!(fills.len(), 1);
+                        assert!(matches!(
+                            fills[0].first,
+                            crate::studies::FillBoundary::Plot(1)
+                        ));
+                        assert!(matches!(
+                            fills[0].second,
+                            crate::studies::FillBoundary::Plot(2)
+                        ));
+                        assert_eq!(
+                            fills[0].color,
+                            Color32::from_rgba_unmultiplied(33, 150, 243, 13)
+                        );
+                    }
+                    for line in 0..3 {
+                        assert_eq!(study.plot_offset(line), offset as isize);
+                    }
+                    assert_eq!(study.plot_value(upper, first), Some(3.0));
+                    assert_eq!(study.plot_value(middle, last), Some(3.0));
+                    assert_eq!(study.plot_value(lower, first), Some(0.0));
+                    assert_eq!(study.plot_value(lower, last), Some(1.0));
+                    // Bar 0 has no value at offset 5, and no bar 6 exists at offset -1.
+                    assert_eq!(study.plot_value(upper, 5), None);
+                }
+            }
+        }
     }
 }

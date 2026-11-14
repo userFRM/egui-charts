@@ -40,7 +40,7 @@ impl HMA {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            color: palette::DEEP_PURPLE, // Deep Purple
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }
@@ -55,7 +55,7 @@ impl HMA {
 /// Construct with the conventional default parameters.
 impl Default for HMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

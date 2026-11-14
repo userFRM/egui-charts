@@ -40,42 +40,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_point_on_segment() {
+    fn distance_projects_onto_the_segment_and_clamps_to_its_endpoints() {
         let start = Pos2::new(0.0, 0.0);
         let end = Pos2::new(10.0, 0.0);
-        let point = Pos2::new(5.0, 0.0);
-
-        let dist = point_to_segment_distance(point, start, end);
-        assert!(dist < 0.001);
-    }
-
-    #[test]
-    fn test_point_perpendicular_to_segment() {
-        let start = Pos2::new(0.0, 0.0);
-        let end = Pos2::new(10.0, 0.0);
-        let point = Pos2::new(5.0, 3.0);
-
-        let dist = point_to_segment_distance(point, start, end);
-        assert!((dist - 3.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_point_beyond_segment_start() {
-        let start = Pos2::new(0.0, 0.0);
-        let end = Pos2::new(10.0, 0.0);
-        let point = Pos2::new(-3.0, 0.0);
-
-        let dist = point_to_segment_distance(point, start, end);
-        assert!((dist - 3.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_point_beyond_segment_end() {
-        let start = Pos2::new(0.0, 0.0);
-        let end = Pos2::new(10.0, 0.0);
-        let point = Pos2::new(13.0, 0.0);
-
-        let dist = point_to_segment_distance(point, start, end);
-        assert!((dist - 3.0).abs() < 0.001);
+        for (point, expected) in [
+            (Pos2::new(5.0, 0.0), 0.0),
+            (Pos2::new(5.0, 3.0), 3.0),
+            (Pos2::new(-3.0, 0.0), 3.0),
+            (Pos2::new(13.0, 0.0), 3.0),
+        ] {
+            assert!(
+                (point_to_segment_distance(point, start, end) - expected).abs() < 0.001,
+                "{point:?}"
+            );
+        }
     }
 }

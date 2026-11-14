@@ -31,14 +31,18 @@ pub mod registry;
 pub mod rendering;
 pub mod repositories;
 pub mod services;
-mod validation;
+pub(crate) mod validation;
 
 // Re-export domain types at module root for convenience
 pub use domain::{
-    ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
-    DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, GannFanDirection,
-    GhostCandle, GhostFeedConfig, HandlePos, ParseToolTypeError, PitchforkConfig, PitchforkLevel,
-    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
+    ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, Drawing, DrawingInteractionMode,
+    DrawingOptions, DrawingTemplate, DrawingToolType, ElliottDegree, FibonacciConfig,
+    FibonacciLevel, FolderSync, FontWeight, GannConfig, GannFanDirection, GannLevel, GhostCandle,
+    GhostFeedConfig, HandlePos, ImageConfig, LineMeasurementPosition, LineMeasurements,
+    LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign, NoteTextStyle,
+    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionReadout, PositionSize,
+    PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility, VwapBand,
+    VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
 };
 
 // Re-export manager types

@@ -10,12 +10,13 @@ use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     DrawingContextMenuAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    StudyContextMenuAction,
+    LocalCopiesDialog, StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
 use egui_charts::ui::drawing_toolbar::{
     DrawingToolbar, DrawingToolbarAction, DrawingToolbarDomainState, MagnetType,
 };
+use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem, show_data_window,
 };
@@ -45,8 +46,11 @@ fn study_from_tree_id(id: usize) -> Option<SeriesId> {
 #[derive(Default)]
 pub(super) struct State {
     toolbar: DrawingToolbar,
+    selection_toolbar: FloatingSelectionToolbar,
     object_tree: ObjectTreePanel,
     properties: DrawingPropertiesDialog,
+    /// The copies of the active chart's drawings that the user kept in a conflict.
+    local_copies: LocalCopiesDialog,
     /// Whether the data window is folded in its own panel.
     data_window_folded: bool,
     /// The last pointer position a chart reported, with its slot, which the data window reads
@@ -79,9 +83,45 @@ impl Terminal {
         match region {
             Region::Left => self.show_drawing_toolbar(ui),
             Region::Right => self.show_drawings_panel(ui),
-            Region::Chart => self.read_crosshair(ui.ctx()),
-            Region::Windows => self.show_drawing_properties(ui.ctx()),
+            Region::Chart => {
+                self.read_crosshair(ui.ctx());
+                self.forward_image_requests();
+            }
+            Region::Windows => {
+                if !self.keyboard_dialog_open()
+                    && let Some(action) = self
+                        .drawings
+                        .selection_toolbar
+                        .show_and_apply(ui, &mut self.charts[self.active])
+                {
+                    self.emit(Action::ChartMenu(ChartContextAction::Drawing(action)));
+                }
+                self.show_drawing_properties(ui.ctx());
+                self.drawings
+                    .local_copies
+                    .show(ui.ctx(), &mut self.charts[self.active]);
+            }
             Region::Top | Region::Bottom => {}
+        }
+    }
+
+    fn forward_image_requests(&mut self) {
+        let requests: Vec<_> = self
+            .chart_events
+            .iter()
+            .filter_map(|(slot, event)| {
+                if let ChartEvent::ImageRequested(request) = event {
+                    Some((*slot, request.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (slot, request) in requests {
+            // shortcut: answers target the active slot; include its id when a slot-addressed
+            // chart accessor exists.
+            self.activate_slot(slot);
+            self.emit(Action::Image(request));
         }
     }
 
@@ -162,8 +202,10 @@ impl Terminal {
                 for chart in &mut self.charts {
                     chart.drawings_mut().tool_defaults = defaults.iter().cloned().collect();
                 }
+                self.drawings.toolbar.state.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
             }
             Direction::Save => {
+                settings.magnet_hint_dismissed = self.drawings.toolbar.state.magnet_hint_dismissed;
                 settings.drawing_defaults = self
                     .chart()
                     .drawings()
@@ -182,7 +224,15 @@ impl Terminal {
     }
 
     pub(super) fn drawings_modal(&self) -> bool {
-        self.drawings.properties.is_open
+        self.drawings.properties.is_open || self.drawings.local_copies.is_open()
+    }
+
+    /// Offers the copies kept of the drawings of `symbol`, if the active chart shows it.
+    pub(super) fn offer_local_copies(&mut self, symbol: &str) {
+        let chart = &mut self.charts[self.active];
+        if chart.symbol() == symbol {
+            self.drawings.local_copies.open(chart);
+        }
     }
 
     /// Shows the drawing toolbar in line with the active chart and queues what it emitted.
@@ -194,16 +244,13 @@ impl Terminal {
         }
         toolbar.state.has_zoom_history = chart.state().has_zoom_history();
         let manager = chart.drawings();
-        let magnet_type = if !manager.options.strong_magnet {
-            MagnetType::Weak
-        } else if toolbar.state.magnet_type == MagnetType::OHLC {
-            // OHLC is an alias of strong snapping; retain the user's menu choice.
-            MagnetType::OHLC
-        } else {
+        let magnet_type = if manager.options.strong_magnet {
             MagnetType::Strong
+        } else {
+            MagnetType::Weak
         };
         toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
-            sel_tool: manager.active_tool,
+            sel_tool: manager.active_tool(),
             magnet_mode: manager.options.magnet_mode,
             snap_to_indicators: manager.options.snap_to_indicators,
             magnet_type,
@@ -215,9 +262,15 @@ impl Terminal {
                 CrosshairStyle::Magic => CursorType::Magic,
                 _ => CursorType::Cross,
             },
-            eraser_mode_enabled: manager.eraser_mode,
+            eraser_mode_enabled: manager.is_eraser_mode(),
             stay_in_drawing_mode: manager.stay_in_drawing_mode,
-            drawing_color: manager.options.default_color,
+            // The swatch shows the colour the active tool draws in, its saved default or its own.
+            drawing_color: manager
+                .new_drawing(
+                    0,
+                    manager.active_tool().unwrap_or(DrawingToolType::TrendLine),
+                )
+                .color,
         });
         let drawings = &manager.drawings;
         toolbar.state.lock_all = !drawings.is_empty() && drawings.iter().all(|d| d.locked);
@@ -294,7 +347,7 @@ impl Terminal {
             }
             DrawingToolbarAction::ToggleValuesTooltip => chart.set_tooltip_enabled(values_tooltip),
             DrawingToolbarAction::SelectTool(tool) => {
-                chart.drawings_mut().set_active_tool(Some(tool))
+                chart.drawings_mut().set_active_tool(Some(tool));
             }
             DrawingToolbarAction::ToggleMagnet => {
                 let manager = chart.drawings_mut();
@@ -320,7 +373,7 @@ impl Terminal {
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let manager = chart.drawings_mut();
-                let on = !manager.eraser_mode;
+                let on = !manager.is_eraser_mode();
                 manager.set_eraser_mode(on);
             }
             DrawingToolbarAction::ToggleStayInDrawingMode => {
@@ -328,7 +381,45 @@ impl Terminal {
                 manager.stay_in_drawing_mode = !manager.stay_in_drawing_mode;
             }
             DrawingToolbarAction::ColorChanged(rgba) => {
-                chart.drawings_mut().options.default_color = rgba;
+                // The colour becomes the active tool's saved default; other tools keep theirs.
+                let manager = chart.drawings_mut();
+                if let Some(tool) = manager.active_tool() {
+                    let saved = manager.new_drawing(0, tool);
+                    let mut drawing = saved.clone();
+                    drawing.set_line_color(rgba);
+                    // The saved default carries earlier picks, so a fill or level the tool does not
+                    // tint from its line (read from the tool's own style) may share the line's RGB
+                    // and be retinted; each pick leaves those as they were.
+                    let own = egui_charts::drawings::Drawing::new(0, tool);
+                    if own
+                        .fill_color
+                        .is_some_and(|fill| fill[..3] != own.color[..3])
+                    {
+                        drawing.fill_color = saved.fill_color;
+                    }
+                    if own
+                        .border_color
+                        .is_some_and(|border| border[..3] != own.color[..3])
+                    {
+                        drawing.border_color = saved.border_color;
+                    }
+                    if let (Some(own_levels), Some(before), Some(after)) =
+                        (&own.pitchfork, &saved.pitchfork, &mut drawing.pitchfork)
+                    {
+                        for (level, kept) in after.levels.iter_mut().zip(&before.levels) {
+                            if own_levels
+                                .levels
+                                .iter()
+                                .any(|l| l.value == level.value && l.color[..3] != own.color[..3])
+                            {
+                                level.color = kept.color;
+                            }
+                        }
+                    }
+                    manager
+                        .tool_defaults
+                        .insert(tool, DrawingTemplate::from_drawing(&drawing));
+                }
             }
             DrawingToolbarAction::ClearAllDrawings | DrawingToolbarAction::RemoveAllDrawings => {
                 chart.drawings_mut().clear_all();
@@ -349,7 +440,7 @@ impl Terminal {
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 let manager = chart.drawings_mut();
                 manager.start_icon_insertion(icon_name.to_string());
-                if let Some(drawing) = &mut manager.curr_drawing {
+                if let Some(drawing) = manager.curr_drawing_mut() {
                     drawing.font_size = size;
                 }
             }
@@ -357,6 +448,20 @@ impl Terminal {
                 chart
                     .drawings_mut()
                     .start_icon_insertion(icon_name.to_string());
+            }
+            DrawingToolbarAction::HideAll => {
+                chart.drawings_mut().set_visibility_all(false);
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.set_indicator_visible(id, false);
+                }
+            }
+            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
+                chart.drawings_mut().clear_all();
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.remove_series(id);
+                }
             }
             // Zoom and the actions of other groups never get here.
             _ => {}
@@ -371,6 +476,25 @@ impl Terminal {
         match action {
             DrawingContextMenuAction::Edit => self.open_drawing_properties(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
+            DrawingContextMenuAction::Copy => match self.chart().copy_selected_drawings() {
+                Ok(Some(text)) => self.copy_text(text),
+                Ok(None) => {}
+                Err(error) => self
+                    .toasts
+                    .error(format!("Could not copy drawings: {error}")),
+            },
+            DrawingContextMenuAction::BringForward | DrawingContextMenuAction::SendBackward => {
+                let action = if action == DrawingContextMenuAction::BringForward {
+                    ObjectTreeAction::MoveUp(id)
+                } else {
+                    ObjectTreeAction::MoveDown(id)
+                };
+                self.drawings.object_tree.apply_to_chart(
+                    &mut self.charts[self.active],
+                    &action,
+                    &[],
+                );
+            }
             action => {
                 let chart = self.chart_mut();
                 let manager = chart.drawings_mut();
@@ -393,7 +517,7 @@ impl Terminal {
         }
     }
 
-    fn open_drawing_properties(&mut self, id: usize) {
+    pub(super) fn open_drawing_properties(&mut self, id: usize) {
         self.drawings
             .properties
             .open_for_chart(&self.charts[self.active], DrawingId(id));
@@ -509,7 +633,7 @@ impl Terminal {
             .with_timestamp(chart.format_time(bar.time))
             .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
         info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info
+        info.with_chart_formatters(chart)
     }
 
     /// Follows the active chart's crosshair, which the data window drawn before the chart reads.
@@ -603,6 +727,60 @@ mod tests {
         terminal
     }
 
+    /// The host receives the Image request after placement on the active chart.
+    #[test]
+    fn image_requests_are_forwarded_to_the_host() {
+        let mut terminal = ready();
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::Image));
+        let p = terminal.chart().get_rendered_price_rect().center();
+        let ctx = terminal.ctx.clone().unwrap();
+        let mut actions = Vec::new();
+        for events in [
+            vec![Event::PointerMoved(p)],
+            vec![Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                events,
+                ..Default::default()
+            };
+            // Opening the inline editor can request another pass; the host handles each pass.
+            ctx.run_ui(raw, |ui| actions.extend(terminal.show(ui)))
+                .drop_without_applying_deltas();
+        }
+        let requests: Vec<_> = actions
+            .into_iter()
+            .filter_map(|action| {
+                if let Action::Image(request) = action {
+                    Some(request)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].drawing,
+            terminal.chart().drawings().drawings[0].id
+        );
+        assert!(requests[0].file.is_none());
+    }
+
     fn line(id: usize) -> Drawing {
         let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
         drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
@@ -614,6 +792,352 @@ mod tests {
         assert!(terminal.run(Action::DrawingToolbar(action)).is_none());
     }
 
+    /// A new tool's fill follows toolbar colours at its own opacity, except independent fills.
+    #[test]
+    fn toolbar_colour_tints_the_default_fill() {
+        let mut terminal = ready();
+        let host = [70, 80, 90, 255];
+        let picked = [10, 200, 30, 220];
+        for (tool, fill) in [
+            (DrawingToolType::Rect, [10, 200, 30, 51]),
+            (DrawingToolType::Arc, [10, 200, 30, 51]),
+            (DrawingToolType::Polyline, [10, 200, 30, 51]),
+            (DrawingToolType::PriceRange, [10, 200, 30, 38]),
+            (DrawingToolType::Sector, [41, 98, 255, 51]),
+        ] {
+            for saved in [false, true] {
+                let manager = terminal.chart_mut().drawings_mut();
+                manager.tool_defaults.clear();
+                manager.options.default_color = Some(host);
+                manager.set_active_tool(Some(tool));
+                if saved {
+                    let mut defaults = manager.new_drawing(0, tool);
+                    defaults.stroke_width = 5.0;
+                    defaults.line_style = egui_charts::model::LineStyle::Dashed;
+                    manager
+                        .tool_defaults
+                        .insert(tool, DrawingTemplate::from_drawing(&defaults));
+                }
+                run(&mut terminal, DrawingToolbarAction::ColorChanged(picked));
+                let drawing = terminal.chart().drawings().new_drawing(1, tool);
+                assert_eq!(drawing.color, picked, "{tool:?}");
+                assert_eq!(drawing.fill_color, Some(fill), "{tool:?}");
+                assert_eq!(
+                    drawing.stroke_width,
+                    if saved {
+                        5.0
+                    } else {
+                        Drawing::new(0, tool).stroke_width
+                    }
+                );
+                assert_eq!(
+                    drawing.line_style,
+                    if saved {
+                        egui_charts::model::LineStyle::Dashed
+                    } else {
+                        egui_charts::model::LineStyle::Solid
+                    }
+                );
+                assert_eq!(terminal.chart().drawings().tool_defaults.len(), 1);
+            }
+        }
+    }
+
+    /// A toolbar pick recolours what a first pick recolours, however many came before it.
+    #[test]
+    fn repeated_toolbar_colours_keep_independent_fills_and_levels() {
+        let mut terminal = ready();
+        let indigo = [41, 98, 255, 255];
+        let red = [242, 54, 69, 255];
+        for tool in [DrawingToolType::Sector, DrawingToolType::Pitchfork] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(indigo));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            if tool == DrawingToolType::Sector {
+                assert_eq!(drawing.fill_color, Some([41, 98, 255, 51]));
+                continue;
+            }
+            let own = egui_charts::drawings::PitchforkConfig::default();
+            // The median is Red in the own style, so every level matches it after Indigo then Red.
+            for (level, own) in drawing.pitchfork.unwrap().levels.iter().zip(&own.levels) {
+                assert_eq!(level.color, own.color, "level {}", own.value);
+            }
+        }
+    }
+
+    /// A toolbar pick keeps a text box's grey border, while a price label's border still
+    /// follows its line.
+    #[test]
+    fn toolbar_colours_keep_the_text_box_border() {
+        let mut terminal = ready();
+        let grey = [112, 112, 112, 255];
+        let red = [242, 54, 69, 255];
+        // A grey pick first makes the saved default's line the border's grey; the next pick
+        // must not recolour the border with the line.
+        for tool in [DrawingToolType::TextLabel, DrawingToolType::AnchoredText] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.options.default_color = None;
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(grey));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            assert_eq!(drawing.border_color, Some(grey), "{tool:?}");
+        }
+        // The same under a grey host colour: one pick recolours the line, not the border.
+        for tool in [DrawingToolType::TextLabel, DrawingToolType::AnchoredText] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.options.default_color = Some(grey);
+            manager.set_active_tool(Some(tool));
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal.chart().drawings().new_drawing(1, tool);
+            assert_eq!(drawing.color, red, "{tool:?}");
+            assert_eq!(drawing.border_color, Some(grey), "{tool:?}");
+        }
+        // Control: a price label's border starts in the label's own colour, so a pick
+        // recolours it with the line, both when never chosen and from an older save.
+        for saved in [false, true] {
+            let manager = terminal.chart_mut().drawings_mut();
+            manager.tool_defaults.clear();
+            manager.options.default_color = None;
+            manager.set_active_tool(Some(DrawingToolType::PriceLabel));
+            if saved {
+                let mut defaults = manager.new_drawing(0, DrawingToolType::PriceLabel);
+                defaults.border_color = Some(defaults.color);
+                manager.tool_defaults.insert(
+                    DrawingToolType::PriceLabel,
+                    DrawingTemplate::from_drawing(&defaults),
+                );
+            }
+            run(&mut terminal, DrawingToolbarAction::ColorChanged(red));
+            let drawing = terminal
+                .chart()
+                .drawings()
+                .new_drawing(1, DrawingToolType::PriceLabel);
+            assert_eq!(drawing.color, red, "saved={saved}");
+            assert_eq!(
+                drawing.border_color,
+                if saved { Some(red) } else { None },
+                "saved={saved}"
+            );
+        }
+    }
+
+    /// Selecting a drawing exposes current style values, and each quick edit is undoable.
+    #[test]
+    fn selected_toolbar_styles_and_more_menu_reach_the_chart() {
+        use super::super::test_support::click;
+        let mut terminal = ready();
+        // Close the watchlist, whose symbol details have a More button of their own.
+        terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
+            RightBarIcon::Watchlist,
+        )));
+        let mut drawing = line(0);
+        // A red line, so that picking the palette blue changes it.
+        drawing.color = [242, 54, 69, 255];
+        drawing.chart_points = vec![ChartPoint::new(430.0, 180.0), ChartPoint::new(460.0, 182.0)];
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .add_synced_drawing(drawing)
+            .unwrap();
+        let id = terminal.chart().drawings().drawings[0].id;
+        terminal.chart_mut().drawings_mut().select_drawings([id]);
+        frame(&mut terminal, SIZE, vec![]);
+        let rendered_text = |terminal: &mut Terminal, value: &str| {
+            let ctx = terminal.ctx().clone();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                    time: Some(ctx.input(|i| i.time) + 0.1),
+                    ..Default::default()
+                },
+                |ui| {
+                    terminal.show(ui);
+                },
+            );
+            let position = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == value => {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .expect(value);
+            output.drop_without_applying_deltas();
+            position
+        };
+        let width = rendered_text(&mut terminal, "2 px");
+        click(&mut terminal, SIZE, width);
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            menu.text_at("4 px").expect("width choice"),
+        );
+        assert_eq!(terminal.chart().drawings().drawings[0].stroke_width, 4.0);
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(terminal.chart().drawings().drawings[0].stroke_width, 2.0);
+        assert!(!terminal.chart().can_undo(), "one undo step for the width");
+        let style = rendered_text(&mut terminal, "Solid");
+        click(&mut terminal, SIZE, style);
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            menu.text_at("Dashed").expect("style choice"),
+        );
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].line_style,
+            egui_charts::model::LineStyle::Dashed
+        );
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].line_style,
+            egui_charts::model::LineStyle::Solid
+        );
+        assert!(!terminal.chart().can_undo(), "one undo step for the style");
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            shown.text_at("#F23645").expect("current line colour"),
+        );
+        let palette = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            palette.text_at("#2962FF").expect("palette colour"),
+        );
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].color,
+            [41, 98, 255, 255]
+        );
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(
+            terminal.chart().drawings().drawings[0].color,
+            [242, 54, 69, 255]
+        );
+        assert!(!terminal.chart().can_undo(), "one undo step for the colour");
+        for (tool, filled) in [
+            (DrawingToolType::TrendLine, false),
+            (DrawingToolType::Rect, true),
+            (DrawingToolType::TextLabel, false),
+        ] {
+            let drawing = &mut terminal.chart_mut().drawings_mut().drawings[0];
+            drawing.tool_type = tool;
+            drawing.fill_color = Some([0, 255, 0, 85]);
+            let shown = frame(&mut terminal, SIZE, vec![]);
+            assert!(
+                shown.text_at("#F23645").is_some(),
+                "current colour: {tool:?}"
+            );
+            assert_eq!(
+                shown.text_at("#00FF00").is_some(),
+                filled,
+                "fill swatch: {tool:?}"
+            );
+            if tool == DrawingToolType::Rect {
+                click(&mut terminal, SIZE, shown.text_at("#00FF00").unwrap());
+                let palette = frame(&mut terminal, SIZE, vec![]);
+                click(&mut terminal, SIZE, palette.text_at("#FFFFFF").unwrap());
+                assert_eq!(
+                    terminal.chart().drawings().drawings[0].fill_color,
+                    Some([255, 255, 255, 85]),
+                    "a palette change preserves the fill's opacity"
+                );
+                assert!(terminal.chart_mut().undo());
+                assert_eq!(
+                    terminal.chart().drawings().drawings[0].fill_color,
+                    Some([0, 255, 0, 85])
+                );
+                assert!(!terminal.chart().can_undo(), "one undo step for the fill");
+            }
+        }
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        click(
+            &mut terminal,
+            SIZE,
+            shown.text_at("More").expect("drawing menu button"),
+        );
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        for label in ["Bring forward", "Send backward", "Copy", "Clone", "Hide"] {
+            assert!(menu.text_at(label).is_some(), "missing {label}");
+        }
+        terminal.chart_mut().drawings_mut().deselect();
+        let shown = frame(&mut terminal, SIZE, vec![]);
+        assert!(shown.text_at("More").is_none());
+    }
+
+    /// A double click opens geometry settings, while text tools retain their inline editor.
+    #[test]
+    fn double_click_drawings_opens_settings_except_for_inline_text() {
+        use egui::{Modifiers, PointerButton};
+        for (tool, settings) in [
+            (DrawingToolType::TrendLine, true),
+            (DrawingToolType::TextLabel, false),
+        ] {
+            let mut terminal = ready();
+            // Close the watchlist, whose symbol details have a More button of their own.
+            terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
+                RightBarIcon::Watchlist,
+            )));
+            let mut drawing = line(0);
+            drawing.tool_type = tool;
+            drawing.text = Some("Annotation".into());
+            drawing.chart_points =
+                vec![ChartPoint::new(430.0, 180.0), ChartPoint::new(460.0, 182.0)];
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(drawing)
+                .unwrap();
+            frame(&mut terminal, SIZE, vec![]);
+            let points = &terminal.chart().drawings().drawings[0].points;
+            let pos = if settings {
+                points[0].lerp(points[1], 0.5)
+            } else {
+                points[0] + egui::vec2(10.0, -5.0)
+            };
+            frame(&mut terminal, SIZE, vec![Event::PointerMoved(pos)]);
+            for _ in 0..2 {
+                // One frame per click keeps the second release within the double-click interval.
+                frame(
+                    &mut terminal,
+                    SIZE,
+                    [true, false]
+                        .map(|pressed| Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: PointerButton::Primary,
+                            modifiers: Modifiers::NONE,
+                        })
+                        .to_vec(),
+                );
+            }
+            assert_eq!(terminal.drawings_modal(), settings, "{tool:?}");
+            assert!(
+                !terminal.studies_modal(),
+                "drawing must not open series settings"
+            );
+            if settings {
+                let shown = frame(&mut terminal, SIZE, vec![]);
+                assert!(
+                    shown.text_at("More").is_none(),
+                    "the selection toolbar must not cover the properties dialog"
+                );
+            }
+        }
+    }
+
     #[test]
     fn toolbar_follows_chart_modes_and_completed_tools() {
         let mut terminal = ready();
@@ -621,7 +1145,7 @@ mod tests {
             terminal.chart().chart_options().crosshair.style,
             CrosshairStyle::Full
         );
-        // Crosshair style, magnet strength and whether the user picked the OHLC alias.
+        // Crosshair style, magnet strength.
         for (style, cursor, magnet) in [
             (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
@@ -631,7 +1155,6 @@ mod tests {
                 CursorType::Demonstration,
                 MagnetType::Strong,
             ),
-            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
         ] {
             terminal.drawings.toolbar.state.magnet_type = magnet;
             terminal.chart_mut().set_crosshair_style(style);
@@ -654,7 +1177,7 @@ mod tests {
                 f64::from,
             );
             manager.add_point_with_coords(pos2(3.0, 4.0), |x| x, f64::from);
-            assert!(manager.active_tool.is_none());
+            assert!(manager.active_tool().is_none());
             frame(&mut terminal, SIZE, vec![]);
             assert!(terminal.drawings.toolbar.state.sel_tool.is_none());
             terminal.chart_mut().drawings_mut().set_eraser_mode(true);
@@ -672,8 +1195,8 @@ mod tests {
     fn zoom_controls_leave_drawing_history_untouched() {
         let mut terminal = ready();
         let chart = terminal.chart_mut();
-        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(1)));
-        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(2)));
+        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(1)).unwrap());
+        chart.user_action(|chart| chart.drawings_mut().add_synced_drawing(line(2)).unwrap());
         terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
         let drawings = |terminal: &Terminal| {
             terminal
@@ -717,7 +1240,8 @@ mod tests {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()
@@ -783,7 +1307,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(line(7));
+            .add_synced_drawing(line(7))
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         let original = terminal.chart().drawings().drawings[0].color;
         let color = egui::Color32::from_rgba_unmultiplied(51, 102, 153, 85);
@@ -807,13 +1332,82 @@ mod tests {
     }
 
     #[test]
+    fn hide_all_and_remove_both_reach_drawings_and_studies_in_one_step() {
+        let mut terminal = ready();
+        for id in 1..=2 {
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(line(id))
+                .unwrap();
+        }
+        for period in [3, 5] {
+            terminal
+                .chart_mut()
+                .add_indicator(Box::new(SMA::new(period)));
+        }
+        // A rendered chart also has its built-in volume study.
+        let study_ids: Vec<_> = terminal.chart().indicators().map(|(id, _)| id).collect();
+        // Repeating Hide all must keep groups hidden rather than toggle them back on.
+        run(&mut terminal, DrawingToolbarAction::HideAll);
+        run(&mut terminal, DrawingToolbarAction::HideAll);
+        assert!(
+            terminal
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| !d.visible)
+        );
+        assert!(
+            terminal
+                .chart()
+                .indicators()
+                .all(|(_, study)| !study.is_visible())
+        );
+        terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
+        assert!(
+            terminal
+                .chart()
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| d.visible)
+        );
+        assert!(
+            terminal
+                .chart()
+                .indicators()
+                .all(|(_, study)| study.is_visible())
+        );
+
+        run(
+            &mut terminal,
+            DrawingToolbarAction::RemoveDrawingsAndIndicators,
+        );
+        assert!(terminal.chart().drawings().drawings.is_empty());
+        assert_eq!(terminal.chart().indicators().count(), 0);
+        terminal.run(Action::TopToolbar(TopToolbarAction::Undo));
+        assert_eq!(terminal.chart().drawings().drawings.len(), 2);
+        assert_eq!(
+            terminal
+                .chart()
+                .indicators()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            study_ids,
+        );
+    }
+
+    #[test]
     fn hide_and_lock_all_perform_the_state_the_toolbar_asks_for() {
         let mut terminal = ready();
         for id in 1..=2 {
             terminal
                 .chart_mut()
                 .drawings_mut()
-                .add_synced_drawing(line(id));
+                .add_synced_drawing(line(id))
+                .unwrap();
         }
         let ids: Vec<_> = terminal
             .chart()
@@ -919,7 +1513,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .add_synced_drawing(line(0));
+            .add_synced_drawing(line(0))
+            .unwrap();
         let id = terminal.chart().drawings().drawings[0].id;
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         let count = |terminal: &Terminal| terminal.chart().drawings().drawings.len();
@@ -937,6 +1532,59 @@ mod tests {
         assert!(!terminal.chart().drawings().drawings[0].visible);
         assert!(terminal.chart_mut().undo());
         assert!(terminal.chart().drawings().drawings[0].visible);
+        // Equal layers still move across exactly one neighbour, and undo restores every layer.
+        for copy in 1..=2 {
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .add_synced_drawing(line(copy))
+                .unwrap();
+        }
+        let ids: Vec<_> = terminal
+            .chart()
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.id)
+            .collect();
+        terminal
+            .chart_mut()
+            .drawings_mut()
+            .select_drawings([ids[1]]);
+        for drawing in &mut terminal.chart_mut().drawings_mut().drawings {
+            drawing.z_order = 0;
+        }
+        let original: Vec<_> = terminal
+            .chart()
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.z_order)
+            .collect();
+        for (action, expected) in [
+            (Draw::BringForward, vec![ids[0], ids[2], ids[1]]),
+            (Draw::SendBackward, vec![ids[1], ids[0], ids[2]]),
+        ] {
+            drawing_menu(&mut terminal, action);
+            let mut order: Vec<_> = terminal.chart().drawings().drawings.iter().collect();
+            order.sort_by_key(|d| d.z_order);
+            assert_eq!(order.iter().map(|d| d.id).collect::<Vec<_>>(), expected);
+            assert!(terminal.chart_mut().undo());
+            assert_eq!(
+                terminal
+                    .chart()
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.z_order)
+                    .collect::<Vec<_>>(),
+                original
+            );
+        }
+        terminal.chart_mut().drawings_mut().drawings.truncate(1);
+        terminal.chart_mut().drawings_mut().select_drawings([id]);
+        drawing_menu(&mut terminal, Draw::Copy);
+        assert!(terminal.ctx().output(|out| out.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text.starts_with(DRAWINGS_CLIPBOARD)))));
         // Clone duplicates the drawing; the properties dialog offers the same.
         drawing_menu(&mut terminal, Draw::Clone);
         assert_eq!(count(&terminal), 2);
@@ -976,39 +1624,72 @@ mod tests {
         // Pasting drawing text adds the copies once; other text is left for the commands group.
         terminal.chart_mut().drawings_mut().select_drawings([id]);
         let text = terminal.chart().copy_selected_drawings().unwrap().unwrap();
+        terminal.chart_mut().set_symbol("MSFT");
+        for _ in 0..8 {
+            frame(&mut terminal, SIZE, vec![]);
+        }
         let before = count(&terminal);
         let paste = |text: &str| Action::Shortcut(ShortcutRequest::PasteDrawing(text.into()));
         assert!(terminal.run(paste(&text)).is_none());
         assert_eq!(count(&terminal), before + 1);
-        assert!(terminal.run(paste("egui-charts-study\n{}")).is_some());
+        assert!(terminal.run(paste("egui-charts-study\n{}")).is_none());
         assert_eq!(count(&terminal), before + 1);
     }
 
     #[test]
-    fn drawing_defaults_per_tool_survive_a_restart() {
+    fn drawings_and_drawing_defaults_survive_a_restart() {
         use super::super::test_support::MemoryStorage;
-        let storage = Arc::new(MemoryStorage::default());
-        let mut terminal = Terminal::new(Arc::new(TestFeed))
-            .with_symbol("AAPL")
-            .with_storage(storage.clone());
-        frame(&mut terminal, SIZE, vec![]);
-        let mut template = DrawingTemplate::from_drawing(&line(0));
-        template.settings.stroke_width = 4.0;
-        terminal
-            .chart_mut()
-            .drawings_mut()
-            .tool_defaults
-            .insert(DrawingToolType::TrendLine, template);
-        drop(terminal);
-        let mut restored = Terminal::new(Arc::new(TestFeed))
-            .with_symbol("AAPL")
-            .with_storage(storage);
-        frame(&mut restored, SIZE, vec![]);
-        let defaults = &restored.chart().drawings().tool_defaults;
-        assert_eq!(defaults.len(), 1);
-        assert_eq!(
-            defaults[&DrawingToolType::TrendLine].settings.stroke_width,
-            4.0
-        );
+        // Whether the storage holds its writes until the host has waited for them.
+        for held in [false, true] {
+            let storage = Arc::new(MemoryStorage::default());
+            let mut terminal = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage.clone());
+            for _ in 0..6 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            let mut template = DrawingTemplate::from_drawing(&line(0));
+            template.settings.stroke_width = 4.0;
+            terminal
+                .chart_mut()
+                .drawings_mut()
+                .tool_defaults
+                .insert(DrawingToolType::TrendLine, template);
+            let draw = |terminal: &mut Terminal| {
+                terminal
+                    .chart_mut()
+                    .user_action(|chart| chart.drawings_mut().add_drawing(line(0)).unwrap());
+            };
+            if held {
+                // The first line's write is unanswered when the second line is drawn.
+                storage.hold();
+                draw(&mut terminal);
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            // Written when the terminal closes, with no frame after the edit.
+            draw(&mut terminal);
+            if held {
+                assert!(!terminal.flush_storage(), "a write is unanswered");
+                storage.release();
+                assert!(terminal.flush_storage());
+            }
+            drop(terminal);
+            let mut restored = Terminal::new(Arc::new(TestFeed))
+                .with_symbol("AAPL")
+                .with_storage(storage);
+            for _ in 0..6 {
+                frame(&mut restored, SIZE, vec![]);
+            }
+            assert_eq!(
+                restored.chart().drawings().drawings.len(),
+                1 + usize::from(held)
+            );
+            let defaults = &restored.chart().drawings().tool_defaults;
+            assert_eq!(defaults.len(), 1);
+            assert_eq!(
+                defaults[&DrawingToolType::TrendLine].settings.stroke_width,
+                4.0
+            );
+        }
     }
 }

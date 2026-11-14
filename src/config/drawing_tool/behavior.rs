@@ -20,6 +20,210 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the renderer paints a filled area that takes the drawing's fill colour.
+    pub fn supports_fill(&self) -> bool {
+        !matches!(
+            self,
+            Self::CrossCursor
+                | Self::DotCursor
+                | Self::ArrowCursor
+                | Self::Eraser
+                | Self::TrendLine
+                | Self::TrendAngle
+                | Self::InfoLine
+                | Self::ABCDPattern
+                | Self::ThreeDrivesPattern
+                | Self::ElliottImpulse
+                | Self::ElliottCorrection
+                | Self::ElliottTriangle
+                | Self::ElliottDoubleCombo
+                | Self::ElliottTripleCombo
+                | Self::GannFan
+                | Self::GannBox
+                | Self::GannSquare
+                | Self::GannFixed
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::CrossLine
+                | Self::FibonacciRetracement
+                | Self::FibonacciExtension
+                | Self::FibonacciTimeZones
+                | Self::TrendBasedFibTime
+                | Self::FibonacciCircles
+                | Self::FibonacciSpiral
+                | Self::FibonacciSpeedResistanceArcs
+                | Self::FibonacciWedge
+                // Forks fill their bands from their level settings.
+                | Self::Pitchfork
+                | Self::SchiffPitchfork
+                | Self::ModifiedSchiffPitchfork
+                | Self::InsidePitchfork
+                | Self::Pitchfan
+                | Self::GhostFeed
+                | Self::BarsPattern
+                | Self::LongPos
+                | Self::ShortPos
+                | Self::AnchoredVWAP
+                | Self::FixedRangeVolumeProfile
+                | Self::AnchoredVolumeProfile
+                | Self::Highlighter
+                | Self::ArrowMarker
+                | Self::Arrow
+                | Self::Path
+                | Self::CyclicLines
+                | Self::SineLine
+                // Text boxes are coloured with their background, in the Text tab.
+                | Self::TextLabel
+                | Self::AnchoredText
+                | Self::AnchoredNote
+                | Self::FontIcon
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+                | Self::Sticker
+        )
+    }
+
+    /// Whether the drawing's left and right extension flags change its geometry.
+    pub fn supports_extend(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::Rect
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::Arrow
+                | Self::ParallelChannel
+                | Self::FlatTopBottom
+                | Self::DisjointChannel
+                | Self::PriceRange
+                | Self::DateAndPriceRange
+                | Self::Pitchfork
+                | Self::SchiffPitchfork
+                | Self::ModifiedSchiffPitchfork
+                | Self::InsidePitchfork
+                | Self::RegressionTrend
+        )
+    }
+
+    /// Whether the drawing is a text annotation: its text is its content and its colour is the
+    /// text's.
+    pub(crate) fn is_text_annotation(&self) -> bool {
+        matches!(
+            self,
+            Self::TextLabel
+                | Self::AnchoredText
+                | Self::Note
+                | Self::AnchoredNote
+                | Self::Callout
+                | Self::FlagNote
+                | Self::Table
+                | Self::Tweet
+                | Self::Idea
+        )
+    }
+
+    /// Whether the renderer displays the drawing's editable text.
+    pub fn supports_text(&self) -> bool {
+        self.is_text_annotation()
+            || matches!(
+                self,
+                Self::PriceNote
+                    | Self::Comment
+                    | Self::Signpost
+                    | Self::TrendLine
+                    | Self::Ray
+                    | Self::InfoLine
+                    | Self::ExtendedLine
+                    | Self::HorizontalLine
+                    | Self::HorizontalRay
+                    | Self::VerticalLine
+                    | Self::CrossLine
+                    | Self::ParallelChannel
+                    | Self::RegressionTrend
+                    | Self::FlatTopBottom
+                    | Self::DisjointChannel
+                    | Self::Rect
+                    | Self::Circle
+                    | Self::Ellipse
+                    | Self::Arrow
+                    | Self::ArrowMarker
+                    | Self::ArrowMarkUp
+                    | Self::ArrowMarkDown
+                    | Self::ArrowMarkLeft
+                    | Self::ArrowMarkRight
+            )
+    }
+
+    /// Whether the renderer draws the drawing's line start and line end styles.
+    pub fn supports_line_ends(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::VerticalLine
+                | Self::Arrow
+                | Self::Path
+                | Self::Polyline
+        )
+    }
+
+    /// Whether the renderer draws a middle line when the drawing's middle line flag is on.
+    pub fn supports_middle_line(&self) -> bool {
+        matches!(self, Self::Rect | Self::ParallelChannel)
+    }
+
+    /// Whether the renderer shows the drawing's line measurements and midpoint.
+    pub fn supports_line_measurements(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::TrendAngle
+        )
+    }
+
+    /// Whether the drawing paints a line whose width and pattern its settings can change.
+    /// Solid marks and annotations with fixed borders or guides offer no line controls.
+    pub fn draws_line(&self) -> bool {
+        !matches!(
+            self,
+            Self::TextLabel
+                | Self::AnchoredText
+                | Self::Note
+                | Self::PriceNote
+                | Self::AnchoredNote
+                | Self::Table
+                | Self::Comment
+                | Self::PriceLabel
+                | Self::Signpost
+                | Self::FlagNote
+                | Self::ArrowMarker
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+        )
+    }
+
+    /// Whether a double click edits the drawing's text in place instead of opening its settings.
+    pub fn edits_text_inline(&self) -> bool {
+        self.is_text_annotation()
+            || matches!(
+                self,
+                Self::Image | Self::PriceNote | Self::Comment | Self::Signpost
+            )
+    }
+
     /// Returns the [`DrawingInteractionMode`] that governs how mouse input is
     /// captured when creating a drawing of this type.
     ///
@@ -40,7 +244,6 @@ impl DrawingToolType {
             | Self::HorizontalRay
             | Self::TextLabel
             | Self::AnchoredText
-            | Self::Note
             | Self::AnchoredNote
             | Self::PriceLabel
             | Self::FlagNote
@@ -53,7 +256,6 @@ impl DrawingToolType {
             | Self::AnchoredVolumeProfile
             | Self::Table
             | Self::Comment
-            | Self::Signpost
             | Self::FontIcon
             | Self::Image
             | Self::Tweet
@@ -122,11 +324,13 @@ impl DrawingToolType {
             | Self::ElliottTriangle
             | Self::ElliottDoubleCombo
             | Self::ElliottTripleCombo
-            | Self::BarsPattern
             | Self::GhostFeed => DrawingInteractionMode::MultiPoint,
 
             // Click-click tools
-            Self::ArrowMarker
+            Self::BarsPattern
+            | Self::ArrowMarker
+            | Self::Note
+            | Self::Signpost
             | Self::PriceNote
             | Self::TrendLine
             | Self::Ray
@@ -146,16 +350,16 @@ impl DrawingToolType {
             Self::ParallelChannel
             | Self::RotatedRect
             | Self::FibonacciWedge
+            | Self::Pitchfork
+            | Self::SchiffPitchfork
+            | Self::ModifiedSchiffPitchfork
+            | Self::InsidePitchfork
             | Self::Pitchfan
             | Self::Sector => 3,
             Self::DoubleCurve => 4,
             Self::Triangle
             | Self::FlatTopBottom
             | Self::DisjointChannel
-            | Self::Pitchfork
-            | Self::SchiffPitchfork
-            | Self::ModifiedSchiffPitchfork
-            | Self::InsidePitchfork
             | Self::Polyline
             | Self::Path
             | Self::GhostFeed
@@ -170,20 +374,24 @@ impl DrawingToolType {
             | Self::ElliottDoubleCombo
             | Self::ElliottTripleCombo => 1,
             Self::ElliottTriangle => 6,
+            // Saved before the label had its own anchor.
+            Self::Note | Self::Signpost => 1,
             _ if self.interaction_mode() == DrawingInteractionMode::SingleClick => 1,
             _ => 2,
         }
     }
 
-    /// Returns the number of `ChartPoint`s
-    /// required to complete a drawing of this type, or `None` for tools with
-    /// no fixed point count (`Polyline`, `Brush`, cursors).
+    /// Returns the number of points placed to complete a drawing of this type, or `None` for
+    /// tools with no fixed count (`Polyline`, `Path`, `Brush`, cursors). Some tools store more
+    /// anchors than they are placed with: a long or short position adds its target and stop,
+    /// three anchors in all, and a curve and a double curve add their controls between their
+    /// ends, three and four. A bars pattern adds its copy anchor, three anchors in all.
     ///
     /// | Mode | Typical count |
     /// |---|---|
     /// | `SingleClick` | 1 |
     /// | `ClickClick` / `DragToDraw` | 2 |
-    /// | `MultiPoint` | 3--7 depending on tool |
+    /// | `MultiPoint` | 2 to 7 depending on tool |
     /// | `ContinuousDraw` | `None` (unlimited) |
     /// | `NotDrawing` | `None` |
     pub fn required_points(&self) -> Option<usize> {
@@ -193,6 +401,7 @@ impl DrawingToolType {
             DrawingInteractionMode::MultiPoint => {
                 // Multi-point tools have varying requirements
                 match self {
+                    Self::Curve | Self::DoubleCurve => Some(2),
                     Self::FibonacciExtension
                     | Self::FibonacciWedge
                     | Self::TrendBasedFibTime
@@ -200,14 +409,10 @@ impl DrawingToolType {
                     | Self::Arc
                     | Self::Sector
                     | Self::RotatedRect
-                    | Self::Curve
                     | Self::ProjectionTool
                     | Self::FlatTopBottom
                     | Self::DisjointChannel
                     | Self::FibonacciChannel
-                    | Self::BarsPattern
-                    | Self::GhostFeed
-                    | Self::ElliottDoubleCombo
                     | Self::Triangle
                     | Self::ParallelChannel
                     | Self::Pitchfork
@@ -216,12 +421,14 @@ impl DrawingToolType {
                     | Self::InsidePitchfork => Some(3),
                     Self::ABCDPattern
                     | Self::ElliottCorrection
-                    | Self::TrianglePattern
-                    | Self::DoubleCurve => Some(4),
-                    Self::XABCDPattern | Self::CypherPattern | Self::ElliottTripleCombo => Some(5),
-                    Self::ElliottImpulse | Self::ElliottTriangle => Some(6),
+                    | Self::ElliottDoubleCombo
+                    | Self::TrianglePattern => Some(4),
+                    Self::XABCDPattern | Self::CypherPattern => Some(5),
+                    Self::ElliottImpulse | Self::ElliottTriangle | Self::ElliottTripleCombo => {
+                        Some(6)
+                    }
                     Self::HeadAndShoulders | Self::ThreeDrivesPattern => Some(7),
-                    // Polyline, Path have no fixed limit
+                    // Polyline, Path and Ghost Feed have no fixed limit
                     _ => None,
                 }
             }
@@ -253,20 +460,24 @@ mod tests {
             (FlatTopBottom, DrawingInteractionMode::MultiPoint, 3),
             (DisjointChannel, DrawingInteractionMode::MultiPoint, 3),
             (FibonacciChannel, DrawingInteractionMode::MultiPoint, 3),
-            (Curve, DrawingInteractionMode::MultiPoint, 3),
-            (DoubleCurve, DrawingInteractionMode::MultiPoint, 4),
+            (Curve, DrawingInteractionMode::MultiPoint, 2),
+            (DoubleCurve, DrawingInteractionMode::MultiPoint, 2),
             (TrianglePattern, DrawingInteractionMode::MultiPoint, 4),
             (ThreeDrivesPattern, DrawingInteractionMode::MultiPoint, 7),
-            (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 3),
+            (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 4),
             (ElliottTriangle, DrawingInteractionMode::MultiPoint, 6),
-            (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 5),
+            (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 6),
+            (Note, DrawingInteractionMode::ClickClick, 2),
+            (Signpost, DrawingInteractionMode::ClickClick, 2),
             (PriceNote, DrawingInteractionMode::ClickClick, 2),
             (ArrowMarker, DrawingInteractionMode::ClickClick, 2),
             (LongPos, DrawingInteractionMode::SingleClick, 1),
             (ShortPos, DrawingInteractionMode::SingleClick, 1),
+            (GhostFeed, DrawingInteractionMode::MultiPoint, 5),
         ] {
             assert_eq!(tool.interaction_mode(), mode, "{tool:?}");
-            assert_eq!(tool.required_points(), Some(count), "{tool:?}");
+            let required = if tool == GhostFeed { None } else { Some(count) };
+            assert_eq!(tool.required_points(), required, "{tool:?}");
             let mut manager = crate::drawings::DrawingManager::new();
             manager.start_drawing_with_coords(
                 tool,
@@ -282,7 +493,46 @@ mod tests {
                     |y| 1000.0 - f64::from(y),
                 );
             }
+            if required.is_none() {
+                assert!(manager.drawings.is_empty(), "{tool:?} completed too soon");
+                manager.complete_curr_drawing();
+            }
             assert_eq!(manager.drawings.len(), 1, "{tool:?}");
+            // A curve placed by its ends stores the bend it is drawn with between them: the
+            // curve's control 0.3 of the chord to the side of its middle, the double curve's at
+            // the chord's thirds, half the chord to either side.
+            let stored: &[(f32, f64)] = match tool {
+                Curve => &[(10.0, 500.0), (90.0, 520.0), (110.0, 600.0)],
+                DoubleCurve => &[
+                    (10.0, 500.0),
+                    (280.0 / 3.0, 1450.0 / 3.0),
+                    (80.0 / 3.0, 1850.0 / 3.0),
+                    (110.0, 600.0),
+                ],
+                _ => &[],
+            };
+            if !stored.is_empty() {
+                let points = &manager.drawings[0].chart_points;
+                assert_eq!(points.len(), stored.len(), "{tool:?}");
+                for (point, &(bar, price)) in points.iter().zip(stored) {
+                    assert!(
+                        (point.bar_idx - bar).abs() < 1e-3 && (point.price - price).abs() < 1e-3,
+                        "{tool:?}: {point:?}"
+                    );
+                }
+            }
+
+            if required.is_none() {
+                assert_eq!(manager.drawings[0].chart_points.len(), count, "{tool:?}");
+            }
+            // Position and channel handles can sit away from their stored anchors;
+            // `HandleService`'s `get_handles_by_tool` covers them.
+            if matches!(
+                tool,
+                LongPos | ShortPos | ParallelChannel | FlatTopBottom | DisjointChannel
+            ) {
+                continue;
+            }
             let drawing = &manager.drawings[0];
             let handles = crate::drawings::services::DrawingInteraction::new().get_handles(drawing);
             for point in &drawing.points {

@@ -14,6 +14,9 @@ pub struct PitchforkLevel {
     pub color: [u8; 4],
     /// Stroke style of this level.
     pub line_style: LineStyle,
+    /// Stroke width in points. `None` inherits the drawing width, as older files do.
+    #[serde(default)]
+    pub width: Option<f32>,
 }
 
 /// The pitchfork's level lines and the fill between adjacent levels.
@@ -28,7 +31,52 @@ pub struct PitchforkConfig {
 }
 
 impl Default for PitchforkConfig {
+    /// The median in red and nine levels in their own colours, of which 0.5 and 1 are shown,
+    /// with bands at 20%.
     fn default() -> Self {
+        use super::drawing::{BLUE, CYAN, PINK, PURPLE, RED, TEAL};
+        let level = |value, color, visible| PitchforkLevel {
+            value,
+            visible,
+            color,
+            line_style: LineStyle::Solid,
+            width: None,
+        };
+        Self {
+            levels: vec![
+                level(0.0, RED, true),
+                level(0.25, [255, 183, 77, 255], false),
+                level(0.382, [129, 199, 132, 255], false),
+                level(0.5, TEAL, true),
+                level(0.618, TEAL, false),
+                level(0.75, CYAN, false),
+                level(1.0, BLUE, true),
+                level(1.5, PURPLE, false),
+                level(1.75, PINK, false),
+                level(2.0, [247, 124, 128, 255], false),
+            ],
+            show_background: true,
+            background_opacity: 51,
+        }
+    }
+}
+
+impl PitchforkConfig {
+    /// The levels a new `tool` starts with: the defaults, with the pitchfan's 0.5 level in cyan.
+    pub(crate) fn for_tool(tool: super::DrawingToolType) -> Self {
+        let mut config = Self::default();
+        if tool == super::DrawingToolType::Pitchfan {
+            let half = config.levels.iter_mut().find(|level| level.value == 0.5);
+            if let Some(level) = half {
+                level.color = super::drawing::CYAN;
+            }
+        }
+        config
+    }
+
+    /// The levels of pitchforks saved without a config: 0, 0.5, 1 and 1.5, all shown, with
+    /// faint bands. Renderers draw them in the drawing colour.
+    pub(crate) fn legacy() -> Self {
         Self {
             levels: [0.0, 0.5, 1.0, 1.5]
                 .map(|value| PitchforkLevel {
@@ -36,6 +84,7 @@ impl Default for PitchforkConfig {
                     visible: true,
                     color: [33, 150, 243, 255],
                     line_style: LineStyle::Solid,
+                    width: None,
                 })
                 .to_vec(),
             show_background: true,

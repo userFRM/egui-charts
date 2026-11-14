@@ -43,7 +43,7 @@ where
         return None;
     }
 
-    if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
+    if let Some(bar_idx) = crate::chart::rendering::volume_profile::hit_profile(
         click_pos,
         indicator,
         coords,
@@ -103,13 +103,14 @@ where
             .map(|_| coords.x_to_idx(click_pos.x));
     }
     let mut plot = indicator.plot_style(line_idx);
+    let bar_spacing = coords.bar_spacing_for_width();
     if !indicator.candles().is_empty() {
         return indicator
             .candles()
             .iter()
             .filter(|candle| candle.plot == line_idx)
             .find_map(|candle| {
-                let (body, wick) = candle_geometry(candle, coords, &value_to_y)?;
+                let (body, wick) = candle_geometry(candle, coords, bar_spacing, &value_to_y)?;
                 (body.expand(HIT_TOLERANCE).contains(click_pos)
                     || point_to_segment_distance(click_pos, wick[0], wick[1])
                         <= HIT_TOLERANCE + plot.width * 0.5)
@@ -125,8 +126,13 @@ where
         .iter()
         .filter(|zone| zone.plot == line_idx)
         .find(|zone| {
-            zone_rect(zone, coords, &value_to_y)
-                .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
+            zone_rect(
+                zone,
+                indicator.zones_cover_whole_bars(),
+                coords,
+                &value_to_y,
+            )
+            .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
         })
     {
         return Some(
@@ -149,10 +155,10 @@ where
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
     {
-        plot.width = coords.bar_spacing * 0.8;
+        plot.width = bar_spacing * 0.8;
     }
     // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
-    let reach = HIT_TOLERANCE + plot.width + coords.bar_spacing;
+    let reach = HIT_TOLERANCE + plot.width + bar_spacing;
     let start = visible_range
         .start
         .max(coords.x_to_idx(click_pos.x - reach).saturating_sub(1));
@@ -169,7 +175,7 @@ where
             continue;
         }
         let hit = match plot.plot_type {
-            PlotType::BackgroundColor => (click_pos.x - point.x).abs() <= coords.bar_spacing * 0.5,
+            PlotType::BackgroundColor => (click_pos.x - point.x).abs() <= bar_spacing * 0.5,
             PlotType::BarColor => false,
             PlotType::Histogram | PlotType::Columns => {
                 let baseline = value_to_y(0.0);
@@ -243,7 +249,7 @@ pub fn hit_test_pane_indicator(
     coords: &ChartMapping,
 ) -> Option<IndicatorHitResult> {
     let mapped = matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
-        .then(|| crate::chart::renderers::study_mapping(indicator, coords));
+        .then(|| crate::chart::rendering::study_mapping(indicator, coords));
     let coords = mapped.as_ref().unwrap_or(coords);
     // Only test non-overlay indicators
     if indicator.is_overlay() || !indicator.is_visible() {
@@ -255,7 +261,7 @@ pub fn hit_test_pane_indicator(
         return None;
     }
 
-    if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
+    if let Some(bar_idx) = crate::chart::rendering::volume_profile::hit_profile(
         click_pos,
         indicator,
         coords,

@@ -7,33 +7,30 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use egui::text::{LayoutJob, TextFormat};
+use egui::text::LayoutJob;
 use egui::{
-    Align, Align2, Color32, EventFilter, FontId, Key, Label, Layout, Modifiers, RichText, Sense,
-    Shape, Stroke, TextStyle, Ui, pos2, vec2,
+    Align, Align2, EventFilter, Key, Label, Layout, Modifiers, RichText, Sense, Shape, Stroke,
+    TextStyle, Ui, pos2, vec2,
 };
 
 use super::market_details::WatchlistDetails;
-use super::object_tree::price_decimals;
 use super::symbol_details::detail_section;
+use super::{HEADER_HEIGHT, grouped, price_decimals, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::Quote;
-use crate::scales::{CurrencyFormatter, PriceFormatter, StudyFormat};
+use crate::painting::symbol_mark::paint_symbol_mark;
+use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::ThemeExt;
 use crate::ui::share_controls::ShareControls;
 use crate::ui_kit::{EmptyState, IconButton};
 
-/// Height shared by market data rows.
-pub(super) const ROW_HEIGHT: f32 = 26.0;
 /// Height of a watchlist row, which fits its symbol mark.
 const LIST_ROW_HEIGHT: f32 = 30.0;
 /// Diameter of a symbol's mark.
 const MARK_SIZE: f32 = 18.0;
-/// Height of a panel header row, which fits its title and action buttons.
-pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
 pub use crate::model::{Watchlist, WatchlistFlag, WatchlistItem};
 
@@ -311,8 +308,8 @@ impl WatchlistPanel {
         self.decimals.insert(symbol.to_owned(), decimals);
     }
 
-    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, the
-    /// row shows the symbol's first letter on a neutral disc.
+    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, or while
+    /// it loads or cannot be read, the row shows the symbol's first letter or digit on a neutral disc.
     pub fn set_mark(&mut self, symbol: &str, mark: egui::ImageSource<'static>) {
         self.marks.insert(symbol.to_owned(), mark);
     }
@@ -721,7 +718,7 @@ impl WatchlistPanel {
                 align,
                 l10n::text(ui.ctx(), label),
                 font.clone(),
-                theme.ui.text_secondary,
+                theme.ui.text_muted,
             );
             if let Some((sorted, descending)) = *sort
                 && sorted == column
@@ -740,7 +737,7 @@ impl WatchlistPanel {
                         pos2(x + 3.5, y + base),
                         pos2(x, y + tip),
                     ],
-                    theme.ui.text_secondary,
+                    theme.ui.text_muted,
                     Stroke::NONE,
                 ));
             }
@@ -925,25 +922,12 @@ impl WatchlistPanel {
                                 pos2(cells[0].left(), rect.center().y - MARK_SIZE / 2.0),
                                 vec2(MARK_SIZE, MARK_SIZE),
                             );
-                            match marks.get(symbol.as_str()) {
-                                Some(source) => egui::Image::new(source.clone())
-                                    .corner_radius(MARK_SIZE / 2.0)
-                                    .paint_at(ui, mark),
-                                None => {
-                                    painter.circle_filled(
-                                        mark.center(),
-                                        MARK_SIZE / 2.0,
-                                        theme.ui.text_disabled,
-                                    );
-                                    painter.text(
-                                        mark.center(),
-                                        Align2::CENTER_CENTER,
-                                        symbol.chars().next().unwrap_or(' ').to_uppercase(),
-                                        FontId::proportional(MARK_SIZE / 2.0),
-                                        Color32::WHITE,
-                                    );
-                                }
-                            }
+                            paint_symbol_mark(
+                                &painter,
+                                mark,
+                                symbol,
+                                marks.get(symbol.as_str()).cloned(),
+                            );
                             ui.new_child(
                                 egui::UiBuilder::new()
                                     .max_rect(cells[0].with_min_x(mark.right() + 6.0))
@@ -1077,31 +1061,6 @@ impl WatchlistPanel {
         }
         action
     }
-}
-
-/// Text in the bundled face at `weight`, such as 700 for bold.
-pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
-    let mut format = TextFormat::simple(FontId::proportional(size), color);
-    format.coords.push("wght", weight);
-    format
-}
-
-/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
-pub(super) fn signed(value: f64, decimals: usize) -> String {
-    let text = grouped(value, decimals);
-    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
-        format!("+{text}")
-    } else {
-        text
-    }
-}
-
-/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
-pub(super) fn grouped(value: f64, decimals: usize) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    CurrencyFormatter::new("", decimals).format(value)
 }
 
 /// Rows of the wide view's section, for the symbols in `focus`; returns the symbol the user
@@ -1317,25 +1276,6 @@ mod tests {
         WatchlistItem::Symbol {
             symbol: symbol.into(),
             flag: None,
-        }
-    }
-
-    #[test]
-    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
-        for (value, decimals, price, change) in [
-            (43237.45, 2, "43,237.45", "+43,237.45"),
-            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
-            (863.83, 2, "863.83", "+863.83"),
-            (100000.5, 1, "100,000.5", "+100,000.5"),
-            (0.000123, 6, "0.000123", "+0.000123"),
-            (-0.0, 2, "0.00", "0.00"),
-            (-0.001, 2, "0.00", "0.00"),
-            (0.001, 2, "0.00", "0.00"),
-            (f64::INFINITY, 2, "-", "-"),
-            (f64::NAN, 2, "-", "-"),
-        ] {
-            assert_eq!(grouped(value, decimals), price);
-            assert_eq!(signed(value, decimals), change);
         }
     }
 

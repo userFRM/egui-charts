@@ -154,35 +154,6 @@ mod tests {
     }
 
     #[test]
-    fn test_volume_oscillator() {
-        let mut vo = VolumeOscillator::new(3, 5);
-
-        let data = vec![
-            make_bar(1000.0),
-            make_bar(1100.0),
-            make_bar(1200.0),
-            make_bar(1300.0),
-            make_bar(1400.0),
-            make_bar(1500.0),
-            make_bar(1600.0),
-        ];
-
-        vo.calculate(&data);
-
-        assert_eq!(vo.values.len(), 7);
-
-        // Should have valid values after long period warmup
-        let valid_cnt = vo
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        assert!(valid_cnt > 0);
-    }
-
-    #[test]
     fn test_volume_oscillator_rising() {
         let mut vo = VolumeOscillator::new(2, 4);
 
@@ -198,11 +169,11 @@ mod tests {
 
         vo.calculate(&data);
 
-        // Last value should be positive (rising volume)
-        let rows = vo.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", vo.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 0.0, "Oscillator should be positive for rising volume");
+        // EMA(2) seeds at 150, then 250,350,450,550; EMA(4) seeds at 250,
+        // then 350,450. Hand percentages: 100*(450-350)/350 and 100*(550-450)/450.
+        for (bar, want) in [(4, 200.0 / 7.0), (5, 200.0 / 9.0)] {
+            let got = vo.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
     }
 }

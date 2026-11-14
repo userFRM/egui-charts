@@ -50,6 +50,7 @@ pub struct TabBar<'a, T: TabLabel> {
     tabs: &'a [T],
     active: &'a mut T,
     pills: bool,
+    single_row: bool,
 }
 
 impl<'a, T: TabLabel> TabBar<'a, T> {
@@ -59,6 +60,7 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
             tabs,
             active,
             pills: false,
+            single_row: false,
         }
     }
 
@@ -66,6 +68,12 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
     /// fit the width.
     pub fn pills(mut self) -> Self {
         self.pills = true;
+        self
+    }
+
+    /// Keep pills on one horizontally scrollable row.
+    pub(crate) fn single_row(mut self) -> Self {
+        self.single_row = true;
         self
     }
 
@@ -101,7 +109,10 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                     let fill = if is_active {
                         theme.ui.text
                     } else {
-                        theme.ui.btn_bg_hover
+                        theme
+                            .ui
+                            .panel_bg
+                            .lerp_to_gamma(theme.ui.panel_bg_secondary, 0.6)
                     };
                     ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
                 }
@@ -137,7 +148,13 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                 }
             }
         };
-        let row = if self.pills {
+        let row = if self.pills && self.single_row {
+            egui::ScrollArea::horizontal()
+                .id_salt("single_row_tabs")
+                .auto_shrink([false, true])
+                .show(ui, |ui| ui.horizontal(add_tabs))
+                .inner
+        } else if self.pills {
             ui.horizontal_wrapped(add_tabs)
         } else {
             ui.horizontal(add_tabs)

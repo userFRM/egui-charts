@@ -1,0 +1,108 @@
+---
+title: Price transforms
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/chart_types.rs?raw';
+
+Transforms derive a display from the source history. Keep feeding original bars
+through the [series lifecycle](../series.mdx#lifecycle); changing the renderer
+does not replace those bars or provide a market feed. All scenes below reuse
+the fixed OHLC history from [your first chart](../first-chart.mdx). The compiled
+setups are in [chart_types.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/chart_types.rs).
+
+## Heikin-Ashi
+
+[`ChartType::Heikin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.Heikin)
+smooths original OHLC bars. The close is `(open + high + low + close) / 4`;
+the open is the midpoint of the previous transformed open and close. The first
+open is the midpoint of the first source open and close. High/low extend to
+include the transformed body. For a first source bar `(100, 106, 98, 104)`, the
+transformed open is 102 and close is 102; the next transformed open is also 102.
+The recurrence uses full loaded history, so panning does not reseed it.
+
+<Example scene="series-heikin" title="Heikin-Ashi from original OHLC"
+  task="Pan through the smoothed candles; the history is transformed before clipping to the view."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn heikin\b[^]*?\n\}/)[0]} />
+
+Heikin-Ashi keeps the time-based axis and can also be an added series. It uses
+the candle renderer's chart colours and dimensions; see [candles and bars](/egui-charts/docs/series/candles-and-bars/).
+The original values remain available through
+[`Chart::bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.bars).
+
+## Renko
+
+[`ChartType::Renko`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.Renko)
+builds bricks from price movement. Supply the original history and set
+[`ChartTypeParams::renko_brick_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.renko_brick_size)
+in price units. Close is the default input; `renko_source` can select high/low.
+`renko_wicks` displays source extremes for the selected input. The
+[`RenkoConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/renko/struct.RenkoConfig.html)
+reference describes brick continuation and reversal rules.
+
+<Example scene="series-renko" title="Half-unit Renko bricks"
+  task="Inspect the price steps: horizontal distance counts bricks rather than elapsed minutes."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn renko\b[^]*?\n\}/)[0]} />
+
+## Point and Figure
+
+[`ChartType::PointAndFigure`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.PointAndFigure)
+builds columns of rising Xs or falling Os. Set
+[`pnf_box_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.pnf_box_size)
+and `pnf_reversal`; a box size of 0.25 and reversal count of 3 require a
+0.75 move against the column to reverse. High/low is the default input;
+`pnf_source` can select close. See
+[`PointFigureConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/point_figure/struct.PointFigureConfig.html)
+for grid and reversal rules.
+
+<Example scene="series-point-and-figure" title="Quarter-unit boxes with a three-box reversal"
+  task="Inspect X and O columns on their own element axis."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn point_and_figure\b[^]*?\n\}/)[0]} />
+
+## Kagi, Line Break and range bars
+
+These main renderers share the parameter workflow above:
+
+| Type | Source and parameters | Style and definition |
+| --- | --- | --- |
+| `Kagi` | Close by default, or `kagi_source` high/low; `kagi_reversal` in price units and `kagi_size_method` | Chart up/down colours and `styles.kagi` thick/thin widths; [`KagiConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/kagi/struct.KagiConfig.html) |
+| `LineBreak` | Close by default, or `line_break_source` high/low; `line_break_count` reversal lookback, 1 to 10 | Chart up/down colours; [`LineBreakConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/line_break/struct.LineBreakConfig.html) |
+| `Range` | Retained executions in order, or an OHLC path approximation when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
+
+[`ChartTypeParams`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html)
+holds all these fields. For high/low input, intrabar order is unknown: continuation
+takes priority over reversal and at most one direction is processed per source
+bar. OHLC range bars are an approximation; original executions give their actual path.
+See the [order-flow guide](../../../../../order-flow.md) for supplying executions.
+
+## Sizes, styles and axis restrictions
+
+Renko, Kagi, Range and Point and Figure support
+[`BoxSizeMethod`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.BoxSizeMethod.html):
+fixed price units, Wilder ATR or a percentage of the absolute latest close.
+History-derived sizes resolve from loaded history and stay frozen while bars
+stream. Reapply parameters to explicitly recalculate them. Invalid sizes or
+insufficient history produce a chart message. Use
+[`Chart::set_chart_type_params`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type_params)
+to apply a copy of the current parameters, preserving unrelated styles.
+
+Main transform colours and dimensions come from
+[`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html);
+Kagi has separate [`KagiStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.KagiStyle.html)
+stroke widths, and Renko has its wick switch. The main candle style switches
+are specific to `Candles`; they are not universal transform settings.
+
+Renko, Kagi, Line Break, Point and Figure, and Range have one time-scale slot per
+displayed element. Chart indices on those types count elements, not source bars.
+Studies, drawings and markers are drawn at the element that contains their time:
+an element covers the interval up to its completion, and a Point and Figure column
+also covers the quiet bars up to the next column. A time before the loaded
+elements or outside the source history has no slot, so nothing is drawn for it.
+Studies are calculated from the element values and keep updating. Added price
+series are drawn too: each bar is placed by its time on the element axis, at the
+slot of an element with the same completion time, between two slots in proportion
+to the time between those completions, and past either end at that end's spacing.
+Volume is hidden on these types. Returning to a time-based type restores the
+time axis of the source bars. These five types cannot be added series:
+[`SeriesOptions::chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.chart_type)
+converts them to `Line`. See [all added-series restrictions](../chart-types.mdx#added-series-restrictions).

@@ -11,6 +11,7 @@ use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
+use super::super::format_price;
 use super::types::DataWindowInfo;
 use crate::ui_kit::ext::UiExt;
 
@@ -45,7 +46,39 @@ impl DataWindowInfo {
                 );
             info.studies = chart.study_values_at(index);
         }
-        info
+        info.with_chart_formatters(chart)
+    }
+
+    /// Formats this readout's raw values with the chart's host formatters. Call after
+    /// populating OHLCV and previous close; missing hooks retain instrument formatting.
+    pub fn with_chart_formatters(mut self, chart: &crate::widget::Chart) -> Self {
+        let price_formatter = chart.series_price_formatter(crate::widget::SeriesId::MAIN);
+        let formats = chart.value_formatters(price_formatter.as_deref());
+        self.formatted_prices = formats.price.map(|formatter| {
+            [self.open, self.high, self.low, self.close].map(|value| formatter.format(value))
+        });
+        self.formatted_volume = formats
+            .volume
+            .map(|formatter| formatter.format(self.volume));
+        self.formatted_change =
+            (formats.price.is_some() || formats.percentage.is_some()).then(|| {
+                let absolute = formats.price.map_or_else(
+                    || {
+                        format!(
+                            "{:+.*}",
+                            usize::from(self.price_decimals.unwrap_or(2)),
+                            self.change
+                        )
+                    },
+                    |formatter| formatter.format_change(self.change),
+                );
+                let percentage = formats.percentage.map_or_else(
+                    || format!("{:+.2}%", self.change_percent),
+                    |formatter| formatter.format(self.change_percent),
+                );
+                format!("{absolute} ({percentage})")
+            });
+        self
     }
 }
 
@@ -146,27 +179,39 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             ui.hint_label("O");
             ui.label(l10n::text(
                 ui.ctx(),
-                format_price(data.open, data.price_decimals),
+                data.formatted_prices.as_ref().map_or_else(
+                    || format_price(data.open, data.price_decimals),
+                    |values| values[0].clone(),
+                ),
             ));
             ui.end_row();
             ui.hint_label("H");
             ui.label(l10n::text(
                 ui.ctx(),
-                format_price(data.high, data.price_decimals),
+                data.formatted_prices.as_ref().map_or_else(
+                    || format_price(data.high, data.price_decimals),
+                    |values| values[1].clone(),
+                ),
             ));
             ui.end_row();
 
             ui.hint_label("L");
             ui.label(l10n::text(
                 ui.ctx(),
-                format_price(data.low, data.price_decimals),
+                data.formatted_prices.as_ref().map_or_else(
+                    || format_price(data.low, data.price_decimals),
+                    |values| values[2].clone(),
+                ),
             ));
             ui.end_row();
             ui.hint_label("C");
             ui.label(
                 RichText::new(l10n::text(
                     ui.ctx(),
-                    format_price(data.close, data.price_decimals),
+                    data.formatted_prices.as_ref().map_or_else(
+                        || format_price(data.close, data.price_decimals),
+                        |values| values[3].clone(),
+                    ),
                 ))
                 .color(change_color),
             );
@@ -175,52 +220,34 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             ui.hint_label("Vol");
             ui.label(l10n::text(
                 ui.ctx(),
-                data.volume_precision.map_or_else(
-                    || format_volume(data.volume),
-                    |decimals| {
-                        VolumeFormatter {
-                            precision: usize::from(decimals),
-                        }
-                        .format(data.volume)
-                    },
-                ),
+                data.formatted_volume.clone().unwrap_or_else(|| {
+                    data.volume_precision.map_or_else(
+                        || format_volume(data.volume),
+                        |decimals| {
+                            VolumeFormatter {
+                                precision: usize::from(decimals),
+                            }
+                            .format(data.volume)
+                        },
+                    )
+                }),
             ));
             ui.end_row();
             ui.hint_label("Chg");
             ui.label(
-                RichText::new(format!(
-                    "{:+.*} ({:+.2}%)",
-                    usize::from(data.price_decimals.unwrap_or(2)),
-                    data.change,
-                    data.change_percent
-                ))
+                RichText::new(data.formatted_change.clone().unwrap_or_else(|| {
+                    format!(
+                        "{:+.*} ({:+.2}%)",
+                        usize::from(data.price_decimals.unwrap_or(2)),
+                        data.change,
+                        data.change_percent
+                    )
+                }))
                 .color(change_color)
                 .small(),
             );
             ui.end_row();
         });
-}
-
-/// Format price with decimals chosen by its magnitude, so a negative price
-/// keeps the decimals of the positive price of the same size
-pub(crate) fn format_price(price: f64, decimals: Option<u8>) -> String {
-    if !price.is_finite() {
-        return "\u{2014}".to_owned();
-    }
-    let decimals = decimals.unwrap_or_else(|| price_decimals(price));
-    format!("{:.*}", usize::from(decimals), price)
-}
-
-/// Decimals of a price label without instrument precision, chosen by the price's magnitude
-pub(crate) fn price_decimals(price: f64) -> u8 {
-    match price.abs() {
-        m if m >= 10000.0 => 0,
-        m if m >= 1000.0 => 1,
-        m if m >= 10.0 => 2,
-        m if m >= 1.0 => 4,
-        m if m >= 0.001 => 6,
-        _ => 8,
-    }
 }
 
 /// Format volume with K/M/B suffixes
@@ -237,50 +264,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_price() {
-        assert_eq!(format_price(0.0, None), "0.00000000");
-        assert_eq!(format_price(f64::NAN, Some(2)), "\u{2014}");
-        assert_eq!(format_price(50000.0, None), "50000");
-        assert_eq!(format_price(1234.5, None), "1234.5");
-        assert_eq!(format_price(99.99, None), "99.99");
-        assert_eq!(format_price(1.2345, None), "1.2345");
-        assert_eq!(format_price(0.001234, None), "0.001234");
-        assert_eq!(format_price(-37.63, None), "-37.63");
-        for (price, decimals, expected) in [
-            (50000.25, 2, "50000.25"),
-            (-37.625, 3, "-37.625"),
-            (0.0, 2, "0.00"),
-            (1.2345, 4, "1.2345"),
-        ] {
-            assert_eq!(format_price(price, Some(decimals)), expected);
-        }
-    }
-
-    #[test]
     fn instrument_precision_formats_prices_change_and_volume() {
-        let mut instrument = crate::model::Instrument::new("FX").with_volume_decimals(3);
-        instrument.tick_size = Some(0.00001);
-        let data = DataWindowInfo::new("FX")
-            .with_instrument(&instrument)
-            .with_ohlcv(0.0, 1.23456, 0.0, 1.23456, 1234.0)
-            .with_prev_close(1.23455);
-        assert_eq!(data.price_decimals, Some(5));
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            show_ohlcv_grid(ui, &data);
-        });
-        let texts: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.text()),
-                _ => None,
-            })
-            .collect();
-        for expected in ["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"] {
-            assert!(texts.contains(&expected), "{expected}: {texts:?}");
+        use crate::model::{Bar, BarData};
+        use crate::scales::CustomPriceFormatter;
+        use std::sync::Arc;
+        for custom in [false, true] {
+            let mut instrument = crate::model::Instrument::new("FX").with_volume_decimals(3);
+            instrument.tick_size = Some(0.00001);
+            let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(vec![
+                Bar::new(time, 1.23455, 1.23455, 1.23455, 1.23455, 0.0),
+                Bar::new(
+                    time + chrono::TimeDelta::minutes(1),
+                    0.0,
+                    1.23456,
+                    0.0,
+                    1.23456,
+                    1234.0,
+                ),
+            ]));
+            chart.set_instrument(Some(instrument));
+            if custom {
+                chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("p {value:.5}")
+                }))));
+                chart.set_percentage_formatter(Some(Arc::new(CustomPriceFormatter::new(
+                    |value| format!("pct {value:.3}"),
+                ))));
+                chart.set_volume_formatter(Some(Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("{value:.0} units")
+                }))));
+            }
+            let data = DataWindowInfo::from_chart(&chart);
+            assert_eq!(data.price_decimals, Some(5));
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show_ohlcv_grid(ui, &data);
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            // 0.00001 / 1.23455 * 100 = 0.000810... percentage points.
+            let expected = if custom {
+                [
+                    "p 0.00000",
+                    "p 1.23456",
+                    "p 0.00001 (pct 0.001)",
+                    "1234 units",
+                ]
+            } else {
+                ["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"]
+            };
+            for expected in expected {
+                assert!(
+                    texts.iter().any(|text| text == expected),
+                    "{expected}: {texts:?}"
+                );
+            }
         }
-        output.drop_without_applying_deltas();
     }
 
     #[test]

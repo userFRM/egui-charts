@@ -39,7 +39,7 @@ impl WMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }
@@ -54,7 +54,7 @@ impl WMA {
 /// Construct with the conventional default parameters.
 impl Default for WMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(9)
     }
 }
 

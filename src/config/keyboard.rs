@@ -63,7 +63,8 @@ pub enum KeyboardAction {
     MaximizeChart,
     /// Complete a multi-point drawing.
     CompleteDrawing,
-    /// Select a drawing tool.
+    /// Select a drawing tool. A horizontal, vertical or cross line is placed
+    /// at once at the pointer when the pointer is over the chart.
     DrawingTool(crate::config::DrawingToolType),
 
     // Navigation
@@ -397,6 +398,12 @@ impl KeyboardAction {
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::V)] }
             }
+            Self::DrawingTool(crate::config::DrawingToolType::CrossLine) => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::C)] }
+            }
+            Self::DrawingTool(crate::config::DrawingToolType::HorizontalRay) => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::J)] }
+            }
             Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::F)] }
             }
@@ -459,6 +466,8 @@ impl KeyboardAction {
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
+            Self::DrawingTool(crate::config::DrawingToolType::CrossLine) => "Alt+C",
+            Self::DrawingTool(crate::config::DrawingToolType::HorizontalRay) => "Alt+J",
             Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => "Alt+F",
             Self::DrawingTool(crate::config::DrawingToolType::Rect) => "Alt+Shift+R",
             _ => "",
@@ -510,7 +519,9 @@ impl KeyboardAction {
                 vec![
                     Self::DrawingTool(DrawingToolType::TrendLine),
                     Self::DrawingTool(DrawingToolType::HorizontalLine),
+                    Self::DrawingTool(DrawingToolType::HorizontalRay),
                     Self::DrawingTool(DrawingToolType::VerticalLine),
+                    Self::DrawingTool(DrawingToolType::CrossLine),
                     Self::DrawingTool(DrawingToolType::FibonacciRetracement),
                     Self::DrawingTool(DrawingToolType::Rect),
                     Self::DeleteSelectedDrawing,

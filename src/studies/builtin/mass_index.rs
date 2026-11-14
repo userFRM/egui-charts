@@ -37,7 +37,7 @@ impl MassIndex {
             sum_period: 25,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::DEEP_ORANGE,
+            color: palette::LIGHT_BLUE,
             visible: true,
         }
     }

@@ -55,6 +55,22 @@ fn pane_buttons_on_hover() -> NavigationButtons {
     NavigationButtons::OnHover
 }
 
+/// Older saved configurations show the market status, as they showed delayed and end-of-day
+/// data marks.
+fn market_status_shown() -> bool {
+    true
+}
+
+/// Layouts saved before `thousands_sep` existed group thousands like a new chart.
+fn group_thousands_with_comma() -> Option<char> {
+    Some(',')
+}
+
+/// Older saved configurations keep the one-physical-pixel grouping threshold.
+fn pixel_conflation_threshold() -> Option<f32> {
+    Some(1.0)
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -65,7 +81,7 @@ fn pane_buttons_on_hover() -> NavigationButtons {
 pub struct PriceAxisOptions {
     /// Allow value tags to overlap instead of moving them to free vertical slots.
     pub allow_label_overlap: bool,
-    /// Display study values on price axes when study values are enabled.
+    /// Display study value tags on price axes, independently of the status line values.
     pub show_study_values: bool,
     /// Study value tag colour; `None` follows each plot's colour.
     pub study_value_color: Option<Color32>,
@@ -249,6 +265,17 @@ pub struct ChartConfig {
     pub bearish_wick_color: Option<Color32>,
     /// Price source for line-based charts (Line, Area, StepLine, etc.)
     pub price_source: PriceSource,
+    /// Minimum spacing in physical pixels for unmerged main-series samples; `None` disables
+    /// conflation. The default, `Some(1.0)`, preserves the one-pixel grouping. Below the
+    /// threshold, consecutive bars form groups of the smallest power of two whose spacing
+    /// reaches it, capped at 2^30 bars. For example, 0.25 points at two pixels per point gives
+    /// groups of two at a threshold of 1, and four at a threshold of 2. Equality stays unmerged.
+    /// Non-positive and non-finite thresholds use 1. Price-based chart types stay unmerged;
+    /// gaps and per-bar colours keep their source samples even within a group.
+    /// [`Chart::prepare_conflation`](crate::Chart::prepare_conflation) prepares these groups
+    /// before rendering. Saved configurations without this field keep the default.
+    #[serde(default = "pixel_conflation_threshold")]
+    pub conflation_threshold: Option<f32>,
     /// Background color for the chart (used when background_style is Solid)
     pub background_color: Color32,
     /// Background style (Solid, VerticalGradient, HorizontalGradient)
@@ -266,6 +293,22 @@ pub struct ChartConfig {
     /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
     /// Default: None
     pub axis_font_size: Option<f32>,
+    /// Font family of this chart's price and time axis labels and tags, including study panes.
+    /// Absent named families use proportional fonts until the host installs them in
+    /// [`egui::FontDefinitions`], without changing the saved choice.
+    /// Defaults to proportional, including for saved configurations without this field.
+    #[serde(default)]
+    pub axis_font_family: egui::FontFamily,
+    /// Character that groups the thousands of the built-in price labels: the ticks and tags of
+    /// price scales, the crosshair label and the legend's prices write `42,541.77` with the
+    /// default `','`. `None` writes plain digits (`42541.77`), and so do `'.'` and the ASCII
+    /// digits, since built-in labels always write `'.'` as the decimal point. Labels written by
+    /// a host formatter ([`Chart::set_price_formatter`](crate::Chart::set_price_formatter)) are
+    /// never grouped; study panes, tooltips and volumes keep their own formats. Layouts saved
+    /// without this field restore with the default.
+    /// Default: `Some(',')`
+    #[serde(default = "group_thousands_with_comma")]
+    pub thousands_sep: Option<char>,
     /// Width of candlestick/bar bodies as a fraction of available space (0.0 to 1.0)
     pub candle_width: f32,
     /// Stroke width for candlestick wicks
@@ -302,8 +345,13 @@ pub struct ChartConfig {
     pub show_legend_volume: bool,
     /// Show host-supplied study inputs in the legend.
     pub show_indicator_inputs: bool,
-    /// Show the host's legend badge, such as the instrument logo, before the title.
+    /// Show the symbol's logo before the legend title: the legend badge, else the instrument's
+    /// logo, else the symbol's initial on a neutral disc.
     pub show_legend_badge: bool,
+    /// Show the market status after the legend title: the session's state and delayed or
+    /// end-of-day data.
+    #[serde(default = "market_status_shown")]
+    pub show_market_status: bool,
     /// Show the change of the last price from the previous session's close in the legend.
     pub show_last_day_change: bool,
     /// Opacity of the study rows' backdrop, from 0 to 1.
@@ -391,13 +439,19 @@ pub struct ChartConfig {
     pub show_extended_hours: bool,
     /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
-    /// Whether to show watermark (large symbol name overlay)
+    /// Whether to show the symbol watermark.
     pub show_watermark: bool,
-    /// Watermark text (None = use symbol name)
+    /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
+    /// interval, such as `AAPL, 1D`, which follow symbol and interval changes.
     pub watermark_text: Option<String>,
+    /// Without `watermark_text`, adds the instrument's description on a second line. Absent in
+    /// configurations saved before it existed, where it reads as `false`.
+    #[serde(default)]
+    pub watermark_description: bool,
     /// Watermark color (typically semi-transparent)
     pub watermark_color: Color32,
-    /// Watermark font size
+    /// Font size of `watermark_text`. The symbol and interval line is twice this size and the
+    /// description line 11/12 of it.
     pub watermark_font_size: f32,
     /// Watermark position
     pub watermark_pos: WatermarkPos,
@@ -453,6 +507,7 @@ impl Default for ChartConfig {
             bearish_wick_color: None,
             // Price source for line charts (default: Close)
             price_source: PriceSource::default(),
+            conflation_threshold: pixel_conflation_threshold(),
             // Dark background
             background_color: chart.bg,
             // Default to solid background
@@ -465,6 +520,8 @@ impl Default for ChartConfig {
             // Text color
             text_color: chart.axis_text,
             axis_font_size: None,
+            axis_font_family: egui::FontFamily::Proportional,
+            thousands_sep: Some(','),
             // Candle bodies leave room for the wider volume bars
             candle_width: 0.6,
             // Wick - thin crisp lines
@@ -487,8 +544,9 @@ impl Default for ChartConfig {
             show_legend_volume: true,
             show_indicator_inputs: true,
             show_legend_badge: true,
+            show_market_status: true,
             show_last_day_change: false,
-            indicator_backdrop_opacity: 1.0,
+            indicator_backdrop_opacity: 0.6,
             show_currency: true,
             show_unit: true,
             show_scale_mode_buttons: true,
@@ -536,6 +594,7 @@ impl Default for ChartConfig {
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
+            watermark_description: false,
             watermark_color: chart.grid_line,
             watermark_font_size: 48.0,
             watermark_pos: WatermarkPos::Center,
@@ -546,7 +605,8 @@ impl Default for ChartConfig {
 }
 
 impl ChartConfig {
-    /// Apply the theme's background, grid, axis text and candle colours to this configuration.
+    /// Apply the theme's background, grid, axis text, candle, session break and watermark
+    /// colours to this configuration.
     ///
     /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
     /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)
@@ -564,6 +624,64 @@ impl ChartConfig {
         self.bearish_border_color = Some(theme.chart.candle_down);
         self.bullish_wick_color = Some(theme.chart.candle_up);
         self.bearish_wick_color = Some(theme.chart.candle_down);
+        self.session_break_color = theme.chart.grid_line_major;
+        self.watermark_color = if theme.dark {
+            theme.chart.grid_line
+        } else {
+            // A cool ink: the interface text would give a neutral grey on the white plot.
+            theme
+                .chart
+                .bg
+                .lerp_to_gamma(Color32::from_rgb(10, 16, 33), 0.18)
+        };
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_axis_family_defaults_and_round_trips_host_names() {
+        let mut saved = serde_json::to_value(ChartConfig::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("axis_font_family");
+        let restored: ChartConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.axis_font_family, egui::FontFamily::Proportional);
+        for family in [
+            egui::FontFamily::Monospace,
+            egui::FontFamily::Name("Host Sans".into()),
+        ] {
+            let config = ChartConfig {
+                axis_font_family: family.clone(),
+                ..Default::default()
+            };
+            let restored: ChartConfig =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.axis_font_family, family);
+        }
+    }
+
+    #[test]
+    fn with_theme_recolours_session_breaks_and_watermark() {
+        let config = ChartConfig::default().with_theme(&Theme::light());
+        assert_eq!(config.session_break_color, Color32::from_rgb(229, 229, 229));
+        assert_eq!(config.watermark_color, Color32::from_rgb(211, 212, 215));
+    }
+
+    #[test]
+    fn saved_conflation_threshold_keeps_disabled_custom_and_legacy_modes() {
+        let mut saved = serde_json::to_value(ChartConfig::default()).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("conflation_threshold");
+        let restored: ChartConfig = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(restored.conflation_threshold, Some(1.0));
+        for threshold in [None, Some(0.5), Some(2.0)] {
+            saved["conflation_threshold"] = serde_json::to_value(threshold).unwrap();
+            let restored: ChartConfig = serde_json::from_value(saved.clone()).unwrap();
+            assert_eq!(restored.conflation_threshold, threshold);
+        }
     }
 }

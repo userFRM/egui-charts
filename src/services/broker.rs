@@ -97,6 +97,25 @@ pub trait Broker: MaybeSend + 'static {
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
+    ///
+    /// The terminal announces, with a notification and the execution sound for fills, a working
+    /// limit or stop order it has not seen on the stream, a rejected order and each execution,
+    /// when they are pushed after `connect` returned while the broker is live. What is pushed
+    /// before `connect` returns, or while the broker reports that it is not live, restates the
+    /// account and is not announced: push the current state then, before returning or between
+    /// [`FeedStatus::Connecting`] and [`FeedStatus::Live`].
+    ///
+    /// A stream starts as connected. While the connection to the broker is not live, push
+    /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
+    /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
+    /// account panel and the order ticket mark the broker and the terminal reports it as not
+    /// connected. A broker that never pushes a status counts as connected. Meanwhile the terminal
+    /// sends no order, cancellation or change: it reports the ones the user confirms as refused,
+    /// and a position order confirmed earlier that still waits for its trading rules too, and
+    /// sends none of them later. It asks for [`rules`](Self::rules) and
+    /// [`history`](Self::history) only while the broker is live, and once it is live again it asks
+    /// again for those that were on their way when it stopped being live, or that failed meanwhile
+    /// or with a [recoverable](FeedError::is_recoverable) error.
     fn connect(&self, events: Events<AccountEvent>);
 
     /// Sends `order` to the broker. The terminal calls this only after the user confirmed the
@@ -114,8 +133,8 @@ pub trait Broker: MaybeSend + 'static {
     fn cancel(&self, id: OrderId, reply: Reply<()>);
 
     /// Replaces the working order `id` with `order`, which differs in its prices or brackets,
-    /// after the user dragged one of its lines or removed a bracket, and confirmed. Called only
-    /// for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
+    /// after the user dragged one of its lines, added or removed a take profit or stop loss, and
+    /// confirmed. Called only for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
     /// once the broker accepted the change; push the changed order as an [`AccountEvent::Order`].
     /// By default every change is refused as [`FeedError::NotSupported`].
     fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
@@ -149,9 +168,19 @@ pub trait Broker: MaybeSend + 'static {
     /// [`HistoryKind`] says, oldest first, and never working orders or positions: those come only
     /// from the pushed stream. The first page of a request holds the newest entries of its range
     /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
-    /// before the previous one. Entries that were pushed live may appear again in a page: events
-    /// are compared by value, so repeat them unchanged. Answer for the account `connect` last
-    /// served; a consumer drops an answer that arrives after the account changed.
+    /// before the previous one. Entries that were pushed live may appear again in a page: an order
+    /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
+    /// account `connect` last served; a consumer drops an answer that arrives after the account
+    /// changed.
+    ///
+    /// The account panel asks once the account arrived, while the broker is live, and the user
+    /// scrolls to the end of a history: first for the range that ends one second after the oldest
+    /// entry it lists (for an order, when it closed), so that entries sharing that time are not
+    /// skipped, then for each `next` until it is `None` or the history lists 1,000 entries. After
+    /// an error, which it shows unless it is `NotSupported`, it asks for that history again only
+    /// after the next `connect`; after a [recoverable](FeedError::is_recoverable) error or one that
+    /// arrives while the broker reports that it is not live, it asks again once the broker
+    /// reports that it is live again.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
@@ -231,7 +260,8 @@ pub enum AccountEvent {
     Position(Position),
     /// One fill, drawn on charts of its order's symbol: push the order first.
     Execution(Execution),
-    /// The connection to the broker.
+    /// The connection to the broker; a stream starts as [`FeedStatus::Live`]. See
+    /// [`Broker::connect`].
     Status(FeedStatus),
     /// A change of the cash balance, for the balance history.
     Balance(BalanceChange),

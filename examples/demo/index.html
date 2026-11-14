@@ -7,9 +7,10 @@
     <script>
         // Only this key distinguishes a choice from palettes saved by earlier releases.
         try {
-            const theme = localStorage.getItem('theme_choice');
-            if (theme === 'true' || theme === 'false') {
-                document.documentElement.dataset.theme = theme === 'true' ? 'dark' : 'light';
+            const saved = localStorage.getItem('theme_choice');
+            const theme = saved === 'true' ? 'dark' : saved === 'false' ? 'light' : JSON.parse(saved);
+            if (['light', 'dark', 'high-contrast'].includes(theme)) {
+                document.documentElement.dataset.theme = theme;
             }
         } catch (_) {
             // Unreadable storage follows the system appearance.
@@ -22,6 +23,7 @@
         }
         :root[data-theme="light"] { color-scheme: light; --bg: #fff; --text: #666; --border: #ebebeb; }
         :root[data-theme="dark"] { color-scheme: dark; --bg: #000; --text: #a6a6a6; --border: #2a2a2a; }
+        :root[data-theme="high-contrast"] { color-scheme: dark; --bg: #000; --text: #fff; --border: #fff; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
         canvas { width: 100vw; height: 100vh; height: 100dvh; display: block; outline: none; }
@@ -37,6 +39,11 @@
             font-size: 16px;
             z-index: 10;
         }
+        #loading[hidden], #loading[data-failed] .spinner, #retry[hidden] { display: none; }
+        #loading { gap: 12px; padding: 24px; }
+        #loading-message { max-width: 40em; overflow-wrap: anywhere; }
+        #retry { padding: 8px 16px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+        #retry:focus-visible { outline: 2px solid #2962ff; outline-offset: 3px; }
         #loading .spinner {
             width: 28px;
             height: 28px;
@@ -44,15 +51,15 @@
             border-top-color: #2962ff;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
-            margin-right: 12px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-    <div id="loading">
+    <div id="loading" role="status" aria-live="polite" aria-busy="true">
         <div class="spinner"></div>
-        Loading egui-charts demo&hellip;
+        <span id="loading-message">Loading egui-charts demo&hellip;</span>
+        <button id="retry" type="button" hidden>Retry</button>
     </div>
     <canvas id="demo_canvas"></canvas>
     <link data-trunk rel="icon" href="../../docs/site/public/favicon.svg" />
@@ -62,20 +69,40 @@
     <link data-trunk rel="copy-file" href="LICENSE-fonts.txt" />
     <link data-trunk rel="copy-file" href="../../assets/icons/LICENSE-lucide.txt" />
     <script>
-        // Hide loading overlay once the canvas starts rendering
-        const canvas = document.getElementById('demo_canvas');
-        const observer = new MutationObserver(() => {
-            if (canvas.width > 0 && canvas.height > 0) {
-                document.getElementById('loading').style.display = 'none';
-                observer.disconnect();
+        const root = document.documentElement;
+        const loading = document.getElementById('loading');
+        const message = document.getElementById('loading-message');
+        const retry = document.getElementById('retry');
+        const updateStartup = () => {
+            const failed = root.dataset.demoState === 'error';
+            loading.hidden = root.dataset.demoState === 'ready';
+            loading.toggleAttribute('data-failed', failed);
+            loading.setAttribute('aria-busy', String(!failed && !loading.hidden));
+            retry.hidden = !failed;
+            if (failed) message.textContent = root.dataset.demoError || 'The chart could not start. Please retry.';
+        };
+        const failStartup = text => {
+            root.dataset.demoError = text;
+            root.dataset.demoState = 'error';
+            updateStartup();
+        };
+        new MutationObserver(updateStartup).observe(root, { attributes: true, attributeFilter: ['data-demo-state'] });
+        window.addEventListener('error', event => {
+            const asset = event.target;
+            if (asset !== window && ['SCRIPT', 'LINK'].includes(asset.tagName)) {
+                failStartup('A chart asset could not load. Check your connection and retry.');
+            } else if (event.error) {
+                failStartup('The chart stopped: ' + event.message);
             }
+        }, true);
+        window.addEventListener('unhandledrejection', () => {
+            failStartup('The chart could not initialize. Check your connection and graphics support, then retry.');
         });
-        observer.observe(canvas, { attributes: true });
-        // Fallback: hide after 8s regardless
-        setTimeout(() => {
-            const el = document.getElementById('loading');
-            if (el) el.style.display = 'none';
-        }, 8000);
+        document.getElementById('demo_canvas').addEventListener('webglcontextlost', () => {
+            failStartup('The graphics connection was lost. Retry to reopen the chart.');
+        });
+        retry.addEventListener('click', () => location.reload());
+        updateStartup();
     </script>
 </body>
 </html>

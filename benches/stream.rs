@@ -160,7 +160,6 @@ fn tail_updates() {
     println!("| study | bars | tick median us | append median us | incremental |");
     println!("|---|---:|---:|---:|---|");
     let mut factory = IndicatorFactory::new();
-    factory.register("C2C Vol", || Box::new(CloseToCloseVol::default()));
     factory.register("Price Channel", || Box::new(PriceChannel::default()));
     factory.register("HLC3", || Box::new(HLC3::default()));
     factory.register("HL2", || Box::new(HL2::default()));

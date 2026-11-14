@@ -99,6 +99,165 @@ pub struct PlotStyle {
     pub visible: bool,
 }
 
+/// Colour and thickness for an alternate state of a plot, such as decreasing bars.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PlotVariant {
+    /// Caption in the style editor.
+    pub name: String,
+    /// Colour in this state.
+    pub color: Color32,
+    /// Stroke width in logical pixels, from 0.5 to 10.
+    pub width: f32,
+}
+
+impl PlotVariant {
+    /// An alternate state with a one-pixel stroke.
+    pub fn new(name: impl Into<String>, color: Color32) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            width: 1.0,
+        }
+    }
+}
+
+/// Presentation of one declared band, independent of its boundary plots.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct FillStyle {
+    /// Colour when the first boundary is at least the second.
+    pub color: Color32,
+    /// Optional colour when the first boundary is below the second.
+    pub inverted_color: Option<Color32>,
+    /// Whether the band is drawn.
+    pub visible: bool,
+}
+
+impl FillStyle {
+    /// A visible band with the same colour on either side of a crossing.
+    pub fn new(color: Color32) -> Self {
+        Self {
+            color,
+            inverted_color: None,
+            visible: true,
+        }
+    }
+}
+
+/// Independent colours and visibility of a declared vertical gradient.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct GradientStyle {
+    /// Colours at the two values in the declared ramp, including their opacity.
+    pub colors: [Color32; 2],
+    /// Whether the fill is drawn, independently of its plot and guides.
+    pub visible: bool,
+}
+
+/// Editable presentation of one reference level in a study's pane, such as 70 for RSI.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct LevelStyle {
+    /// Value the level is drawn at, or `None` for the value the study declares, which can
+    /// follow its inputs.
+    pub value: Option<f64>,
+    /// Line colour.
+    pub color: Color32,
+    /// Stroke pattern.
+    pub pattern: LineStyle,
+    /// Stroke width in logical pixels, from 0.5 to 10. Older settings use one pixel.
+    #[serde(default = "default_level_width")]
+    pub width: f32,
+    /// Whether the guide stroke is drawn. A hidden boundary still bounds the fill.
+    pub visible: bool,
+    /// Draw a dotted value line independently of guide visibility. Off in older settings.
+    #[serde(default)]
+    pub price_line: bool,
+}
+
+fn default_level_width() -> f32 {
+    1.0
+}
+
+/// The levels and fill a study declares, as the defaults of its level settings.
+pub(super) fn declared_levels<S: Indicator + ?Sized>(
+    study: &S,
+) -> (Vec<LevelStyle>, bool, Color32) {
+    let pane = study.pane();
+    let levels = pane
+        .levels
+        .iter()
+        .enumerate()
+        .map(|(index, &(value, color, _))| {
+            let (pattern, width) = study.level_stroke(index, value);
+            LevelStyle {
+                value: None,
+                color,
+                pattern,
+                width,
+                visible: true,
+                price_line: study.level_price_line(index).is_some(),
+            }
+        })
+        .collect();
+    (levels, pane.fill_between_levels, study.level_fill_color())
+}
+
+/// Missing style lists inherit the study's declared presentation.
+fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
+    let (levels, fill, color) = declared_levels(study);
+    if study.name() == "Stochastic" && settings.levels.len() == 2 && levels.len() == 3 {
+        // Keep the two saved guides and the old appearance when adding the middle guide.
+        let mut middle = levels[2];
+        middle.visible = false;
+        settings.levels.push(middle);
+    } else if study.name() == "KST" && settings.levels.is_empty() && levels.len() == 1 {
+        // Saved before it had a zero guide, a KST keeps drawing none until the guide is shown.
+        let mut zero = levels[0];
+        zero.visible = false;
+        settings.levels.push(zero);
+    } else if settings.levels.len() != levels.len() {
+        settings.levels = levels;
+        settings.fill_between_levels = fill;
+        settings.level_fill_color = color;
+    }
+    settings
+        .plot_variants
+        .resize_with(study.line_count(), Vec::new);
+    for (line, variants) in settings.plot_variants.iter_mut().enumerate() {
+        let declared = study.plot_variants(line);
+        if variants.len() != declared.len() {
+            *variants = declared;
+            // Saved before this plot had alternate states, all its bars used the plot's width.
+            if let Some(plot) = settings.plots.get(line) {
+                for variant in variants.iter_mut() {
+                    variant.width = plot.width;
+                }
+            }
+        }
+    }
+    // Saved band styles are kept whatever the study declares so far, since a study can declare
+    // a band only once it has data. Bands beyond them start with the study's own style.
+    let gradients = study.gradients();
+    let saved = settings.gradients.len().min(gradients.len());
+    settings
+        .gradients
+        .extend(gradients[saved..].iter().map(|fill| GradientStyle {
+            colors: fill.colors,
+            visible: true,
+        }));
+    let fills = study.fills();
+    let saved = settings.fills.len().min(fills.len());
+    settings
+        .fills
+        .extend(fills[saved..].iter().map(|fill| FillStyle {
+            color: fill.color,
+            inverted_color: fill.inverted_color,
+            visible: true,
+        }));
+}
+
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.
 /// Ordered ranges compare nominal duration for time bars and thresholds within the same
 /// trade-based family. Other families are outside the range. `Only` matches the exact interval.
@@ -145,6 +304,17 @@ impl StudyIntervalRange {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq)]
 #[non_exhaustive]
 pub struct StudySettings {
+    /// Show values in the status line when the chart enables study values. Defaults to true.
+    #[serde(default = "enabled_by_default")]
+    pub show_legend_values: bool,
+    /// Allow user edits through settings, legend and context controls. Host APIs remain writable.
+    /// `None` keeps the permission declared by the study.
+    /// Read the effective permission through [`Indicator::user_edit_enabled`].
+    #[serde(default)]
+    pub user_edit_enabled: Option<bool>,
+    /// Help article requested through the host. None uses the underlying study's metadata.
+    #[serde(default)]
+    pub help_url: Option<String>,
     /// One style per declared output line.
     pub plots: Vec<PlotStyle>,
     /// Decimal places, or the chart's default precision.
@@ -155,6 +325,53 @@ pub struct StudySettings {
     /// every interval except those in `hidden_intervals`.
     #[serde(default)]
     pub interval_range: StudyIntervalRange,
+    /// One style per level of the study's pane, in the order of
+    /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
+    /// editable, and settings with another number of levels, take the study's own levels and fill.
+    /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
+    /// Know Sure Thing saved with none.
+    #[serde(default)]
+    pub levels: Vec<LevelStyle>,
+    /// Whether the band between the boundary levels is filled.
+    /// [`Indicator::level_fill_indices`] selects them; otherwise the outer levels are used.
+    #[serde(default)]
+    pub fill_between_levels: bool,
+    /// Colour of the band between the boundary levels.
+    #[serde(default)]
+    pub level_fill_color: Color32,
+    /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
+    /// scale while the chart shows study values; the legend still shows it. A study starts
+    /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
+    /// than four. An empty list, as in settings saved before this field, tags every plot.
+    /// Applying settings drops indices without a plot and sorts the rest.
+    #[serde(default)]
+    pub untagged_plots: Vec<usize>,
+    /// Outputs with a horizontal line at their latest value, independent of tags and displacement.
+    /// Missing latest values remove the line. Empty, including older settings, disables all.
+    #[serde(default)]
+    pub price_line_plots: Vec<usize>,
+    /// Alternate colour and width states per output. Missing states take declared defaults.
+    #[serde(default)]
+    pub plot_variants: Vec<Vec<PlotVariant>>,
+    /// Optional tint across the study's plot area, independent of its plots and bands.
+    #[serde(default)]
+    pub background: Option<Color32>,
+    /// Whether the optional pane tint is drawn. Hiding it retains its colour.
+    #[serde(default = "enabled_by_default")]
+    pub background_visible: bool,
+    /// One independent style per band returned by [`Indicator::fills`].
+    /// Missing styles take the study's declared colours and visibility. Styles of bands the study
+    /// does not declare yet are kept for when it does.
+    #[serde(default)]
+    pub fills: Vec<FillStyle>,
+    /// Independent styles for [`Indicator::gradients`], in declaration order.
+    /// Older settings inherit the study's declared ramps.
+    #[serde(default)]
+    pub gradients: Vec<GradientStyle>,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 /// An owned settings and input snapshot without calculated study data.
@@ -162,7 +379,7 @@ pub struct StudySettings {
 #[derive(Debug, Clone)]
 pub struct StudySettingsSnapshot {
     inputs: Vec<(String, InputValue)>,
-    settings: StudySettings,
+    pub(crate) settings: StudySettings,
     timeframe: Option<Timeframe>,
     colors: Vec<Color32>,
     visible: bool,
@@ -226,7 +443,7 @@ impl StudySettingsSnapshot {
     pub(super) fn restore(
         &self,
         study: &mut (impl Indicator + ?Sized),
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         let current = study.inputs();
         let inputs: Vec<_> = self
             .inputs
@@ -242,6 +459,10 @@ impl StudySettingsSnapshot {
             study.apply_settings(&inputs, self.settings.clone())?;
         }
         study.set_colors(self.colors.clone());
+        // A palette recolours the bands of a wrapped study, and the saved band styles win.
+        if study.settings().fills != self.settings.fills {
+            study.apply_settings(&[], self.settings.clone())?;
+        }
         study.set_visible(self.visible);
         if let Some(overlay) = self.overlay {
             study.set_overlay(overlay);
@@ -255,6 +476,11 @@ impl StudySettingsSnapshot {
 
 /// A study with editable presentation, used automatically by the chart.
 /// Hosts composing their own chart can wrap built-in or custom studies the same way.
+///
+/// Calculated on another interval or symbol, a study's volume profiles and zones span the chart
+/// bars that share time with their bars, its markers sit on the last such chart bar once the
+/// values on the chart reach their bar, and its labels are hidden. Its visible range is the range
+/// of its own bars that share time with the chart bars in view.
 #[derive(Clone)]
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
@@ -273,6 +499,25 @@ pub struct ConfiguredStudy {
     clock: crate::model::BarClock,
     aligned: Option<IndicatorValues>,
     aligned_bars: Vec<Option<usize>>,
+    /// For each chart bar, the bars of another interval or symbol that share its time, by which
+    /// the study's profiles, zones and markers are placed on chart bars.
+    spans: Vec<std::ops::Range<usize>>,
+    /// The chart bars in view, from `set_visible_range`.
+    visible: Option<std::ops::Range<usize>>,
+    /// The study's markers and zones on chart bars while it runs on another interval or symbol.
+    aligned_markers: Vec<super::IndicatorMarker>,
+    aligned_zones: Vec<super::StudyZone>,
+    /// The values kept on the bars that remain after the chart evicted the oldest bars, until
+    /// the study is calculated again.
+    kept: Option<Kept>,
+}
+
+/// The values a study keeps on the bars that remain after the chart evicted the oldest `shift`
+/// bars since its last calculation.
+#[derive(Clone)]
+struct Kept {
+    values: IndicatorValues,
+    shift: usize,
 }
 
 impl std::fmt::Debug for ConfiguredStudy {
@@ -294,6 +539,7 @@ impl ConfiguredStudy {
         {
             plot.visible = true;
         }
+        match_declared_styles(study.as_ref(), &mut settings);
         Self {
             study,
             settings,
@@ -311,16 +557,35 @@ impl ConfiguredStudy {
             clock: crate::model::BarClock::new(Timeframe::Min1),
             aligned: None,
             aligned_bars: Vec::new(),
+            spans: Vec::new(),
+            visible: None,
+            aligned_markers: Vec::new(),
+            aligned_zones: Vec::new(),
+            kept: None,
         }
     }
+    /// Attach a host-chosen help article to this study, retained in saved presentation.
+    pub fn with_help_url(mut self, url: impl Into<String>) -> Self {
+        self.settings.help_url = Some(url.into());
+        self
+    }
+
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
-    /// alone, without data of its own to request or the chart's trades.
+    /// alone, without data of its own to request or order flow it cannot do without.
+    /// An accepted interval stays available if calculating on it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
-        self.study.source().is_some()
-            || (self.study.data_requests().is_empty() && self.study.order_flow_input().is_none())
+        self.calculation_timeframe.is_some()
+            || self.study.source().is_some()
+            || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
+    }
+    /// The bars evicted since the study was last calculated, by which the bars of its kept values
+    /// trail those of the study.
+    fn shift(&self) -> usize {
+        self.kept.as_ref().map_or(0, |kept| kept.shift)
     }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
+        self.kept = None;
         match self.source() {
             Some(super::StudySource::Price(source)) if self.source() != self.study.source() => {
                 let values: Vec<_> = data
@@ -348,6 +613,18 @@ impl Indicator for ConfiguredStudy {
         true
     }
 
+    fn user_edit_enabled(&self) -> bool {
+        self.settings
+            .user_edit_enabled
+            .unwrap_or_else(|| self.study.user_edit_enabled())
+    }
+    fn help_url(&self) -> Option<&str> {
+        self.settings
+            .help_url
+            .as_deref()
+            .or_else(|| self.study.help_url())
+            .filter(|url| !url.trim().is_empty())
+    }
     fn name(&self) -> &str {
         self.study.name()
     }
@@ -360,9 +637,10 @@ impl Indicator for ConfiguredStudy {
     fn inputs(&self) -> Vec<super::StudyInput> {
         let mut inputs = self.study.inputs();
         if let Some(default) = self.study.source() {
-            let initial = inputs
-                .iter()
-                .find(|input| input.id == "source")
+            let own = inputs.iter().find(|input| input.id == "source");
+            // A study that names its source, where only part of it reads the source, keeps that name.
+            let label = own.map_or_else(|| "Source".into(), |input| input.label.clone());
+            let initial = own
                 .and_then(|input| match input.default {
                     InputValue::Choice(index) => crate::model::PriceSource::all()
                         .get(index)
@@ -376,7 +654,7 @@ impl Indicator for ConfiguredStudy {
             inputs.push(
                 super::StudyInput::new(
                     "source",
-                    "Source",
+                    label,
                     InputValue::Source(self.source.unwrap_or(default)),
                     super::InputKind::Source,
                 )
@@ -422,13 +700,14 @@ impl Indicator for ConfiguredStudy {
         }
         inputs
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if id == "plot_offset" && self.study.source().is_some() {
             let InputValue::Integer(offset) = value else {
-                return Err("invalid plot offset");
+                return Err(crate::studies::StudyError::invalid_input(id));
             };
             self.offset = offset;
             self.aligned = None;
+            self.kept = None;
             self.study.calculate(&[]);
             return Ok(());
         }
@@ -441,16 +720,20 @@ impl Indicator for ConfiguredStudy {
                 .inputs()
                 .into_iter()
                 .find(|input| input.id == id)
-                .ok_or("unknown study input")?;
+                .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
             if !schema.accepts(&value) {
-                return Err("invalid study data input");
+                return Err(crate::studies::StudyError::invalid_input(id));
             }
             if matches!(self.source(), Some(super::StudySource::Study { .. }))
                 && !matches!(&value, InputValue::Symbol(s) if s.is_empty())
                 && value != InputValue::Timeframe(None)
                 && id != "wait_for_close"
             {
-                return Err("a study output already follows the chart interval and symbol");
+                return Err(super::StudyError::InvalidInput {
+                    id: id.into(),
+                    reason: "must follow the chart while the source is another study's output"
+                        .into(),
+                });
             }
             match value {
                 InputValue::Symbol(value) => self.calculation_symbol = value,
@@ -458,7 +741,22 @@ impl Indicator for ConfiguredStudy {
                 InputValue::Toggle(value) => self.wait_for_close = value,
                 _ => unreachable!(),
             }
+            // The study missed the chart's interval, clock and bars in view while it ran on
+            // other bars.
+            if id != "wait_for_close"
+                && self.calculation_symbol.is_empty()
+                && self.calculation_timeframe.is_none()
+            {
+                if let Some(timeframe) = self.timeframe {
+                    self.study.set_timeframe(timeframe);
+                    self.study.set_bar_clock(&self.clock);
+                }
+                if let Some(visible) = &self.visible {
+                    self.study.set_visible_range(visible.clone());
+                }
+            }
             self.aligned = None;
+            self.kept = None;
             self.study.calculate(&[]);
             return Ok(());
         }
@@ -467,38 +765,68 @@ impl Indicator for ConfiguredStudy {
                 self.study.set_input(id, value)?;
                 self.source = None;
                 self.aligned = None;
+                self.kept = None;
                 return Ok(());
             }
             let InputValue::Source(source) = value else {
-                return Err("invalid study source");
+                return Err(crate::studies::StudyError::invalid_input(id));
             };
             if matches!(source, super::StudySource::Study { .. })
                 && (!self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some())
             {
-                return Err("a study output already follows the chart interval and symbol");
+                return Err(super::StudyError::InvalidInput {
+                    id: id.into(),
+                    reason: "cannot be another study's output while the study runs on another symbol or interval".into(),
+                });
             }
             self.source = Some(source);
             self.aligned = None;
+            self.kept = None;
             self.study.calculate(&[]);
             Ok(())
         } else {
+            let format = self.study.value_format();
             self.study.set_input(id, value)?;
+            if self.study.value_format() != format {
+                self.formatter = None;
+            }
             self.aligned = None;
+            self.kept = None;
             Ok(())
         }
     }
     fn data_requests(&self) -> Vec<super::StudyDataRequest> {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
-            vec![super::StudyDataRequest {
+            // The bars come first: `update_data` reads them from the head. The study's own
+            // metric requests (exchange rates) follow, as they are not bars of that interval.
+            let mut requests = vec![super::StudyDataRequest {
                 metric: None,
                 symbol: self.calculation_symbol.clone(),
                 timeframe: self.calculation_timeframe,
-            }]
+            }];
+            requests.extend(
+                self.study
+                    .data_requests()
+                    .into_iter()
+                    .filter(|request| request.metric.is_some()),
+            );
+            requests
         } else {
             self.study.data_requests()
         }
     }
+    fn data_start(
+        &self,
+        request: &super::StudyDataRequest,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            self.study.data_start(request)
+        } else {
+            None
+        }
+    }
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
+        self.kept = None;
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
             if self.study.data_requests().is_empty() {
                 self.update(data, from);
@@ -511,6 +839,9 @@ impl Indicator for ConfiguredStudy {
         let Some(source) = sources.iter().find(|source| &source.request == request) else {
             self.aligned = Some(IndicatorValues::missing(data.len()));
             self.aligned_bars.clear();
+            self.spans.clear();
+            self.aligned_markers.clear();
+            self.aligned_zones.clear();
             return;
         };
         self.instrument_precision = source
@@ -519,7 +850,16 @@ impl Indicator for ConfiguredStudy {
         self.study.set_instrument(source.instrument);
         self.study.set_timeframe(source.timeframe);
         self.study.set_bar_clock(&source.clock);
-        self.update_price(source.bars, 0);
+        self.spans = spans_of(data, &self.clock, source);
+        if let Some(visible) = &self.visible {
+            self.study
+                .set_visible_range(source_bars(&self.spans, visible));
+        }
+        if self.data_requests().len() > 1 {
+            self.study.update_data(source.bars, 0, sources);
+        } else {
+            self.update_price(source.bars, 0);
+        }
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
         for (at, bar) in data.iter().enumerate() {
@@ -550,9 +890,38 @@ impl Indicator for ConfiguredStudy {
             aligned.push(super::IndicatorValue::Multiple(values));
         }
         self.aligned = Some(aligned);
+        // A marker appears once the values on the chart reach its bar (Wait for interval close).
+        let shown = self.aligned_bars.iter().flatten().max().copied();
+        self.aligned_markers = self
+            .study
+            .markers()
+            .iter()
+            .filter(|marker| shown >= Some(marker.bar))
+            .filter_map(|marker| {
+                let bars = chart_bars(&self.spans, &(marker.bar..marker.bar.saturating_add(1)))?;
+                Some(super::IndicatorMarker {
+                    bar: bars.end - 1,
+                    ..*marker
+                })
+            })
+            .collect();
+        self.aligned_zones = self
+            .study
+            .zones()
+            .iter()
+            .filter_map(|zone| {
+                Some(super::StudyZone {
+                    bars: chart_bars(&self.spans, &zone.bars)?,
+                    ..zone.clone()
+                })
+            })
+            .collect();
     }
-    fn order_flow_input(&self) -> Option<crate::data::OrderFlowInput> {
-        self.study.order_flow_input()
+    fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
+        self.study.order_flow_inputs()
+    }
+    fn needs_order_flow(&self) -> bool {
+        self.study.needs_order_flow()
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -566,12 +935,31 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.kept = None;
         self.study.update_source(data, from, source);
     }
     fn is_incremental(&self) -> bool {
         self.data_requests().is_empty()
             && self.source() == self.study.source()
             && self.study.is_incremental()
+    }
+    fn remove_oldest_bars(&mut self, count: usize) -> bool {
+        // These outputs index the evicted bars too.
+        let indexed = !self.candles().is_empty()
+            || !self.zones().is_empty()
+            || !self.markers().is_empty()
+            || !self.labels().is_empty()
+            || !self.projections().is_empty()
+            || (0..self.line_count()).any(|line| self.provisional_after(line).is_some());
+        #[cfg(feature = "drawings")]
+        let indexed = indexed || !self.drawings().is_empty();
+        if indexed || self.values().len() <= count {
+            return false;
+        }
+        let shift = self.shift() + count;
+        let values = self.values().without_first(count);
+        self.kept = Some(Kept { values, shift });
+        true
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
@@ -582,6 +970,15 @@ impl Indicator for ConfiguredStudy {
             false
         }
     }
+    fn set_time_scale_events(&mut self, events: &[crate::model::TimeScaleEvent]) -> bool {
+        // A study calculated on another symbol has none of the chart's events.
+        self.study
+            .set_time_scale_events(if self.calculation_symbol.is_empty() {
+                events
+            } else {
+                &[]
+            })
+    }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.timeframe = Some(timeframe);
         self.clock = crate::model::BarClock::new(timeframe);
@@ -590,7 +987,15 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn set_visible_range(&mut self, range: std::ops::Range<usize>) -> bool {
-        self.study.set_visible_range(range)
+        self.visible = Some(range.clone());
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            return self.study.set_visible_range(range);
+        }
+        // Mapped by the spans of the last calculation; `update_data` maps it again on its bars.
+        // Without spans there is nothing to recalculate until it does.
+        self.study
+            .set_visible_range(source_bars(&self.spans, &range))
+            && !self.spans.is_empty()
     }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.clock = clock.clone();
@@ -611,7 +1016,11 @@ impl Indicator for ConfiguredStudy {
         self.study.tpo()
     }
     fn values(&self) -> &IndicatorValues {
-        self.aligned.as_ref().unwrap_or_else(|| self.study.values())
+        self.kept
+            .as_ref()
+            .map(|kept| &kept.values)
+            .or(self.aligned.as_ref())
+            .unwrap_or_else(|| self.study.values())
     }
     fn colors(&self) -> Vec<Color32> {
         self.settings.plots.iter().map(|plot| plot.color).collect()
@@ -620,6 +1029,21 @@ impl Indicator for ConfiguredStudy {
         self.study.set_colors(colors);
         for (plot, color) in self.settings.plots.iter_mut().zip(self.study.colors()) {
             plot.color = color;
+        }
+        for (line, variants) in self.settings.plot_variants.iter_mut().enumerate() {
+            for (variant, declared) in variants.iter_mut().zip(self.study.plot_variants(line)) {
+                variant.color = declared.color;
+            }
+        }
+        for (style, declared) in self.settings.fills.iter_mut().zip(self.study.fills()) {
+            style.color = declared.color;
+            style.inverted_color = declared.inverted_color;
+        }
+    }
+    fn set_color(&mut self, line: usize, color: Color32) {
+        if let Some(plot) = self.settings.plots.get_mut(line) {
+            self.study.set_color(line, color);
+            plot.color = self.study.plot_style(line).color;
         }
     }
     fn line_style(&self, line: usize) -> IndicatorLineStyle {
@@ -630,16 +1054,52 @@ impl Indicator for ConfiguredStudy {
         style
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
-        let mut plot = self
-            .settings
-            .plots
-            .get(line)
-            .copied()
-            .unwrap_or_else(|| self.study.plot_style(line));
+        let mut plot = self.settings.plots.get(line).copied().unwrap_or_else(|| {
+            let mut plot = self.study.plot_style(line);
+            let output = self.settings.plots.get(self.study.plot_output(line));
+            plot.visible &= output.is_none_or(|output| output.visible);
+            plot
+        });
         if self.study.is_volume() {
             plot.visible &= self.study.plot_style(line).visible;
         }
         plot
+    }
+    fn plot_tagged(&self, line: usize) -> bool {
+        if line < self.settings.plots.len() {
+            !self.settings.untagged_plots.contains(&line)
+        } else {
+            self.study.plot_tagged(line)
+        }
+    }
+    fn plot_price_line(&self, line: usize) -> bool {
+        self.settings.price_line_plots.contains(&line)
+    }
+    fn plot_variants(&self, line: usize) -> Vec<PlotVariant> {
+        self.settings
+            .plot_variants
+            .get(line)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn plot_variant(&self, line: usize, bar: usize) -> Option<usize> {
+        let bar = bar.checked_add(self.shift())?;
+        let bar = if self.aligned.is_some() {
+            self.aligned_bars.get(bar).copied().flatten()?
+        } else {
+            bar
+        };
+        self.study.plot_variant(line, bar)
+    }
+    fn plot_width(&self, line: usize, bar: usize) -> f32 {
+        self.plot_variant(line, bar)
+            .and_then(|variant| self.settings.plot_variants.get(line)?.get(variant))
+            .map_or_else(|| self.plot_style(line).width, |variant| variant.width)
+    }
+    fn background(&self) -> Option<Color32> {
+        self.settings
+            .background
+            .filter(|_| self.settings.background_visible)
     }
     fn plot_offset(&self, line: usize) -> isize {
         self.study
@@ -647,7 +1107,8 @@ impl Indicator for ConfiguredStudy {
             .saturating_add(self.offset as isize)
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
-        if let Some(values) = &self.aligned {
+        let kept = self.kept.as_ref().map(|kept| &kept.values);
+        if let Some(values) = kept.or(self.aligned.as_ref()) {
             values.value(
                 line,
                 bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?,
@@ -660,6 +1121,13 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if let Some(variant) = self
+            .plot_variant(line, bar)
+            .and_then(|variant| self.settings.plot_variants.get(line)?.get(variant))
+        {
+            return Some(variant.color);
+        }
+        let bar = bar.checked_add(self.shift())?;
         let bar = if self.aligned.is_some() {
             self.aligned_bars.get(bar).copied().flatten()?
         } else {
@@ -668,6 +1136,7 @@ impl Indicator for ConfiguredStudy {
         self.study.plot_color(line, bar)
     }
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        let bar = bar.checked_add(self.shift())?;
         let bar = if self.aligned.is_some() {
             self.aligned_bars.get(bar).copied().flatten()?
         } else {
@@ -676,12 +1145,45 @@ impl Indicator for ConfiguredStudy {
         self.study.plot_text(line, bar)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
-        self.study.fills()
+        self.study
+            .fills()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, mut fill)| {
+                if let Some(style) = self.settings.fills.get(index) {
+                    if !style.visible {
+                        return None;
+                    }
+                    fill.color = style.color;
+                    fill.inverted_color = style.inverted_color;
+                }
+                Some(fill)
+            })
+            .collect()
+    }
+    fn gradients(&self) -> Vec<super::StudyGradient> {
+        self.study
+            .gradients()
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut fill)| {
+                if let Some(style) = self.settings.gradients.get(index) {
+                    fill.colors = if style.visible {
+                        style.colors
+                    } else {
+                        [Color32::TRANSPARENT; 2]
+                    };
+                }
+                fill
+            })
+            .collect()
     }
     fn snapshot_settings(&self) -> StudySettingsSnapshot {
         let mut snapshot =
             StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
         snapshot.settings = self.settings.clone();
+        // As `settings` returns it, so applying unchanged settings adds no history step.
+        snapshot.settings.user_edit_enabled = Some(self.user_edit_enabled());
         snapshot.timeframe = self.timeframe;
         snapshot.overlay = self.overlay;
         snapshot.scale = self.scale;
@@ -692,11 +1194,14 @@ impl Indicator for ConfiguredStudy {
         snapshot.offset = self.offset;
         snapshot
     }
-    fn restore_settings(&mut self, snapshot: &StudySettingsSnapshot) -> Result<(), &'static str> {
+    fn restore_settings(
+        &mut self,
+        snapshot: &StudySettingsSnapshot,
+    ) -> Result<(), crate::studies::StudyError> {
         let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
         while !inputs.is_empty() {
             let remaining = inputs.len();
-            let mut error = "invalid study input";
+            let mut error = None;
             // An input can change another input's accepted range.
             inputs.retain(|(id, value)| {
                 if self
@@ -708,18 +1213,19 @@ impl Indicator for ConfiguredStudy {
                     return false;
                 }
                 if let Err(message) = self.study.set_input(id, value.clone()) {
-                    error = message;
+                    error = Some(message);
                     true
                 } else {
                     false
                 }
             });
             if inputs.len() == remaining {
-                return Err(error);
+                return Err(error.expect("a retained input failed to apply"));
             }
         }
         self.study.set_colors(snapshot.colors.clone());
         self.study.set_visible(snapshot.visible);
+        self.study.set_label_precision(snapshot.settings.precision);
         self.settings = snapshot.settings.clone();
         self.timeframe = snapshot.timeframe;
         self.overlay = snapshot.overlay;
@@ -731,56 +1237,166 @@ impl Indicator for ConfiguredStudy {
         self.wait_for_close = snapshot.wait_for_close;
         self.offset = snapshot.offset;
         self.aligned = None;
+        self.kept = None;
         self.aligned_bars.clear();
         Ok(())
     }
     fn settings(&self) -> StudySettings {
-        self.settings.clone()
+        let mut settings = self.settings.clone();
+        settings.user_edit_enabled = Some(self.user_edit_enabled());
+        // A study can declare a band after its settings were last applied.
+        match_declared_styles(self.study.as_ref(), &mut settings);
+        settings
     }
     fn apply_settings(
         &mut self,
         inputs: &[(String, InputValue)],
         mut settings: StudySettings,
-    ) -> Result<(), &'static str> {
-        if settings.precision.is_some_and(|precision| precision > 12)
-            || settings
-                .plots
-                .iter()
-                .any(|plot| !plot.width.is_finite() || !(0.5..=10.0).contains(&plot.width))
+    ) -> Result<(), crate::studies::StudyError> {
+        if let Some(precision) = settings.precision.filter(|precision| *precision > 12) {
+            return Err(super::StudyError::InvalidPrecision(precision));
+        }
+        if let Some((plot, width)) = settings
+            .plots
+            .iter()
+            .enumerate()
+            .map(|(plot, style)| (plot, style.width))
+            .chain(
+                settings
+                    .plot_variants
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(plot, variants)| {
+                        variants.iter().map(move |variant| (plot, variant.width))
+                    }),
+            )
+            .find(|(_, width)| !width.is_finite() || !(0.5..=10.0).contains(width))
         {
-            return Err("invalid study presentation settings");
+            return Err(super::StudyError::InvalidPlotWidth { plot, width });
+        }
+        if let Some((level, style)) = settings
+            .levels
+            .iter()
+            .enumerate()
+            .find(|(_, style)| !style.width.is_finite() || !(0.5..=10.0).contains(&style.width))
+        {
+            return Err(super::StudyError::InvalidLevelWidth {
+                level,
+                width: style.width,
+            });
+        }
+        if let Some((level, value)) =
+            settings
+                .levels
+                .iter()
+                .enumerate()
+                .find_map(|(level, style)| {
+                    style
+                        .value
+                        .filter(|value| !value.is_finite())
+                        .map(|value| (level, value))
+                })
+        {
+            return Err(super::StudyError::InvalidLevelValue { level, value });
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
-        if inputs.iter().any(|(id, value)| {
-            id == "source" && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
-        }) {
-            inputs.sort_by_key(|(id, _)| {
-                !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
+        // Close-wait applies before clearing its interval; both precede the study's own inputs.
+        if (edited.study.source().is_none() && edited.runs_on_other_bars())
+            || edited.calculation_timeframe.is_some()
+            || inputs.iter().any(|(id, value)| {
+                id == "source"
+                    && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
+            })
+        {
+            inputs.sort_by_key(|(id, _)| match id.as_str() {
+                "wait_for_close" => 0,
+                "calculation_symbol" | "calculation_timeframe" => 1,
+                _ => 2,
             });
         }
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
-        // Styles of the plots before the inputs changed their number keep their place, and
-        // plots they add start with the study's own style.
+        // Styles and tags of the plots before the inputs changed their number keep their place,
+        // and plots they add start with the study's own style and tag. Plots that keep their
+        // names at the end, behind plots the inputs add or remove, keep theirs under those names.
         if settings.plots.len() == self.line_count() && edited.line_count() != self.line_count() {
-            let defaults = edited.study.settings().plots;
-            let kept = settings.plots.len().min(defaults.len());
-            settings.plots.truncate(kept);
-            settings.plots.extend_from_slice(&defaults[kept..]);
+            let defaults = edited.study.settings();
+            let (old, new) = (settings.plots.len(), defaults.plots.len());
+            let (before, after) = (self.line_names(), edited.line_names());
+            let moved = if (before.len(), after.len()) == (old, new) {
+                let same = |(a, b): &(&String, &String)| a == b;
+                let head = before.iter().zip(&after).take_while(same).count();
+                let (before, after) = (before[head..].iter().rev(), after[head..].iter().rev());
+                before.zip(after).take_while(same).count()
+            } else {
+                0
+            };
+            // The plot of the study before the edit that plot `line` continues.
+            let was = |line: usize| {
+                if line + moved >= new {
+                    Some(old - (new - line))
+                } else {
+                    (line + moved < old).then_some(line)
+                }
+            };
+            let flagged = |flags: &[usize], declared: &[usize]| -> Vec<usize> {
+                (0..new)
+                    .filter(|&line| match was(line) {
+                        Some(from) => flags.contains(&from),
+                        None => declared.contains(&line),
+                    })
+                    .collect()
+            };
+            settings.untagged_plots = flagged(&settings.untagged_plots, &defaults.untagged_plots);
+            settings.price_line_plots = flagged(&settings.price_line_plots, &[]);
+            settings.plots = (0..new)
+                .map(|line| was(line).map_or(defaults.plots[line], |from| settings.plots[from]))
+                .collect();
         }
         if settings.plots.len() != edited.line_count() {
-            return Err("one style is required per study plot");
+            return Err(super::StudyError::PlotCount {
+                expected: edited.line_count(),
+                found: settings.plots.len(),
+            });
         }
-        edited.set_colors(settings.plots.iter().map(|plot| plot.color).collect());
+        settings
+            .untagged_plots
+            .retain(|&line| line < settings.plots.len());
+        settings.untagged_plots.sort_unstable();
+        settings.untagged_plots.dedup();
+        settings
+            .price_line_plots
+            .retain(|&line| line < settings.plots.len());
+        settings.price_line_plots.sort_unstable();
+        settings.price_line_plots.dedup();
+        // Unchanged plot colours must retain any per-bar palette stored by the study.
+        for (line, plot) in settings.plots.iter().enumerate() {
+            if plot.color != edited.study.plot_style(line).color {
+                edited.study.set_color(line, plot.color);
+            }
+        }
+        // Bands these inputs remove take their styles with them. A study left with none keeps
+        // them, since it may declare its bands only once it has data and these inputs can
+        // recalculate it without bars.
+        let bands = edited.study.fills().len();
+        if bands > 0 && bands < self.study.fills().len() {
+            settings.fills.truncate(bands);
+        }
+        match_declared_styles(edited.study.as_ref(), &mut settings);
+        if self.study.value_format() != edited.study.value_format() {
+            self.formatter = None;
+        }
         self.study = edited.study;
+        self.study.set_label_precision(settings.precision);
         self.source = edited.source;
         self.calculation_symbol = edited.calculation_symbol;
         self.calculation_timeframe = edited.calculation_timeframe;
         self.wait_for_close = edited.wait_for_close;
         self.offset = edited.offset;
         self.aligned = None;
+        self.kept = None;
         self.settings = settings;
         Ok(())
     }
@@ -802,9 +1418,35 @@ impl Indicator for ConfiguredStudy {
             .as_ref()
             .filter(|_| value.is_finite())
             .map_or_else(
-                || self.value_format().format(value, self.precision()),
+                || {
+                    if self.precision() == self.study.precision() {
+                        self.study.format_value(value)
+                    } else {
+                        self.value_format().format(value, self.precision())
+                    }
+                },
                 |formatter| formatter.format(value),
             )
+    }
+    fn format_plot_value(&self, line: usize, value: f64) -> String {
+        if self.formatter.is_some() || self.precision() != self.study.precision() {
+            self.format_value(value)
+        } else {
+            self.study.format_plot_value(line, value)
+        }
+    }
+    fn legend_lines(&self) -> Vec<usize> {
+        self.study.legend_lines()
+    }
+    fn legend_visible(&self, line: usize) -> bool {
+        let (shown, own) = (
+            self.study.legend_visible(line),
+            self.study.plot_style(line).visible,
+        );
+        // The study may add a readout for a hidden plot or withhold one for a drawn plot.
+        self.settings.show_legend_values
+            && (self.plot_style(line).visible || (shown && !own))
+            && (shown || !own)
     }
     fn value_format(&self) -> crate::scales::StudyFormat {
         self.study.value_format()
@@ -828,14 +1470,89 @@ impl Indicator for ConfiguredStudy {
     fn line_names(&self) -> Vec<String> {
         self.study.line_names()
     }
+    fn projection_fill_color(&self, projection: &super::StudyProjection) -> Color32 {
+        self.study.projection_fill_color(projection)
+    }
+    fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
+        self.study
+            .plot_label_colors(line)
+            .map(|(_, text)| (self.plot_style(line).color, text))
+    }
+    fn marker_style(&self) -> Option<PlotStyle> {
+        self.study.marker_style()
+    }
     fn markers(&self) -> &[super::IndicatorMarker] {
-        self.study.markers()
+        if self.aligned.is_some() {
+            &self.aligned_markers
+        } else {
+            self.study.markers()
+        }
     }
     fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
-        self.study.volume_profiles(visible)
+        // Kept profiles would index the evicted bars too.
+        if self.kept.is_some() {
+            return Vec::new();
+        }
+        if self.aligned.is_none() {
+            return self.study.volume_profiles(visible);
+        }
+        // Source bars of a study on another interval or symbol are not chart bars.
+        self.study
+            .volume_profiles(source_bars(&self.spans, &visible))
+            .into_iter()
+            .filter_map(|mut plot| {
+                plot.bars = chart_bars(&self.spans, &plot.bars)?;
+                Some(plot)
+            })
+            .collect()
+    }
+    fn profile_levels(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::ProfileLevel> {
+        // Kept levels would index the evicted bars too.
+        if self.kept.is_some() {
+            return Vec::new();
+        }
+        if self.aligned.is_none() {
+            return self.study.profile_levels(visible);
+        }
+        // Source bars of a study on another interval or symbol are not chart bars.
+        self.study
+            .profile_levels(source_bars(&self.spans, &visible))
+            .into_iter()
+            .filter_map(|mut level| {
+                level.bars = chart_bars(&self.spans, &level.bars)?;
+                Some(level)
+            })
+            .collect()
     }
     fn zones(&self) -> &[super::StudyZone] {
-        self.study.zones()
+        if self.aligned.is_some() {
+            &self.aligned_zones
+        } else {
+            self.study.zones()
+        }
+    }
+    fn zones_cover_whole_bars(&self) -> bool {
+        self.study.zones_cover_whole_bars()
+    }
+    fn labels(&self) -> &[super::StudyLabel] {
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.labels()
+        }
+    }
+    fn labels_on_price(&self) -> bool {
+        self.study.labels_on_price()
+    }
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.study.set_label_precision(precision);
+    }
+    fn provisional_after(&self, line: usize) -> Option<usize> {
+        self.aligned
+            .is_none()
+            .then(|| self.study.provisional_after(line))
+            .flatten()
     }
     fn extend_right(&self) -> bool {
         self.study.extend_right()
@@ -846,8 +1563,70 @@ impl Indicator for ConfiguredStudy {
     fn is_volume(&self) -> bool {
         self.study.is_volume()
     }
+    fn level_style(&self, value: f64) -> LineStyle {
+        // Levels moved onto one value draw with the pattern of the first visible one.
+        self.study
+            .pane()
+            .levels
+            .iter()
+            .zip(&self.settings.levels)
+            .find(|((declared, ..), style)| {
+                style.visible && style.value.unwrap_or(*declared) == value
+            })
+            .map_or_else(|| self.study.level_style(value), |(_, style)| style.pattern)
+    }
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        self.study.level_fill_indices()
+    }
+    fn level_price_line(&self, index: usize) -> Option<Color32> {
+        self.settings
+            .levels
+            .get(index)
+            .filter(|style| style.price_line)
+            .map(|style| style.color)
+    }
+    fn level_stroke(&self, index: usize, value: f64) -> (LineStyle, f32) {
+        self.settings
+            .levels
+            .get(index)
+            .filter(|style| {
+                style
+                    .value
+                    .or_else(|| self.study.pane().levels.get(index).map(|level| level.0))
+                    == Some(value)
+            })
+            .map_or_else(
+                || (self.level_style(value), self.level_width(value)),
+                |style| (style.pattern, style.width),
+            )
+    }
+    fn level_fill_color(&self) -> Color32 {
+        self.settings.level_fill_color
+    }
+    fn level_width(&self, value: f64) -> f32 {
+        self.study
+            .pane()
+            .levels
+            .iter()
+            .zip(&self.settings.levels)
+            .find(|((declared, ..), style)| {
+                style.visible && style.value.unwrap_or(*declared) == value
+            })
+            .map_or_else(|| self.study.level_width(value), |(_, style)| style.width)
+    }
     fn pane(&self) -> super::StudyPane {
-        self.study.pane()
+        let mut pane = self.study.pane();
+        for ((value, color, _), style) in pane.levels.iter_mut().zip(&self.settings.levels) {
+            *value = style.value.unwrap_or(*value);
+            // A hidden level still bounds the fill; its transparent line is not drawn.
+            *color = if style.visible {
+                style.color
+            } else {
+                Color32::TRANSPARENT
+            };
+        }
+        pane.fill_between_levels = self.settings.fill_between_levels;
+        pane
     }
     fn is_overlay(&self) -> bool {
         self.overlay.unwrap_or_else(|| self.study.is_overlay())
@@ -876,10 +1655,361 @@ impl Indicator for ConfiguredStudy {
     }
 }
 
+/// For each of the chart's bars `data`, opened by `clock`, the bars of `source` that share its
+/// time: those that open before it closes and close after it opens. A bar of an interval not
+/// measured in time lasts until the next one opens, and the last one without end.
+fn spans_of(
+    data: &[Bar],
+    clock: &crate::model::BarClock,
+    source: &super::StudyData<'_>,
+) -> Vec<std::ops::Range<usize>> {
+    let close = |by: &crate::model::BarClock, bars: &[Bar], at: usize| {
+        by.next_open(by.bar_open(bars[at].time))
+            .or_else(|| bars.get(at + 1).map(|bar| bar.time))
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
+    };
+    let (mut first, mut end) = (0, 0);
+    data.iter()
+        .enumerate()
+        .map(|(at, bar)| {
+            let (open, until) = (clock.bar_open(bar.time), close(clock, data, at));
+            while first < source.bars.len() && close(&source.clock, source.bars, first) <= open {
+                first += 1;
+            }
+            end = end.max(first);
+            while end < source.bars.len() && source.clock.bar_open(source.bars[end].time) < until {
+                end += 1;
+            }
+            first..end
+        })
+        .collect()
+}
+
+/// The chart bars that share time with the source bars `bars`, from the `spans` of each chart
+/// bar; `None` when no chart bar does.
+fn chart_bars(
+    spans: &[std::ops::Range<usize>],
+    bars: &std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let start = spans.partition_point(|span| span.end <= bars.start);
+    let end = spans.partition_point(|span| span.start < bars.end);
+    (bars.start < bars.end && start < end).then_some(start..end)
+}
+
+/// The source bars that share time with the chart bars `bars`: from the first source bar of the
+/// first chart bar to the last of the last, from the `spans` of each chart bar.
+fn source_bars(
+    spans: &[std::ops::Range<usize>],
+    bars: &std::ops::Range<usize>,
+) -> std::ops::Range<usize> {
+    let end = bars.end.min(spans.len());
+    if bars.start >= end {
+        return 0..0;
+    }
+    spans[bars.start].start..spans[end - 1].end
+}
+
 #[cfg(all(test, feature = "studies"))]
 mod tests {
     use super::*;
     use crate::studies::BollingerBands;
+
+    /// Guards #2112: clearing the calculation interval hands the study the chart's interval,
+    /// whether the chart passed it before the input was set, as a template does, or moved on
+    /// while it was set, and whether the edit comes directly or from the settings dialog.
+    #[test]
+    fn clearing_the_calculation_interval_restores_the_chart_interval() {
+        let daily = super::super::StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Day1),
+            metric: None,
+        };
+        for (added_on, dialog) in [
+            (None, false),
+            (None, true),
+            (Some(Timeframe::Day1), false),
+            (Some(Timeframe::Day1), true),
+        ] {
+            let mut study = ConfiguredStudy::new(Box::new(super::super::Performance::new()));
+            if let Some(timeframe) = added_on {
+                study.set_timeframe(timeframe);
+            }
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Day1)),
+                )
+                .unwrap();
+            study.set_timeframe(Timeframe::Min1);
+            let cleared = (
+                "calculation_timeframe".to_owned(),
+                InputValue::Timeframe(None),
+            );
+            if dialog {
+                let settings = study.settings();
+                study
+                    .apply_settings(
+                        &[cleared, ("wait_for_close".into(), InputValue::Toggle(true))],
+                        settings,
+                    )
+                    .unwrap();
+            } else {
+                study.set_input(&cleared.0, cleared.1).unwrap();
+            }
+            assert_eq!(
+                study.data_requests(),
+                std::slice::from_ref(&daily),
+                "added on {added_on:?}, dialog {dialog}"
+            );
+        }
+    }
+
+    /// A study on a daily chart keeps the Interval it accepted once it has run on those bars,
+    /// though on them it requests data of its own: the input stays listed, a template saved from
+    /// the study keeps it, and it can be cleared.
+    #[test]
+    fn calculation_interval_stays_listed_and_clears_after_a_run() {
+        use crate::model::BarClock;
+        let hour = |h: i64| chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(h);
+        let flat = |time| Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0);
+        let days: Vec<_> = (0..21).map(|day| flat(hour(24 * day))).collect();
+        // Each study, the Interval set on it, and the hours between the bars of that Interval.
+        let cases: [(Box<dyn Indicator>, Timeframe, i64); 3] = [
+            (
+                Box::new(super::super::Performance::new()),
+                Timeframe::Hour1,
+                1,
+            ),
+            (
+                Box::new(super::super::PivotPoints::new().with_daily_bars(true)),
+                Timeframe::Hour1,
+                1,
+            ),
+            (
+                Box::new(super::super::Volume24h::new()),
+                Timeframe::Week1,
+                168,
+            ),
+        ];
+        let (mut observed, mut expected) = (Vec::new(), Vec::new());
+        for (inner, interval, step) in cases {
+            let name = inner.name().to_owned();
+            let mut study = ConfiguredStudy::new(inner);
+            study.set_timeframe(Timeframe::Day1);
+            study.set_bar_clock(&BarClock::new(Timeframe::Day1));
+            let chart_requests = study.data_requests();
+            let chosen = InputValue::Timeframe(Some(interval));
+            study
+                .set_input("calculation_timeframe", chosen.clone())
+                .unwrap();
+            let bars: Vec<_> = (0..21 * 24 / step)
+                .map(|at| flat(hour(at * step)))
+                .collect();
+            let request = study.data_requests().pop().unwrap();
+            study.update_data(
+                &days,
+                0,
+                &[super::super::StudyData {
+                    request,
+                    bars: &bars,
+                    clock: BarClock::new(interval),
+                    instrument: None,
+                    timeframe: interval,
+                }],
+            );
+            let listed = study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "calculation_timeframe")
+                .map(|input| input.value);
+            let template = crate::studies::StudyTemplate::from_study(&study);
+            let restored = template.create().unwrap();
+            assert!(
+                restored
+                    .inputs()
+                    .iter()
+                    .any(|input| { input.id == "calculation_timeframe" && input.value == chosen })
+            );
+            let saved = template
+                .inputs
+                .into_iter()
+                .find(|(id, _)| id == "calculation_timeframe")
+                .map(|(_, value)| value);
+            let cleared = study
+                .set_input("calculation_timeframe", InputValue::Timeframe(None))
+                .map_err(|error| error.to_string());
+            assert_eq!(study.data_requests(), chart_requests, "{name}");
+            observed.push((name.clone(), listed, saved, cleared));
+            expected.push((
+                name,
+                Some(chosen.clone()),
+                Some(chosen),
+                Ok::<(), String>(()),
+            ));
+        }
+        assert_eq!(observed, expected);
+
+        // A batch can first stop requesting daily bars, then select a calculation interval.
+        let mut pivots = ConfiguredStudy::new(Box::new(
+            super::super::PivotPoints::new().with_daily_bars(true),
+        ));
+        pivots.set_timeframe(Timeframe::Min1);
+        let settings = pivots.settings();
+        pivots
+            .apply_settings(
+                &[
+                    ("daily_bars".into(), InputValue::Toggle(false)),
+                    (
+                        "calculation_timeframe".into(),
+                        InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    ),
+                ],
+                settings,
+            )
+            .unwrap();
+        assert_eq!(pivots.data_requests()[0].timeframe, Some(Timeframe::Hour1));
+
+        // Switching back to price first makes a separate calculation interval available.
+        let mut average = ConfiguredStudy::new(Box::new(super::super::SMA::new(1)));
+        average.set_timeframe(Timeframe::Day1);
+        average
+            .set_input(
+                "source",
+                InputValue::Source(super::super::StudySource::Study { id: 1, plot: 0 }),
+            )
+            .unwrap();
+        let settings = average.settings();
+        average
+            .apply_settings(
+                &[
+                    (
+                        "source".into(),
+                        InputValue::Source(super::super::StudySource::Price(
+                            crate::model::PriceSource::Close,
+                        )),
+                    ),
+                    (
+                        "calculation_timeframe".into(),
+                        InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    ),
+                ],
+                settings,
+            )
+            .unwrap();
+        assert_eq!(average.data_requests()[0].timeframe, Some(Timeframe::Hour1));
+    }
+
+    /// 24-hour Volume on another interval asks for its exchange rates next to that interval's
+    /// bars and converts with them, and clearing the Interval or the target restores the
+    /// requests of the chart's own interval.
+    #[test]
+    fn volume_24h_on_another_interval_converts_its_currency() {
+        use crate::model::BarClock;
+        let hour = |h: i64| chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(h);
+        let flat = |h| Bar::new(hour(h), 10.0, 10.0, 10.0, 10.0, 2.0);
+        let usd = Instrument::new("TEST").with_currency("USD");
+        let eur = super::super::StudyDataRequest::exchange_rate("USD", "EUR");
+        let mut study = ConfiguredStudy::new(Box::new(super::super::Volume24h::new()));
+        study.set_timeframe(Timeframe::Hour1);
+        study.set_bar_clock(&BarClock::new(Timeframe::Hour1));
+        study.set_instrument(Some(&usd));
+        // The dialog applies the Interval first, while it is still offered, then the units.
+        let chosen = InputValue::Timeframe(Some(Timeframe::Hour4));
+        study.set_input("calculation_timeframe", chosen).unwrap();
+        study.set_input("units", InputValue::Choice(1)).unwrap();
+        study.set_input("currency", InputValue::Choice(2)).unwrap();
+        let requests = study.data_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].timeframe, Some(Timeframe::Hour4));
+        assert_eq!(requests[1], eur);
+        let (chart, bars4, rates) = (
+            (0..=4).map(flat).collect::<Vec<_>>(),
+            [flat(0), flat(4)],
+            [Bar::from_value(hour(0), 0.5)],
+        );
+        let source = |request, bars, timeframe| super::super::StudyData {
+            request,
+            bars,
+            clock: BarClock::new(timeframe),
+            instrument: Some(&usd),
+            timeframe,
+        };
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(requests[0].clone(), &bars4, Timeframe::Hour4),
+                source(eur.clone(), &rates, Timeframe::default()),
+            ],
+        );
+        // The first 4h bar is 2 x 10 x 0.5 = 10 EUR, shown where it closes.
+        assert_eq!(study.values().value(0, 4), Some(10.0));
+        assert!(study.table().is_none());
+
+        study.set_input("currency", InputValue::Choice(0)).unwrap();
+        assert_eq!(study.data_requests().len(), 1);
+        study.set_input("currency", InputValue::Choice(2)).unwrap();
+        study
+            .set_input("calculation_timeframe", InputValue::Timeframe(None))
+            .unwrap();
+        assert_eq!(study.data_requests(), [eur]);
+    }
+
+    #[test]
+    fn value_tags_default_by_plot_count_and_persist() {
+        use crate::studies::{
+            CustomIndicator, IndicatorValue, MARibbon, StudyTemplate, VolumeWeightedAvgPrice,
+        };
+        for (lines, untagged) in [(4, vec![]), (5, vec![0, 1, 2, 3, 4])] {
+            let study = ConfiguredStudy::new(Box::new(
+                CustomIndicator::new("Lines", |bars| vec![IndicatorValue::None; bars.len()])
+                    .with_line_count(lines),
+            ));
+            assert_eq!(study.settings().untagged_plots, untagged, "{lines} plots");
+        }
+
+        let mut ribbon = ConfiguredStudy::new(Box::new(MARibbon::new()));
+        assert_eq!(
+            ribbon.settings().untagged_plots,
+            (0..12).collect::<Vec<_>>()
+        );
+        let mut settings = ribbon.settings();
+        settings.untagged_plots = (1..11).collect();
+        ribbon.apply_settings(&[], settings).unwrap();
+        let template = StudyTemplate::from_study(&ribbon);
+        let json = serde_json::to_string(&template).unwrap();
+        let restored = serde_json::from_str::<StudyTemplate>(&json)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            restored.settings().untagged_plots,
+            (1..11).collect::<Vec<_>>()
+        );
+        assert!(restored.plot_tagged(0) && restored.plot_tagged(11) && !restored.plot_tagged(5));
+        // Settings saved before the field existed tag every plot, as they did.
+        let mut old = serde_json::to_value(&template).unwrap();
+        old["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("untagged_plots");
+        let restored = serde_json::from_value::<StudyTemplate>(old)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert!((0..12).all(|line| restored.plot_tagged(line)));
+
+        // Two bands take VWAP from one plot to five: the kept VWAP line stays tagged.
+        let mut vwap = ConfiguredStudy::new(Box::new(VolumeWeightedAvgPrice::new()));
+        let settings = vwap.settings();
+        vwap.apply_settings(&[("band_count".into(), InputValue::Length(2))], settings)
+            .unwrap();
+        assert_eq!(vwap.settings().untagged_plots, [1, 2, 3, 4]);
+        let mut settings = vwap.settings();
+        settings.untagged_plots = vec![3, 1, 3, 7];
+        vwap.apply_settings(&[], settings).unwrap();
+        assert_eq!(vwap.settings().untagged_plots, [1, 3]);
+    }
 
     #[test]
     fn automatic_precision_tracks_metadata_and_preserves_study_overrides() {
@@ -923,14 +2053,14 @@ mod tests {
         }
     }
 
-    /// New Net Volume, PPO and PVO studies draw their signed volume and oscillator differences as
-    /// columns and their oscillator lines as lines, and a saved plot type replaces the default.
+    /// Net Volume starts as a line; PPO and PVO keep columns for their differences.
+    /// A saved plot type replaces each default.
     #[test]
     fn histogram_defaults_yield_to_a_saved_plot_type() {
         use super::super::{NetVolume, PercentageVolumeOscillator, PriceOscillator};
         let (line, columns) = (PlotType::Line, PlotType::Columns);
         let studies: [(Box<dyn Indicator>, &[PlotType]); 3] = [
-            (Box::new(NetVolume::default()), &[columns]),
+            (Box::new(NetVolume::default()), &[line]),
             (Box::new(PriceOscillator::default()), &[line, line, columns]),
             (
                 Box::new(PercentageVolumeOscillator::default()),
@@ -989,6 +2119,173 @@ mod tests {
         }
         let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
         assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
+    }
+
+    /// Volume profiles, zones and markers of a study calculated on a finer or a coarser interval
+    /// lie on the chart bars that share time with their bars, a marker once the values on the chart
+    /// reach its bar, and none are left when the other history is missing.
+    #[test]
+    fn profiles_zones_and_markers_of_another_interval_lie_on_their_chart_bars() {
+        use super::super::{
+            CrossDirection, IndicatorMarker, StudyData, StudyZone, VolProfileSession,
+            VolProfileVisible,
+        };
+        // Markers on the second and the last bar, and a zone from the one to the other.
+        #[derive(Clone, Default)]
+        struct Marks {
+            values: IndicatorValues,
+            markers: Vec<IndicatorMarker>,
+            zones: Vec<StudyZone>,
+        }
+        impl Indicator for Marks {
+            fn name(&self) -> &str {
+                "Marks"
+            }
+            fn calculate(&mut self, data: &[Bar]) {
+                self.values = IndicatorValues::missing(data.len());
+                let last = data.len().saturating_sub(1);
+                let marker = |bar| IndicatorMarker {
+                    bar,
+                    value: 100.0,
+                    direction: CrossDirection::Up,
+                };
+                let zone = StudyZone {
+                    bars: 1..last + 1,
+                    top: 101.0,
+                    bottom: 100.0,
+                    plot: 0,
+                };
+                (self.markers, self.zones) = if last > 1 {
+                    (vec![marker(1), marker(last)], vec![zone])
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+            }
+            fn values(&self) -> &IndicatorValues {
+                &self.values
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::WHITE]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn markers(&self) -> &[IndicatorMarker] {
+                &self.markers
+            }
+            fn zones(&self) -> &[StudyZone] {
+                &self.zones
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+        }
+        // Bar i opens i intervals after 23:50 UTC on 6 March, so midnight starts a second
+        // session, and trades a volume of 1 from 100 + i to 101 + i.
+        let start: chrono::DateTime<chrono::Utc> = "2026-03-06T23:50:00Z".parse().unwrap();
+        let bars = |count: i32, interval: Timeframe| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let low = 100.0 + f64::from(i);
+                    let time = start + interval.duration() * i;
+                    Bar::new(time, low, low + 1.0, low, low + 1.0, 1.0)
+                })
+                .collect()
+        };
+        let profiles = |study: &ConfiguredStudy, visible| -> Vec<_> {
+            study
+                .volume_profiles(visible)
+                .into_iter()
+                .map(|plot| {
+                    let rows = &plot.profile;
+                    (plot.bars, rows.low(), rows.high(), rows.volume().to_vec())
+                })
+                .collect()
+        };
+        for (name, [chart, other], sessions, (view, visible), markers, zones, levels) in [
+            (
+                "finer",
+                [(4, Timeframe::Min5), (20, Timeframe::Min1)],
+                [
+                    (0..2, 100.0, 110.0, vec![10.0]),
+                    (2..4, 110.0, 120.0, vec![10.0]),
+                ],
+                (1..3, (1..3, 105.0, 115.0, vec![10.0])),
+                vec![0, 3],
+                0..4,
+                (2..4, 105.0),
+            ),
+            (
+                "coarser",
+                [(20, Timeframe::Min1), (4, Timeframe::Min5)],
+                [
+                    (0..10, 100.0, 102.0, vec![2.0]),
+                    (10..20, 102.0, 104.0, vec![2.0]),
+                ],
+                (3..12, (0..15, 100.0, 103.0, vec![3.0])),
+                vec![9],
+                5..20,
+                (10..20, 101.0),
+            ),
+        ] {
+            let (interval, source_interval) = (chart.1, other.1);
+            let (chart, source) = (bars(chart.0, interval), bars(other.0, source_interval));
+            let calculated = |inner: Box<dyn Indicator>| {
+                let mut study = ConfiguredStudy::new(inner);
+                study.set_timeframe(interval);
+                let other = InputValue::Timeframe(Some(source_interval));
+                study.set_input("calculation_timeframe", other).unwrap();
+                let data = StudyData {
+                    request: study.data_requests().remove(0),
+                    bars: &source,
+                    clock: crate::model::BarClock::new(source_interval),
+                    instrument: None,
+                    timeframe: source_interval,
+                };
+                study.update_data(&chart, 0, &[data]);
+                study
+            };
+            let mut session = VolProfileSession::new(1);
+            session
+                .set_input("extend_poc", InputValue::Toggle(true))
+                .unwrap();
+            let mut studies = [
+                calculated(Box::new(session)),
+                calculated(Box::new(VolProfileVisible::new(1))),
+                calculated(Box::<Marks>::default()),
+            ];
+            assert_eq!(profiles(&studies[0], 0..chart.len()), sessions, "{name}");
+            let extended: Vec<_> = studies[0]
+                .profile_levels(0..chart.len())
+                .into_iter()
+                .map(|level| (level.bars, level.price))
+                .collect();
+            assert_eq!(extended, [levels], "{name}");
+            assert_eq!(profiles(&studies[1], view), [visible], "{name}");
+            let marked: Vec<_> = studies[2]
+                .markers()
+                .iter()
+                .map(|marker| marker.bar)
+                .collect();
+            assert_eq!(marked, markers, "{name}");
+            let zone = StudyZone {
+                bars: zones,
+                top: 101.0,
+                bottom: 100.0,
+                plot: 0,
+            };
+            assert_eq!(studies[2].zones(), [zone], "{name}");
+            for study in &mut studies {
+                study.update_data(&chart, 0, &[]);
+            }
+            for study in &studies {
+                assert!(profiles(study, 0..chart.len()).is_empty(), "{name}");
+                assert!(study.profile_levels(0..chart.len()).is_empty(), "{name}");
+                assert!(
+                    study.markers().is_empty() && study.zones().is_empty(),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1065,5 +2362,183 @@ mod tests {
         let restored: StudySettings = serde_json::from_str(&saved).unwrap();
         assert!(!restored.plots[0].visible);
         assert_eq!(restored.hidden_intervals, [Timeframe::Min1]);
+    }
+
+    #[test]
+    fn rsi_levels_round_trip_and_older_settings_take_the_declared_levels() {
+        use crate::studies::{AdxBreakout, RSI, palette};
+        let values = |study: &ConfiguredStudy| -> Vec<f64> {
+            study.pane().levels.iter().map(|level| level.0).collect()
+        };
+        let mut study = ConfiguredStudy::new(Box::new(RSI::default()));
+        let declared = study.settings();
+        assert_eq!(
+            declared
+                .levels
+                .iter()
+                .map(|l| (l.value, l.color, l.pattern, l.visible))
+                .collect::<Vec<_>>(),
+            [(None, palette::MUTED, LineStyle::Dashed, true); 3]
+        );
+        assert!(declared.fill_between_levels);
+        assert_eq!(
+            declared.level_fill_color,
+            Color32::from_rgba_unmultiplied(126, 87, 194, 26)
+        );
+        let before = study.snapshot_settings();
+        let mut edited = declared.clone();
+        edited.levels[0].value = Some(80.0);
+        edited.levels[0].width = 3.0;
+        edited.levels[1].visible = false;
+        study.apply_settings(&[], edited.clone()).unwrap();
+        assert_eq!(values(&study), [80.0, 30.0, 50.0]);
+        // Templates, copies and layouts rebuild a fresh study from the saved JSON.
+        let saved = serde_json::to_value(&edited).unwrap();
+        let mut loaded = ConfiguredStudy::new(Box::new(RSI::default()));
+        loaded
+            .apply_settings(&[], serde_json::from_value(saved.clone()).unwrap())
+            .unwrap();
+        assert_eq!(loaded.settings(), edited);
+        let mut older = saved;
+        for level in older["levels"].as_array_mut().unwrap() {
+            level.as_object_mut().unwrap().remove("width");
+        }
+        loaded
+            .apply_settings(&[], serde_json::from_value(older.clone()).unwrap())
+            .unwrap();
+        assert_eq!(loaded.settings().levels[0].width, 1.0);
+        for key in ["levels", "fill_between_levels", "level_fill_color"] {
+            older.as_object_mut().unwrap().remove(key);
+        }
+        loaded
+            .apply_settings(&[], serde_json::from_value(older).unwrap())
+            .unwrap();
+        assert_eq!(loaded.settings(), declared);
+        study.restore_settings(&before).unwrap();
+        assert_eq!(values(&study), [70.0, 30.0, 50.0]);
+        let mut invalid = declared.clone();
+        invalid.levels[0].value = Some(f64::INFINITY);
+        assert!(matches!(
+            study.apply_settings(&[], invalid),
+            Err(super::super::StudyError::InvalidLevelValue { level: 0, value }) if value == f64::INFINITY
+        ));
+        assert_eq!(study.settings(), declared);
+        for width in [f32::NAN, f32::INFINITY, 0.0, 11.0] {
+            let mut invalid = declared.clone();
+            invalid.levels[0].width = width;
+            assert!(matches!(
+                study.apply_settings(&[], invalid),
+                Err(super::super::StudyError::InvalidLevelWidth { level: 0, .. })
+            ));
+            assert_eq!(study.settings(), declared);
+        }
+        // Adding a middle guide keeps the two saved Stochastic guides and their band.
+        for name in ["Stochastic", "StochRSI"] {
+            let mut study = ConfiguredStudy::new(
+                crate::studies::IndicatorFactory::new()
+                    .create(name)
+                    .unwrap(),
+            );
+            let defaults = study.settings();
+            assert_eq!(values(&study), [80.0, 20.0, 50.0]);
+            assert!(defaults.fill_between_levels);
+            assert_eq!(study.level_fill_indices(), Some([0, 1]));
+            assert_eq!(
+                defaults.level_fill_color,
+                palette::LIGHT_BLUE.gamma_multiply_u8(26)
+            );
+            let mut older = defaults.clone();
+            older.levels.truncate(2);
+            older.levels[0].value = Some(85.0);
+            older.levels[0].width = 4.0;
+            older.levels[1].visible = false;
+            older.fill_between_levels = false;
+            study.apply_settings(&[], older.clone()).unwrap();
+            if name == "Stochastic" {
+                assert_eq!(&study.settings().levels[..2], older.levels);
+                assert!(!study.settings().levels[2].visible);
+                assert!(!study.pane().fill_between_levels);
+            }
+            let mut absent = defaults.clone();
+            absent.levels.clear();
+            study.apply_settings(&[], absent).unwrap();
+            assert_eq!(study.settings(), defaults);
+        }
+        // A KST opens with a dashed zero guide. Saved before it had one, it restores with the
+        // guide hidden, and a guide shown since keeps its style through a template.
+        let declared =
+            ConfiguredStudy::new(Box::new(crate::studies::KnowSureThing::new())).settings();
+        let zero = LevelStyle {
+            value: None,
+            color: palette::GRAY,
+            pattern: LineStyle::Dashed,
+            width: 1.0,
+            visible: true,
+            price_line: false,
+        };
+        assert_eq!(declared.levels, [zero]);
+        let saved = r#"{"name":"KST","inputs":[["roc_periods [0]",{"Length":10}],["roc_periods [1]",{"Length":15}],["roc_periods [2]",{"Length":20}],["roc_periods [3]",{"Length":30}],["sma_periods [0]",{"Length":10}],["sma_periods [1]",{"Length":10}],["sma_periods [2]",{"Length":10}],["sma_periods [3]",{"Length":15}],["signal_period",{"Length":9}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.KnowSureThing.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut older = serde_json::from_str::<crate::studies::StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            older.settings().levels,
+            [LevelStyle {
+                visible: false,
+                ..zero
+            }]
+        );
+        assert_eq!(older.pane().levels[0].1, Color32::TRANSPARENT);
+        let mut shown = older.settings();
+        shown.levels[0].visible = true;
+        shown.levels[0].width = 2.0;
+        older.apply_settings(&[], shown.clone()).unwrap();
+        let again = crate::studies::StudyTemplate::from_study(older.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings().levels, shown.levels);
+        assert_eq!(again.pane().levels[0].1, palette::GRAY);
+        let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
+        let settings = adx.settings();
+        adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
+            .unwrap();
+        assert_eq!(values(&adx), [25.0]);
+    }
+
+    /// A palette set on a chart study recolours its band, as it recolours its plots.
+    #[test]
+    fn set_colors_recolours_the_band() {
+        let band = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
+        let palette = vec![Color32::RED, Color32::GREEN, Color32::BLUE, band];
+        let mut own = BollingerBands::default();
+        own.set_colors(palette.clone());
+        // Bollinger Bands fill the band in the fourth palette colour.
+        assert_eq!(own.fills()[0].color, band);
+        let mut study = ConfiguredStudy::new(Box::new(BollingerBands::default()));
+        study.set_colors(palette);
+        assert_eq!(study.plot_style(0).color, Color32::RED);
+        assert_eq!(study.fills()[0].color, band);
+
+        // A hidden band stays hidden through a palette, and a template keeps its colour.
+        let mut settings = study.settings();
+        settings.fills[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        study.set_colors(vec![Color32::RED, Color32::GREEN, Color32::BLUE, band]);
+        assert!(study.fills().is_empty());
+        let restored = crate::studies::StudyTemplate::from_study(&study)
+            .create()
+            .unwrap();
+        assert_eq!(restored.settings().fills[0].color, band);
+        assert!(restored.fills().is_empty());
+
+        // Restoring a snapshot through the trait reapplies the palette after the saved styles,
+        // which keep a band colour of their own.
+        let own = Color32::from_rgba_unmultiplied(9, 8, 7, 60);
+        let mut settings = study.settings();
+        settings.fills[0] = FillStyle::new(own);
+        study.apply_settings(&[], settings).unwrap();
+        study.snapshot_settings().restore(&mut study).unwrap();
+        assert_eq!(study.fills()[0].color, own);
     }
 }

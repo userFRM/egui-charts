@@ -1,0 +1,95 @@
+---
+title: Price scale
+---
+
+import Example from '../../components/Example.astro';
+import priceScale from '../../../../../examples/docs/scenes/price_scale.rs?raw';
+
+Use independent scales when two series have different units or magnitudes. This
+scene adds a comparison at ten times the sample price to the
+[first chart](first-chart.mdx). Both histories contain only positive prices.
+
+## Try modes and margins
+
+Select **Main** or **Comparison**, then change its mode, invert it or adjust its
+top and bottom margins. **Crop vertically** makes that scale manual;
+**Autoscale** fits it again. Pan to see relative modes choose a new reference.
+The controls and setup below run in the widget-only docs package.
+Create `PriceScale::new(&mut chart)` once, then call its `show(ui, &mut chart)`
+before `chart.show(ui)` on each frame.
+
+<Example scene="price-scale" title="Two independent price scales"
+  task="Change either scale's mode and margins, crop it, then restore autoscale."
+  code={priceScale} />
+
+## Assign an independent scale
+
+[`SeriesOptions::scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.scale)
+uses [`SeriesScale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.SeriesScale.html):
+
+- `Right` and `Left` share the pane's corresponding axis.
+- `Separate(id)` creates an additional labelled axis.
+- `Overlay(id)` creates an independent scale without axis labels.
+
+Series with the same assignment share a range and options. Distinct host-chosen
+IDs keep their scales independent. Use
+[`set_series_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_scale)
+to reassign a present series, or
+[`series_price_scale_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_scale_mut)
+to edit its current scale. Each pane has its own scales for these assignments,
+so a series moved to another pane joins the
+[destination pane's scale](panes.mdx#move-an-added-series) with the same
+assignment.
+
+## Choose the transform
+
+[`PriceScaleOptions::mode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleOptions.html#structfield.mode)
+selects a [`PriceScaleMode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/enum.PriceScaleMode.html).
+For a price `p` and the series' first visible close `b`:
+
+| Mode | Scale units | Meaning |
+| --- | --- | --- |
+| Normal | `p` | Equal differences occupy equal heights. |
+| Logarithmic | `ln(p)` | Equal ratios occupy equal heights. |
+| Percentage | `100 * (p - b) / abs(b)` | The reference reads 0%. |
+| IndexedTo100 | `100 + 100 * (p - b) / abs(b)` | The reference reads 100. |
+
+For example, a move from 100 to 110 reads +10% or 110 indexed. Prices 100, 200
+and 400 have equal vertical spacing on a logarithmic scale because each step
+doubles the price. **Logarithmic rendering requires strictly positive prices**;
+zero and negative prices have no finite log coordinate. Choose Normal for data
+that can cross zero. A missing, non-finite or zero relative reference falls back
+to ordinary prices. Each series keeps its own first-visible-close reference,
+even when several share a relative scale.
+
+After changing a mode through
+[`PriceScale::options_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScale.html#method.options_mut),
+call [`reset`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScale.html#method.reset)
+to fit the data in the new units. The scene does this after an option edit.
+[`invert_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleOptions.html#structfield.invert_scale)
+reverses the vertical direction without changing the prices.
+
+## Leave margins or set a manual range
+
+[`scale_margins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleOptions.html#structfield.scale_margins)
+contains [`top`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleMargins.html#structfield.top)
+and [`bottom`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleMargins.html#structfield.bottom)
+fractions of the pane height. The defaults are 0.1 each, leaving the data in the
+middle 80%. Keep each fraction between 0 and 1 and their sum below 1; a sum of
+1 or more leaves no drawable space, so the margins are ignored. With data from
+100 to 120 and 10% margins, the total span is `20 / 0.8 = 25`, so autoscale uses
+97.5 to 122.5 in Normal mode.
+
+[`set_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScale.html#method.set_range)
+sets a manual range in **scale units**, including logarithms or percentages when
+that mode is active. Bounds must be finite and increasing with a finite span;
+invalid bounds leave the range unchanged. Margins apply to automatic fitting.
+Use `reset` to resume it after manual scaling or an axis drag.
+
+For custom overlays, read
+[`series_price_map`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_map)
+after `Chart::show`, then use
+[`price_to_y`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceMap.html#method.price_to_y)
+and [`y_to_price`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceMap.html#method.y_to_price).
+Before the pane is first drawn, its map is `None`. See
+[first-frame geometry](time-scale.mdx#wait-for-plot-geometry).

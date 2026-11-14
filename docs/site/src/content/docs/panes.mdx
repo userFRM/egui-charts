@@ -1,0 +1,98 @@
+---
+title: Panes
+---
+
+import Example from '../../components/Example.astro';
+import panes from '../../../../../examples/docs/scenes/panes.rs?raw';
+
+Panes are stacked plots **inside one `Chart`**. They share the time axis,
+horizontal navigation and crosshair time, while each pane has its own price
+scale. A multi-chart grid contains separate `Chart` instances, each with its
+own data and viewport; see [synchronizing charts](../../../../builder-guide.md#synchronize-charts).
+
+## Try placement and resizing
+
+This scene hides the built-in volume overlay with
+[`ChartConfig::show_volume`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_volume)
+and adds the [first chart's](first-chart.mdx) synthetic volume as a Columns
+series in a lower pane. **Move to main** puts it beside the candles on
+an independent scale; **Move below** returns it. Drag the separator, double-click
+it to reset, try **Lower pane: 140 pt**, or restore the **3:1** proportions.
+Create `Panes::new(&mut chart)` once, then call its `show(ui, &mut chart)` before
+`chart.show(ui)` on each frame.
+
+<Example scene="panes" title="One chart with two panes"
+  task="Move the volume series between panes and change their relative heights."
+  code={panes} />
+
+## Move an added series
+
+Keep the [`SeriesId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html)
+returned by [`add_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_series),
+then create a destination with
+[`add_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_pane).
+[`move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
+moves the main series, an added series or a study to another pane. Pass the main
+series' [`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html)
+and the destination [`PaneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneId.html);
+`PaneId::MAIN` brings a series back to the price pane while it exists. Each series keeps its price scale
+and the shared time mapping. It returns `false` for an unknown series or pane and for a
+study whose custom presentation rejects the placement.
+
+```rust
+let pane = chart.add_pane();
+chart.move_series_to_pane(SeriesId::MAIN, pane); // true: the candles move to the new pane
+chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN); // true: they return
+```
+
+In every pane, the added series follows
+[`SeriesOptions::scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.scale).
+Each pane keeps its own scale for every assignment, so a moved series joins the
+destination pane's scale with the same assignment, with that scale's options and
+range. The scene assigns volume an independent scale so that it does not share
+the price axis on its return to the main pane. Change its active scale
+through [`series_price_scale_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_scale_mut),
+as in the [price scale guide](price-scale.mdx).
+
+An empty lower pane is normally removed when its last member leaves. The scene
+calls [`set_preserve_empty_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_preserve_empty_pane)
+so the same destination remains available. Inspect placement with
+[`panes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.panes),
+[`pane_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.pane_series)
+and [`series_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_pane).
+[`remove_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_pane)
+also removes the series, studies, markers, price lines and drawings it contains
+(locked drawings included); move them out first to keep them. This applies to
+the original price pane too, as long as another pane remains: the surviving
+panes keep their IDs, order, data and the shared time mapping, and snapshots
+save and restore the layout without it. The main series stays out of the panes
+and is not drawn, but its bars keep taking `set_data`, `update` and the feed for
+the studies and the time axis, also after such a layout is restored. Removing the final pane returns `false`
+and keeps its content. To clear only the secondary panes, skip `PaneId::MAIN`.
+
+## Set pane sizes
+
+[`set_pane_stretch_factor`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_pane_stretch_factor)
+divides the available plot height proportionally: factors 3 and 1 give the main
+pane three quarters and the lower pane one quarter, subject to the 40-point
+minimum for each expanded pane. Set finite, positive factors. These proportions
+survive a container resize.
+
+[`set_pane_height`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_pane_height)
+requests a height in egui points on the next layout, then converts it to a
+stretch factor. It is not a permanent fixed pixel height. The other expanded
+panes share the remaining space and all keep their minimum. Read
+[`pane_height`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.pane_height)
+after `show`; it returns `None` for a pane that has not been drawn or is hidden.
+Read the resulting proportions with
+[`pane_stretch_factor`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.pane_stretch_factor).
+
+[`PaneOptions::resizable`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneOptions.html#structfield.resizable)
+enables separator dragging and double-click reset by default. Change it through
+[`pane_options_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.pane_options_mut).
+[`separator_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneOptions.html#structfield.separator_color)
+and [`separator_hover_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneOptions.html#structfield.separator_hover_color)
+override the theme colours. Use
+[`move_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_pane)
+or [`swap_panes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.swap_panes)
+to change vertical order without moving the data into another chart.

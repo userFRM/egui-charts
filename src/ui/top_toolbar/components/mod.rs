@@ -4,12 +4,12 @@
 
 pub mod chart_grid_selector;
 pub mod chart_type_selector;
-pub mod indicator_dialog;
 pub mod layout_menu;
 pub mod settings_menu;
-pub mod symbol_search;
 pub mod sync_button;
 pub mod timeframe_selector;
+
+pub use crate::ui::dialogs::{indicator_dialog, symbol_search};
 
 // Explicit re-exports to avoid ambiguous glob conflicts
 // (indicator_dialog and settings_menu both have actions, config, data, dialog, types submodules)

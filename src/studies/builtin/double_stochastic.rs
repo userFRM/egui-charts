@@ -27,7 +27,7 @@ impl DoubleStochastic {
             period: period.max(1),
             smooth: smooth.max(1),
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Orange
+            color: palette::PURPLE,
             visible: true,
         }
     }
@@ -209,27 +209,5 @@ impl Indicator for DoubleStochastic {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("DS({},{})", self.period, self.smooth)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::studies::test_support::make_range_bar as make_bar;
-
-    #[test]
-    fn test_double_stochastic() {
-        let mut ds = DoubleStochastic::new(5, 3);
-
-        let data: Vec<Bar> = (0..30)
-            .map(|i| {
-                let base = 100.0 + i as f64;
-                make_bar(base + 2.0, base - 2.0, base + 1.0)
-            })
-            .collect();
-
-        ds.calculate(&data);
-
-        assert_eq!(ds.values.len(), 30);
     }
 }

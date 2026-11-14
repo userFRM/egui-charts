@@ -11,6 +11,9 @@ use egui::Color32;
 /// 2. Up/Down Streak Length RSI
 /// 3. Percent Rank of Rate of Change
 ///
+/// The pane starts with guides at 70, 50 and 30 and a light blue fill between the outer guides.
+/// Applied study settings edit each guide and the fill independently.
+///
 /// Developed by Larry Connors
 #[derive(Clone)]
 pub struct ConnorsRSI {
@@ -44,7 +47,7 @@ impl ConnorsRSI {
             rank_period: 100,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::PINK, // Pink
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -192,6 +195,27 @@ impl Indicator for ConnorsRSI {
         }
     }
 
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 2])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        palette::LIGHT_BLUE.gamma_multiply_u8(26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (70.0, palette::MUTED, "Upper guide"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+                (30.0, palette::MUTED, "Lower guide"),
+            ],
+            fill_between_levels: true,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // Separate pane
     }
@@ -245,35 +269,15 @@ mod tests {
             make_bar(100.0), // 0
         ];
 
-        let mut study = ConnorsRSI::new();
-        for (i, expected) in [0.0, 1.0, 2.0, -1.0, -2.0, 0.0].into_iter().enumerate() {
-            study.update(&data[..=i], i);
-            assert_eq!(study.stepper.state().streak, expected);
+        // Wilder RSI(2): price = 100, 50, 25, 25; streak = 100, 25, 50/3, 450/7.
+        // The last two returns rank the current return at 0, 0, 0, then 100 percent.
+        let expected = [200.0 / 3.0, 25.0, 125.0 / 9.0, 1325.0 / 21.0];
+        let mut study = ConnorsRSI::new().with_periods(2, 2, 2);
+        study.calculate(&data);
+        for (bar, want) in (2..data.len()).zip(expected) {
+            let got = study.values().value(0, bar).expect("defined Connors RSI");
+            assert!((got - want).abs() < 1e-9, "bar {bar}: {got} != {want}");
         }
-    }
-
-    #[test]
-    fn test_connors_rsi_calculation() {
-        let mut crsi = ConnorsRSI::new().with_periods(3, 2, 20);
-
-        // Create enough data
-        let data: Vec<Bar> = (0..50)
-            .map(|i| make_bar(100.0 + (i as f64 * 0.5).sin() * 5.0))
-            .collect();
-
-        crsi.calculate(&data);
-
-        assert_eq!(crsi.values.len(), 50);
-
-        // Should have valid values after warm-up period
-        let valid_cnt = crsi
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        assert!(valid_cnt > 0);
     }
 
     /// A flat series has no gains or losses: both RSI components are the neutral 50 and no
@@ -287,24 +291,5 @@ mod tests {
             IndicatorValue::Single(v) => assert!((v - 100.0 / 3.0).abs() < 1e-9),
             _ => panic!("expected a value after warmup"),
         }
-    }
-
-    #[test]
-    fn test_connors_rsi_range() {
-        let mut crsi = ConnorsRSI::new().with_periods(3, 2, 20);
-
-        let data: Vec<Bar> = (0..100).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        crsi.calculate(&data);
-
-        // CRSI should be bounded between 0 and 100
-        let mut checked = 0;
-        for value in &crsi.values.to_rows() {
-            if let IndicatorValue::Single(v) = value {
-                assert!(*v >= 0.0 && *v <= 100.0, "CRSI {v} out of range");
-                checked += 1;
-            }
-        }
-        assert!(checked > 0, "no value to check");
     }
 }

@@ -7,10 +7,12 @@
 
 mod sink;
 
+pub(crate) use sink::TradeBars;
+
 pub use sink::{Sink, aggregate_trades, aggregate_trades_with_tick_size};
 
 use super::depth::Book;
-use super::depth_history::{DepthColumn, DepthHistoryConfig, Sampler};
+use super::depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig, Sampler};
 use super::merge::Origin;
 use super::trades::Trades;
 use super::{FeedError, FeedStatus, OrderQueue, SubscriptionId};
@@ -63,6 +65,9 @@ struct Live {
     sampler: Option<Sampler>,
     study_inputs: Vec<crate::data::OrderFlowInput>,
     taken: TakenIds,
+    /// Pending bars the pending limit does not count, those of a replay rebuild until the chart
+    /// drains them; `usize::MAX` while the rebuild runs.
+    rebuilt_bars: usize,
     updates: Updates,
 }
 
@@ -87,8 +92,11 @@ pub(crate) struct Updates {
     pub(crate) reset: bool,
     /// One per slot, keyed by its open; the last one is the forming bar.
     pub(crate) bars: BTreeMap<DateTime<Utc>, (Bar, Origin)>,
-    /// The trades folded into `bars`, in arrival order.
+    /// The trades folded into `bars`, in arrival order, and repeats completing the order ids of
+    /// drained ones.
     pub(crate) trades: Trades,
+    /// Ids of the queued repeats, which `bars` did not count.
+    repeats: HashSet<u64>,
     /// The order book, if it changed.
     pub(crate) depth: Option<OrderBook>,
     pub(crate) orders: Option<OrderQueue>,
@@ -96,6 +104,8 @@ pub(crate) struct Updates {
     /// Columns sampled for the depth history, oldest first, as many as its newest resolution
     /// holds: the oldest make room for new ones.
     pub(crate) depth_columns: VecDeque<DepthColumn>,
+    /// A seek rebuilds every resolution before the next drain, instead of dropping old columns.
+    pub(crate) replay_depth: Option<DepthHistory>,
     /// Latest top-of-book quote pushed in this frame.
     pub(crate) quote: Option<Level1Quote>,
     /// Latest accepted heartbeat, applied to studies after the queued trades are merged.
@@ -124,10 +134,12 @@ impl Updates {
             reset: false,
             bars: BTreeMap::new(),
             trades,
+            repeats: HashSet::new(),
             depth: None,
             orders: None,
             orders_changed: false,
             depth_columns: VecDeque::new(),
+            replay_depth: None,
             quote: None,
             time: None,
             resnapshot: false,
@@ -171,24 +183,46 @@ impl Inbox {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
             live.updates.depth_columns.clear();
+            live.updates.replay_depth = None;
+        }
+    }
+
+    /// Drops as late the executions `id` receives before `time`, which bars the chart kept
+    /// over a pause already count.
+    #[cfg(feature = "widget")]
+    pub(crate) fn drop_trades_before(&self, id: SubscriptionId, time: DateTime<Utc>) {
+        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+            live.last_trade = live.last_trade.max(Some(time));
         }
     }
 
     /// Connects active stream studies before their inputs are coalesced for the frame.
-    #[cfg(feature = "widget")]
+    #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn study_inputs(
         &self,
         id: SubscriptionId,
         inputs: Vec<crate::data::OrderFlowInput>,
     ) {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
-            live.study_inputs = inputs;
+            live.connect_study_inputs(inputs);
         }
     }
 
     /// Discards what `id` pushed and ignores whatever it pushes from now on.
     pub(crate) fn unsubscribe(&self, id: SubscriptionId) {
         self.state().subscriptions.remove(&id);
+    }
+
+    /// Stops a subscription atomically, retaining its symbol, undrained executions and reset.
+    #[cfg(feature = "widget")]
+    pub(crate) fn unsubscribe_with_trades(
+        &self,
+        id: SubscriptionId,
+    ) -> Option<(String, bool, Trades)> {
+        self.state()
+            .subscriptions
+            .remove(&id)
+            .map(|live| (live.symbol, live.updates.reset, live.updates.trades))
     }
 
     /// Takes everything that arrived since the last drain.
@@ -203,6 +237,9 @@ impl Inbox {
             .map(|(id, live)| {
                 let next = Updates::new(live.updates.trades.empty());
                 let mut updates = std::mem::replace(&mut live.updates, next);
+                if live.rebuilt_bars != usize::MAX {
+                    live.rebuilt_bars = 0;
+                }
                 if updates.dropped_bars > 0 {
                     updates.rejected += updates.dropped_bars;
                     updates.error = Some(FeedError::InvalidData(format!(

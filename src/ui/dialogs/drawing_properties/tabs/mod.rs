@@ -9,6 +9,7 @@ mod visibility;
 pub use coordinates::{CoordinatePoint, CoordinatesState, CoordinatesTab};
 pub use style::StyleTab;
 pub use text::TextTab;
+pub(super) use text::has_text_box;
 pub use visibility::VisibilityTab;
 
 use crate::ui_kit::tab_bar::TabLabel;

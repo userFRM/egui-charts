@@ -1,0 +1,113 @@
+---
+title: Custom series
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/extensions.rs?raw';
+
+A custom series combines an
+[`Indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html)
+that computes values with a
+[`Primitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html)
+that draws and hit-tests them. The chart keeps the study's legend, crosshair,
+last-value tag and automatic range; your primitive replaces its plot geometry.
+Start with [primitives](../extensions.mdx) for lifecycle, passes and axes.
+
+## Compute values, then draw them
+
+This scene adapts the renderer from the native
+[primitives example](https://github.com/userFRM/egui-charts/blob/main/examples/primitives.rs).
+Each value is **high minus low**, the bar's full range, in price units. For
+example, a high of 103 and a low of 99 give 4 regardless of open and close.
+This is not true range, which also considers the previous close.
+
+<Example scene="custom-series" title="Bar ranges drawn as lollipops"
+  task="Zoom in and hover a round head in the lower pane to get the pointing-hand cursor; click it to select the study."
+  code={source.slice(source.indexOf('/// Draw each')).trim()} />
+
+[`CustomIndicator::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.new)
+is a closure-based implementation available with `widget`, even without the
+built-in `studies` feature. Return one
+[`IndicatorValue`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html)
+per source bar, in the same order. For missing or warm-up outputs use
+`IndicatorValue::None`; if your source includes whitespace, handle it explicitly
+instead of turning its non-finite prices into a plotted zero.
+
+[`with_overlay(false)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_overlay)
+requests a separate pane. Pass the study and renderer to
+[`Chart::add_custom_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_custom_series)
+and keep the returned
+[`SeriesId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/selection/struct.SeriesId.html).
+There is no new `ChartType` variant to register. For a richer study definition,
+implement `Indicator` as described in the [studies guide](../studies.mdx).
+
+## Map the study, not candle closes
+
+[`PrimitiveView::study`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#structfield.study)
+is `Some` for a study attachment. The renderer reads
+[`plot_value(0, index)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.plot_value)
+and [`colors()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.colors)
+from it. It draws only `view.visible` in the `Series` pass, converting indices
+and values with the current pane mapping. `view.bars` contains the main source
+bars, while the plotted value comes from the study.
+
+The study's values determine the pane's upper range. The primitive's
+[`autoscale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.autoscale)
+adds `(0.0, 0.0)` because each stem starts at zero. Without it, fitting only the
+positive heads could clip the baseline. Both drawing and hit testing call the
+same `head` function; the hit radius adds three screen points for easier aiming.
+It does not claim the empty space between stems.
+
+## Identity, updates and removal
+
+Custom series are studies, so they follow the main bars supplied through
+[`set_data(SeriesId::MAIN, bars)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data)
+and [`update(SeriesId::MAIN, bar)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update).
+The host supplies historical and streaming data. The renderer's `data_changed`
+hook receives those source bars; `set_data` on the study ID does nothing.
+
+## Feed typed points of your own
+
+To feed a series independently of the bars, implement
+[`CustomPoint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.CustomPoint.html)
+for your point type and add it with
+[`Chart::add_custom_data_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_custom_data_series).
+A point has a key and any number of prices. All prices fit the scale, and the
+last is the current value of the legend, last-value tag and crosshair.
+
+[`set_custom_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_custom_data)
+sorts points by key and keeps the last of a duplicate key.
+[`update_custom_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update_custom_data)
+replaces, appends or inserts one point. A point without prices is whitespace: it
+keeps its key without values. A point marked otherwise with no prices or a
+non-finite one is dropped and counted in `feed_state`, leaving stored points in
+place.
+
+The renderer reads them with
+[`PrimitiveView::custom_points`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#method.custom_points)
+and `visible_custom_points`, placing each with `time_to_x`. Hosts read them with
+`custom_points`, `custom_point_at`, `custom_point_at_index` and
+`custom_points_in_logical_range`, and under the cursor with
+[`ChartPointer::custom_point`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#method.custom_point).
+The main bars still define the shared time scale, so a chart without bars draws
+no points, and a point between two bars has no legend row. The chart's last-value
+tag reads the point at the last main bar; a renderer can tag another point with
+`price_axis_labels`.
+
+Use [`set_series_visible(id, visible)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_visible)
+to hide or show the study and its renderer, and
+[`move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
+to move both. [`remove_series(id)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_series)
+removes the study and detaches its renderer. Undoing that removal does not
+reconstruct the host renderer.
+
+A renderer hit is reported as
+[`PointerTarget::Element`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.Element)
+containing
+[`ChartElementId::Indicator(id)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/selection/enum.ChartElementId.html#variant.Indicator),
+so clicking selects the study rather than a separate primitive ID.
+Read [`ChartEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html)
+values after `show` for host interactions. The
+[series guide](../series.mdx) covers the shared identity and lifecycle APIs;
+the [primitive guide](../extensions.mdx#draw-passes-and-coordinates) covers
+additional drawing passes, axes and merged rendering.

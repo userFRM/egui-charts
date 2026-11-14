@@ -38,8 +38,8 @@ impl TRIX {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::BLUE,   // Blue - TRIX
-                palette::ORANGE, // Orange - Signal
+                palette::BRIGHT_RED, // TRIX
+                palette::ORANGE,     // Signal
             ],
             visible: true,
         }
@@ -61,7 +61,7 @@ impl TRIX {
 /// Construct with the conventional default parameters.
 impl Default for TRIX {
     fn default() -> Self {
-        Self::new(15)
+        Self::new(18)
     }
 }
 

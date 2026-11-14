@@ -34,8 +34,9 @@
 #[allow(missing_debug_implementations)]
 mod builtin;
 mod custom;
-mod data;
-pub use data::{StudyData, StudyDataRequest};
+mod error;
+pub use crate::data::{StudyData, StudyDataRequest};
+pub use error::{RefusedStudy, StudyError};
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub mod factory;
@@ -52,10 +53,13 @@ pub(crate) mod plots;
 pub(crate) mod projection;
 mod settings;
 pub(crate) mod table;
-pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
+pub use plots::{
+    FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyGradient, StudyLabel, StudyZone,
+};
 pub use projection::StudyProjection;
 pub use settings::{
-    ConfiguredStudy, PlotStyle, PlotType, StudyIntervalRange, StudySettings, StudySettingsSnapshot,
+    ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
+    StudyIntervalRange, StudySettings, StudySettingsSnapshot,
 };
 pub use table::{StudyCell, StudyTable};
 mod values;
@@ -86,7 +90,7 @@ pub use chart_state::ChartState;
 mod template;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-pub use template::StudyTemplate;
+pub use template::{StudyTemplate, StudyTemplateSet};
 
 use crate::model::Bar;
 

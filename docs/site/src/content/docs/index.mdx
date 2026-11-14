@@ -1,60 +1,98 @@
 ---
 title: Financial charts. Your data.
-description: Embed interactive financial charts in your Rust application with egui-charts.
+description: Interactive financial charts for Rust and egui. Bring your historical and streaming data, and build your own workspace.
+template: splash
+editUrl: false
+prev: false
+next: false
+hero:
+  title: Financial charts.<br />Your data.
+  tagline: Interactive financial charts for Rust and egui, built around your historical and streaming data.
+  actions:
+    - text: Get started
+      link: /egui-charts/docs/installation/
+      icon: right-arrow
+    - text: Live demo
+      link: /egui-charts/demo/
+      variant: secondary
 ---
 
-import { Aside, Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import FirstChart from '../../components/FirstChart.astro';
 
-egui-charts is a financial charting engine for egui. Put an interactive chart in
-your application, connect your data, and add analysis and workspace controls as
-you need them. The same Rust code runs natively and in WebAssembly.
+<figure id="product-tour" className="live-chart">
+  <figcaption>
+    <span>Explore the demo <span className="sample-label">Generated sample data</span></span>
+    <a href="/egui-charts/demo/">Open the demo <span aria-hidden="true">→</span></a>
+  </figcaption>
+  <video id="tour-video" autoplay muted loop playsinline preload="metadata" poster="/egui-charts/docs/media/tour-poster.webp" width="2560" height="1440" aria-label="Chart layouts, studies, drawing tools, watchlist and bar replay in the demo">
+    <source data-src="/egui-charts/docs/media/tour-1080p.webm" type="video/webm; codecs=av01.0.09M.08" />
+    <source data-src="/egui-charts/docs/media/tour-1080p.mp4" type="video/mp4" />
+    <a href="/egui-charts/docs/media/tour-1080p.mp4">Watch the demo tour</a>
+  </video>
+  <p><button id="tour-play" type="button" hidden>Play the demo tour</button> Four charts, studies, drawing tools and replay. All prices come from the sample feed.</p>
+  <noscript><p><a href="/egui-charts/docs/media/tour-1080p.mp4">Play the demo tour</a></p></noscript>
+</figure>
 
-<LinkButton href="/egui-charts/docs/installation/" icon="right-arrow">Start building</LinkButton>
-<LinkButton href="/egui-charts/docs/api-reference/" variant="secondary">Explore the API</LinkButton>
+<script is:inline set:html={`
+  (() => {
+    const video = document.getElementById('tour-video');
+    const play = document.getElementById('tour-play');
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const load = () => {
+      for (const source of video.querySelectorAll('source')) source.src = source.dataset.src;
+      video.load();
+    };
+    const update = () => {
+      video.autoplay = !motion.matches;
+      play.hidden = !motion.matches;
+      video.controls = !motion.matches;
+      if (motion.matches) {
+        video.pause();
+        for (const source of video.querySelectorAll('source')) source.removeAttribute('src');
+        video.load();
+      } else {
+        load();
+        video.play().catch(() => { play.hidden = false; });
+      }
+    };
+    play.addEventListener('click', () => {
+      video.controls = true;
+      load();
+      video.play().then(() => { play.hidden = true; }).catch(() => { play.hidden = false; });
+    });
+    motion.addEventListener('change', update);
+    update();
+  })();
+`} />
 
-## Build around your chart
+<FirstChart />
+
+## Learn the chart
 
 <CardGrid>
-  <Card title="Start with a widget" icon="puzzle">
-    Keep a chart alive between frames and call `Chart::show` in your egui layout.
-    It handles painting, navigation and interaction.
-
-    [Create your first chart](first-chart.mdx)
-  </Card>
-  <Card title="Connect your data" icon="setting">
-    Supply bars already in memory, or attach a feed for asynchronous history
-    and live subscriptions.
-
-    [Bring history and live updates](data.mdx)
-  </Card>
-  <Card title="Add analysis" icon="magnifier">
-    Attach built-in or custom studies, draw on the chart, and work with actual
-    executions and order-book data.
-
-    [Explore studies](studies.mdx)
-  </Card>
-  <Card title="Compose a workspace" icon="window">
-    Use toolbars, dialogs and panels alongside your chart. The headless engine
-    also works without egui.
-
-    [Build your application UI](application-ui.mdx)
-  </Card>
+  <LinkCard title="Installation" href="/egui-charts/docs/installation/" description="Choose main (0.3 in development, egui 0.37) or the published 0.2.0 API (egui 0.33.3)." />
+  <LinkCard title="First chart" href="/egui-charts/docs/first-chart/" description="Put a chart on screen, keep its state, replace history and update bars." />
+  <LinkCard title="Builder tutorial" href="/egui-charts/docs/builder-guide/" description="Connect historical and streaming data, handle events, and save chart state." />
+  <LinkCard title="main API (rustdoc)" href="/egui-charts/docs/api/egui_charts/index.html" description="Browse types and methods for egui 0.37, with rustdoc's own symbol search." />
 </CardGrid>
 
-## Bring your own services
+## Chart concepts
 
-Your application owns market data connections, credentials, accounts and durable
-storage. The library provides data contracts, chart rendering, study calculations
-and host actions. It does not supply a market data feed or run trading strategies.
+<CardGrid>
+  <LinkCard title="Series and chart types" href="/egui-charts/docs/chart-types/" description="Choose a renderer, add a series, and select shared or independent pricing." />
+  <LinkCard title="Price scale" href="/egui-charts/docs/scales/#choose-a-price-scale" description="Use normal, logarithmic, percentage or indexed prices." />
+  <LinkCard title="Time scale and whitespace" href="/egui-charts/docs/scales/#exchange-time-not-bar-indices" description="Share UTC viewports and reserve future whitespace. Use Bar::whitespace for missing observations." />
+  <LinkCard title="Panes and markers" href="/egui-charts/docs/api-reference/#panes" description="Place series and studies in panes, resize them, and attach event markers to bars." />
+</CardGrid>
 
-Start with [the data model](data-model.mdx), then use the
-[builder guide](../../../../builder-guide.md) to connect events, persistence and
-synchronized charts.
+## Build your workspace
 
-<Aside title="Choose the matching API">
-This guide follows `main`, which includes changes beyond the published 0.2.0
-release. Use the Git dependency in [installation](installation.mdx) for these
-examples. For released APIs, read [the 0.2.0 documentation](https://docs.rs/egui-charts/0.2.0).
-</Aside>
+<CardGrid>
+  <LinkCard title="Studies and extensions" href="/egui-charts/docs/api-reference/#extensions" description="Add custom studies, series primitives, drawing tools and themes." />
+  <LinkCard title="Recipes" href="/egui-charts/docs/api-reference/#recipes" description="Page history, stream bars, connect HTTP endpoints, save drawings and synchronize charts." />
+  <LinkCard title="Interaction" href="/egui-charts/docs/scales/#handle-chart-events" description="Respond to clicks, crosshair movement and visible-range changes." />
+  <LinkCard title="Status" href="/egui-charts/docs/progress/" description="See what works today and which capabilities still have gaps." />
+</CardGrid>
 
-[Third-party licenses](https://userfrm.github.io/egui-charts/docs/licenses.txt)
+<p id="bring-your-own-services" className="host-note">Your application owns market data connections, credentials, accounts and storage. egui-charts supplies the chart, analysis and host interfaces.</p>

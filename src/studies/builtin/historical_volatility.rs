@@ -26,7 +26,7 @@ impl HistoricalVolatility {
             period: period.max(1),
             trading_days: 252.0, // Default for stocks
             values: IndicatorValues::new(),
-            color: palette::ORANGE, // Deep Orange
+            color: palette::BLUE, // Deep Orange
             visible: true,
         }
     }
@@ -54,7 +54,7 @@ impl HistoricalVolatility {
 /// Construct with the conventional default parameters.
 impl Default for HistoricalVolatility {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(10)
     }
 }
 
@@ -131,7 +131,7 @@ impl Indicator for HistoricalVolatility {
 
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
-        trading_days: number("Trading days", 0.0, f64::MAX)
+        trading_days: number("Trading days per year", 0.0, f64::MAX)
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -207,37 +207,6 @@ mod tests {
     use crate::studies::test_support::make_bar;
 
     #[test]
-    fn test_hv_calculation() {
-        let mut hv = HistoricalVolatility::new(5);
-
-        // Prices with some volatility
-        let data = vec![
-            make_bar(100.0),
-            make_bar(102.0),
-            make_bar(99.0),
-            make_bar(103.0),
-            make_bar(98.0),
-            make_bar(105.0),
-            make_bar(101.0),
-        ];
-
-        hv.calculate(&data);
-
-        assert_eq!(hv.values.len(), 7);
-
-        // First values should be None
-        for i in 0..5 {
-            assert!(matches!(hv.values.to_rows()[i], IndicatorValue::None));
-        }
-
-        // Should have positive volatility
-        let IndicatorValue::Single(v) = hv.values.to_rows()[6] else {
-            panic!("no value: {:?}", hv.values.to_rows()[6]);
-        };
-        assert!(v > 0.0, "HV should be positive");
-    }
-
-    #[test]
     fn test_hv_no_volatility() {
         let mut hv = HistoricalVolatility::new(3);
 
@@ -257,7 +226,7 @@ mod tests {
         let IndicatorValue::Single(v) = rows.last().unwrap() else {
             panic!("no value: {:?}", hv.values.to_rows().last().unwrap());
         };
-        assert!(v.abs() < 0.01, "HV should be ~0 for constant prices");
+        assert_eq!(*v, 0.0, "zero log returns have exactly zero variance");
     }
 
     #[test]
@@ -275,11 +244,18 @@ mod tests {
 
         hv.calculate(&data);
 
-        // High volatility should produce large HV values
-        let rows = hv.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", hv.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
+        for bar in 0..3 {
+            assert!(
+                matches!(hv.values.to_rows()[bar], IndicatorValue::None),
+                "warm-up bar {bar}"
+            );
+        }
+        // Hand sample deviation of three log returns, times sqrt(252)*100:
+        // ln(6/5),ln(2/3),ln(13/8), then ln(2/3),ln(13/8),ln(7/13).
+        // Variance is sum((return-mean)^2)/2, evaluated independently at 60 digits.
+        for (bar, want) in [(3, 719.1134022641008), (4, 930.0417872049941)] {
+            let got = hv.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-10, "bar {bar}: {got}");
+        }
     }
 }

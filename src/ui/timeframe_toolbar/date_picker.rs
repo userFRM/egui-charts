@@ -15,6 +15,7 @@ use egui::{
     Align, Align2, FontId, Key, Label, Layout, Modifiers, RichText, Role, Sense, Stroke,
     StrokeKind, TextEdit, Ui, Vec2, WidgetInfo,
 };
+use std::fmt::Write;
 
 /// Side of a day cell.
 const CELL: f32 = 32.0;
@@ -190,7 +191,10 @@ impl DatePicker {
 
             // Always one line, so the dialog keeps its height while a range is picked.
             let (status, color) = if !field_valid {
-                ("Enter a date as YYYY-MM-DD".to_owned(), theme.ui.error)
+                (
+                    l10n::text(ui.ctx(), "Enter a date as YYYY-MM-DD"),
+                    theme.ui.error,
+                )
             } else if !self.custom_range_mode {
                 (
                     self.sel_date.format("%A %-d %B %Y").to_string(),
@@ -198,22 +202,34 @@ impl DatePicker {
                 )
             } else {
                 let text = match (self.range_start, self.range_end) {
-                    (Some(start), Some(end)) => format!("From {start} to {end}"),
-                    (Some(start), None) => format!("From {start}, pick the last day"),
-                    _ => "Pick the first day".to_owned(),
+                    (Some(start), Some(end)) => {
+                        let mut start_text = String::with_capacity(10);
+                        let mut end_text = String::with_capacity(10);
+                        let _ = write!(start_text, "{start}");
+                        let _ = write!(end_text, "{end}");
+                        l10n::format_text(
+                            ui.ctx(),
+                            "From {start} to {end}",
+                            &[("start", start_text.as_str()), ("end", end_text.as_str())],
+                        )
+                    }
+                    (Some(start), None) => {
+                        let mut start_text = String::with_capacity(10);
+                        let _ = write!(start_text, "{start}");
+                        l10n::format_text(
+                            ui.ctx(),
+                            "From {start}, pick the last day",
+                            &[("start", start_text.as_str())],
+                        )
+                    }
+                    _ => l10n::text(ui.ctx(), "Pick the first day"),
                 };
                 (text, theme.ui.text_secondary)
             };
             ui.allocate_ui_with_layout(
                 Vec2::new(row.x, LINE),
                 Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.label(
-                        RichText::new(l10n::text(ui.ctx(), status))
-                            .size(theme.text.label)
-                            .color(color),
-                    )
-                },
+                |ui| ui.label(RichText::new(status).size(theme.text.label).color(color)),
             );
 
             ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {

@@ -1,0 +1,57 @@
+---
+title: Host legend and tooltip
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/recipes.rs?raw';
+
+Keep the built-in legend and tooltip, and render your own readout from
+[`ChartEvent::CrosshairMoved`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html#variant.CrosshairMoved).
+The event carries a
+[`ChartPointer`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html)
+with the bar, optional stored time, pane value, added-series bars and study values.
+You do not need to repeat coordinate lookup or read the chart's internals.
+
+## Show, drain, then draw the host tooltip
+
+Create a [first chart](../first-chart.mdx) and one `HostReadout::default()` before
+the frame loop. Call `readout.show(ui, &mut chart)` each frame; it shows the chart
+itself. Keep this state alive so the legend can use the last event on the next
+frame. It calls
+[`drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
+after `show`. The source below is the complete readout, including its imports.
+
+<Example scene="host-readout" title="Built-in values with a host readout"
+  task="Move over a candle to compare the chart tooltip with the host's UTC close readout, then click and leave the plot."
+  code={source.slice(source.indexOf('/// Keep the last local'), source.indexOf('/// Share UTC')).trim()} />
+
+The host legend appears above the chart; the additional tooltip follows the
+pointer. A click saves its timestamp in the host state. The built-in tooltip
+stays on by default;
+[`set_tooltip_enabled`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_tooltip_enabled)
+turns it off when the host readout replaces it.
+The saved main bar's close is a data value;
+[`ChartPointer::price`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.price)
+is the pointer's value on the hovered pane and can be in volume or study units.
+
+## Handle unavailable values
+
+`CrosshairMoved(None)` clears the host readout when the pointer leaves. A pointer
+over empty history or outside stored slots can still have screen coordinates
+and a pane value while its `time` and `bar` are absent. A whitespace bar has a
+timestamp but no price; the scene filters it before formatting. Keep missing
+values absent rather than displaying a zero or a stale close.
+
+[`series_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.series_bars)
+contains only added series with a matching timestamp, including hidden series.
+[`studies`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.studies)
+contains visible study plots by default. Use
+[`set_cursor_data_policy`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_cursor_data_policy)
+with `IncludeHidden` if the host readout needs hidden studies too. Match by stable
+series or study id, not list position. For production formatting, see the
+[formatter contracts](https://github.com/userFRM/egui-charts/blob/main/docs/chart-api.md).
+
+Drain the event queue in one place and dispatch events to all interested host
+components there. A second drain cannot see the first drain's events. The
+[interaction guide](../interaction.mdx#drain-events-once-per-frame) explains queue
+overflow and the wildcard required for this non-exhaustive enum.

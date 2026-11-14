@@ -1,7 +1,8 @@
 //! A synthetic limit order book that follows the trades of a price process: each trade takes the
-//! liquidity in its way, liquidity providers quote again around the new last price, and orders
-//! are added and cancelled near the best bid and ask between trades. Every change is numbered
-//! as a depth delta, so a feed can push the book through the same contract as an exchange's.
+//! liquidity in its way, liquidity providers quote every price within the depth again around the
+//! new last price, and orders are added and cancelled near the best bid and ask between trades.
+//! Every change is numbered as a depth delta, so a feed can push the book through the same
+//! contract as an exchange's.
 //!
 //! The benches include this file to measure a busy instrument; it uses only the library's API.
 
@@ -81,7 +82,8 @@ impl Market {
     /// A trade of `size` at `price` ticks, aggressed by `side`. A buy takes every ask below the
     /// price and `size` from the ask at it, and the bids at or above it are gone; a sell does the
     /// same the other way. The book then quotes again one tick from the price on the passive
-    /// side and beyond it on the side taken, if nothing is left there. Returns the delta.
+    /// side and beyond it on the side taken, if nothing is left there, and every price the trade
+    /// emptied within the depth. Returns the delta.
     pub fn trade(
         &mut self,
         ts: DateTime<Utc>,
@@ -116,6 +118,7 @@ impl Market {
             let size = self.resting(0);
             self.set(!taken, price - direction, size);
         }
+        self.quote_gaps();
         self.trim();
         self.end()
     }
@@ -150,6 +153,7 @@ impl Market {
             let size = if distance == 0 { size.max(1.0) } else { size };
             self.set(bid, level, size);
         }
+        self.quote_gaps();
         self.trim();
         self.end()
     }
@@ -193,6 +197,26 @@ impl Market {
         }
     }
 
+    /// Quotes every price without a size within the depth of the best bid and ask.
+    fn quote_gaps(&mut self) {
+        for (bid, direction) in [(true, -1), (false, 1)] {
+            let side = self.side(bid);
+            let touch = if bid {
+                side.last_key_value()
+            } else {
+                side.first_key_value()
+            };
+            let Some((&touch, _)) = touch else { continue };
+            for distance in 0..DEPTH {
+                let level = touch + direction * distance;
+                if !self.side(bid).contains_key(&level) {
+                    let size = self.resting(distance);
+                    self.set(bid, level, size);
+                }
+            }
+        }
+    }
+
     /// Removes the levels furthest from the touch beyond the quoted depth.
     fn trim(&mut self) {
         while self.bids.len() as i64 > DEPTH {
@@ -205,10 +229,16 @@ impl Market {
         }
     }
 
-    /// A resting size `distance` ticks from the touch: larger further away, with noise.
+    /// A resting size `distance` ticks from the touch: larger further away, with noise, and one
+    /// level in 15 a wall of large orders, as a book of a real instrument shows.
     fn resting(&mut self, distance: i64) -> f64 {
         let base = 20.0 + 4.0 * (distance.min(20) as f64);
-        (base * (0.5 + (self.random() % 1000) as f64 / 1000.0)).round()
+        let wall = if self.random().is_multiple_of(15) {
+            4.0
+        } else {
+            1.0
+        };
+        (wall * base * (0.75 + (self.random() % 500) as f64 / 1000.0)).round()
     }
 
     fn level(&self, price: i64, size: f64) -> OrderBookLevel {
@@ -228,5 +258,37 @@ impl Market {
         self.random ^= self.random >> 7;
         self.random ^= self.random << 17;
         self.random
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Guards the book a heatmap and a ladder show: a trade or a cancel never leaves an empty
+    /// price within the depth, wherever the price process goes.
+    #[test]
+    fn every_price_within_the_depth_stays_quoted() {
+        // Imported here: the benches include this file, and a build without tests drops the test.
+        use super::{DateTime, Market, OrderSide};
+        let mut market = Market::new("A", 0.25, 20_000, 7);
+        let (mut price, ts) = (20_000, DateTime::default());
+        for event in 0..10_000 {
+            if event % 5 == 0 {
+                price += (market.random() % 41) as i64 - 20;
+                let side = if market.random().is_multiple_of(2) {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
+                };
+                market.trade(ts, price, side, 25.0);
+            } else {
+                market.churn(ts);
+            }
+        }
+        let (&bid, _) = market.bids.last_key_value().unwrap();
+        let (&ask, _) = market.asks.first_key_value().unwrap();
+        for distance in 0..=50 {
+            assert!(market.bids[&(bid - distance)] > 0.0);
+            assert!(market.asks[&(ask + distance)] > 0.0);
+        }
     }
 }

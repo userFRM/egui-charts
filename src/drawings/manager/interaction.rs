@@ -1,16 +1,106 @@
 //! Pointer interaction: handles and drags, tool selection and drawing creation.
 
 use super::{DrawingManager, DrawingSyncAction};
-use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
+use crate::drawings::domain::{
+    ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
+};
 use crate::drawings::services::HandleService;
+use crate::model::PostLink;
 use egui::Pos2;
 
 impl DrawingManager {
+    /// Whether a modifier area gesture owns the pointer, including after modifier release
+    /// or cancellation until the primary button is released.
+    pub(crate) fn box_selection_input(&mut self, ui: &egui::Ui) -> bool {
+        let frame = ui.ctx().cumulative_frame_nr();
+        if let Some(area) = &mut self.selection.area {
+            // Give the owner the release frame, then free input even if no pane handled it.
+            match area.release_frame {
+                Some(released) if released != frame => self.end_selection_area(),
+                None if !ui.input(|i| i.pointer.primary_down()) => {
+                    area.release_frame = Some(frame);
+                    ui.ctx().request_repaint();
+                }
+                _ => {}
+            }
+        }
+        let (pressed, held, modifier, origin) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down() || i.pointer.primary_released(),
+                i.modifiers.ctrl || i.modifiers.command,
+                i.pointer.press_origin(),
+            )
+        });
+        if pressed && self.selection.area_press.is_none_or(|(at, _)| at != frame) {
+            let empty = self.active_tool.is_none()
+                && !self.eraser_mode
+                && modifier
+                && origin.is_some_and(|p| {
+                    (if self.pane_clips.is_empty() {
+                        self.pane_rect.contains(p)
+                    } else {
+                        self.pane_clips.values().any(|rect| rect.contains(p))
+                    }) && self.hit_test(p).is_none()
+                });
+            self.selection.area_press = Some((frame, empty));
+        }
+        held && (self.selection.area.is_some()
+            || (modifier && self.selection.area_press.is_some_and(|(_, empty)| empty)))
+    }
+
+    /// The live selection area, if a gesture owns the pointer.
+    pub(crate) fn selection_area(&self) -> Option<&crate::drawings::services::SelectionArea> {
+        self.selection.area.as_ref()
+    }
+
+    /// Starts an area gesture in `pane` at `origin`, remembering the selection it adds to.
+    pub(crate) fn begin_selection_area(&mut self, origin: Pos2, pane: Option<usize>) {
+        self.selection.begin_area(origin, pane);
+    }
+
+    /// Ends the area gesture, keeping the selection it made.
+    pub(crate) fn end_selection_area(&mut self) {
+        self.selection.area = None;
+    }
+
+    /// Selects the visible drawings of this pane whose painted geometry meets `rect`, on top of
+    /// the selection the gesture began with.
+    pub(crate) fn update_selection_area(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|drawing| {
+                drawing.selectable
+                    && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                    && if self.owns_pane(drawing) {
+                        painted
+                            .iter()
+                            .find(|p| p.id == drawing.id && p.points == drawing.points)
+                            .is_some_and(|p| {
+                                crate::drawings::services::SelectionService::intersects_painted(
+                                    ctx, &p.shapes, rect,
+                                )
+                            })
+                    } else {
+                        drawing.reaches_other_panes()
+                            && (drawing.points.first())
+                                .is_some_and(|point| rect.x_range().contains(point.x))
+                    }
+            })
+            .map(|d| d.id)
+            .collect();
+        drop(painted);
+        self.selection.update_area(ids);
+    }
+
     // === Handle delegation ===
 
     /// Returns the selection handle positions for a drawing (tool-type-aware).
+    /// Regression trends use the fitted endpoints from the last [`Self::render_all`].
     pub fn get_handles(&self, drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
-        HandleService::get_handles(drawing)
+        HandleService::get_handles(&self.handle_drawing(drawing))
     }
 
     /// Hit-tests a point against the handles of a drawing.
@@ -18,6 +108,7 @@ impl DrawingManager {
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
         if !drawing.selectable
+            || drawing.locked
             || !drawing.is_visible_on_timeframe(&self.curr_timeframe)
             || (!self.pane_clips.is_empty()
                 && !self
@@ -27,7 +118,11 @@ impl DrawingManager {
         {
             return None;
         }
-        HandleService::hit_test_handle(drawing, point, self.options.handle_config.size)
+        HandleService::hit_test_handle(
+            &self.handle_drawing(drawing),
+            point,
+            self.options.handle_config.size,
+        )
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
@@ -52,7 +147,8 @@ impl DrawingManager {
         }
     }
 
-    /// Begins moving every anchor from a body grab at `origin`, retaining the grab offset.
+    /// Begins moving the anchors that move with the body (all but a bars pattern's source)
+    /// from a grab at `origin`, retaining the grab offset.
     /// Locked drawings ignore the grab. The move shares the handle drag's undo and sync lifecycle.
     pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
         self.start_drag_handle(drawing_id, HandlePos::Middle);
@@ -74,31 +170,230 @@ impl DrawingManager {
         }
     }
 
+    pub(crate) fn copy_dragged_drawings(&mut self) {
+        let Some((_, handle)) = self.dragging_handle else {
+            return;
+        };
+        let Some(old) = self.drag_old_state.take() else {
+            return;
+        };
+        let primary_id = old.id;
+        let mut copies = std::mem::take(&mut self.drag_group);
+        copies.push(old);
+        copies.sort_by_key(|copy| {
+            (
+                copy.z_order,
+                self.drawings.iter().position(|d| d.id == copy.id),
+            )
+        });
+        // A copy that could not be created ends the gesture, as a grab of a locked drawing does.
+        if copies
+            .iter()
+            .any(|copy| self.validate_created(copy).is_err())
+        {
+            self.dragging_handle = None;
+            self.drag_origin = None;
+            return;
+        }
+        let primary = copies.iter().position(|d| d.id == primary_id).unwrap();
+        for copy in &mut copies {
+            copy.id = self.take_id();
+            copy.stored_id = None;
+            copy.created_at = None;
+            copy.z_order = self.top_z_order();
+            self.drawings.push(copy.clone());
+        }
+        let old = copies.remove(primary);
+        self.dragging_handle = Some((old.id, handle));
+        self.drag_old_state = Some(old.clone());
+        self.drag_group = copies;
+        self.select_drawings(
+            self.drag_group
+                .iter()
+                .map(|d| d.id)
+                .chain([old.id])
+                .collect::<Vec<_>>(),
+        );
+        self.drag_copy = true;
+    }
+
+    pub(crate) fn constrains_angle(tool: DrawingToolType) -> bool {
+        use DrawingToolType as T;
+        matches!(
+            tool,
+            T::TrendLine
+                | T::Ray
+                | T::ExtendedLine
+                | T::InfoLine
+                | T::TrendAngle
+                | T::Arrow
+                | T::ParallelChannel
+                | T::DisjointChannel
+                | T::FlatTopBottom
+                | T::RegressionTrend
+                | T::FibonacciChannel
+        )
+    }
+
+    // Project onto the nearest 45-degree direction. Integer directions keep diagonals exact.
+    fn constrain_angle(&self, drawing: &Drawing, index: usize, point: Pos2) -> Pos2 {
+        if !self.interaction_modifiers.shift
+            || drawing.custom_tool.is_some()
+            || !Self::constrains_angle(drawing.tool_type)
+        {
+            return point;
+        }
+        let anchor_index = if index == 0 { 1 } else { index - 1 };
+        let Some(&anchor) = drawing.points.get(anchor_index) else {
+            return point;
+        };
+        let delta = point - anchor;
+        let angle =
+            (delta.angle() / std::f32::consts::FRAC_PI_4).round() * std::f32::consts::FRAC_PI_4;
+        let direction = egui::vec2(angle.cos().round(), angle.sin().round());
+        let mut offset = direction * (delta.dot(direction) / direction.length_sq());
+        // Clip along the ray so an off-pane anchor keeps the same angle at the pane edge.
+        if self.pane_rect.is_positive() {
+            let mut first = 0.0_f32;
+            let mut last = f32::INFINITY;
+            for (start, step, min, max) in [
+                (
+                    anchor.x,
+                    direction.x,
+                    self.pane_rect.left(),
+                    self.pane_rect.right(),
+                ),
+                (
+                    anchor.y,
+                    direction.y,
+                    self.pane_rect.top(),
+                    self.pane_rect.bottom(),
+                ),
+            ] {
+                if step == 0.0 {
+                    if start < min || start > max {
+                        last = f32::NEG_INFINITY;
+                    }
+                } else {
+                    let a = (min - start) / step;
+                    let b = (max - start) / step;
+                    first = first.max(a.min(b));
+                    last = last.min(a.max(b));
+                }
+            }
+            if first <= last {
+                let distance = delta.dot(direction) / direction.length_sq();
+                offset = direction * distance.clamp(first, last);
+            }
+        }
+        anchor + offset
+    }
+
+    fn constrain_preview(&self, point: Pos2) -> Pos2 {
+        self.curr_drawing.as_ref().map_or(point, |drawing| {
+            let index = drawing
+                .points
+                .len()
+                .saturating_sub(usize::from(self.preview_point));
+            self.constrain_angle(drawing, index, point)
+        })
+    }
+
     /// Updates the position of the currently dragged handle to `new_pos`,
     /// applying snap behavior and coordinate conversion.
-    pub fn update_drag_handle<F, G>(&mut self, new_pos: Pos2, x_to_bar: F, y_to_price: G)
-    where
+    /// `translate_price(price, from_y, to_y)` shifts whole-drawing prices in scale units;
+    /// `y_to_price` retains the pointer bounds for individual handles.
+    pub fn update_drag_handle<F, G, H>(
+        &mut self,
+        new_pos: Pos2,
+        x_to_bar: F,
+        y_to_price: G,
+        translate_price: H,
+    ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
+            // A derived handle can be rounded, clamped or shifted away from its stored anchor.
+            if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
+                )
+                && self.get_handles(drawing).into_iter().any(|(h, point)| {
+                    h == handle
+                        && x_to_bar(new_pos.x) == x_to_bar(point.x)
+                        && (drawing.tool_type == DrawingToolType::RegressionTrend
+                            || drawing.points.first().is_some_and(|p| p.x != point.x))
+                })
+            {
+                return;
+            }
             // Compute snapped position before mutable borrow
-            let snapped = self.snap_point(new_pos, &self.drawings);
+            let mut snapped = self.snap_point(new_pos, &self.drawings);
+            let mut constrained_price = None;
+            if self.interaction_modifiers.shift
+                && let Some(origin) = self.drag_origin
+            {
+                let delta = snapped - origin;
+                if delta.x.abs() >= delta.y.abs() {
+                    snapped.y = origin.y;
+                } else {
+                    snapped.x = origin.x;
+                }
+            } else if let Some(drawing) = self.drawings.iter().find(|d| d.id == id) {
+                let index = match handle {
+                    HandlePos::Start => Some(0),
+                    HandlePos::End => Some(1),
+                    HandlePos::Point(index) => Some(index),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    snapped = self.constrain_angle(drawing, index, snapped);
+                    let anchor_index = if index == 0 { 1 } else { index - 1 };
+                    if self.interaction_modifiers.shift
+                        && Self::constrains_angle(drawing.tool_type)
+                        && drawing.custom_tool.is_none()
+                        && let Some((anchor, chart_anchor)) = drawing
+                            .points
+                            .get(anchor_index)
+                            .zip(drawing.chart_points.get(anchor_index))
+                    {
+                        // Use the fixed anchor's current projection, including after a view change.
+                        constrained_price = Some((chart_anchor.price, anchor.y));
+                    }
+                }
+            }
+            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars.
+            let whole_bars = self.interaction_modifiers.shift && constrained_price.is_none();
+            let x_to_bar = |x| {
+                let bar = x_to_bar(x);
+                if whole_bars { bar.round() } else { bar }
+            };
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                let price = y_to_price(snapped.y) - y_to_price(origin.y);
                 for old in &self.drag_group {
                     if let Some(drawing) = self
                         .drawings
                         .iter_mut()
                         .find(|d| d.id == old.id && !d.locked)
                     {
-                        for (point, before) in
-                            drawing.chart_points.iter_mut().zip(&old.chart_points)
+                        let first = old.first_moved_anchor();
+                        for (point, before) in drawing
+                            .chart_points
+                            .iter_mut()
+                            .zip(&old.chart_points)
+                            .skip(first)
                         {
-                            *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                            *point = ChartPoint::new(
+                                before.bar_idx + bars,
+                                translate_price(before.price, origin.y, snapped.y),
+                            );
                         }
-                        for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                        for (point, before) in
+                            drawing.points.iter_mut().zip(&old.points).skip(first)
+                        {
                             *point = *before + (snapped - origin);
                         }
                         if let Some([x, y]) = old.screen_anchor {
@@ -113,15 +408,61 @@ impl DrawingManager {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
-                    let price = y_to_price(snapped.y) - y_to_price(origin.y);
-                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
-                        *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                    // Dragging a label leaves the point it annotates; a selection, a copy or a
+                    // note saved without a label anchor moves whole.
+                    let skip = usize::from(
+                        self.drag_group.is_empty()
+                            && !self.drag_copy
+                            && old.points.len() > 1
+                            && matches!(
+                                drawing.tool_type,
+                                DrawingToolType::Callout
+                                    | DrawingToolType::Note
+                                    | DrawingToolType::PriceNote
+                            ),
+                    );
+                    let skip = skip.max(old.first_moved_anchor());
+                    // A line moved from a pane it only reaches moves in time: that pane's price
+                    // scale is not its own.
+                    let keeps_price = !self.pane_members.contains(&drawing.pane);
+                    for (point, before) in drawing
+                        .chart_points
+                        .iter_mut()
+                        .zip(&old.chart_points)
+                        .skip(skip)
+                    {
+                        *point = ChartPoint::new(
+                            before.bar_idx + bars,
+                            if keeps_price {
+                                before.price
+                            } else {
+                                translate_price(before.price, origin.y, snapped.y)
+                            },
+                        );
                     }
-                    for (point, before) in drawing.points.iter_mut().zip(&old.points) {
-                        *point = *before + (snapped - origin);
+                    let moved = snapped - origin;
+                    let moved = if keeps_price {
+                        egui::vec2(moved.x, 0.0)
+                    } else {
+                        moved
+                    };
+                    for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
+                        *point = *before + moved;
                     }
                 } else {
-                    HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+                    HandleService::update_handle(
+                        drawing,
+                        handle,
+                        snapped,
+                        x_to_bar,
+                        |y| {
+                            constrained_price.map_or_else(
+                                || y_to_price(y),
+                                |(price, from)| translate_price(price, from, y),
+                            )
+                        },
+                        &translate_price,
+                    );
                 }
                 if drawing.screen_anchor.is_some()
                     && let Some(pos) = drawing.points.first()
@@ -135,10 +476,70 @@ impl DrawingManager {
         }
     }
 
+    /// Puts each pin of this pane that still carries a pane position on the bar and price under
+    /// that position, and clears the position, so pins saved by earlier releases stay where they
+    /// were shown. Called by the chart after the pane's screen coordinates are updated.
+    pub(crate) fn anchor_pins_to_bars(
+        &mut self,
+        x_to_bar: impl Fn(f32) -> f32,
+        y_to_price: impl Fn(f32) -> f64,
+    ) {
+        let pane = self.pane_rect;
+        if !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0 {
+            return;
+        }
+        let mut converted = Vec::new();
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            let Some([x, y]) = drawing.screen_anchor else {
+                continue;
+            };
+            if drawing.tool_type != DrawingToolType::AnchoredNote
+                || !self.pane_members.contains(&drawing.pane)
+            {
+                continue;
+            }
+            let pos = pane.min + egui::vec2(x * pane.width(), y * pane.height());
+            let anchor = ChartPoint::new(x_to_bar(pos.x), y_to_price(pos.y));
+            if let (Some(point), Some(chart_point), true) = (
+                drawing.points.first_mut(),
+                drawing.chart_points.first_mut(),
+                anchor.bar_idx.is_finite() && anchor.price.is_finite(),
+            ) {
+                *point = pos;
+                *chart_point = anchor;
+                drawing.screen_anchor = None;
+                converted.push(drawing.id);
+            }
+        }
+        for id in converted {
+            self.queue_update(id);
+        }
+    }
+
     /// Ends the current handle drag or [`Self::drag_edit_drawing`] gesture, pushing one modify
     /// command to the undo history and queuing one update for the whole gesture.
+    /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
         if let Some(old_state) = self.drag_old_state.take() {
+            if std::mem::take(&mut self.drag_copy) {
+                let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
+                    .iter()
+                    .map(|d| d.id)
+                    .collect();
+                ids.push(old_state.id);
+                ids.sort_by_key(|id| self.drawings.iter().position(|d| d.id == *id));
+                for &id in &ids {
+                    self.queue(DrawingSyncAction::SaveDrawing(id));
+                }
+                self.history
+                    .push_command(crate::drawings::services::DrawingCommand::Snapshot {
+                        drawings: Vec::new(),
+                        ids,
+                    });
+                self.dragging_handle = None;
+                self.drag_origin = None;
+                return;
+            }
             self.queue_edit(&old_state);
             if self.drag_group.is_empty() {
                 self.history.push_modify(old_state.id, old_state);
@@ -151,12 +552,10 @@ impl DrawingManager {
                 let snapshot = self
                     .drawings
                     .iter()
-                    .map(|drawing| {
-                        before
-                            .iter()
-                            .find(|old| old.id == drawing.id)
-                            .unwrap_or(drawing)
-                            .clone()
+                    .enumerate()
+                    .filter_map(|(index, drawing)| {
+                        let old = before.iter().find(|old| old.id == drawing.id)?;
+                        Some((index, old.clone()))
                     })
                     .collect();
                 self.history.push_snapshot(snapshot);
@@ -168,22 +567,63 @@ impl DrawingManager {
 
     // === Tool management ===
 
-    /// Sets the active drawing tool. Pass `None` to exit drawing mode and
-    /// return to selection/pointer mode. A tool cancels any in-progress drawing and leaves
-    /// eraser mode.
-    pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) {
+    /// Sets the active drawing tool and returns whether it is now active. Pass `None` to exit
+    /// drawing mode and return to selection/pointer mode. A tool cancels any in-progress
+    /// drawing and leaves eraser mode. A built-in tool the [`registry`](Self::registry)
+    /// disables is not set: the manager returns to selection mode, as with `None`, and the
+    /// call returns `false`.
+    pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) -> bool {
         self.active_custom_tool = None;
-        let tool = tool.filter(|tool| self.registry.availability(*tool).enabled);
-        self.active_tool = tool;
+        let set = tool.filter(|tool| self.registry.availability(*tool).enabled);
+        self.active_tool = set;
         self.cancel_curr_drawing();
-        if tool.is_some() {
+        if set.is_some() {
             self.eraser_mode = false;
         }
+        set == tool
     }
 
     /// The registered tool selected for the next placement, or `None` for a built-in tool.
     pub fn active_custom_tool(&self) -> Option<&str> {
         self.active_custom_tool.as_deref()
+    }
+
+    /// The built-in tool the next pointer placement uses, or `None` in selection mode. A
+    /// registered tool is active as [`DrawingToolType::Polyline`] with its id in
+    /// [`Self::active_custom_tool`]. Set it with [`Self::set_active_tool`] or
+    /// [`Self::set_custom_tool`].
+    pub fn active_tool(&self) -> Option<DrawingToolType> {
+        self.active_tool
+    }
+
+    /// Whether a click deletes the drawing under the pointer instead of selecting it. Switch
+    /// it with [`Self::set_eraser_mode`].
+    pub fn is_eraser_mode(&self) -> bool {
+        self.eraser_mode
+    }
+
+    /// The drawing being placed. It joins [`Self::drawings`] when completed, except for the
+    /// temporary [`DrawingToolType::Measure`] ruler.
+    pub fn curr_drawing(&self) -> Option<&Drawing> {
+        self.curr_drawing.as_ref()
+    }
+
+    /// The drawing being placed, to adjust its settings before it is completed, such as the
+    /// glyph size of an icon that [`Self::start_icon_insertion`] prepared.
+    pub fn curr_drawing_mut(&mut self) -> Option<&mut Drawing> {
+        self.curr_drawing.as_mut()
+    }
+
+    /// The drawing and handle being dragged, as `(drawing_id, handle)`, from
+    /// [`Self::start_drag_handle`] or [`Self::start_drag_body`] until [`Self::end_drag_handle`].
+    pub fn dragging_handle(&self) -> Option<(usize, HandlePos)> {
+        self.dragging_handle
+    }
+
+    /// Whether a drag or a continuous edit is in progress, which [`Self::end_drag_handle`] records
+    /// as one step from the state it started in.
+    pub(crate) fn drag_in_progress(&self) -> bool {
+        self.drag_old_state.is_some()
     }
 
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
@@ -235,8 +675,8 @@ impl DrawingManager {
 
     /// Start text annotation mode
     ///
-    /// Activates the Note drawing tool, allowing the user to click
-    /// on the chart to place a text note annotation.
+    /// Activates the Note drawing tool, allowing the user to click the bar and price to
+    /// annotate, then where the label goes.
     pub fn start_text_annotation(&mut self) {
         self.set_active_tool(Some(DrawingToolType::Note));
     }
@@ -258,11 +698,7 @@ impl DrawingManager {
 
         // Create a new drawing with the icon name
         let id = self.take_id();
-        let mut drawing = Drawing::with_color(id, tool, self.options.default_color);
-
-        if let Some(defaults) = self.tool_defaults.get(&drawing.tool_type) {
-            let _ = defaults.apply_to(&mut drawing);
-        }
+        let mut drawing = self.new_drawing(id, tool);
         drawing.text = Some(icon_name);
         drawing.completed = false; // Not complete until user clicks
 
@@ -270,10 +706,41 @@ impl DrawingManager {
         self.curr_drawing = Some(drawing);
     }
 
+    /// Prepares a post or idea card showing `post`, placed by the next click on the chart, as
+    /// [`Self::start_icon_insertion`] does for a picked icon. The tool's saved defaults apply,
+    /// and the inline editor does not open, since the card has its content. Does nothing for
+    /// other tools or a disabled one.
+    pub fn start_post_insertion(&mut self, tool: DrawingToolType, post: PostLink) {
+        if !matches!(tool, DrawingToolType::Tweet | DrawingToolType::Idea)
+            || !self.registry.availability(tool).enabled
+        {
+            return;
+        }
+        self.set_active_tool(Some(tool));
+        let id = self.take_id();
+        let mut drawing = self.new_drawing(id, tool);
+        drawing.post = Some(post);
+        drawing.completed = false;
+        self.curr_drawing = Some(drawing);
+    }
+
     // === Drawing lifecycle ===
 
+    /// `point` with the magnet applied, except for freehand samples, which follow the pointer.
+    fn snap_placement(&self, tool: Option<DrawingToolType>, point: Pos2) -> Pos2 {
+        if tool
+            .is_some_and(|tool| tool.interaction_mode() == DrawingInteractionMode::ContinuousDraw)
+        {
+            point
+        } else {
+            self.snap_point(point, &self.drawings)
+        }
+    }
+
     /// Starts a new drawing of the given tool type at the given screen position, or places the
-    /// drawing [`Self::start_icon_insertion`] prepared for it.
+    /// drawing [`Self::start_icon_insertion`] prepared for it. Does nothing for a cursor tool
+    /// or a disabled built-in tool. A completed drawing that saving would refuse, such as one
+    /// whose anchor maps to a non-finite position, is dropped.
     ///
     /// The coordinate conversion closures (`x_to_bar`, `y_to_price`) convert
     /// screen coordinates to chart coordinates for persistent storage. If the
@@ -289,22 +756,20 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        if self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled {
+        if tool_type.is_cursor()
+            || (self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled)
+        {
             return;
         }
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.snap_placement(Some(tool_type), point);
         // A drawing prepared before its first anchor, such as a picked icon, starts here.
         let mut drawing = match self.curr_drawing.take() {
             Some(prepared) if prepared.tool_type == tool_type && prepared.points.is_empty() => {
                 prepared
             }
             _ => {
-                let mut drawing =
-                    Drawing::with_color(self.take_id(), tool_type, self.options.default_color);
-                if let Some(defaults) = self.tool_defaults.get(&tool_type) {
-                    let _ = defaults.apply_to(&mut drawing);
-                }
-                drawing
+                let id = self.take_id();
+                self.new_drawing(id, tool_type)
             }
         };
         if let Some(id) = &self.active_custom_tool {
@@ -358,7 +823,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.constrain_preview(
+            self.snap_placement(self.curr_drawing.as_ref().map(|d| d.tool_type), point),
+        );
         if let Some(ref mut drawing) = self.curr_drawing {
             // The click takes the place of the pointer preview.
             if std::mem::take(&mut self.preview_point) {
@@ -366,6 +833,10 @@ impl DrawingManager {
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
+            drawing.align_second_anchor();
+            if drawing.completed {
+                drawing.store_default_curve_controls(&x_to_bar, &y_to_price);
+            }
             if let Some(tool) = drawing
                 .custom_tool
                 .as_deref()
@@ -387,7 +858,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let point = self.snap_point(point, &self.drawings);
+        let point = self.constrain_preview(
+            self.snap_placement(self.curr_drawing.as_ref().map(|d| d.tool_type), point),
+        );
         if let Some(ref mut drawing) = self.curr_drawing
             && !drawing.points.is_empty()
             && !drawing.completed
@@ -399,12 +872,14 @@ impl DrawingManager {
                 drawing.completed = false;
                 self.preview_point = true;
             }
+            drawing.align_second_anchor();
         }
     }
 
     /// Manually completes the in-progress drawing (e.g., on double-click or Enter
     /// for multi-point tools), without its pointer preview. Requires at least 2 points, and
-    /// as many as the tool draws with, so that what it adds can be saved.
+    /// as many as the tool draws with, so that what it adds can be saved. A drawing that saving
+    /// would still refuse is dropped, and the tool stays active.
     pub fn complete_curr_drawing(&mut self) {
         if let Some(drawing) = &mut self.curr_drawing
             && std::mem::take(&mut self.preview_point)
@@ -427,16 +902,54 @@ impl DrawingManager {
         }
     }
 
-    /// Moves the completed current drawing to the drawing list and queues it to be saved.
+    /// Closes the built-in polyline being placed when `point` is within reach of its first
+    /// anchor's handle and at least three anchors are placed. Returns whether it finished.
+    pub(crate) fn close_curr_polyline(&mut self, point: Pos2) -> bool {
+        let reach = self.options.handle_config.size * 1.5;
+        let preview = usize::from(self.preview_point);
+        let Some(drawing) = self.curr_drawing.as_mut().filter(|d| {
+            d.tool_type == DrawingToolType::Polyline
+                && d.custom_tool.is_none()
+                && d.points.len().saturating_sub(preview) >= 3
+                && d.points[0].distance(point) <= reach
+        }) else {
+            return false;
+        };
+        drawing.closed = true;
+        self.complete_curr_drawing();
+        true
+    }
+
+    /// Moves the completed current drawing to the drawing list and queues it to be saved, or
+    /// keeps the measurement until the next click. Drops a drawing when its tool was disabled
+    /// meanwhile or saving would refuse it.
     /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
         if let Some(mut drawing) = self.curr_drawing.take() {
-            if drawing.custom_tool.is_none()
-                && !self.registry.availability(drawing.tool_type).enabled
+            // A bars pattern's copy starts over its source: on the left source bar, at the
+            // first anchor's price. Moving the pattern then moves only this anchor.
+            if drawing.tool_type == DrawingToolType::BarsPattern
+                && let (&[first, second], &[first_at, second_at]) =
+                    (drawing.chart_points.as_slice(), drawing.points.as_slice())
             {
-                return;
+                let (bar, x) = if second.bar_idx < first.bar_idx {
+                    (second.bar_idx, second_at.x)
+                } else {
+                    (first.bar_idx, first_at.x)
+                };
+                drawing.chart_points.push(ChartPoint::new(bar, first.price));
+                drawing.points.push(Pos2::new(x, first_at.y));
             }
             drawing.update_pane_coords(self.pane_rect);
+            if self.validate_created(&drawing).is_err() {
+                return;
+            }
+            // A measurement is a ruler for the moment: kept until the next click, never stored.
+            if drawing.tool_type == DrawingToolType::Measure {
+                self.measurement = Some(drawing);
+                self.active_tool = None;
+                return;
+            }
             let icon = matches!(
                 drawing.tool_type,
                 DrawingToolType::FontIcon | DrawingToolType::Sticker
@@ -447,6 +960,7 @@ impl DrawingManager {
             self.history.push_add(drawing.clone());
             let id = drawing.id;
             self.drawings.push(drawing);
+            self.select(id);
             self.queue(DrawingSyncAction::SaveDrawing(id));
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
@@ -460,10 +974,13 @@ impl DrawingManager {
         }
     }
 
-    /// Cancels the in-progress drawing without adding it to the drawing list.
+    /// Cancels the in-progress drawing without adding it to the drawing list,
+    /// and clears a finished measurement.
     pub fn cancel_curr_drawing(&mut self) {
+        self.selection.cancel_area();
         self.curr_drawing = None;
         self.preview_point = false;
+        self.measurement = None;
     }
 
     // === Compatibility methods for old DrawingManager API ===
@@ -493,18 +1010,19 @@ impl DrawingManager {
         self.complete_curr_drawing();
     }
 
-    /// Update drag handle with coordinate conversion functions
-    /// Alias for update_drag_handle for API compatibility
-    pub fn update_drag_handle_with_coords<F, G>(
+    /// Alias for [`Self::update_drag_handle`], with the same pointer mapping and price translation.
+    pub fn update_drag_handle_with_coords<F, G, H>(
         &mut self,
         new_pos: Pos2,
         x_to_bar: F,
         y_to_price: G,
+        translate_price: H,
     ) where
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
+        H: Fn(f64, f32, f32) -> f64,
     {
-        self.update_drag_handle(new_pos, x_to_bar, y_to_price);
+        self.update_drag_handle(new_pos, x_to_bar, y_to_price, translate_price);
     }
 
     /// Hit test a handle by drawing ID
@@ -515,5 +1033,373 @@ impl DrawingManager {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two clicks copy the bars between them in place, right to left as well, and dragging the
+    /// pattern moves its copy while the source anchors stay on the bars it copies.
+    #[test]
+    fn a_bars_pattern_is_copied_on_two_clicks_and_moved_by_its_copy() {
+        let mut manager = DrawingManager::new();
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 1000.0 - f64::from(y);
+        manager.start_drawing_with_coords(
+            DrawingToolType::BarsPattern,
+            Pos2::new(300.0, 200.0),
+            x_to_bar,
+            y_to_price,
+        );
+        manager.add_point_with_coords(Pos2::new(100.0, 400.0), x_to_bar, y_to_price);
+        assert_eq!(manager.drawings.len(), 1);
+        let drawing = &manager.drawings[0];
+        assert_eq!(
+            drawing.chart_points,
+            [
+                ChartPoint::new(30.0, 800.0),
+                ChartPoint::new(10.0, 600.0),
+                ChartPoint::new(10.0, 800.0)
+            ]
+        );
+        assert_eq!(drawing.points[2], Pos2::new(100.0, 200.0));
+        let id = drawing.id;
+        manager.start_drag_body(id, Pos2::new(150.0, 250.0));
+        manager.update_drag_handle(
+            Pos2::new(250.0, 150.0),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
+        manager.end_drag_handle();
+        assert_eq!(
+            manager.drawings[0].chart_points,
+            [
+                ChartPoint::new(30.0, 800.0),
+                ChartPoint::new(10.0, 600.0),
+                ChartPoint::new(20.0, 900.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn copied_groups_keep_their_layers_locally_and_when_synced() {
+        fn top_tool(manager: &DrawingManager) -> DrawingToolType {
+            let id = manager.hit_test(Pos2::new(75.0, 100.0)).unwrap();
+            manager
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .tool_type
+        }
+        for (background_layer, line_layer, expected) in [
+            (2, 5, DrawingToolType::TrendLine),
+            (5, 5, DrawingToolType::TrendLine),
+            (5, 2, DrawingToolType::Rect),
+        ] {
+            let mut manager = DrawingManager::new();
+            for (id, tool, layer, points) in [
+                (
+                    7,
+                    DrawingToolType::Rect,
+                    background_layer,
+                    [Pos2::new(50.0, 50.0), Pos2::new(150.0, 150.0)],
+                ),
+                (
+                    8,
+                    DrawingToolType::TrendLine,
+                    line_layer,
+                    [Pos2::new(50.0, 100.0), Pos2::new(150.0, 100.0)],
+                ),
+            ] {
+                let mut drawing = Drawing::new(id, tool);
+                drawing.z_order = layer;
+                drawing.completed = true;
+                drawing.fill_color = Some([30, 60, 95, 255]);
+                drawing.points = points.to_vec();
+                drawing.chart_points = points
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x / 10.0, 200.0 - f64::from(p.y)))
+                    .collect();
+                manager.drawings.push(drawing);
+            }
+            manager.select_drawings([7, 8]);
+            manager.start_drag_body(7, Pos2::new(75.0, 75.0));
+            manager.copy_dragged_drawings();
+            manager.end_drag_handle();
+            manager.deselect();
+            assert_eq!(manager.drawings.len(), 4);
+            assert_eq!(top_tool(&manager), expected);
+            let mut peer = DrawingManager::new();
+            for action in manager.pending_sync.lock().unwrap().iter() {
+                if let DrawingSyncAction::SaveDrawing(id) = action {
+                    let mut copy = manager
+                        .drawings
+                        .iter()
+                        .find(|d| d.id == *id)
+                        .unwrap()
+                        .clone();
+                    copy.stored_id = Some(id.to_string());
+                    peer.add_synced_drawing(copy).unwrap();
+                }
+            }
+            peer.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            assert_eq!(peer.drawings.len(), 2);
+            assert_eq!(top_tool(&peer), expected);
+            assert!(manager.undo());
+            assert_eq!(manager.drawings.len(), 2);
+            assert!(!manager.undo());
+            assert!(manager.redo());
+            assert_eq!(manager.drawings.len(), 4);
+            manager.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            assert_eq!(top_tool(&manager), expected);
+        }
+    }
+
+    #[test]
+    fn copy_drag_ignores_non_pointer_edits() {
+        let mut manager = DrawingManager::new();
+        manager
+            .drawings
+            .push(Drawing::new(7, DrawingToolType::TrendLine));
+        manager.drag_edit_drawing(7, |drawing| drawing.text = Some("Draft".into()));
+        manager.copy_dragged_drawings();
+        assert_eq!(manager.drawings.len(), 1);
+        manager.end_drag_handle();
+        assert!(manager.undo());
+        assert_eq!(manager.drawings[0].text, None);
+        assert!(!manager.undo());
+    }
+
+    /// Dragging the label of a tool that annotates a point leaves that point on its bar and price,
+    /// in one undo step. Other drawings, a selection and a copy move whole.
+    #[test]
+    fn annotation_boxes_move_without_their_anchor() {
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 1000.0 - f64::from(y);
+        let translate = |price: f64, from: f32, to: f32| price - f64::from(to - from);
+        let start_points = [Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+        let start_chart = [ChartPoint::new(10.0, 800.0), ChartPoint::new(20.0, 900.0)];
+        let label = (
+            vec![Pos2::new(100.0, 200.0), Pos2::new(250.0, 140.0)],
+            vec![ChartPoint::new(10.0, 800.0), ChartPoint::new(25.0, 860.0)],
+        );
+        let whole = (
+            vec![Pos2::new(150.0, 240.0), Pos2::new(250.0, 140.0)],
+            vec![ChartPoint::new(15.0, 760.0), ChartPoint::new(25.0, 860.0)],
+        );
+        // A note saved before its label had an anchor has only the one it annotates.
+        for (tool, anchors, group, copy, expected) in [
+            (DrawingToolType::Callout, 2, false, false, &label),
+            (DrawingToolType::Note, 2, false, false, &label),
+            (DrawingToolType::PriceNote, 2, false, false, &label),
+            (DrawingToolType::Note, 1, false, false, &whole),
+            (DrawingToolType::TrendLine, 2, false, false, &whole),
+            (DrawingToolType::Callout, 2, true, false, &whole),
+            (DrawingToolType::Callout, 2, false, true, &whole),
+        ] {
+            let mut manager = DrawingManager::new();
+            for id in [7, 8] {
+                let mut drawing = Drawing::new(id, tool);
+                drawing.points = start_points[..anchors].to_vec();
+                drawing.chart_points = start_chart[..anchors].to_vec();
+                manager.drawings.push(drawing);
+            }
+            if group {
+                manager.select_drawings([7, 8]);
+            }
+            manager.start_drag_body(7, Pos2::new(205.0, 105.0));
+            if copy {
+                manager.copy_dragged_drawings();
+            }
+            manager.update_drag_handle(Pos2::new(255.0, 145.0), x_to_bar, y_to_price, translate);
+            manager.end_drag_handle();
+            let moved = manager
+                .drawings
+                .last()
+                .filter(|_| copy)
+                .unwrap_or(&manager.drawings[0]);
+            assert_eq!(
+                moved.points,
+                expected.0[..anchors],
+                "{tool:?} {group} {copy}"
+            );
+            assert_eq!(
+                moved.chart_points,
+                expected.1[..anchors],
+                "{tool:?} {group} {copy}"
+            );
+            if !copy {
+                assert!(manager.undo());
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    start_chart[..anchors],
+                    "{tool:?}"
+                );
+            }
+        }
+    }
+
+    /// The second anchor of Time cycles sets only the period, and a Signpost's only the label's
+    /// height, in the preview and when placed.
+    #[test]
+    fn second_anchors_follow_the_first_during_placement() {
+        let same_price: fn(Pos2) -> Pos2 = |p| Pos2::new(p.x, 200.0);
+        let same_bar: fn(Pos2) -> Pos2 = |p| Pos2::new(100.0, p.y);
+        let chart = |p: Pos2| ChartPoint::new(p.x / 10.0, 1000.0 - f64::from(p.y));
+        for (tool, aligned) in [
+            (DrawingToolType::TimeCycles, same_price),
+            (DrawingToolType::Signpost, same_bar),
+        ] {
+            for (preview, drag) in [(false, false), (true, false), (true, true)] {
+                let mut manager = DrawingManager::new();
+                let x_to_bar = |x: f32| x / 10.0;
+                let y_to_price = |y: f32| 1000.0 - f64::from(y);
+                let start = Pos2::new(100.0, 200.0);
+                manager.start_drawing_with_coords(tool, start, x_to_bar, y_to_price);
+                if preview {
+                    for point in [Pos2::new(150.0, 100.0), Pos2::new(300.0, 250.0)] {
+                        manager.update_last_point_with_coords(point, x_to_bar, y_to_price);
+                        let drawing = manager.curr_drawing.as_ref().unwrap();
+                        assert_eq!(drawing.points[1], aligned(point), "{tool:?}");
+                        assert_eq!(drawing.chart_points[1], chart(aligned(point)), "{tool:?}");
+                    }
+                }
+                let end = Pos2::new(300.0, 250.0);
+                if drag {
+                    manager.complete_drag_drawing();
+                } else {
+                    manager.add_point_with_coords(end, x_to_bar, y_to_price);
+                }
+                assert_eq!(manager.drawings.len(), 1);
+                assert!(manager.is_selected(manager.drawings[0].id));
+                assert_eq!(
+                    manager.drawings[0].points,
+                    vec![start, aligned(end)],
+                    "{tool:?}"
+                );
+                assert_eq!(
+                    manager.drawings[0].chart_points,
+                    vec![chart(start), chart(aligned(end))],
+                    "{tool:?}"
+                );
+            }
+        }
+    }
+
+    /// A rectangle and a trend line start in their own colours, the rectangle filled with a tint
+    /// of its border; a host colour recolours both and the tint; a default saved for a tool wins.
+    #[test]
+    fn new_drawings_take_their_tool_style_then_the_saved_default() {
+        let place = |manager: &mut DrawingManager, tool| {
+            manager.start_drawing_with_coords(tool, Pos2::new(10.0, 10.0), |x| x, f64::from);
+            manager
+                .curr_drawing
+                .take()
+                .or_else(|| manager.drawings.pop())
+                .unwrap()
+        };
+        let mut manager = DrawingManager::new();
+        let line = place(&mut manager, DrawingToolType::TrendLine);
+        let rect = place(&mut manager, DrawingToolType::Rect);
+        assert_ne!(line.color, rect.color);
+        assert_eq!(line.fill_color, None);
+        assert_eq!(rect.fill_color.unwrap()[..3], rect.color[..3]);
+
+        for (tool, color, width, fill) in [
+            (
+                DrawingToolType::Polyline,
+                [0, 188, 212, 255],
+                2.0,
+                Some([0, 188, 212, 51]),
+            ),
+            (
+                DrawingToolType::Arc,
+                [233, 30, 99, 255],
+                2.0,
+                Some([233, 30, 99, 51]),
+            ),
+            (
+                DrawingToolType::PriceRange,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+            ),
+            (
+                DrawingToolType::Measure,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+            ),
+            (DrawingToolType::AnchoredVWAP, [41, 98, 255, 255], 1.0, None),
+            (
+                DrawingToolType::FixedRangeVolumeProfile,
+                [83, 196, 216, 255],
+                2.0,
+                None,
+            ),
+            (
+                DrawingToolType::AnchoredVolumeProfile,
+                [83, 196, 216, 255],
+                2.0,
+                None,
+            ),
+            (DrawingToolType::Pitchfan, [242, 54, 69, 255], 2.0, None),
+        ] {
+            let drawing = place(&mut manager, tool);
+            assert_eq!(
+                (drawing.color, drawing.stroke_width, drawing.fill_color),
+                (color, width, fill),
+                "{tool:?}"
+            );
+            if tool == DrawingToolType::Pitchfan {
+                let config = drawing.pitchfork.as_ref().unwrap();
+                let visible: Vec<_> = config
+                    .levels
+                    .iter()
+                    .filter(|level| level.visible)
+                    .map(|level| (level.value, level.color))
+                    .collect();
+                assert_eq!(
+                    visible,
+                    [
+                        (0.0, [242, 54, 69, 255]),
+                        (0.5, [0, 188, 212, 255]),
+                        (1.0, [41, 98, 255, 255])
+                    ]
+                );
+            }
+        }
+
+        manager.options.default_color = Some([1, 2, 3, 255]);
+        let rect = place(&mut manager, DrawingToolType::Rect);
+        assert_eq!(
+            (rect.color, rect.fill_color),
+            ([1, 2, 3, 255], Some([1, 2, 3, 51]))
+        );
+
+        let mut saved = Drawing::new(0, DrawingToolType::Rect);
+        (saved.color, saved.fill_color) = ([9, 9, 9, 255], None);
+        let saved = crate::drawings::DrawingTemplate::from_drawing(&saved);
+        manager.tool_defaults.insert(DrawingToolType::Rect, saved);
+        let rect = place(&mut manager, DrawingToolType::Rect);
+        assert_eq!((rect.color, rect.fill_color), ([9, 9, 9, 255], None));
+
+        // Closure belongs to the outline, so a saved default cannot close a new polyline.
+        let mut closed = Drawing::new(0, DrawingToolType::Polyline);
+        closed.closed = true;
+        manager.tool_defaults.insert(
+            DrawingToolType::Polyline,
+            crate::drawings::DrawingTemplate::from_drawing(&closed),
+        );
+        assert!(!place(&mut manager, DrawingToolType::Polyline).closed);
+        let open = Drawing::new(0, DrawingToolType::Polyline);
+        crate::drawings::DrawingTemplate::from_drawing(&open)
+            .apply_to(&mut closed)
+            .unwrap();
+        assert!(closed.closed);
     }
 }

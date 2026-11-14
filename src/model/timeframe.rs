@@ -257,6 +257,71 @@ impl Timeframe {
     }
 }
 
+/// Unit of an interval, as its label names it: `90min` is 90 [`Minute`](Self::Minute)s and
+/// `1D` one [`Day`](Self::Day). Units are ordered as declared, trade-based units first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum TimeframeUnit {
+    /// A fixed number of executions per bar.
+    Tick,
+    /// Traded volume in whole units, split exactly at the threshold.
+    Volume,
+    /// Price range in instrument ticks.
+    Range,
+    /// Absolute buy minus sell volume in whole units.
+    Delta,
+    /// One of the model's subsecond presets.
+    Millisecond,
+    /// Seconds.
+    Second,
+    /// Minutes.
+    Minute,
+    /// Hours.
+    Hour,
+    /// Days.
+    Day,
+    /// Weeks.
+    Week,
+    /// Months.
+    Month,
+}
+
+impl TimeframeUnit {
+    /// Abbreviated unit label.
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            TimeframeUnit::Tick => "T",
+            TimeframeUnit::Volume => "V",
+            TimeframeUnit::Range => "R",
+            TimeframeUnit::Delta => "delta",
+            TimeframeUnit::Millisecond => "ms",
+            TimeframeUnit::Second => "S",
+            TimeframeUnit::Minute => "m",
+            TimeframeUnit::Hour => "h",
+            TimeframeUnit::Day => "D",
+            TimeframeUnit::Week => "W",
+            TimeframeUnit::Month => "M",
+        }
+    }
+
+    /// Display name for this value.
+    pub fn name(&self) -> &'static str {
+        match self {
+            TimeframeUnit::Tick => "ticks",
+            TimeframeUnit::Volume => "volume units",
+            TimeframeUnit::Range => "range ticks",
+            TimeframeUnit::Delta => "delta units",
+            TimeframeUnit::Millisecond => "milliseconds",
+            TimeframeUnit::Second => "seconds",
+            TimeframeUnit::Minute => "minutes",
+            TimeframeUnit::Hour => "hours",
+            TimeframeUnit::Day => "days",
+            TimeframeUnit::Week => "weeks",
+            TimeframeUnit::Month => "months",
+        }
+    }
+}
+
 /// Format a custom seconds value into a human-readable label.
 /// Chooses the largest clean unit: days > hours > minutes > seconds.
 fn format_custom_seconds(seconds: u64) -> String {
@@ -285,7 +350,7 @@ impl fmt::Display for Timeframe {
 }
 
 impl FromStr for Timeframe {
-    type Err = String;
+    type Err = super::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         for (suffix, make) in [
@@ -296,17 +361,22 @@ impl FromStr for Timeframe {
             if let Some(value) = s.to_lowercase().strip_suffix(suffix)
                 && value.chars().all(|c| c.is_ascii_digit())
             {
-                return value
-                    .parse::<NonZeroU64>()
-                    .map(make)
-                    .map_err(|_| "Trade interval must be a positive integer".into());
+                return value.parse::<NonZeroU64>().map(make).map_err(|_| {
+                    super::ParseError::new(
+                        "timeframe",
+                        s,
+                        "trade interval must be a positive integer",
+                    )
+                });
             }
         }
         if let Some(count) = s.to_lowercase().strip_suffix('t') {
             return count
                 .parse::<NonZeroU64>()
                 .map(Timeframe::Ticks)
-                .map_err(|_| "Tick count must be a positive integer".into());
+                .map_err(|_| {
+                    super::ParseError::new("timeframe", s, "tick count must be a positive integer")
+                });
         }
         // Try known preset names first
         match s.to_lowercase().as_str() {
@@ -337,11 +407,13 @@ impl FromStr for Timeframe {
             ("w", Timeframe::Weeks),
         ] {
             if let Some(value) = s.to_lowercase().strip_suffix(suffix) {
-                return value
-                    .trim()
-                    .parse::<NonZeroU32>()
-                    .map(make)
-                    .map_err(|_| "Calendar interval must be a positive 32-bit integer".into());
+                return value.trim().parse::<NonZeroU32>().map(make).map_err(|_| {
+                    super::ParseError::new(
+                        "timeframe",
+                        s,
+                        "calendar interval must be a positive 32-bit integer",
+                    )
+                });
             }
         }
 
@@ -350,11 +422,19 @@ impl FromStr for Timeframe {
         if let Some(seconds) = parse_custom_timeframe(&lower) {
             return NonZeroU64::new(seconds)
                 .map(Timeframe::Custom)
-                .ok_or_else(|| "Custom timeframe must be greater than zero".to_string());
+                .ok_or_else(|| {
+                    super::ParseError::new(
+                        "timeframe",
+                        s,
+                        "custom timeframe must be greater than zero",
+                    )
+                });
         }
 
-        Err(format!(
-            "Invalid timeframe '{s}'. Valid formats: 100ms, 250ms, 500ms, 1s-30s, 1min-30min, 1h, 4h, 1D, 1W, 1M, or custom (e.g. 45s, 3min, 2h)"
+        Err(super::ParseError::new(
+            "timeframe",
+            s,
+            "valid formats are 100ms, 250ms, 500ms, 1s-30s, 1min-30min, 1h, 4h, 1D, 1W, 1M, or custom (e.g. 45s, 3min, 2h)",
         ))
     }
 }
@@ -437,6 +517,8 @@ mod tests {
 
     #[test]
     fn test_from_str_presets() {
+        assert_eq!("1s".parse::<Timeframe>(), Ok(Timeframe::Sec1));
+        assert_eq!("5min".parse::<Timeframe>(), Ok(Timeframe::Min5));
         assert_eq!("1min".parse::<Timeframe>(), Ok(Timeframe::Min1));
         let ticks = Timeframe::Ticks(NonZeroU64::new(10).unwrap());
         assert_eq!("10t".parse::<Timeframe>(), Ok(ticks));
@@ -478,39 +560,21 @@ mod tests {
             assert_eq!(Timeframe::from_resolution(label), Some(timeframe));
             assert_eq!(serde_json::from_str::<Timeframe>(saved).unwrap(), timeframe);
         }
-        for text in ["0w", "0month", "-1month", "4294967296month"] {
-            assert!(text.parse::<Timeframe>().is_err());
+        for text in [
+            "0s",
+            "0min",
+            "xyz",
+            "",
+            "0w",
+            "0month",
+            "-1month",
+            "4294967296month",
+        ] {
+            assert!(text.parse::<Timeframe>().is_err(), "{text:?}");
         }
         for text in [r#"{"Weeks":0}"#, r#"{"Months":0}"#] {
             assert!(serde_json::from_str::<Timeframe>(text).is_err());
         }
-    }
-
-    #[test]
-    fn test_from_str_custom_zero_rejected() {
-        assert!("0s".parse::<Timeframe>().is_err());
-        assert!("0min".parse::<Timeframe>().is_err());
-    }
-
-    #[test]
-    fn test_from_str_invalid() {
-        assert!("xyz".parse::<Timeframe>().is_err());
-        assert!("".parse::<Timeframe>().is_err());
-    }
-
-    #[test]
-    fn test_custom_display() {
-        assert_eq!(custom(45).to_string(), "45s");
-        assert_eq!(custom(180).to_string(), "3min");
-        assert_eq!(custom(7200).to_string(), "2h");
-    }
-
-    #[test]
-    fn test_preset_from_str_takes_precedence() {
-        // "1s" should resolve to preset Sec1, not Custom(1)
-        assert_eq!("1s".parse::<Timeframe>(), Ok(Timeframe::Sec1));
-        assert_eq!("5min".parse::<Timeframe>(), Ok(Timeframe::Min5));
-        assert_eq!("1h".parse::<Timeframe>(), Ok(Timeframe::Hour1));
     }
 
     #[test]

@@ -149,6 +149,8 @@ The default build includes the chart widget, the icons, the built-in studies and
 - `drawings` (**default on**): drawing tools, geometry, interaction, undo and persistence. Implies `widget`; enabled by `ui`.
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `alert-engine` (off): `services::AlertEngine`, an `Alerts` service that evaluates alerts on the bars the host feeds it. Needs no egui.
+- `detectors` (off): `services::OrderFlowDetectors`, a `Signals` service that finds order-flow events in the trades and depth the host feeds it. Needs no egui.
+- `strategies` (off): `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a `StrategyReport`. Needs no egui.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
 - `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
@@ -195,9 +197,11 @@ CI runs clippy with warnings denied. Its `stable` toolchain is current stable, w
 
 ## Feature status
 
-When a change completes or advances a planned feature, update its row in [`docs/progress/features.csv`](docs/progress/features.csv) in the same commit. Use `done` for complete behaviour, `partial` for remaining gaps and `missing` for unavailable behaviour. Keep names short, use `library` or `host` for `provided_by`, and list existing implementation paths without line numbers, separated by semicolons. Missing rows have an empty source field. Keep rows unique and sorted by area, group and feature.
+When a change completes or advances a planned feature, update its row in [`docs/progress/features.csv`](docs/progress/features.csv) in the same commit. A pull request that implements a row sets `unverified`: the behaviour is implemented but awaits an independent check. Only an independent reviewer who has checked every option, default and interaction covered by the row may set `verified`. Use `incomplete` for behaviour implemented in part, with the remaining work tracked in linked issues, and `missing` for behaviour not started. Authors and reviewers should lower a status when they find a gap; an implementation change needs a new independent check before it can be verified. Keep names short, use `library` or `host` for `provided_by`, and list existing implementation paths without line numbers, separated by semicolons. Missing rows have an empty source field, and a source reference alone does not establish that the behaviour works. Keep rows unique and sorted by area, group and feature.
 
-The [status page](https://userfrm.github.io/egui-charts/docs/progress/) and its badges are computed from this file; partial features do not count as done. Host features describe the interfaces and UI supplied by the library, while the application supplies data, accounts and storage. Run `npm run build` in `docs/site` to check the list and page.
+List related issue numbers in `issues`, separated by semicolons, or leave it empty when none exists. The status page links these from unverified, incomplete and missing features.
+
+The [status page](https://userfrm.github.io/egui-charts/docs/progress/) and its badges are computed from this file; percentages count only independently verified rows. Host features describe the interfaces and UI supplied by the library, while the application supplies data, accounts and storage. Run `npm run build` in `docs/site` to check the list and page.
 
 ## Code style
 

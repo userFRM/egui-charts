@@ -19,20 +19,25 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SWMA::new()),
         Box::new(KAMA::new(l(0)).with_periods(l(1), l(2))),
         Box::new(SmoothedMA::new(l(0))),
-        Box::new(GuppyMA::new()),
+        Box::new(GuppyMA::new().with_periods(std::array::from_fn(&l))),
         Box::new(McGinleyDynamic::new(l(0))),
         Box::new(VIDYA::new(l(0))),
         Box::new(ZLEMA::new(l(0))),
         Box::new(HammingMA::new(l(0))),
         Box::new(MultipleMA::new()),
-        Box::new(MAChannel::new(l(0), x(1.0))),
+        Box::new(MAChannel::new(l(0), l(1)).with_offsets(3, -2)),
         Box::new(EMACross::new(l(0), l(1))),
         Box::new(MACross::new(l(0), l(1))),
         Box::new(MixedMACross::new(l(0), l(1))),
         Box::new(TripleMA::new(l(0), l(1), l(2))),
         Box::new(MARibbon::new()),
         Box::new(RSI::new(l(0))),
+        Box::new(RSI::new(l(0)).with_divergence(true)),
         Box::new(MACD::new(l(0), l(1), l(2))),
+        Box::new(
+            MACD::new(l(0), l(1), l(2))
+                .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple),
+        ),
         Box::new(VolumeWeightedMACD::new(l(0), l(1), l(2))),
         Box::new(Stochastic::new(l(0), l(1), l(2))),
         Box::new(StochasticRSI::new(l(0), l(1), l(2), l(3))),
@@ -79,10 +84,12 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(SMIErgodicOscillator::new(l(0), l(1), l(2))),
         Box::new(WoodiesCCI::new(l(0), l(1))),
         Box::new(ADX::new(l(0))),
+        Box::new(ADX::new(l(0)).with_smoothing(l(1))),
         Box::new(SuperTrend::new(l(0), x(3.0))),
         Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
         Box::new(ParabolicSAR::new(x(0.02), x(0.02), x(0.2))),
         Box::new(DirectionalMovement::new(l(0))),
+        Box::new(DirectionalMovement::new(l(0)).with_smoothing(l(1))),
         Box::new(VortexIndicator::new(l(0))),
         Box::new(
             SqueezeMomentum::new()
@@ -101,20 +108,29 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(BollingerBands::new(l(0), x(2.0))),
         Box::new(BollingerBandsWidth::new(l(0), x(2.0))),
         Box::new(ATR::new(l(0))),
+        Box::new(ATR::new(l(0)).with_smoothing(AtrSmoothing::Weighted)),
+        Box::new(ATR::new(l(0)).with_smoothing(AtrSmoothing::Simple)),
         Box::new(TrueRange::new()),
         Box::new(KeltnerChannels::new(l(0), l(1), x(2.0))),
+        Box::new(
+            KeltnerChannels::new(l(0), l(1), x(2.0))
+                .with_average(OscillatorAverage::Simple)
+                .with_band(KeltnerBand::Range)
+                .with_source(crate::model::PriceSource::HL2),
+        ),
         Box::new(DonchianChannels::new(l(0))),
         Box::new(StandardDeviation::new(l(0))),
         Box::new(HistoricalVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ChaikinVolatility::new(l(0), l(1))),
         Box::new(ChandelierExit::new(l(0), x(3.0))),
+        Box::new(ChandelierExit::new(l(0), x(3.0)).with_atr_period(l(1))),
         Box::new(AccelerationBands::new(l(0), x(4.0))),
-        Box::new(Envelopes::new(l(0), x(2.5), "SMA")),
+        Box::new(Envelopes::new(l(0), x(10.0), EnvelopeAverage::Simple)),
         Box::new(PercentB::new(l(0), x(2.0))),
-        Box::new(CloseToCloseVol::new(l(0))),
-        Box::new(OhlcVolatility::new(l(0))),
+        Box::new(CloseToCloseVol::new(l(0)).with_trading_days(x(252.0))),
+        Box::new(OhlcVolatility::new(l(0)).with_trading_days(x(252.0))),
         Box::new(ParkinsonVol::new(l(0))),
-        Box::new(ZeroTrendVol::new(l(0))),
+        Box::new(ZeroTrendVol::new(l(0)).with_trading_days(x(252.0))),
         Box::new(RelativeVolatilityIndex::new(l(0))),
         Box::new(
             CommoditySelectionIndex::new(l(0))
@@ -125,6 +141,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Median::new(l(0), l(1), x(2.0))),
         Box::new(Volume::new(l(0))),
         Box::new(UpDownVolume::new()),
+        Box::new(VolumeDelta::new()),
+        Box::new(CumulativeVolumeDelta::new()),
         Box::new(OnBalanceVolume::new()),
         Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
         Box::new(AnchoredVWAP::new(0)),
@@ -169,14 +187,16 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
             min: x(100.0),
             max: f64::MAX,
         })),
+        Box::new(OrderFlowStudy::execution_delta(false)),
+        Box::new(OrderFlowStudy::execution_delta(true)),
         Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
             seconds: l(0),
         })),
         Box::new(NetVolume::new()),
         Box::new(VolumePriceTrend::new()),
         Box::new(PriceVolumeTrendStudy::new(l(0))),
-        Box::new(NegativeVolumeIndex::new()),
-        Box::new(PositiveVolumeIndex::new()),
+        Box::new(NegativeVolumeIndex::new().with_signal_length(l(0))),
+        Box::new(PositiveVolumeIndex::new().with_signal_length(l(0))),
         Box::new(WilliamsAD::new()),
         Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
         Box::new(PivotPoints::new().with_pivots_back(l(0))),
@@ -224,7 +244,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(AdxBreakout::new(l(0), l(1), l(2))),
         Box::new(PriceChannel::new(l(0))),
         Box::new(LinearRegression::new(l(0))),
-        Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
+        Box::new(LinearRegressionChannel::new(l(0), x(2.0)).with_multipliers(x(2.0), x(1.0))),
         Box::new(LinearRegressionSlope::new(l(0))),
         Box::new(TrendStrengthIndex::new(l(0))),
         Box::new(StandardError::new(l(0))),
@@ -236,6 +256,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Correlation::new(l(0)).with_log_returns(true)),
         Box::new(RciRibbon::new(l(0), l(1), l(2))),
         Box::new(MajorityRule::new(l(0))),
+        Box::new(MajorityRule::new(l(0)).with_mode(MajorityMode::Direction)),
         Box::new(AccumulationSwingIndex::new(x(0.5))),
         Box::new(Seasonality::new()),
         Box::new(Performance::new()),
@@ -339,8 +360,29 @@ fn every_update_equals_a_fresh_calculate() {
                 .with_time_zone(TimezoneId::fixed_offset(9 * 3600).unwrap()),
         )
     };
+    let pivot_labels = || -> Box<dyn Indicator> {
+        Box::new(
+            PivotPoints::new()
+                .with_pivots_back(3)
+                .with_labels(true, true)
+                .with_label_side(PivotLabelSide::Right),
+        )
+    };
+    let zigzag_labels = || -> Box<dyn Indicator> {
+        Box::new(ZigZag::new(1.0, 2).with_labels(true, Some(ZigZagChange::Price), true))
+    };
+    let session_labels = || -> Box<dyn Indicator> {
+        Box::new(
+            TradingSessions::new()
+                .with_labels(true, true, true)
+                .with_lines(true, true, true),
+        )
+    };
     let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
     studies.push(tokyo_week());
+    studies.push(pivot_labels());
+    studies.push(zigzag_labels());
+    studies.push(session_labels());
     for study in &studies {
         if matches!(
             study.name(),
@@ -355,6 +397,9 @@ fn every_update_equals_a_fresh_calculate() {
     }
     let mut twins = builtins_with(|k| 3 + 2 * k, |v| v);
     twins.push(tokyo_week());
+    twins.push(pivot_labels());
+    twins.push(zigzag_labels());
+    twins.push(session_labels());
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut data = Vec::<Bar>::new();
     for event in 0..200 {
@@ -377,6 +422,8 @@ fn every_update_equals_a_fresh_calculate() {
             }
             0
         } else {
+            // The hourly bars span a day and a half, over which every default trading session
+            // opens and closes.
             let time =
                 data.last()
                     .map_or(Utc.with_ymd_and_hms(2023, 9, 15, 23, 0, 0).unwrap(), |b| {
@@ -384,7 +431,7 @@ fn every_update_equals_a_fresh_calculate() {
                             + if len < 60 {
                                 Duration::weeks(1)
                             } else {
-                                Duration::minutes(1)
+                                Duration::hours(1)
                             }
                     });
             let close =
@@ -428,7 +475,11 @@ fn every_update_equals_a_fresh_calculate() {
                             study.markers(),
                             study.zones(),
                             study.table(),
-                            study.projections()
+                            study.projections(),
+                            study.labels(),
+                            (0..study.line_count())
+                                .map(|line| study.provisional_after(line))
+                                .collect::<Vec<_>>()
                         )
                     ),
                     format!(
@@ -437,7 +488,11 @@ fn every_update_equals_a_fresh_calculate() {
                             fresh.markers(),
                             fresh.zones(),
                             fresh.table(),
-                            fresh.projections()
+                            fresh.projections(),
+                            fresh.labels(),
+                            (0..fresh.line_count())
+                                .map(|line| fresh.provisional_after(line))
+                                .collect::<Vec<_>>()
                         )
                     ),
                     "{} metadata, event {event}, revision {revision}",
@@ -539,11 +594,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
 
     // Every length equal, then each length alone huge, then each alone longer than the rest
     // (a swapped fast/slow pair, for example).
-    let mut lengths: Vec<[usize; 9]> = vec![[0; 9], [1; 9], [usize::MAX; 9]];
-    for k in 0..9 {
-        let mut huge = [1; 9];
+    let mut lengths: Vec<[usize; 12]> = vec![[0; 12], [1; 12], [usize::MAX; 12]];
+    for k in 0..12 {
+        let mut huge = [1; 12];
         huge[k] = usize::MAX;
-        let mut longer = [20; 9];
+        let mut longer = [20; 12];
         longer[k] = 50;
         lengths.extend([huge, longer]);
     }

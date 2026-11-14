@@ -44,7 +44,7 @@ impl StandardDeviation {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: palette::GOLD,
+            color: palette::TEAL,
             visible: true,
         }
     }

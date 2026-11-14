@@ -35,7 +35,11 @@ impl BollingerBandsWidth {
             expansion: 125,
             contraction: 125,
             values: IndicatorValues::new(),
-            colors: vec![palette::PURPLE, palette::GREEN, palette::RED],
+            colors: vec![
+                palette::BLUE,
+                palette::RED.gamma_multiply_u8(128),
+                palette::TEAL.gamma_multiply_u8(128),
+            ],
             visible: true,
         }
     }
@@ -75,7 +79,7 @@ impl BollingerBandsWidth {
             let upper = sma + self.std_dev * stdev;
             let lower = sma - self.std_dev * stdev;
 
-            widths.push(if sma.abs() < 1e-15 {
+            widths.push(if sma == 0.0 {
                 0.0
             } else {
                 (upper - lower) / sma * 100.0

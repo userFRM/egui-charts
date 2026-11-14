@@ -445,10 +445,6 @@ pub struct AnnotationSizingTokens {
     pub callout_padding_y: f32,
     /// Pointer size, in egui logical points.
     pub pointer_size: f32,
-    /// Note size, in egui logical points.
-    pub note_size: f32,
-    /// Note fold size, in egui logical points.
-    pub note_fold_size: f32,
     /// Table cell width, in egui logical points.
     pub table_cell_width: f32,
     /// Table cell height, in egui logical points.
@@ -457,10 +453,6 @@ pub struct AnnotationSizingTokens {
     pub table_header_height: f32,
     /// Horizontal signpost padding, in egui logical points.
     pub signpost_padding_x: f32,
-    /// Vertical signpost padding, in egui logical points.
-    pub signpost_padding_y: f32,
-    /// Signpost bracket, in egui logical points.
-    pub signpost_bracket: f32,
     /// Vertical text padding, in egui logical points.
     pub text_padding_y: f32,
 }
@@ -508,18 +500,8 @@ pub struct CrosshairSizingTokens {
 pub struct PositionToolSizingTokens {
     /// Minimum width, in egui logical points.
     pub min_width: f32,
-    /// Label info width, in egui logical points.
-    pub label_info_width: f32,
-    /// Minimum label info height, in egui logical points.
-    pub label_info_height: f32,
-    /// Label target width, in egui logical points.
-    pub label_target_width: f32,
-    /// Horizontal label offset, in egui logical points.
-    pub label_offset_x: f32,
     /// Vertical label offset, in egui logical points.
     pub label_offset_y: f32,
-    /// Horizontal text offset, in egui logical points.
-    pub text_offset_x: f32,
 }
 
 /// Charts additional sizing defaults in egui logical points.

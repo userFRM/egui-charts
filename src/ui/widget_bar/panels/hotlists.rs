@@ -6,13 +6,13 @@ use std::sync::Arc;
 use egui::{Sense, Ui, vec2};
 
 use super::controls::{cell, dropdown, row};
-use super::object_tree::{format_price, price_decimals};
-use super::watchlist::{ROW_HEIGHT, signed};
+use super::{ROW_HEIGHT, signed};
+use super::{format_price, price_decimals};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, HotlistEntry, HotlistQuery};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
-use crate::ui_kit::status_message::{MessageKind, status_message};
+use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
 /// Symbols asked for at most.
@@ -126,10 +126,14 @@ impl HotlistsPanel {
                 status_message(ui, MessageKind::Info, "This feed supplies no hotlists.");
             }
             Some(error) => {
-                status_message(
+                translated_status_message(
                     ui,
                     MessageKind::Error,
-                    &format!("Hotlist unavailable: {error}"),
+                    l10n::format_text(
+                        ui.ctx(),
+                        "Hotlist unavailable: {error}",
+                        &[("error", error.to_string().as_str())],
+                    ),
                 );
             }
             None if self.loading && self.entries.is_empty() => {

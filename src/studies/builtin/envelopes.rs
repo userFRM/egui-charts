@@ -1,17 +1,40 @@
 use super::clamp_param;
 use super::smoothing::Smoothing;
 use crate::model::Bar;
+use crate::studies::inputs::input_spec;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyError, StudyInput,
+};
 use egui::Color32;
 
-/// Moving Average Envelopes
+/// The moving average in the middle of [`Envelopes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EnvelopeAverage {
+    /// Arithmetic mean of a complete window, named `SMA`.
+    Simple,
+    /// Exponential smoothing with alpha 2/(period+1), seeded by the first price, named `EMA`.
+    Exponential,
+}
+
+impl EnvelopeAverage {
+    /// The abbreviation in the middle line's name.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Simple => "SMA",
+            Self::Exponential => "EMA",
+        }
+    }
+}
+
+/// Moving Average Envelopes. The band between the upper and lower lines is filled.
 #[derive(Clone)]
 pub struct Envelopes {
     period: usize,
     percent: f64,
-    ma_type: String,
+    ma_type: EnvelopeAverage,
     values: IndicatorValues,
     stepper: Stepper<State>,
     colors: Vec<Color32>,
@@ -25,18 +48,20 @@ struct State {
 }
 
 impl Envelopes {
-    /// `percent` is clamped into 0 to `f64::MAX`, NaN to 0.
-    pub fn new(period: usize, percent: f64, ma_type: &str) -> Self {
+    /// Bands `percent` above and below a `ma_type` average of `period` closes. `percent` is
+    /// clamped into 0 to `f64::MAX`, NaN to 0.
+    pub fn new(period: usize, percent: f64, ma_type: EnvelopeAverage) -> Self {
         Self {
             period: period.max(1),
             percent: clamp_param(percent, 0.0, f64::MAX),
-            ma_type: ma_type.to_string(),
+            ma_type,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                palette::GREEN, // Green - Upper
-                palette::BLUE,  // Blue - Middle
-                palette::RED,   // Red - Lower
+                palette::BLUE,                       // Upper
+                palette::ORANGE,                     // Middle
+                palette::BLUE,                       // Lower
+                palette::BLUE.gamma_multiply_u8(13), // Fill
             ],
             visible: true,
         }
@@ -45,7 +70,7 @@ impl Envelopes {
 
 impl Default for Envelopes {
     fn default() -> Self {
-        Self::new(20, 2.5, "SMA")
+        Self::new(20, 10.0, EnvelopeAverage::Simple)
     }
 }
 
@@ -56,11 +81,63 @@ impl Indicator for Envelopes {
         ))
     }
 
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        percent: number("Percent", 0.0, f64::MAX),
-        ma_type: choice("Average", ["SMA".to_owned(), "EMA".to_owned()])
-    ; {});
+    fn inputs(&self) -> Vec<StudyInput> {
+        let defaults = Self::default();
+        vec![
+            input_spec!("period", self.period, length("Period", 1, usize::MAX))
+                .with_default(InputValue::Length(defaults.period)),
+            input_spec!("percent", self.percent, number("Percent", 0.0, f64::MAX))
+                .with_default(InputValue::Number(defaults.percent)),
+            StudyInput::new(
+                "ma_type",
+                "Exponential basis",
+                InputValue::Toggle(self.ma_type == EnvelopeAverage::Exponential),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(
+                defaults.ma_type == EnvelopeAverage::Exponential,
+            )),
+        ]
+    }
+
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
+        let value = match (id, value) {
+            ("ma_type", InputValue::Choice(0)) => InputValue::Toggle(false),
+            ("ma_type", InputValue::Choice(1)) => InputValue::Toggle(true),
+            (_, value) => value,
+        };
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| StudyError::UnknownInput(id.into()))?;
+        if !schema.accepts(&value) {
+            return Err(StudyError::invalid_input(id));
+        }
+        match (id, value) {
+            ("period", InputValue::Length(value)) => self.period = value,
+            ("percent", InputValue::Number(value)) => self.percent = value,
+            ("ma_type", InputValue::Toggle(value)) => {
+                self.ma_type = if value {
+                    EnvelopeAverage::Exponential
+                } else {
+                    EnvelopeAverage::Simple
+                }
+            }
+            _ => unreachable!("validated study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(0),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: self.colors[3],
+            inverted_color: None,
+        }]
+    }
 
     fn name(&self) -> &str {
         "Envelopes"
@@ -77,7 +154,7 @@ impl Indicator for Envelopes {
     fn update(&mut self, data: &[Bar], from: usize) {
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                let ma = if self.ma_type == "EMA" {
+                let ma = if self.ma_type == EnvelopeAverage::Exponential {
                     state
                         .ema
                         .next(bar.close, 1, 2.0 / (self.period as f64 + 1.0))
@@ -113,7 +190,8 @@ impl Indicator for Envelopes {
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if colors.len() >= 3 {
-            self.colors = colors;
+            let n = colors.len().min(self.colors.len());
+            self.colors[..n].copy_from_slice(&colors[..n]);
         }
     }
 
@@ -140,7 +218,7 @@ impl Indicator for Envelopes {
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("Upper(+{}%)", self.percent),
-            format!("{}({})", self.ma_type, self.period),
+            format!("{}({})", self.ma_type.label(), self.period),
             format!("Lower(-{}%)", self.percent),
         ]
     }

@@ -136,6 +136,15 @@ fn default_take_profit() -> Color32 {
 fn default_stop_loss() -> Color32 {
     Color32::from_rgb(255, 166, 0)
 }
+/// The light theme's, which also reads at 3:1 or more on black, for a theme saved without it.
+#[cfg(feature = "serde")]
+fn default_order_notable() -> Color32 {
+    Theme::light().chart.order_notable
+}
+#[cfg(feature = "serde")]
+fn default_order_large() -> Color32 {
+    Theme::light().chart.order_large
+}
 
 impl Default for UiColors {
     fn default() -> Self {
@@ -171,6 +180,14 @@ pub struct ChartColors {
     pub candle_up: Color32,
     /// Falling candles and bars: body, border and wick.
     pub candle_down: Color32,
+    /// Resting orders that reach the notable size tier of an
+    /// [`OrderBookView`](crate::chart::overlays::OrderBookView): heatmap cells, book profile bars
+    /// and depth ladder cells.
+    #[cfg_attr(feature = "serde", serde(default = "default_order_notable"))]
+    pub order_notable: Color32,
+    /// Resting orders that reach the large size tier.
+    #[cfg_attr(feature = "serde", serde(default = "default_order_large"))]
+    pub order_large: Color32,
     /// Opacity of the volume colours returned by [`Self::volume_up`] and [`Self::volume_down`].
     pub volume_alpha: u8,
 }
@@ -182,14 +199,14 @@ impl Default for ChartColors {
 }
 
 impl ChartColors {
-    /// Rising volume bars: #26a69a at `volume_alpha`.
+    /// Rising volume bars: teal at `volume_alpha`.
     pub fn volume_up(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(38, 166, 154, self.volume_alpha)
+        Color32::from_rgb(38, 166, 154).gamma_multiply_u8(self.volume_alpha)
     }
 
-    /// Falling volume bars: #ef5350 at `volume_alpha`.
+    /// Falling volume bars: red at `volume_alpha`.
     pub fn volume_down(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(239, 83, 80, self.volume_alpha)
+        Color32::from_rgb(239, 83, 80).gamma_multiply_u8(self.volume_alpha)
     }
 }
 
@@ -248,12 +265,12 @@ impl Default for TextSizes {
             body: 13.0,
             title: 14.0,
             heading: 16.0,
-            chart_title: 16.0,
+            chart_title: 13.0,
             toolbar: 14.0,
             ohlc: 13.0,
             axis: 12.0,
             price_tag: 12.0,
-            bottom_bar: 14.0,
+            bottom_bar: 12.0,
         }
     }
 }
@@ -449,12 +466,12 @@ mod tests {
             ("micro", 8.0),
             ("marker", 9.0),
             ("dialog_title", 20.0),
-            ("chart_title", 16.0),
+            ("chart_title", 13.0),
             ("toolbar", 14.0),
             ("ohlc", 13.0),
             ("axis", 12.0),
             ("price_tag", 12.0),
-            ("bottom_bar", 14.0),
+            ("bottom_bar", 12.0),
         ] {
             for override_size in [None, Some(19.0)] {
                 let mut saved = serde_json::to_value(Theme::dark()).unwrap();

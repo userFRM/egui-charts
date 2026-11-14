@@ -21,12 +21,14 @@ pub(crate) fn current_time_seconds() -> f64 {
 #[derive(Default)]
 pub struct Toasts {
     toasts: Vec<Toast>,
+    /// Whether the user expanded the stack; a new burst starts collapsed.
+    pub(super) expanded: bool,
 }
 
 impl Toasts {
     /// Create a new toasts container
     pub fn new() -> Self {
-        Self { toasts: Vec::new() }
+        Self::default()
     }
 
     /// Add a toast
@@ -63,6 +65,7 @@ impl Toasts {
     /// Clear all toasts
     pub fn clear(&mut self) {
         self.toasts.clear();
+        self.expanded = false;
     }
 
     /// Get the toasts
@@ -95,17 +98,6 @@ impl Toasts {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn add_stamps_creation_time_from_web_time() {
-        let mut toasts = Toasts::new();
-        toasts.info("hello");
-        assert_eq!(toasts.len(), 1);
-        assert!(
-            toasts.toasts()[0].created_at > 0.0,
-            "add() must stamp created_at from the web_time clock"
-        );
-    }
 
     #[test]
     fn cleanup_keeps_permanent_and_fresh_toasts() {

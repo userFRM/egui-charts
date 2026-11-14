@@ -1,12 +1,14 @@
 //! The painted-geometry cache, painting and hit testing of the drawings.
 
 use super::{DrawingManager, PaintedDrawing};
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
 use crate::drawings::rendering::ChartView;
 use crate::drawings::services::{DrawingInteraction, HandleService, in_z_order};
 use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
-use egui::{Pos2, Rect, Shape};
+use egui::{Color32, Pos2, Rect, Shape};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Shapes tessellated at a scale and with options, as what to paint in place of each shape: a
 /// run of geometry becomes one mesh in place of its first shape and nothing in place of the rest,
@@ -83,6 +85,32 @@ fn is_plain(shape: &Shape) -> bool {
 }
 
 impl DrawingManager {
+    /// Uses the fitted endpoints kept with the last paint for data-driven handles.
+    pub(super) fn handle_drawing<'a>(&self, drawing: &'a Drawing) -> Cow<'a, Drawing> {
+        let regression = drawing.tool_type == DrawingToolType::RegressionTrend;
+        let volume_tool = matches!(
+            drawing.tool_type,
+            DrawingToolType::AnchoredVWAP
+                | DrawingToolType::FixedRangeVolumeProfile
+                | DrawingToolType::AnchoredVolumeProfile
+        );
+        if !(regression || volume_tool) || drawing.custom_tool.is_some() {
+            return Cow::Borrowed(drawing);
+        }
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        let points = painted
+            .iter()
+            .find(|p| p.id == drawing.id && p.points == drawing.points)
+            .and_then(|p| p.handle_points.clone());
+        // A volume tool with nothing drawn keeps its handles on its anchors, to be dragged to bars.
+        if points.is_none() && !regression {
+            return Cow::Borrowed(drawing);
+        }
+        let mut projected = drawing.clone();
+        projected.points = points.unwrap_or_default();
+        Cow::Owned(projected)
+    }
+
     /// Renders selection handles for a drawing, highlighting the currently
     /// dragged handle (if any).
     pub fn render_handles(&self, painter: &egui::Painter, drawing: &Drawing) {
@@ -90,7 +118,12 @@ impl DrawingManager {
             .dragging_handle
             .filter(|(id, _)| *id == drawing.id)
             .map(|(_, h)| h);
-        HandleService::render_handles(painter, drawing, &self.options.handle_config, dragging);
+        HandleService::render_handles(
+            painter,
+            &self.handle_drawing(drawing),
+            &self.options.handle_config,
+            dragging,
+        );
     }
 
     // === Hit testing ===
@@ -117,6 +150,7 @@ impl DrawingManager {
                         .pane_clips
                         .get(&d.pane)
                         .is_some_and(|rect| rect.contains(point))
+                    || self.reaches_pane_at(d, point)
             })
             .find(|drawing| {
                 if let Some(id) = &drawing.custom_tool {
@@ -128,15 +162,44 @@ impl DrawingManager {
                 let paint = painted
                     .iter()
                     .find(|p| p.id == drawing.id && p.points == drawing.points);
-                if paint.is_some_and(|p| !p.shapes.iter().any(|s| s.clip_rect.contains(point))) {
+                if paint.is_some_and(|p| !p.shapes.iter().any(|s| s.clip_rect.contains(point)))
+                    && !self.reaches_pane_at(drawing, point)
+                {
                     return false;
                 }
                 paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
-                    || DrawingInteraction::new()
-                        .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
-                        .is_some()
+                    || (drawing.tool_type != DrawingToolType::RegressionTrend
+                        && DrawingInteraction::new()
+                            .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
+                            .is_some())
             })
             .map(|d| d.id)
+    }
+
+    /// Whether `drawing` runs through some pane at `point`. Its paint belongs to its own pane, so
+    /// another pane's line is hit on its outline.
+    fn reaches_pane_at(&self, drawing: &Drawing, point: Pos2) -> bool {
+        drawing.reaches_other_panes() && self.pane_clips.values().any(|rect| rect.contains(point))
+    }
+
+    /// Position and layout of the first upright text shape painting exactly `text` for `id`.
+    pub(crate) fn painted_text(&self, id: usize, text: &str) -> Option<(Pos2, Arc<egui::Galley>)> {
+        fn find(shape: &Shape, text: &str) -> Option<(Pos2, Arc<egui::Galley>)> {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+                Shape::Text(t) if t.angle == 0.0 && t.galley.text() == text => {
+                    Some((t.pos, Arc::clone(&t.galley)))
+                }
+                _ => None,
+            }
+        }
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        painted
+            .iter()
+            .find(|p| p.id == id)?
+            .shapes
+            .iter()
+            .find_map(|s| find(&s.shape, text))
     }
 
     fn render_drawing(
@@ -151,7 +214,12 @@ impl DrawingManager {
                 tool.implementation.render(drawing, painter, rect, view);
             }
         } else {
-            drawing.render(painter, rect, view);
+            drawing.render_with_selection(
+                painter,
+                rect,
+                view,
+                self.selection.is_selected(drawing.id),
+            );
         }
     }
 
@@ -181,6 +249,12 @@ impl DrawingManager {
             .is_none();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
+            let preview = self
+                .text_editor
+                .as_ref()
+                .filter(|editor| editor.inline && editor.id == drawing.id)
+                .map(|editor| editor.preview(drawing, painter.ctx()));
+            let drawing = preview.as_ref().unwrap_or(drawing);
             let off_pane = drawing.custom_tool.is_none()
                 && drawing
                     .paint_bounds()
@@ -229,11 +303,29 @@ impl DrawingManager {
                 painted.push(PaintedDrawing {
                     id: drawing.id,
                     points: drawing.points.clone(),
+                    handle_points: match drawing.tool_type {
+                        DrawingToolType::RegressionTrend => {
+                            drawing.regression_ends(view).map(Vec::from)
+                        }
+                        DrawingToolType::AnchoredVWAP
+                        | DrawingToolType::FixedRangeVolumeProfile
+                        | DrawingToolType::AnchoredVolumeProfile => {
+                            drawing.volume_tool_handles(view)
+                        }
+                        _ => None,
+                    },
                     shapes,
                     tessellated,
                 });
+            } else if !self.owns_pane(drawing)
+                && drawing.reaches_other_panes()
+                && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            {
+                drawing.render_line_from_other_pane(painter, price_rect);
             }
         }
+
+        drop(painted);
 
         // Render current drawing being created
         if let Some(ref drawing) = self.curr_drawing
@@ -241,9 +333,15 @@ impl DrawingManager {
         {
             self.render_drawing(drawing, painter, price_rect, view);
             if drawing.tool_type == DrawingToolType::Rect {
-                drawing.render_rect_guides(painter);
+                drawing.render_rect_guides(painter, view.price_formatter);
                 self.render_handles(painter, drawing);
             }
+        }
+
+        if let Some(drawing) = &self.measurement
+            && self.owns_pane(drawing)
+        {
+            self.render_drawing(drawing, painter, price_rect, view);
         }
 
         // Render handles for every visible selected drawing.
@@ -254,10 +352,101 @@ impl DrawingManager {
                 && d.is_visible_on_timeframe(&self.curr_timeframe)
         }) {
             if drawing.tool_type == DrawingToolType::Rect {
-                drawing.render_rect_guides(painter);
+                drawing.render_rect_guides(painter, view.price_formatter);
             }
             self.render_handles(painter, drawing);
         }
+    }
+}
+
+/// A tag a drawing puts on an axis of its pane.
+#[derive(Clone, Copy)]
+pub(crate) enum DrawingAxisTag {
+    /// `price` on the price axis, on a `color` tag, at `decimals` places or the scale's.
+    Price {
+        price: f64,
+        color: Color32,
+        decimals: Option<u8>,
+    },
+    /// The time of `anchor` on the time axis at screen `x`, on an opaque `color` tag.
+    Time {
+        x: f32,
+        anchor: ChartPoint,
+        color: Color32,
+    },
+}
+
+impl DrawingManager {
+    /// The axis tags of visible drawings of the pane last handled, in drawing order: enabled
+    /// price and time labels of horizontal, vertical and cross lines reaching `plot`, position
+    /// levels, whose entry takes `entry_color`, the latest value of an anchored VWAP that tracks
+    /// it over the pane's `bars` at `revision`, and the time of a vertical line reaching that
+    /// pane from another. Call after the pane handles input so tags follow a drag in the same
+    /// frame. Line tags use opaque RGB so their text stays legible.
+    pub(crate) fn axis_tags<'a>(
+        &'a self,
+        plot: Rect,
+        entry_color: Color32,
+        bars: &'a [crate::model::Bar],
+        revision: u64,
+    ) -> impl Iterator<Item = DrawingAxisTag> + 'a {
+        self.drawings
+            .iter()
+            .filter(|drawing| {
+                (self.owns_pane(drawing) || drawing.reaches_other_panes())
+                    && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            })
+            .flat_map(move |drawing| {
+                let (price, time) = Drawing::axis_labels_of(drawing.tool_type);
+                let (price, time) = (
+                    price
+                        && drawing.price_axis_label
+                        && !matches!(
+                            drawing.tool_type,
+                            DrawingToolType::LongPos | DrawingToolType::ShortPos
+                        ),
+                    time && drawing.time_axis_label,
+                );
+                let [r, g, b, _] = drawing.color;
+                let color = Color32::from_rgb(r, g, b);
+                let at = drawing.chart_points.first().zip(drawing.points.first());
+                // A ray starting right of the plot draws nothing in it.
+                let price = at
+                    .filter(|(_, point)| {
+                        price
+                            && (drawing.tool_type != DrawingToolType::HorizontalRay
+                                || point.x <= plot.right())
+                    })
+                    .map(|(anchor, _)| DrawingAxisTag::Price {
+                        price: anchor.price,
+                        color,
+                        decimals: None,
+                    });
+                let vwap =
+                    drawing
+                        .anchored_vwap_last(bars, revision)
+                        .map(|price| DrawingAxisTag::Price {
+                            price,
+                            color,
+                            decimals: drawing.vwap.and_then(|config| config.precision),
+                        });
+                let time = at
+                    .filter(|(_, point)| time && plot.x_range().contains(point.x))
+                    .map(|(anchor, point)| DrawingAxisTag::Time {
+                        x: point.x,
+                        anchor: *anchor,
+                        color,
+                    });
+                drawing
+                    .position_price_tags(entry_color)
+                    .into_iter()
+                    .map(|(price, color)| DrawingAxisTag::Price {
+                        price,
+                        color,
+                        decimals: None,
+                    })
+                    .chain([price, vwap, time].into_iter().flatten())
+            })
     }
 }
 
@@ -265,6 +454,143 @@ impl DrawingManager {
 mod tests {
     use super::*;
     use crate::drawings::domain::ChartPoint;
+
+    /// Handles follow y = 11 + x for closes 10, 14, 12, regardless of clicked prices,
+    /// anchor order or extension. Moving the range to closes 14, 12 gives y = 14 - 2x.
+    #[test]
+    fn regression_handles_follow_the_fit_and_refit_after_dragging() {
+        use crate::drawings::{
+            HandlePos,
+            persistence::{drawing_to_stored, stored_to_drawing},
+        };
+        use crate::model::Bar;
+        let bars: Vec<_> = [10.0, 14.0, 12.0]
+            .into_iter()
+            .map(|close| Bar::from_value(chrono::DateTime::UNIX_EPOCH, close))
+            .collect();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        let ctx = egui::Context::default();
+        for (start, reverse) in [(0.0, false), (0.0, true), (-1.0, false), (0.4, true)] {
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::RegressionTrend);
+            drawing.chart_points = vec![ChartPoint::new(start, 30.0), ChartPoint::new(2.0, 5.0)];
+            if reverse {
+                drawing.chart_points.reverse();
+            }
+            let saved = drawing_to_stored(&drawing, |b| 1_700_000_000_000 + (b * 60_000.0) as i64);
+            let mut drawing =
+                stored_to_drawing(&saved, |p| (p - 1_700_000_000_000) as f32 / 60_000.0, 7);
+            assert_eq!(
+                drawing
+                    .chart_points
+                    .iter()
+                    .map(|p| p.bar_idx)
+                    .collect::<Vec<_>>(),
+                if reverse {
+                    vec![2.0, start]
+                } else {
+                    vec![start, 2.0]
+                }
+            );
+            drawing.extend_right = true;
+            manager.drawings.push(drawing);
+            manager.select(7);
+            let render = |manager: &mut DrawingManager, bars: &[Bar]| {
+                manager
+                    .update_all_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(pane),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        manager.render_all(
+                            ui.painter(),
+                            pane,
+                            &ChartView {
+                                price_formatter: None,
+                                time_formatter: None,
+                                bar_seconds: 0,
+                                instrument: None,
+                                bars,
+                                revision: 0,
+                                bar_to_x: &|b| 100.0 + b * 100.0,
+                                price_to_y: &|p| 500.0 - p as f32 * 10.0,
+                                y_to_price: &|y| f64::from((500.0 - y) / 10.0),
+                                time_axis: true,
+                                executions: None,
+                                timeframe: None,
+                                finer: &[],
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            render(&mut manager, &bars);
+            let (first, last) = if reverse { (1, 0) } else { (0, 1) };
+            let handles = manager.get_handles(&manager.drawings[0]);
+            assert_eq!(handles.len(), 2);
+            for point in &manager.drawings[0].points {
+                assert_eq!(manager.hit_test_handle(&manager.drawings[0], *point), None);
+                assert_eq!(manager.hit_test(*point), None);
+            }
+            for (index, point) in [
+                (first, Pos2::new(100.0, 390.0)),
+                (last, Pos2::new(300.0, 370.0)),
+            ] {
+                assert!(handles.contains(&(HandlePos::Point(index), point)));
+                assert_eq!(
+                    manager.hit_test_handle(&manager.drawings[0], point),
+                    Some(HandlePos::Point(index))
+                );
+            }
+            let before = manager.drawings[0].chart_points.clone();
+            manager.start_drag_handle(7, HandlePos::Point(first));
+            manager.update_drag_handle(
+                Pos2::new(100.0, 50.0),
+                |x| (x - 100.0) / 100.0,
+                |y| f64::from(500.0 - y) / 10.0,
+                |p, from, to| p - f64::from(to - from) / 10.0,
+            );
+            assert_eq!(
+                manager.drawings[0].chart_points, before,
+                "vertical drag is a no-op"
+            );
+            manager.update_drag_handle(
+                Pos2::new(200.0, 50.0),
+                |x| (x - 100.0) / 100.0,
+                |y| f64::from(500.0 - y) / 10.0,
+                |p, from, to| p - f64::from(to - from) / 10.0,
+            );
+            manager.end_drag_handle();
+            render(&mut manager, &bars);
+            let handles = manager.get_handles(&manager.drawings[0]);
+            assert!(handles.contains(&(HandlePos::Point(first), Pos2::new(200.0, 360.0))));
+            assert!(handles.contains(&(HandlePos::Point(last), Pos2::new(300.0, 380.0))));
+            assert!(
+                manager.drawings[0]
+                    .chart_points
+                    .iter()
+                    .zip(before)
+                    .all(|(p, old)| p.price == old.price)
+            );
+            assert!(manager.undo());
+            render(&mut manager, &bars);
+            assert_eq!(manager.get_handles(&manager.drawings[0]).len(), 2);
+            let mut live = bars.clone();
+            live[2].close = 18.0;
+            render(&mut manager, &live);
+            // Perfect line 10, 14, 18 after a tick: slope 4, intercept 10.
+            assert!(
+                manager
+                    .get_handles(&manager.drawings[0])
+                    .contains(&(HandlePos::Point(last), Pos2::new(300.0, 320.0)))
+            );
+            render(&mut manager, &[]);
+            assert!(manager.get_handles(&manager.drawings[0]).is_empty());
+        }
+    }
 
     /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
     /// selectable away from every anchor, using their actual paint geometry.
@@ -282,8 +608,8 @@ mod tests {
             (
                 DrawingToolType::Sector,
                 vec![(100., 100.), (200., 100.), (100., 50.)],
-                (50., 150.),
                 (150., 50.),
+                (50., 150.),
             ),
             (
                 DrawingToolType::ArrowMarkLeft,
@@ -317,9 +643,9 @@ mod tests {
             ),
             (
                 DrawingToolType::FibonacciCircles,
-                vec![(100., 100.), (200., 100.)],
-                (100., 200.),
-                (400., 350.),
+                vec![(100., 100.), (200., 200.)],
+                (150., 200.),
+                (580., 390.),
             ),
             (
                 DrawingToolType::CyclicLines,
@@ -345,13 +671,19 @@ mod tests {
             let render = |manager: &DrawingManager| {
                 ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
+                        price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
+                        y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
                         executions: None,
+                        timeframe: None,
+                        finer: &[],
                     };
                     manager.render_all(ui.painter(), pane, &view);
                 })
@@ -425,13 +757,19 @@ mod tests {
             let mut output = ctx.run_ui(RawInput::default(), |ui| {
                 ctx.set_transform_layer(ui.layer_id(), layer);
                 let view = ChartView {
+                    price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
                     instrument: None,
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b * 10.0,
                     price_to_y: &|p| 500.0 - p as f32,
+                    y_to_price: &|y| 500.0 - f64::from(y),
                     time_axis: true,
                     executions: None,
+                    timeframe: None,
+                    finer: &[],
                 };
                 manager.render_all(ui.painter(), pane, &view);
             });
