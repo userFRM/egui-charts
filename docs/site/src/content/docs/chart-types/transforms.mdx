@@ -36,7 +36,10 @@ The original values remain available through
 builds bricks from price movement. Supply the original history and set
 [`ChartTypeParams::renko_brick_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.renko_brick_size)
 in price units. Close is the default input; `renko_source` can select high/low.
-`renko_wicks` displays source extremes for the selected input. The
+`renko_wicks` displays source extremes for the selected input.
+[`styles.renko`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.RenkoStyle.html) hides the brick borders or sets
+rising and falling border and wick colours; a colour left `None` keeps the
+brick colour, at 70% opacity for the border. The
 [`RenkoConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/renko/struct.RenkoConfig.html)
 reference describes brick continuation and reversal rules.
 
@@ -104,7 +107,7 @@ Main transform colours and dimensions come from
 [`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html);
 Kagi has separate [`KagiStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.KagiStyle.html)
 stroke widths and colours, Point and Figure its own column colours, and Renko
-its wick switch. The Kagi and Point and Figure colours
+its wick switch, borders and wick colours. The Kagi and Point and Figure colours
 follow the theme while unedited, and documents saved before they existed draw
 these types in their candle body colours. The main candle style switches
 are specific to `Candles`; they are not universal transform settings.
