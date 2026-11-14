@@ -583,6 +583,15 @@ pub fn price_axis_width(
     price_axis_width_with_edges(painter, price_map, tag_labels, formatter, None)
 }
 
+/// Width of an axis column that holds each of `tags` whole, with the plot gap and right
+/// clearance of the labels.
+pub(crate) fn axis_tags_width<'a>(tags: impl IntoIterator<Item = &'a Option<Rect>>) -> f32 {
+    tags.into_iter()
+        .flatten()
+        .map(|tag| tag.width() + 5.0 + 6.0)
+        .fold(0.0, f32::max)
+}
+
 /// Measures the list painted by an axis, including edge ticks when `pane` is present.
 pub(crate) fn price_axis_width_with_edges(
     painter: &Painter,

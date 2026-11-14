@@ -403,9 +403,9 @@ impl IndicatorPane {
                 self.price_formatter.as_deref(),
             )
         };
-        for tag in tags.iter().chain(&self.fixed_axis_tags).flatten() {
-            width = width.max(tag.width() + 5.0 + 6.0);
-        }
+        width = width.max(crate::chart::rendering::axes::axis_tags_width(
+            tags.iter().chain(&self.fixed_axis_tags),
+        ));
         self.axis_tags = tags.clone();
         tags.extend(self.fixed_axis_tags.iter().copied());
         if !self.draw_axis {

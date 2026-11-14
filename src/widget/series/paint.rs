@@ -692,6 +692,8 @@ impl Chart {
                     .edge_ticks_visible
                     .then_some(label_rect),
             ));
+            // A tag led by a long name can be wider than the scale's tick labels.
+            measured = measured.max(crate::chart::rendering::axes::axis_tags_width(&tags));
             ui.interact(
                 axis,
                 ui.scope_id().with(("series_axis", key)),

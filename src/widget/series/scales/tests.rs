@@ -2759,7 +2759,8 @@ fn column_padding_searches_past_neighbours_and_single_point_times() {
 }
 
 /// Each added series writes its last value with its own scale's decimals, led by its own
-/// name once the axis shows names, and a host formatter still replaces the decimals.
+/// name once the axis shows names, and a host formatter still replaces the decimals. A
+/// column on either side of the plot widens to hold a named tag whole.
 #[test]
 fn added_series_value_tags_use_their_scale_precision_and_name() {
     let ctx = egui::Context::default();
@@ -2777,8 +2778,8 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
             .set_price_precision(Some(decimals));
         id
     };
-    let alpha = add("Alpha", SeriesScale::Separate(2), 3, 200.5);
-    add("Beta", SeriesScale::Separate(3), 0, 300.5);
+    let alpha = add("Alpha Growth", SeriesScale::Separate(2), 3, 200.5);
+    add("Beta Industrial", SeriesScale::Separate(3), 0, 300.5);
     chart.config.price_axis.show_symbol_name = true;
     frame(&ctx, &mut chart, 0.0, vec![]);
     let labels = |chart: &Chart, key, rect| {
@@ -2790,9 +2791,41 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
     let rect = chart.last_rendered_price_rect;
     assert_eq!(
         labels(&chart, SeriesScale::Separate(2), rect),
-        ["Alpha 200.500"]
+        ["Alpha Growth 200.500"]
     );
-    assert_eq!(labels(&chart, SeriesScale::Separate(3), rect), ["Beta 300"]);
+    assert_eq!(
+        labels(&chart, SeriesScale::Separate(3), rect),
+        ["Beta Industrial 300"]
+    );
+    for side in [crate::model::AxisSide::Left, crate::model::AxisSide::Right] {
+        assert!(chart.place_pane_scales(chart.main_series_pane(), side));
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+        // The central panel's margin around the chart.
+        let widget = egui::Rect::from_min_max(Pos2::new(8.0, 8.0), Pos2::new(792.0, 592.0));
+        let plot = chart.last_rendered_price_rect;
+        assert_eq!(chart.calculate_layout_rects(widget).price_rect, plot);
+        let axes = chart.secondary_axes(widget, plot);
+        for (key, label) in [
+            (SeriesScale::Separate(2), "Alpha Growth 200.500"),
+            (SeriesScale::Separate(3), "Beta Industrial 300"),
+        ] {
+            let column = axes.iter().find(|(axis, _)| *axis == key).unwrap().1;
+            let text = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.visual_bounding_rect())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{side:?}: {label} is painted"));
+            assert!(
+                text.left() >= column.left() && text.right() <= column.right(),
+                "{side:?}: {label} at {text:?} fits {column:?}"
+            );
+        }
+    }
     chart.config.price_axis.show_symbol_name = false;
     assert_eq!(labels(&chart, SeriesScale::Separate(2), rect), ["200.500"]);
     chart.set_series_formatter(
