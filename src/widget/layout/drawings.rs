@@ -515,7 +515,7 @@ impl DrawingLinks {
                 // A drawing deleted, or confined to its chart, also leaves the charts that put a
                 // copy aside, which may be linked to any of the drawings removed here.
                 for gone in deleted {
-                    self.delete_aside_copies(charts, count, gone);
+                    self.delete_aside_copies(charts, count, groups, gone);
                 }
             }
             // The copy that stays, or the one deleted, is now the only instance, so it is stored
@@ -755,14 +755,22 @@ impl DrawingLinks {
         arrivals
     }
 
-    /// Takes the copies of a drawing deleted or confined to its chart out of the charts that put
-    /// them aside with their symbol, so that they do not come back with the chart.
-    fn delete_aside_copies(&mut self, charts: &mut [&mut Chart], count: usize, key: Key) {
+    /// Takes the copies of a drawing deleted or confined to its chart out of the charts of its
+    /// group that put them aside with their symbol, so that they do not come back with the chart.
+    fn delete_aside_copies(
+        &mut self,
+        charts: &mut [&mut Chart],
+        count: usize,
+        groups: &[Option<String>; 16],
+        key: Key,
+    ) {
         let gone: Vec<_> = self
             .aside
             .iter()
-            .filter(|((_, symbol, _), (_, partners))| {
-                symbol == charts[key.0].symbol() && partners.contains(&key)
+            .filter(|((slot, symbol, _), (_, partners))| {
+                symbol == charts[key.0].symbol()
+                    && groups[*slot] == groups[key.0]
+                    && partners.contains(&key)
             })
             .map(|(entry, _)| entry.clone())
             .collect();
@@ -2484,7 +2492,8 @@ mod tests {
     /// holds one line however often it happens, also when the chart that stayed changed the line
     /// meanwhile. A line deleted on another chart of the symbol, also in the frame of the return,
     /// or confined to that chart by its folder, does not come back, and a chart that forgot the
-    /// drawings of the symbol draws lines of its own there.
+    /// drawings of the symbol draws lines of its own there. A deletion in another group leaves the
+    /// copy put aside.
     #[test]
     fn mirrored_drawings_stay_single_through_a_symbol_round_trip() {
         for sync_symbol in [true, false] {
@@ -2518,26 +2527,43 @@ mod tests {
             chart.drawings_mut().delete_drawing(id);
         };
         let confine: fn(&mut Chart) = |chart| into_folder(chart, FolderSync::Chart);
-        for (name, edit, kept, at_return) in [
-            ("deleted while away", delete, vec![], false),
+        for (name, edit, expected, at_return, apart) in [
+            ("deleted while away", delete, [vec![], vec![]], false, false),
             (
                 "confined to its chart while away",
                 confine,
-                vec![104.0],
+                [vec![104.0], vec![]],
+                false,
                 false,
             ),
-            ("deleted in the frame of the return", delete, vec![], true),
+            (
+                "deleted in the frame of the return",
+                delete,
+                [vec![], vec![]],
+                true,
+                false,
+            ),
+            (
+                "deleted in another group while away",
+                delete,
+                [vec![], vec![104.0]],
+                false,
+                true,
+            ),
         ] {
             let (mut layout, mut charts) = mirrored_pair(false);
             charts[1].set_symbol("OTHER");
             frames(&mut layout, &mut charts);
+            if apart {
+                layout.set_sync_group(0, Some("Second".into()));
+            }
             edit(&mut charts[0]);
             if !at_return {
                 frames(&mut layout, &mut charts);
             }
             charts[1].set_symbol("SAMPLE");
             frames(&mut layout, &mut charts);
-            assert_eq!(prices(&charts), [kept, vec![]], "{name}");
+            assert_eq!(prices(&charts), expected, "{name}");
         }
 
         // Ids belong to a symbol's drawings: a drawing made on the other symbol meanwhile may
