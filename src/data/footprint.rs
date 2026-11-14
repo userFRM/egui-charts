@@ -101,7 +101,29 @@ pub struct FootprintBar {
 
 impl FootprintBar {
     /// A bar with no executions, opening at `time`.
-    pub(crate) fn empty(time: DateTime<Utc>) -> Self {
+    /// Fill its rows, side totals and delta extrema from the prepared data, then validate the
+    /// aggregate through [`Footprint::from_bars`].
+    ///
+    /// ```
+    /// use egui_charts::{
+    ///     data::{Footprint, FootprintBar, FootprintLevel},
+    ///     model::{BarClock, Timeframe},
+    /// };
+    ///
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// let mut row = FootprintLevel::default();
+    /// row.level = 400;
+    /// row.ask = 2.0;
+    /// row.ask_trades = 1;
+    /// bar.levels.insert(row.level, row);
+    /// bar.ask = 2.0;
+    /// bar.max_delta = 2.0;
+    /// let footprint = Footprint::from_bars(BarClock::new(Timeframe::Min1), 0.25, 1, [bar])?;
+    /// assert_eq!(footprint.bar_at(time).unwrap().volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn empty(time: DateTime<Utc>) -> Self {
         Self {
             time,
             levels: BTreeMap::new(),
