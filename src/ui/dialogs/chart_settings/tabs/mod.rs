@@ -115,6 +115,7 @@ fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, 
     (*label, *line) = mode;
 }
 
+/// A settings dropdown showing `selected`; returns the response of its closed box.
 fn styled_dropdown<R>(
     ui: &mut Ui,
     id: &str,
@@ -122,7 +123,7 @@ fn styled_dropdown<R>(
     text_color: Color32,
     selected: &str,
     add_contents: impl FnOnce(&mut Ui) -> R,
-) {
+) -> Response {
     egui::ComboBox::from_id_salt(id)
         .icon(crate::ui_kit::buttons::combo_chevron)
         .width(width)
@@ -131,7 +132,8 @@ fn styled_dropdown<R>(
                 .size(ui.active_theme().text.title)
                 .color(text_color),
         )
-        .show_ui(ui, add_contents);
+        .show_ui(ui, add_contents)
+        .response
 }
 
 /// The width of the Trading tab's labels, where its dropdowns start.

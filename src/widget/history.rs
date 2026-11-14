@@ -159,7 +159,8 @@ struct SeriesSet {
     other: Vec<SeriesId>,
     main_scale: SeriesScale,
     main_alerts: SeriesAlerts,
-    main_price_line: Option<egui::Color32>,
+    /// The colour of the main series' price line and the bar it follows.
+    main_price_line: (Option<egui::Color32>, crate::model::PriceLineSource),
     held: Vec<HeldSeries>,
 }
 
@@ -174,7 +175,10 @@ impl SeriesSet {
             other: Vec::new(),
             main_scale: chart.main_series_scale,
             main_alerts: chart.main_series_style.alerts,
-            main_price_line: chart.main_series_style.price_line_color,
+            main_price_line: (
+                chart.main_series_style.price_line_color,
+                chart.main_series_style.price_line_source,
+            ),
             held: Vec::new(),
         }
     }
@@ -847,7 +851,10 @@ impl Chart {
         }
         self.main_series_scale = set.main_scale;
         self.main_series_style.alerts = set.main_alerts;
-        self.main_series_style.price_line_color = set.main_price_line;
+        (
+            self.main_series_style.price_line_color,
+            self.main_series_style.price_line_source,
+        ) = set.main_price_line;
         // `now.props` lists the series shown before the exchange, in draw order.
         for (id, ..) in &now.props {
             if self.price_series.iter().all(|item| item.id != *id) {

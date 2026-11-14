@@ -7949,7 +7949,7 @@ mod tests {
         state.grid_lines.vertical_color = egui::Color32::BLUE;
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
-        state.margins.right_bars = 17;
+        state.margins.right_bars = 17.0;
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;

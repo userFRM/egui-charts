@@ -28,6 +28,11 @@ impl SettingsDialog {
         ] {
             styled_checkbox(ui, value, label, theme.ui.text);
         }
+        // Settings that hold no choice keep the chart's until the switch is used.
+        let mut session_breaks = self.settings.show_session_breaks.unwrap_or_default();
+        if styled_checkbox(ui, &mut session_breaks, "Session breaks", theme.ui.text) {
+            self.settings.show_session_breaks = Some(session_breaks);
+        }
     }
 
     pub(in super::super) fn draw_trading_tab(&mut self, ui: &mut Ui, theme: &Theme) {

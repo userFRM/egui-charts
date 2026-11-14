@@ -208,11 +208,16 @@ impl Default for WatermarkSettings {
 
 /// Canvas tab: Scales appearance settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ScalesAppearanceSettings {
     /// Text color.
     pub text_color: Color32,
     /// Font size in logical pixels.
     pub font_size: u8,
+    /// Font family of the axis labels and tags. `None` keeps the chart's family, as do settings
+    /// saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<egui::FontFamily>,
     /// Axis line color.
     pub lines_color: Color32,
 }
@@ -222,6 +227,7 @@ impl Default for ScalesAppearanceSettings {
         Self {
             text_color: crate::theme::Theme::default().ui.text_secondary,
             font_size: 12,
+            font_family: None,
             lines_color: Color32::TRANSPARENT,
         }
     }
@@ -252,8 +258,11 @@ pub struct MarginsSettings {
     pub top_percent: f32,
     /// Empty space below prices, as a percentage of pane height.
     pub bottom_percent: f32,
-    /// Empty space after the latest bar, in bars.
-    pub right_bars: u32,
+    /// Empty space after the latest bar, in bars; a margin set in pixels reads as its width in
+    /// bars at the current bar spacing. Settings without
+    /// [`ScalesAppearanceSettings::font_family`], as saved when this held whole bars, keep the
+    /// chart's margin when this equals its whole bars.
+    pub right_bars: f32,
 }
 
 impl Default for MarginsSettings {
@@ -263,15 +272,30 @@ impl Default for MarginsSettings {
         Self {
             top_percent: (price.top * 100.0) as f32,
             bottom_percent: (price.bottom * 100.0) as f32,
-            // Whole bars: resetting a chart whose right margin was edited gives 2 bars, not 2.5.
-            right_bars: crate::config::TimeScaleOptions::default().right_offset as u32,
+            right_bars: crate::config::TimeScaleOptions::default().right_offset,
         }
     }
+}
+
+/// The character that groups the thousands of the built-in price labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ThousandsSeparator {
+    /// Plain digits: `42541.77`.
+    Off,
+    /// A comma: `42,541.77`.
+    Comma,
+    /// A space: `42 541.77`.
+    Space,
+    /// An apostrophe: `42'541.77`.
+    Apostrophe,
+    /// A character the host set as `ChartConfig::thousands_sep`.
+    Other(char),
 }
 
 /// Scales and lines tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ScalesAndLinesSettings {
     /// Axis layout of the pane containing the main series.
     pub axis_layout: crate::model::PaneAxisOptions,
@@ -323,6 +347,12 @@ pub struct ScalesAndLinesSettings {
     pub show_prev_close_label: bool,
     /// Whether to show price line.
     pub show_price_line: bool,
+    /// The bar whose close the last price line and label of the main series show. `None` keeps
+    /// the chart's choice, as do settings saved without this field.
+    pub price_line_source: Option<crate::model::PriceLineSource>,
+    /// The thousands separator of price labels. `None` keeps the chart's separator, as do
+    /// settings saved without this field.
+    pub thousands_sep: Option<ThousandsSeparator>,
     /// Whether to show countdown.
     pub show_countdown: bool,
     /// Whether to show bid ask.
@@ -359,6 +389,8 @@ impl Default for ScalesAndLinesSettings {
             show_last_price_label: true,
             show_prev_close_label: false,
             show_price_line: true,
+            price_line_source: None,
+            thousands_sep: None,
             show_countdown: true,
             show_bid_ask: false,
             show_high_low: false,
@@ -593,6 +625,10 @@ pub struct ChartSettingsState {
     // Events tab
     /// Visible event categories.
     pub events: crate::model::EventVisibility,
+    /// Whether session break lines are drawn. `None` keeps the chart's choice, as do settings
+    /// saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_session_breaks: Option<bool>,
 }
 
 impl serde::Serialize for ChartSettingsState {
@@ -651,6 +687,7 @@ impl Default for ChartSettingsState {
             alerts: AlertsSettings::default(),
 
             events: crate::model::EventVisibility::default(),
+            show_session_breaks: None,
         }
     }
 }

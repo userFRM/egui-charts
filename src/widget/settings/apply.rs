@@ -2,7 +2,7 @@
 
 use super::{
     BackgroundType, ButtonVisibility, ChartSettingsState, GridLinesMode, PrecisionMode,
-    WatermarkMode,
+    ThousandsSeparator, WatermarkMode,
 };
 use crate::{
     Chart,
@@ -30,6 +30,38 @@ fn axis_line_color(config: &ChartConfig) -> Color32 {
             .unwrap_or(Theme::default().ui.border)
     } else {
         Color32::TRANSPARENT
+    }
+}
+
+/// The right margin the dialog shows, in bars: the margin the view keeps, which for a margin set
+/// in pixels is its width at the current bar spacing.
+fn right_margin_bars(chart: &Chart) -> f32 {
+    let options = &chart.chart_options().time_scale;
+    options
+        .right_offset_pixels
+        .map_or(options.right_offset, |pixels| {
+            pixels / chart.state().time_scale().bar_spacing()
+        })
+        .max(0.0)
+}
+
+fn thousands_separator(separator: Option<char>) -> ThousandsSeparator {
+    match separator {
+        None => ThousandsSeparator::Off,
+        Some(',') => ThousandsSeparator::Comma,
+        Some(' ') => ThousandsSeparator::Space,
+        Some('\'') => ThousandsSeparator::Apostrophe,
+        Some(other) => ThousandsSeparator::Other(other),
+    }
+}
+
+fn thousands_sep(separator: ThousandsSeparator) -> Option<char> {
+    match separator {
+        ThousandsSeparator::Off => None,
+        ThousandsSeparator::Comma => Some(','),
+        ThousandsSeparator::Space => Some(' '),
+        ThousandsSeparator::Apostrophe => Some('\''),
+        ThousandsSeparator::Other(other) => Some(other),
     }
 }
 
@@ -63,6 +95,8 @@ pub enum ChartSettingsError {
         /// The bottom margin in percent.
         bottom: f32,
     },
+    /// The right margin in bars is not finite or is negative.
+    RightMargin(f32),
     /// The crosshair line width is not finite or not above zero.
     CrosshairWidth(f32),
     /// The axis font size is zero.
@@ -87,6 +121,7 @@ impl std::fmt::Display for ChartSettingsError {
         f.write_str(match self {
             Self::Timezone(_) => "Invalid timezone",
             Self::Margins { .. } => "Margins must leave room for prices",
+            Self::RightMargin(_) => "Right margin must be zero or more bars",
             Self::CrosshairWidth(_) => "Crosshair width must be above zero",
             Self::FontSize(_) => "Font sizes must be between 1 and 256",
             Self::PriceToBarRatio(_) => "Price-to-bar ratio must be positive and finite",
@@ -124,6 +159,7 @@ impl ChartSettingsState {
             chart_type_params: Some(chart.chart_type_params().clone()),
             price_source: Some(chart.config().price_source),
             events: chart.event_visibility().clone(),
+            show_session_breaks: Some(config.show_session_breaks),
             order_flow: super::OrderFlowSettings {
                 show_heatmap: chart
                     .feed_link
@@ -245,9 +281,12 @@ impl ChartSettingsState {
         settings.scales_and_lines.show_extended_session_price = config.show_extended_session_price;
         settings.scales_and_lines.extended_session_price_color =
             config.extended_session_price_color;
-        settings.scales_and_lines.symbol_price_color = chart
-            .series_style(crate::widget::SeriesId::MAIN)
-            .and_then(|style| style.price_line_color);
+        let main_style = chart.series_style(crate::widget::SeriesId::MAIN);
+        settings.scales_and_lines.symbol_price_color =
+            main_style.and_then(|style| style.price_line_color);
+        settings.scales_and_lines.price_line_source =
+            main_style.map(|style| style.price_line_source);
+        settings.scales_and_lines.thousands_sep = Some(thousands_separator(config.thousands_sep));
         settings.scales_and_lines.lock_price_to_bar_ratio =
             chart.state().price_scale().bar_ratio_locked();
         // An unlocked chart offers the ratio of the view it shows, which ticking the lock keeps; one
@@ -275,7 +314,7 @@ impl ChartSettingsState {
             (chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
         settings.margins.bottom_percent =
             (chart.state().price_scale().options().scale_margins.bottom * 100.0) as f32;
-        settings.margins.right_bars = chart.chart_options().time_scale.right_offset.max(0.0) as u32;
+        settings.margins.right_bars = right_margin_bars(chart);
         let scale = chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale = scale.options().mode == PriceScaleMode::Logarithmic;
@@ -343,6 +382,7 @@ impl ChartSettingsState {
         settings.watermark.color = config.watermark_color;
         settings.scales_appearance.text_color = config.text_color;
         settings.scales_appearance.font_size = axis_font_size(config);
+        settings.scales_appearance.font_family = Some(config.axis_font_family.clone());
         settings.scales_appearance.lines_color = axis_line_color(config);
         settings.btns.pane = button_visibility(config.pane_buttons);
 
@@ -370,6 +410,10 @@ impl ChartSettingsState {
             || top + bottom >= 100.0
         {
             return Err(ChartSettingsError::Margins { top, bottom });
+        }
+        let right = self.margins.right_bars;
+        if !right.is_finite() || right < 0.0 {
+            return Err(ChartSettingsError::RightMargin(right));
         }
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err(ChartSettingsError::CrosshairWidth(
@@ -410,7 +454,8 @@ impl ChartSettingsState {
 
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
     /// Host-owned trading and alerts are left to their providers. Invalid timezone,
-    /// margins or crosshair width returns an error before changing the chart.
+    /// margins or crosshair width returns an error before changing the chart. The optional
+    /// choices that hold `None`, as in settings saved before they existed, keep the chart's.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
         let timezone = self.validate()?;
         if let Some(params) = &self.chart_type_params {
@@ -559,6 +604,12 @@ impl ChartSettingsState {
         config.show_countdown = self.scales_and_lines.show_countdown;
         config.show_bid_ask = self.scales_and_lines.show_bid_ask;
         config.show_high_low = self.scales_and_lines.show_high_low;
+        if let Some(separator) = self.scales_and_lines.thousands_sep {
+            config.thousands_sep = thousands_sep(separator);
+        }
+        if let Some(show) = self.show_session_breaks {
+            config.show_session_breaks = show;
+        }
 
         set_unless_resolved(
             &mut config.vertical_grid_color,
@@ -590,6 +641,9 @@ impl ChartSettingsState {
         if self.scales_appearance.font_size != axis_font_size(config) {
             config.axis_font_size = Some(f32::from(self.scales_appearance.font_size));
         }
+        if let Some(family) = &self.scales_appearance.font_family {
+            config.axis_font_family.clone_from(family);
+        }
         config.show_watermark = self.watermark.mode != WatermarkMode::ReplayMode;
         config.watermark_color = self.watermark.color;
         if self.watermark.mode != WatermarkMode::Custom {
@@ -601,9 +655,19 @@ impl ChartSettingsState {
             top: f64::from(self.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
             bottom: f64::from(self.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
         };
-        if self.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32
-        {
-            chart.set_right_margin(self.margins.right_bars as f32);
+        // An unedited margin keeps the chart's, in bars or in pixels; an edited one is in bars.
+        // Settings saved before the margin could hold part of a bar, which hold none of the
+        // choices `from_chart` fills, hold the whole bars of the bar margin for an unedited one.
+        let whole_bars = chart
+            .chart_options()
+            .time_scale
+            .right_offset
+            .max(0.0)
+            .trunc();
+        let saved_unedited =
+            self.scales_appearance.font_family.is_none() && self.margins.right_bars == whole_bars;
+        if self.margins.right_bars != right_margin_bars(chart) && !saved_unedited {
+            chart.set_right_margin(self.margins.right_bars);
         }
         let mode = if self.scales_and_lines.log_scale {
             PriceScaleMode::Logarithmic
@@ -651,6 +715,9 @@ impl ChartSettingsState {
         chart.state.price_scale_mut().set_price_precision(precision);
         if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
+            if let Some(source) = self.scales_and_lines.price_line_source {
+                style.price_line_source = source;
+            }
         }
         chart.price_scale_mut().set_bar_ratio(
             self.scales_and_lines
@@ -2657,5 +2724,108 @@ mod tests {
         // The bars span 0.009 to 0.016: ten times the span they are fitted in is below 0.0875,
         // while one price unit per bar spans the plot's height in bar widths, about 91.
         assert!(range.max - range.min < 0.0875, "{range:?}");
+    }
+
+    /// The session breaks switch and the bar the last price line follows reach the chart, read
+    /// back and are undone. Settings saved before these, the axis font family and the thousands
+    /// separator could be chosen hold none of them and keep the chart's.
+    #[test]
+    fn session_breaks_and_last_price_bar_apply_and_read_back() {
+        use crate::model::PriceLineSource::{LastBar, LastVisible};
+        use crate::widget::{SeriesId, test_frames::chart};
+        let read = |chart: &Chart| {
+            let style = chart.series_style(SeriesId::MAIN).unwrap();
+            (chart.config().show_session_breaks, style.price_line_source)
+        };
+        let mut chart = chart(&[100.0], &[110.0]);
+        let new_chart = ChartSettingsState::from_chart(&chart);
+        for (breaks, source) in [(true, LastVisible), (false, LastBar)] {
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.show_session_breaks = Some(breaks);
+            settings.scales_and_lines.price_line_source = Some(source);
+            chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+            assert_eq!(read(&chart), (breaks, source));
+            let settings = ChartSettingsState::from_chart(&chart);
+            assert_eq!(
+                (
+                    settings.show_session_breaks,
+                    settings.scales_and_lines.price_line_source
+                ),
+                (Some(breaks), Some(source))
+            );
+        }
+        assert!(chart.undo());
+        assert_eq!(read(&chart), (true, LastVisible));
+
+        chart.config_mut().axis_font_family = egui::FontFamily::Monospace;
+        chart.config_mut().thousands_sep = Some('_');
+        let mut saved = serde_json::to_value(new_chart).unwrap();
+        for (group, choice) in [
+            ("", "show_session_breaks"),
+            ("/scales_and_lines", "price_line_source"),
+            ("/scales_and_lines", "thousands_sep"),
+            ("/scales_appearance", "font_family"),
+        ] {
+            let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
+            group.remove(choice).expect(choice);
+        }
+        let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
+        saved.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);
+        assert_eq!(chart.config().thousands_sep, Some('_'));
+    }
+
+    /// The right margin row shows the margin the view keeps: part of a bar as it is, and a margin
+    /// set in pixels as its width in bars at the bar spacing. Unedited settings leave the bar and
+    /// pixel margins as they were, and an edit sets the margin in bars. Settings saved before the
+    /// row could hold part of a bar hold the whole bars of the bar margin and keep the chart's.
+    #[test]
+    fn right_margin_row_shows_the_margin_the_view_keeps() {
+        use crate::widget::test_frames::chart;
+        // A new chart, and one keeping 60 pixels at the default bar spacing of 6 points.
+        for (pixels, shown) in [(None, 2.5), (Some(60.0), 10.0)] {
+            let mut options = crate::config::ChartOptions::default();
+            options.time_scale.right_offset_pixels = pixels;
+            let mut chart = chart(&[100.0], &[110.0]).with_chart_options(options);
+            let kept = chart.chart_options().time_scale.clone();
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            assert_eq!(settings.margins.right_bars, shown, "{pixels:?}");
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                chart.chart_options().time_scale,
+                kept,
+                "unedited, {pixels:?}"
+            );
+
+            // The margins a new chart saved before the change, without the later choices.
+            let mut saved = serde_json::to_value(&settings).unwrap();
+            saved["margins"] = serde_json::from_str(
+                r#"{"top_percent":10.0,"bottom_percent":10.0,"right_bars":2}"#,
+            )
+            .unwrap();
+            let appearance = saved["scales_appearance"].as_object_mut().unwrap();
+            appearance.remove("font_family").unwrap();
+            let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
+            saved.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(chart.chart_options().time_scale, kept, "saved, {pixels:?}");
+
+            // An edit, also to the whole bars of the bar margin.
+            for bars in [2.0, 7.5] {
+                settings.margins.right_bars = bars;
+                settings.apply_to_chart(&mut chart).unwrap();
+                let time_scale = &chart.chart_options().time_scale;
+                assert_eq!(
+                    (time_scale.right_offset, time_scale.right_offset_pixels),
+                    (bars, None),
+                    "{pixels:?}"
+                );
+            }
+            settings.margins.right_bars = -1.0;
+            assert_eq!(
+                settings.apply_to_chart(&mut chart),
+                Err(ChartSettingsError::RightMargin(-1.0))
+            );
+        }
     }
 }

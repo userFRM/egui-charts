@@ -640,7 +640,7 @@ mod tests {
         state.watermark.mode = WatermarkMode::Symbol;
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
-        state.margins.right_bars = 17;
+        state.margins.right_bars = 17.0;
         settings(&mut terminal, state.clone());
         let chart = terminal.chart();
         assert_eq!(chart.config().candle_border_width, 0.0);
