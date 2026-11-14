@@ -82,12 +82,15 @@ impl SeriesSettingsDialog {
 
         let mut action = SeriesSettingsAction::None;
 
-        let object = if self.series_id == Some(SeriesId::MAIN) {
-            "Main series".to_owned()
-        } else {
-            format!("Series {:?}", self.series_id)
+        let object = match self.series_id {
+            Some(SeriesId::MAIN) => l10n::text(ctx, "Main series"),
+            Some(id) => l10n::format_text(ctx, "Series {number}", &[("number", id.0.to_string())]),
+            None => l10n::text(ctx, "Series"),
         };
-        let title = format!("{object} · {}", self.settings.chart_type.name());
+        let title = format!(
+            "{object} · {}",
+            l10n::text(ctx, self.settings.chart_type.name())
+        );
         let mut open = true;
         Modal::new("series_settings", title)
             .width(self.config.width + 32.0)

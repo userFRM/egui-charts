@@ -171,7 +171,11 @@ fn render_group(
         };
         if IconButton::new(icon)
             .size(ButtonSize::SM)
-            .tooltip(format!("Toggle {name}"))
+            .tooltip(l10n::format_text(
+                ui.ctx(),
+                "Toggle {name}",
+                &[("name", name)],
+            ))
             .show(ui)
             .clicked()
         {
