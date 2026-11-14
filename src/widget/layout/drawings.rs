@@ -5,7 +5,7 @@ use super::ChartLayout;
 use crate::config::{DrawingSort, DrawingToolType};
 use crate::drawings::manager::sync_id;
 use crate::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
-use crate::drawings::{Drawing, FolderSync};
+use crate::drawings::{Drawing, DrawingManager, FolderSync};
 use crate::widget::{Chart, PaneId};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -31,6 +31,18 @@ fn mirrored(sync: Option<FolderSync>, layout_wide: bool) -> bool {
         Some(FolderSync::Chart) => false,
         Some(FolderSync::Layout) => true,
         None => layout_wide,
+    }
+}
+
+/// The drawings of `symbol` that `chart` holds: on show, or put aside with the symbol.
+fn drawings_of<'a>(chart: &'a Chart, symbol: &str) -> Option<&'a DrawingManager> {
+    if chart.symbol() == symbol {
+        Some(chart.drawings())
+    } else {
+        chart
+            .symbol_drawings
+            .get(symbol)
+            .map(|(manager, _)| manager)
     }
 }
 
@@ -84,6 +96,10 @@ pub(super) struct DrawingLinks {
     frame: u64,
     /// The `drawing_resets` of each chart at the last frame.
     resets: Vec<u64>,
+    /// The `identity` of the drawings of each symbol each chart held at the last frame, on show
+    /// or put aside, by slot and symbol: drawings a load or a restore put in their place are new
+    /// to the layout, also under the same ids.
+    managers: HashMap<(usize, String), u64>,
 }
 
 impl DrawingLinks {
@@ -118,6 +134,11 @@ impl DrawingLinks {
         if a.max(b) < self.resets.len() {
             self.resets.swap(a, b);
         }
+        self.managers = self
+            .managers
+            .drain()
+            .map(|((slot, symbol), identity)| ((moved((slot, 0)).0, symbol), identity))
+            .collect();
         self.arriving = self
             .arriving
             .drain()
@@ -134,40 +155,61 @@ impl DrawingLinks {
         self.retry.retain(|key| self.previous.contains_key(key));
         self.unwritten.retain(|key| self.previous.contains_key(key));
         self.aside.retain(|(slot, symbol, id), _| {
-            *slot < count && {
-                let chart = &charts[*slot];
-                let manager = if chart.symbol() == symbol {
-                    Some(chart.drawings())
-                } else {
-                    chart
-                        .symbol_drawings
-                        .get(symbol)
-                        .map(|(manager, _)| manager)
-                };
-                manager.is_some_and(|manager| {
+            *slot < count
+                && drawings_of(charts[*slot], symbol).is_some_and(|manager| {
                     manager
                         .drawings
                         .iter()
                         .any(|d| d.id == *id && d.folder_sync_mode().is_some())
                 })
-            }
         });
     }
 
-    /// Forgets the drawings of the chart in `slot`, supplied or restored there anew: its ids may
-    /// name other drawings now. They are new to the layout, and the chart receives the mirrored
-    /// drawings of its symbol as a chart that comes to it does.
-    pub(super) fn forget_slot(&mut self, slot: usize) {
-        self.previous.retain(|key, _| key.0 != slot);
-        self.origins.retain(|key, _| key.0 != slot);
-        self.retry.retain(|key| key.0 != slot);
-        self.unwritten.retain(|key| key.0 != slot);
-        self.aside.retain(|entry, _| entry.0 != slot);
-        for (_, partners) in self.aside.values_mut() {
-            partners.retain(|key| key.0 != slot);
+    /// Forgets the drawings of the chart in `slot` of each symbol that `gone` picks, which the
+    /// chart no longer holds: drawings in their place are new to the layout, also under their ids.
+    fn forget(&mut self, slot: usize, gone: impl Fn(&str) -> bool) {
+        let keys: Vec<Key> = self
+            .previous
+            .iter()
+            .filter(|(key, old)| key.0 == slot && gone(&old.symbol))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in &keys {
+            self.previous.remove(key);
+            self.origins.remove(key);
+            self.retry.remove(key);
+            self.unwritten.remove(key);
         }
+        self.aside
+            .retain(|(owner, symbol, _), _| *owner != slot || !gone(symbol));
+        for ((_, symbol, _), (_, partners)) in &mut self.aside {
+            if gone(symbol) {
+                partners.retain(|key| key.0 != slot);
+            }
+        }
+        self.managers
+            .retain(|(owner, symbol), _| *owner != slot || !gone(symbol));
+        self.rename_links(|origin, symbol| origin.0 == slot && gone(symbol));
+    }
+
+    /// Forgets the drawings of the chart in `slot`, supplied or restored there anew, of each
+    /// symbol whose drawings it no longer holds as at the last frame: a new chart holds none of
+    /// them, and a restore replaces those of the symbol it shows, whose ids may name other
+    /// drawings now. The drawings a restored chart kept stay linked. The chart receives the
+    /// mirrored drawings of its symbol as a chart that comes to it does.
+    pub(super) fn forget_slot(&mut self, slot: usize, chart: &Chart) {
+        let kept: HashSet<String> = self
+            .managers
+            .iter()
+            .filter(|((owner, symbol), identity)| {
+                *owner == slot
+                    && drawings_of(chart, symbol)
+                        .is_some_and(|manager| manager.identity == **identity)
+            })
+            .map(|((_, symbol), _)| symbol.clone())
+            .collect();
+        self.forget(slot, |symbol| !kept.contains(symbol));
         self.arriving.insert(slot);
-        self.rename_links(|origin, _| origin.0 == slot);
     }
 
     /// Gives each link that `gone` picks by name and symbol the name of one of its drawings on
@@ -295,6 +337,24 @@ impl DrawingLinks {
                 self.forget_switched(charts, count);
             }
             self.wide = layout_wide;
+        }
+        // Drawings a load put in place of those of a symbol are new to the layout, and the chart
+        // receives the mirrored drawings of its symbol again, as after a restore.
+        let replaced: Vec<(usize, String)> = self
+            .managers
+            .iter()
+            .filter(|((slot, symbol), identity)| {
+                *slot < count
+                    && drawings_of(charts[*slot], symbol)
+                        .is_some_and(|manager| manager.identity != **identity)
+            })
+            .map(|(entry, _)| entry.clone())
+            .collect();
+        for (slot, symbol) in replaced {
+            if charts[slot].symbol() == symbol {
+                self.arriving.insert(slot);
+            }
+            self.forget(slot, |shown| shown == symbol);
         }
         self.shown.resize(count, None);
         for (slot, chart) in charts.iter().take(count).enumerate() {
@@ -679,6 +739,15 @@ impl DrawingLinks {
             .take(count)
             .map(|chart| chart.drawing_resets)
             .collect();
+        self.managers.clear();
+        for (slot, chart) in charts.iter().take(count).enumerate() {
+            self.managers
+                .insert((slot, chart.symbol().to_owned()), chart.drawings().identity);
+            for (symbol, (manager, _)) in &chart.symbol_drawings {
+                self.managers
+                    .insert((slot, symbol.clone()), manager.identity);
+            }
+        }
         self.origins
             .retain(|key, _| self.previous.contains_key(key));
         for (slot, symbol) in forgotten {
@@ -3659,7 +3728,9 @@ mod tests {
     }
 
     /// Charts saved as snapshots and restored into a new layout show each mirrored drawing once,
-    /// still linked, however often that happens.
+    /// still linked, however often that happens. A restore or a load replaces only the drawings
+    /// of the symbol it shows: those a chart put aside on other symbols stay linked, and a chart
+    /// new to a slot starts without links.
     #[cfg(feature = "ui")]
     #[test]
     fn mirrored_drawings_restored_from_snapshots_stay_single_and_linked() {
@@ -3713,6 +3784,93 @@ mod tests {
                 "chart {restored} restored, away {away}"
             );
         }
+
+        // Restored from a snapshot of a third symbol, away or on show: the copy put aside on the
+        // symbol stays linked and takes the move made meanwhile.
+        let third = {
+            let mut chart = bars(60);
+            chart.set_symbol("THIRD");
+            draw(&mut chart, 70.0);
+            chart.snapshot().unwrap()
+        };
+        for away in [true, false] {
+            let (mut layout, mut charts) = mirrored_pair(false);
+            if away {
+                charts[1].set_symbol("OTHER");
+                frames(&mut layout, &mut charts);
+            }
+            let data = charts[1].bars(SeriesId::MAIN).to_vec();
+            charts[1].restore(&third).unwrap();
+            charts[1].set_data(SeriesId::MAIN, data);
+            frames(&mut layout, &mut charts);
+            move_first(&mut charts[0], 95.0);
+            frames(&mut layout, &mut charts);
+            charts[1].set_symbol("SAMPLE");
+            frames(&mut layout, &mut charts);
+            assert_eq!(
+                prices(&charts),
+                [vec![95.0], vec![95.0]],
+                "third symbol, away {away}"
+            );
+        }
+
+        // A chart new to the slot starts without links, also when its line takes the id of the
+        // copy the chart before it put aside.
+        let (mut layout, mut charts) = mirrored_pair(false);
+        let copy = charts[1].drawings().drawings[0].id;
+        charts[1].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        let mut chart = bars(60);
+        chart.set_symbol("SAMPLE");
+        assert_eq!(draw(&mut chart, 60.0), copy, "the id comes back");
+        chart.set_symbol("OTHER");
+        charts[1] = chart;
+        frames(&mut layout, &mut charts);
+        move_first(&mut charts[0], 95.0);
+        frames(&mut layout, &mut charts);
+        charts[1].set_symbol("SAMPLE");
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [vec![60.0, 95.0], vec![60.0, 95.0]],
+            "new chart"
+        );
+
+        // Drawings loaded into a chart are new: on show they join the others' drawings, which
+        // stay as they are; away, the copy put aside on the left symbol stays linked.
+        let file = |symbol: &str| {
+            let mut chart = bars(60);
+            chart.set_symbol(symbol);
+            draw(&mut chart, 70.0);
+            chart.save_drawings().unwrap().to_json().unwrap()
+        };
+        let (mut layout, mut charts) = mirrored_pair(false);
+        let line = charts[0].drawings().drawings[0].id;
+        charts[1].load_drawings(&file("SAMPLE")).unwrap();
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [vec![70.0, 104.0], vec![70.0, 104.0]],
+            "loaded on show"
+        );
+        assert!(
+            charts[0]
+                .drawings()
+                .drawings
+                .iter()
+                .any(|d| d.id == line && d.chart_points[0].price == 104.0),
+            "the first chart's line stays"
+        );
+        let (mut layout, mut charts) = mirrored_pair(false);
+        charts[1].set_symbol("OTHER");
+        frames(&mut layout, &mut charts);
+        charts[1].load_drawings(&file("OTHER")).unwrap();
+        frames(&mut layout, &mut charts);
+        move_first(&mut charts[0], 95.0);
+        frames(&mut layout, &mut charts);
+        charts[1].set_symbol("SAMPLE");
+        frames(&mut layout, &mut charts);
+        assert_eq!(prices(&charts), [vec![95.0], vec![95.0]], "loaded away");
     }
 
     /// Two charts keep their drawings in one storage that keeps revisions, a third in its own.
@@ -3799,6 +3957,44 @@ mod tests {
                 assert_eq!((counts(&shown), counts(&restarted)), ([0, 1, 0], [0, 1, 0]));
             }
         }
+    }
+
+    /// A chart reads its drawings again when they change in its storage elsewhere, here on a
+    /// chart of another layout, as in another window. A read is no load: the change reaches the
+    /// copy on the other chart of the layout as an edit, and each chart keeps one line.
+    #[test]
+    fn a_mirrored_drawing_changed_elsewhere_stays_single() {
+        use crate::services::document::tests::Revised;
+        use crate::widget::{ChartLayout, ChartLayoutMode};
+
+        let (own, shared) = (Arc::new(Revised::default()), Arc::new(Revised::default()));
+        let stored = |storage: &Arc<Revised>| {
+            let mut chart = bars(60);
+            chart.set_symbol("SAMPLE");
+            chart.set_storage(storage.clone());
+            chart
+        };
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        layout.sync.sync_drawings = true;
+        let mut window = ChartLayout::default();
+        let mut charts = [stored(&own), stored(&shared)];
+        let mut elsewhere = [stored(&shared)];
+        frames(&mut layout, &mut charts);
+        // The chart on the shared storage stores the line there, where the window reads it.
+        charts[1].user_action(|chart| draw(chart, 104.0));
+        frames(&mut layout, &mut charts);
+        frames(&mut window, &mut elsewhere);
+        assert_eq!(prices(&elsewhere), [vec![104.0]], "read from the shared storage");
+        elsewhere[0].user_action(|chart| move_first(chart, 95.0));
+        frames(&mut window, &mut elsewhere);
+        frames(&mut layout, &mut charts);
+        assert_eq!(
+            (prices(&charts), prices(&elsewhere)),
+            ([vec![95.0], vec![95.0]], [vec![95.0]])
+        );
     }
 
     /// Guards #1622: bars evicted from a chart or loaded in front of its bars renumber its
