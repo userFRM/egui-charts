@@ -168,6 +168,8 @@ impl TextEditState {
             );
         }
         shown.text = Some(self.shown_text(ctx));
+        // A pin whose popup is switched off still shows the text being written.
+        shown.marker.show_text = true;
         shown
     }
 }
@@ -526,8 +528,15 @@ impl DrawingManager {
         {
             drawing.modified_at.get_or_insert(now);
         }
-        self.selection
-            .prune(&self.drawings.iter().map(|d| d.id).collect());
+        // A step that hides a selected drawing deselects it, as hiding it by an edit does.
+        self.selection.prune(
+            &self
+                .drawings
+                .iter()
+                .filter(|d| d.visible)
+                .map(|d| d.id)
+                .collect(),
+        );
         true
     }
 

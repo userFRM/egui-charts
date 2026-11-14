@@ -814,6 +814,89 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "drawings")]
+    fn press(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// Ctrl+Alt+H hides every drawing unless all are hidden, and then shows them all.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn hide_drawings_key_hides_all_unless_all_are_hidden() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::test_frames::frame;
+        for (hidden, shown) in [
+            ([false, false, false], false),
+            ([false, true, false], false),
+            ([true, true, true], true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            for (id, hidden) in hidden.into_iter().enumerate() {
+                let mut drawing = Drawing::new(id, DrawingToolType::HorizontalLine);
+                drawing.chart_points = vec![ChartPoint::new(30.0, 14.0 + id as f64)];
+                drawing.completed = true;
+                drawing.visible = !hidden;
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let hide = press(Key::H, Modifiers::COMMAND.plus(Modifiers::ALT));
+            frame(&ctx, &mut chart, 1.0, vec![hide]);
+            let visible: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.visible)
+                .collect();
+            assert_eq!(visible, [shown; 3], "{hidden:?}");
+        }
+    }
+
+    /// Drawings hidden by Ctrl+Alt+H or by undoing a show are deselected, so Delete and the
+    /// arrows leave them alone.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn hidden_drawings_ignore_delete_and_arrow_keys() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::test_frames::frame;
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing.clone());
+        chart.drawings_mut().select(7);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let hide = press(Key::H, Modifiers::COMMAND.plus(Modifiers::ALT));
+        for (i, event) in [
+            hide.clone(),
+            press(Key::Delete, Modifiers::NONE),
+            press(Key::ArrowRight, Modifiers::NONE),
+            hide,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 1.0 + i as f64, vec![event]);
+        }
+        let drawings = &chart.drawings().drawings;
+        assert_eq!(drawings.len(), 1);
+        assert!(drawings[0].visible);
+        assert_eq!(drawings[0].chart_points, drawing.chart_points);
+        // Undoing the show hides the drawing again and deselects it too.
+        chart.drawings_mut().select(7);
+        assert!(chart.undo());
+        let delete = press(Key::Delete, Modifiers::NONE);
+        frame(&ctx, &mut chart, 5.0, vec![delete]);
+        assert_eq!(chart.drawings().drawings.len(), 1);
+    }
+
     #[test]
     fn reset_chart_restores_time_and_every_price_scale() {
         use crate::model::SeriesScale;

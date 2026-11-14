@@ -917,7 +917,8 @@ mod tests {
     }
 
     /// Completing an annotation focuses its editor. Inline text joins the placement undo step;
-    /// double-click reopens it, and Escape discards the draft without deselecting.
+    /// double-click reopens it, and Escape discards the draft without deselecting. A pin whose
+    /// popup is switched off still shows the text being written.
     #[test]
     fn placement_and_double_click_edit_annotation_text() {
         for (tool, pane) in [
@@ -926,6 +927,7 @@ mod tests {
             DrawingToolType::Note,
             DrawingToolType::AnchoredNote,
             DrawingToolType::Callout,
+            DrawingToolType::Signpost,
             DrawingToolType::Table,
             DrawingToolType::Image,
             DrawingToolType::Tweet,
@@ -973,7 +975,10 @@ mod tests {
             };
             step(&mut chart, vec![Event::PointerMoved(from)]);
             step(&mut chart, vec![button(from, true)]);
-            if matches!(tool, DrawingToolType::Callout | DrawingToolType::Note) {
+            if matches!(
+                tool,
+                DrawingToolType::Callout | DrawingToolType::Note | DrawingToolType::Signpost
+            ) {
                 step(
                     &mut chart,
                     vec![Event::PointerMoved(from + egui::vec2(8.0, 0.0))],
@@ -1038,6 +1043,8 @@ mod tests {
                 }
                 // Inside the pin's head, outside its hole.
                 DrawingToolType::AnchoredNote => points[0] - egui::vec2(0.0, 12.0),
+                // On the signpost's label, at the second anchor's height above the first.
+                DrawingToolType::Signpost => egui::pos2(points[0].x, points[1].y),
                 _ => points[0] + egui::vec2(10.0, 10.0),
             };
             assert_eq!(
@@ -1088,6 +1095,32 @@ mod tests {
                 ],
             );
             assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
+            if tool == DrawingToolType::AnchoredNote {
+                chart.drawings_mut().edit_drawing(id, |drawing| {
+                    drawing.locked = false;
+                    drawing.marker.show_text = false;
+                });
+                // Long enough for the next click to start a new double click.
+                for _ in 0..5 {
+                    step(&mut chart, vec![]);
+                }
+                for _ in 0..2 {
+                    step(
+                        &mut chart,
+                        vec![Event::PointerMoved(on_text), button(on_text, true)],
+                    );
+                    step(&mut chart, vec![button(on_text, false)]);
+                }
+                step(
+                    &mut chart,
+                    vec![
+                        key(Key::A, Modifiers::COMMAND),
+                        Event::Text("Hidden".into()),
+                    ],
+                );
+                step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hidden"));
+            }
         }
     }
 

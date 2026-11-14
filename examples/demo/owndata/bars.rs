@@ -239,6 +239,21 @@ impl Aggregator {
         });
     }
 
+    /// Continues from `bar`, a bar the stream's bars route sent. The service counted the trades
+    /// of its slot up to the moment it sent it, so the trades after it continue it. A bar of a
+    /// slot older than the one being built is left out: that slot is closed.
+    pub(crate) fn follow(&mut self, bar: &Bar) {
+        let slot = self.clock.bar_open(bar.time);
+        if self
+            .building
+            .as_ref()
+            .is_some_and(|building| slot < building.slot)
+        {
+            return;
+        }
+        self.start(Some(bar.clone()));
+    }
+
     /// Folds `trade` in and returns the bar to push, in its state after the trade. `None` when
     /// the trade changes nothing: its rule is `Ignore`, its slot is older than the bar being
     /// built, its slot opens too far after `now` (see [`ahead`]), or it counts volume only and no

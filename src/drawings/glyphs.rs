@@ -21,7 +21,7 @@ macro_rules! glyphs {
 glyphs! {
     "Icons: signals" => ["icon:up", "Arrow up"; "icon:down", "Arrow down"; "icon:check", "Check"; "icon:cross", "Cross"; "icon:flag", "Flag"; "icon:target", "Target"],
     "Icons: shapes" => ["icon:star", "Star"; "icon:heart", "Heart"; "icon:bolt", "Lightning bolt"; "icon:diamond", "Diamond"; "icon:circle", "Circle"; "icon:square", "Square"],
-    "Emoji: faces" => ["😀", "Grinning face"; "😂", "Tears of joy"; "😎", "Sunglasses"; "😐", "Neutral face"; "😢", "Crying face"; "😡", "Angry face"],
+    "Emoji: faces" => ["😀", "Grinning face"; "🙂", "Slightly smiling face"; "😂", "Tears of joy"; "😎", "Sunglasses"; "😐", "Neutral face"; "😢", "Crying face"; "😡", "Angry face"],
     "Emoji: gestures" => ["👍", "Thumbs up"; "👎", "Thumbs down"; "👏", "Clapping hands"; "🙏", "Folded hands"],
     "Emoji: nature" => ["🔥", "Fire"; "🌞", "Sun"; "🌈", "Rainbow"; "🌲", "Evergreen tree"; "🐂", "Bull"; "🐻", "Bear"],
     "Emoji: food" => ["🍎", "Apple"; "🍕", "Pizza"; "☕", "Coffee"; "🎂", "Birthday cake"],
@@ -121,6 +121,19 @@ pub(crate) fn paint(painter: &Painter, id: &str, rect: Rect, color: Color32) -> 
         "icon:diamond" => line(&[(12., 2.), (22., 12.), (12., 22.), (2., 12.)], true),
         "icon:circle" => circle(12., 12., 9., Color32::TRANSPARENT),
         "icon:square" => line(&[(3., 3.), (21., 3.), (21., 21.), (3., 21.)], true),
+        // The bundled emoji font has no slightly smiling face, so it is drawn in its style.
+        "🙂" => {
+            circle(12., 12., 10., Color32::TRANSPARENT);
+            circle(8.5, 9.5, 0.75, color);
+            circle(15.5, 9.5, 0.75, color);
+            let smile: Vec<_> = (0..=8)
+                .map(|i| {
+                    let angle = (35. + 110. * i as f32 / 8.).to_radians();
+                    (12. + 5.5 * angle.cos(), 11. + 5.5 * angle.sin())
+                })
+                .collect();
+            line(&smile, false);
+        }
         "sticker:bull" | "sticker:bear" => {
             let bull = id == "sticker:bull";
             let fur = if bull {

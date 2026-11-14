@@ -314,6 +314,7 @@ impl Ladder {
         let position = (market.positions.iter()).find(|position| position.symbol == symbol);
         let quantity_decimals = decimals(market.rules.quantity_step);
         let numbers = market.numbers();
+        let ctx = ui.ctx().clone();
         let order = |side, order_type| -> Result<OrderRequest, String> {
             if market.offline.is_some() {
                 return Err("Waiting for the broker to connect".into());
@@ -327,7 +328,8 @@ impl Ladder {
             if entry_price(&order_type).is_some_and(|price| !price.is_finite() || price <= 0.0) {
                 return Err("Enter a positive price".into());
             }
-            let quantity = order_quantity(wanted, market.rules)?;
+            let quantity =
+                order_quantity(wanted, market.rules).map_err(|limit| limit.message(&ctx))?;
             let mut request = OrderRequest::new(symbol, side, quantity, order_type);
             request.time_in_force = tif;
             Ok(request)
@@ -1016,11 +1018,11 @@ impl Ladder {
                                     let label = format!(
                                         "{} {} · {}",
                                         format_size(order.request.quantity - order.filled),
-                                        tag(&order.request.order_type),
+                                        l10n::text(ui.ctx(), tag(&order.request.order_type)),
                                         order.id.0,
                                     );
                                     if ui
-                                        .selectable_label(order.id == working.id, l10n::text(ui.ctx(), label))
+                                        .selectable_label(order.id == working.id, label)
                                         .clicked()
                                     {
                                         self.selected = Some(order.id.clone());
