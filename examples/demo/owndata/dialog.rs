@@ -49,6 +49,32 @@ const LARGEST_FILE: u64 = 1 << 20;
 /// What the dialog says about `Connect` while own data is on.
 const RECONNECTS: &str =
     "Connect reconnects with this profile. Studies and drawings on the chart are not kept.";
+/// The first-visit sentence. The web build runs in a browser, the native build on the device.
+const CHOICE: &str = if cfg!(target_arch = "wasm32") {
+    "This demo runs on synthetic data. You can also chart your own REST history and WebSocket \
+     stream, mapped here in your browser."
+} else {
+    "This demo runs on synthetic data. You can also chart your own REST history and WebSocket \
+     stream, mapped here on this device."
+};
+/// The choice that keeps the key values.
+const KEEP: &str = if cfg!(target_arch = "wasm32") {
+    "Keep keys in this browser"
+} else {
+    "Keep keys on this device"
+};
+/// Where a kept key is stored.
+const KEPT: &str = if cfg!(target_arch = "wasm32") {
+    "Kept as plain text in this browser's storage for this site."
+} else {
+    "Kept as plain text in the demo's settings file on this device."
+};
+/// Why a key of the stream travels elsewhere than in a header.
+const NO_HEADERS: &str = if cfg!(target_arch = "wasm32") {
+    "A browser sends no headers when it opens a WebSocket."
+} else {
+    "The stream sends no headers when it opens."
+};
 
 /// What the dialog asks the application to do.
 pub(crate) enum Outcome {
@@ -138,7 +164,7 @@ struct Draft {
     profile: Profile,
     /// The value of each key, in the order of `profile.keys`.
     values: Vec<String>,
-    /// The choice `Keep keys in this browser`.
+    /// Whether the key values are kept: the box [`KEEP`].
     keep: bool,
     /// The name of the saved profile the draft was loaded from. `None` for a new or an
     /// imported one.
@@ -416,13 +442,15 @@ impl<'a> Fields<'a> {
         }
     }
 
-    /// Maps `slot` to the node at `path`, whose value is `value`.
+    /// Maps `slot` to the node at `path`, whose value is `value`. The form of a time or a time
+    /// of day is the one its value reads in.
     fn assign(&mut self, slot: Slot, path: FieldPath, value: &Value) {
         match slot {
             Slot::Time => *self.time = time::guess(path, value),
             Slot::Clock => {
                 if let TimeSpec::Wall { clock, .. } = &mut *self.time {
-                    let unit = clock.take().map(|clock| clock.unit).unwrap_or_default();
+                    let held = clock.take().map(|clock| clock.unit).unwrap_or_default();
+                    let unit = time::clock_unit(value, held);
                     *clock = Some(Clock { field: path, unit });
                 }
             }
@@ -477,49 +505,50 @@ impl<'a> Fields<'a> {
     }
 
     /// Draws one row of a slot grid per slot, read on `record`.
-    fn rows(
-        &mut self,
-        ui: &mut egui::Ui,
-        record: Option<&Value>,
-        zone: &TimezoneId,
-        active: &mut Slot,
-    ) {
+    fn rows(&mut self, ui: &mut egui::Ui, record: Option<&Value>, active: &mut Slot) {
         for slot in self.slots() {
             let path = self.path(slot).unwrap_or_default();
             slot_cells(ui, slot, active, &path, false, record);
-            let mut clear = false;
-            ui.horizontal(|ui| {
-                clear = clear_button(ui, !path.is_empty());
-                match slot {
-                    Slot::Time if !path.is_empty() => {
-                        let mut form = TimeForm::of(self.time);
-                        let label = |form: &TimeForm| form.label().to_owned();
-                        if ui.combo_select("time_form", &mut form, TimeForm::ALL, label) {
-                            form.apply(self.time);
-                        }
-                        if let Some(record) = record {
-                            ui.weak(stamp_text(record, self.time, zone));
-                        }
-                    }
-                    Slot::Clock => {
-                        if let TimeSpec::Wall {
-                            clock: Some(clock), ..
-                        } = &mut *self.time
-                        {
-                            let units =
-                                [ClockUnit::Milliseconds, ClockUnit::Seconds, ClockUnit::Text];
-                            let label = |unit: &ClockUnit| clock_label(unit).to_owned();
-                            ui.combo_select("clock_unit", &mut clock.unit, units, label);
-                        }
-                    }
-                    _ => {}
-                }
-            });
-            if clear {
+            if clear_button(ui, !path.is_empty()) {
                 self.clear(slot);
             }
             ui.end_row();
         }
+    }
+
+    /// The form of the mapped time and of its time of day, and the time `record` holds. They
+    /// follow the slot grid, whose rows leave no room for them on a phone.
+    fn forms(&mut self, ui: &mut egui::Ui, record: Option<&Value>, zone: &TimezoneId) {
+        let timed = self.path(Slot::Time).is_some_and(|path| !path.is_empty());
+        let clocked = matches!(self.time, TimeSpec::Wall { clock: Some(_), .. });
+        if !timed && !clocked {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            if timed {
+                let mut form = TimeForm::of(self.time);
+                let label = |form: &TimeForm| form.label().to_owned();
+                let chosen = ui.name_inputs("Form of the time", |ui| {
+                    ui.combo_select("time_form", &mut form, TimeForm::ALL, label)
+                });
+                if chosen {
+                    form.apply(self.time);
+                }
+            }
+            if let TimeSpec::Wall {
+                clock: Some(clock), ..
+            } = &mut *self.time
+            {
+                let units = [ClockUnit::Milliseconds, ClockUnit::Seconds, ClockUnit::Text];
+                let label = |unit: &ClockUnit| clock_label(unit).to_owned();
+                ui.name_inputs("Form of the time of day", |ui| {
+                    ui.combo_select("clock_unit", &mut clock.unit, units, label);
+                });
+            }
+            if timed && let Some(record) = record {
+                ui.weak(stamp_text(record, self.time, zone));
+            }
+        });
     }
 }
 
@@ -799,10 +828,7 @@ impl DataSourceDialog {
 
     /// The first-visit choice.
     fn choice(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            "This demo runs on synthetic data. You can also chart your own REST history and \
-             WebSocket stream, mapped here in your browser.",
-        );
+        ui.label(CHOICE);
         let footer = DialogFooter::new("Connect my own data").secondary("Use synthetic data");
         let (own, synthetic) = footer.show(ui);
         ui.weak("You can change this later under Data source in the menu.");
@@ -1052,25 +1078,28 @@ impl DataSourceDialog {
         let idle = self.import.is_none();
         let mut pick = None;
         FormRow::new("Profile").show(ui, |ui| {
-            let label =
-                |name: &Option<String>| name.clone().unwrap_or_else(|| "New profile".into());
-            if ui.combo_select("data_source_profile", &mut chosen, names, label) {
-                pick = Some(Pick::Load);
-            }
-            let buttons = [
-                ("New", Pick::New, true),
-                ("Import", Pick::Import, idle),
-                ("Export", Pick::Export, true),
-                ("Delete", Pick::Delete, deletable),
-            ];
-            for (label, action, enabled) in buttons {
-                if ui
-                    .add(Button::new(label).outlined().small().enabled(enabled))
-                    .clicked()
-                {
-                    pick = Some(action);
+            // On a phone the buttons go on below the list.
+            ui.horizontal_wrapped(|ui| {
+                let label =
+                    |name: &Option<String>| name.clone().unwrap_or_else(|| "New profile".into());
+                if ui.combo_select("data_source_profile", &mut chosen, names, label) {
+                    pick = Some(Pick::Load);
                 }
-            }
+                let buttons = [
+                    ("New", Pick::New, true),
+                    ("Import", Pick::Import, idle),
+                    ("Export", Pick::Export, true),
+                    ("Delete", Pick::Delete, deletable),
+                ];
+                for (label, action, enabled) in buttons {
+                    if ui
+                        .add(Button::new(label).outlined().small().enabled(enabled))
+                        .clicked()
+                    {
+                        pick = Some(action);
+                    }
+                }
+            });
         });
         match pick {
             Some(Pick::Load) => {
@@ -1113,7 +1142,12 @@ impl DataSourceDialog {
             "A chart interval and the text the service expects for it, such as 1m, 60 or 60000. \
              The chart opens on the first row.",
         );
-        intervals.show(ui, |ui| interval_rows(ui, &mut draft.profile.intervals));
+        // The table takes the full width below its label, so that a row fits a phone. Out of
+        // the row, its controls take the label as their name.
+        intervals.show(ui, |_| {});
+        ui.name_inputs("Intervals", |ui| {
+            interval_rows(ui, &mut draft.profile.intervals);
+        });
         let zone = FormRow::new("Time zone").description(
             "The zone of every time that names none, and of bounds printed as dates: UTC, a \
              name such as America/New_York or an offset such as +05:30.",
@@ -1150,13 +1184,12 @@ impl DataSourceDialog {
             "Written as {name} in an address, a header, a body or a message. A key typed \
              there as it is becomes part of the profile and is saved and exported with it.",
         );
-        keys.show(ui, |ui| {
-            key_rows(ui, &mut draft.profile.keys, &mut draft.values)
-        });
-        let keep = egui::Checkbox::new(&mut draft.keep, "Keep keys in this browser");
+        keys.show(ui, |_| {});
+        key_rows(ui, &mut draft.profile.keys, &mut draft.values);
+        let keep = egui::Checkbox::new(&mut draft.keep, KEEP);
         ui.add_enabled(self.can_save, keep);
         if draft.keep {
-            ui.weak("Kept as plain text in this browser's storage for this site.");
+            ui.weak(KEPT);
         }
         ui.weak("Keys are sent only to the endpoints of this profile and are never exported.");
 
@@ -1275,18 +1308,18 @@ impl DataSourceDialog {
         self.symbol = self.symbol.min(profile.symbols.len().saturating_sub(1));
         self.interval = self.interval.min(profile.intervals.len().saturating_sub(1));
         let symbol = |at: &usize| profile.symbols.get(*at).cloned().unwrap_or_default();
-        ui.combo_select(
-            "test_symbol",
-            &mut self.symbol,
-            0..profile.symbols.len(),
-            symbol,
-        );
+        ui.name_inputs("Symbol", |ui| {
+            let symbols = 0..profile.symbols.len();
+            ui.combo_select("test_symbol", &mut self.symbol, symbols, symbol);
+        });
         let interval = |at: &usize| {
             let row = profile.intervals.get(*at);
             row.map(|row| row.chart.to_string()).unwrap_or_default()
         };
         let rows = 0..profile.intervals.len();
-        ui.combo_select("test_interval", &mut self.interval, rows, interval);
+        ui.name_inputs("Interval", |ui| {
+            ui.combo_select("test_interval", &mut self.interval, rows, interval);
+        });
     }
 
     /// The History step: the request, its Test and the mapping of the response.
@@ -1313,7 +1346,8 @@ impl DataSourceDialog {
             "Placeholders: {{symbol}}, {{interval}}, {{from}}, {{to}}, {{limit}}{keys}. A key \
              typed here instead of as {{name}} is saved and exported with the profile."
         ));
-        FormRow::new("Headers").show(ui, |ui| header_rows(ui, &mut history.headers));
+        FormRow::new("Headers").show(ui, |_| {});
+        header_rows(ui, &mut history.headers);
         let body = FormRow::new("Body").description(
             "Empty sends GET. Anything else is sent with POST, as application/json unless a \
              header names another content type.",
@@ -1332,19 +1366,23 @@ impl DataSourceDialog {
                 RangeFormat::Date,
                 RangeFormat::CompactDate,
             ];
-            let label = |form: &RangeFormat| range_label(form).to_owned();
-            ui.combo_select("range_format", &mut history.range, forms, label);
-            ui.weak("the form of {from} and {to}");
+            ui.horizontal_wrapped(|ui| {
+                let label = |form: &RangeFormat| range_label(form).to_owned();
+                ui.combo_select("range_format", &mut history.range, forms, label);
+                ui.weak("the form of {from} and {to}");
+            });
         });
         FormRow::new("Page size").show(ui, |ui| {
-            ui.add(egui::DragValue::new(&mut history.page_size).range(1..=100_000));
-            ui.weak("the most bars asked for in one request");
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::DragValue::new(&mut history.page_size).range(1..=100_000));
+                ui.weak("the most bars asked for in one request");
+            });
         });
 
         let ready = self.target().is_some();
         let waiting = self.history.pending.is_some();
         let mut test = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             self.target_choices(ui);
             test = ui
                 .add(Button::new("Test").primary().enabled(ready))
@@ -1560,7 +1598,8 @@ impl DataSourceDialog {
                 true,
                 test.sample.as_ref(),
             );
-            ui.horizontal(|ui| {
+            // The last cell is as wide as the step leaves it, and wraps on a phone.
+            ui.horizontal_wrapped(|ui| {
                 if clear_button(ui, !history.rows.path.is_empty()) {
                     clear = Some(Slot::Rows);
                 }
@@ -1582,8 +1621,9 @@ impl DataSourceDialog {
                 }
                 ui.end_row();
             }
-            Fields::bar(&mut history.bar).rows(ui, row, &zone, &mut test.slot);
+            Fields::bar(&mut history.bar).rows(ui, row, &mut test.slot);
         });
+        Fields::bar(&mut history.bar).forms(ui, row, &zone);
         match clear {
             Some(Slot::Rows) => history.rows.path.clear(),
             Some(_) => history.rows.layout = Layout::Arrays { header: None },
@@ -1641,7 +1681,7 @@ impl DataSourceDialog {
             ui.add(field.desired_width(f32::INFINITY));
         });
         ui.hint_label(format!(
-            "A browser sends no headers when it opens a WebSocket. Write {{name}} in the URL, \
+            "{NO_HEADERS} Write {{name}} in the URL, \
              in a subprotocol or in a connect message to send the key of that name there. \
              Placeholders: {{symbol}}, {{interval}}{keys}. A key typed here instead of as \
              {{name}} is saved and exported with the profile."
@@ -1650,27 +1690,32 @@ impl DataSourceDialog {
             "Offer one only when the service answers with it: a connection that offers \
              subprotocols ends when the server selects none.",
         );
-        protocols.show(ui, |ui| {
-            text_rows(ui, "protocol", &mut stream.protocols, "Add subprotocol")
+        protocols.show(ui, |_| {});
+        ui.name_inputs("Subprotocols", |ui| {
+            text_rows(ui, "protocol", &mut stream.protocols, "Add subprotocol");
         });
         let connect = FormRow::new("Connect messages").description(
             "Sent as typed, in this order, every time the socket opens: the login first, then \
              the subscribe message.",
         );
-        connect.show(ui, |ui| {
-            text_rows(ui, "connect", &mut stream.connect, "Add message")
+        connect.show(ui, |_| {});
+        ui.name_inputs("Connect messages", |ui| {
+            text_rows(ui, "connect", &mut stream.connect, "Add message");
         });
         let keep_alive = FormRow::new("Keep-alive")
             .description("A message and its period in seconds. An empty message sends none.");
         keep_alive.show(ui, |ui| {
-            ui.add(TextEdit::singleline(&mut stream.keep_alive).desired_width(280.0));
+            // The message leaves room for the period beside it.
+            let period = ui.spacing().interact_size.x + ui.spacing().item_spacing.x;
+            let width = (ui.available_width() - period).min(280.0);
+            ui.add(TextEdit::singleline(&mut stream.keep_alive).desired_width(width));
             ui.add(egui::DragValue::new(&mut stream.keep_alive_every).range(1..=3600));
         });
 
         let ready = self.target().is_some();
         let running = self.live.session.is_some();
         let mut pressed = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             self.target_choices(ui);
             let button = Button::new(if running { "Stop" } else { "Test" }).primary();
             pressed = ui.add(button.enabled(running || ready)).clicked();
@@ -2036,7 +2081,8 @@ impl DataSourceDialog {
         let mut removed = None;
         for (index, route) in stream.routes.iter_mut().enumerate() {
             ui.push_id(("route", index), |ui| {
-                ui.horizontal(|ui| {
+                // On a phone the kinds go on below the value.
+                ui.horizontal_wrapped(|ui| {
                     let name = format!("Route {}", index + 1);
                     if ui
                         .add(Button::new(name).small().selected(live.route == index))
@@ -2088,8 +2134,9 @@ impl DataSourceDialog {
         if let Some(route) = stream.routes.get_mut(live.route) {
             if let Some(mut fields) = Fields::route(&mut route.kind) {
                 FormGrid::new("route_slots").columns(4).show(ui, |ui| {
-                    fields.rows(ui, record, &zone, &mut live.slot);
+                    fields.rows(ui, record, &mut live.slot);
                 });
+                fields.forms(ui, record, &zone);
             }
             if let Some(record) = record {
                 let clock = BarClock::new(timeframe).with_timezone(zone.clone());
@@ -2607,11 +2654,12 @@ fn interval_rows(ui: &mut egui::Ui, rows: &mut Vec<Interval>) {
                 ui.horizontal(|ui| {
                     let label = |chart: &Timeframe| chart.to_string();
                     ui.combo_select("chart", &mut row.chart, Timeframe::all(), label);
+                    let width = (ui.available_width() - 90.0).clamp(60.0, 160.0);
                     let service = TextEdit::singleline(&mut row.service);
                     ui.add(
                         service
                             .hint_text("as the service spells it")
-                            .desired_width(160.0),
+                            .desired_width(width),
                     );
                     if ui.add(Button::new("Remove").small()).clicked() {
                         removed = Some(index);
@@ -2645,13 +2693,19 @@ fn key_rows(ui: &mut egui::Ui, keys: &mut Vec<String>, values: &mut Vec<String>)
         for (index, (name, value)) in keys.iter_mut().zip(values.iter_mut()).enumerate() {
             ui.push_id(("key", index), |ui| {
                 ui.horizontal(|ui| {
+                    // Both fields share what the Remove button leaves; on a desktop they keep
+                    // 140 and 240.
+                    let gap = ui.spacing().item_spacing.x;
+                    let room = ui.available_width() - 90.0;
+                    let name_width = ((room - gap) / 2.0).min(140.0);
+                    let value_width = (room - gap - name_width).min(240.0);
                     ui.add(
                         TextEdit::singleline(name)
                             .hint_text("key name")
-                            .desired_width(140.0),
+                            .desired_width(name_width),
                     );
                     let value = TextEdit::singleline(value).hint_text("key value");
-                    ui.add(value.password(true).desired_width(240.0));
+                    ui.add(value.password(true).desired_width(value_width));
                     if ui.add(Button::new("Remove").small()).clicked() {
                         removed = Some(index);
                     }
@@ -2676,16 +2730,19 @@ fn header_rows(ui: &mut egui::Ui, rows: &mut Vec<(String, String)>) {
         for (index, (name, value)) in rows.iter_mut().enumerate() {
             ui.push_id(("header", index), |ui| {
                 ui.horizontal(|ui| {
+                    // The name takes at most half of what the Remove button leaves.
+                    let gap = ui.spacing().item_spacing.x;
+                    let room = ui.available_width() - 90.0;
+                    let name_width = ((room - gap) / 2.0).min(160.0);
                     ui.add(
                         TextEdit::singleline(name)
                             .hint_text("name")
-                            .desired_width(160.0),
+                            .desired_width(name_width),
                     );
-                    let width = (ui.available_width() - 90.0).max(80.0);
                     ui.add(
                         TextEdit::singleline(value)
                             .hint_text("value")
-                            .desired_width(width),
+                            .desired_width(room - gap - name_width),
                     );
                     if ui.add(Button::new("Remove").small()).clicked() {
                         removed = Some(index);
@@ -2736,7 +2793,8 @@ fn condition_rows(ui: &mut egui::Ui, rules: &mut Vec<(String, ConditionRule)>, t
     let mut removed = None;
     for (index, (value, rule)) in rules.iter_mut().enumerate() {
         ui.push_id(("condition", index), |ui| {
-            ui.horizontal(|ui| {
+            // On a phone the rules go on below the value.
+            ui.horizontal_wrapped(|ui| {
                 ui.monospace(value.as_str());
                 let choices = [
                     ConditionRule::PriceAndVolume,
@@ -2815,6 +2873,8 @@ mod tests {
         text: String,
         /// The hint of a field.
         hint: String,
+        /// Whether the node has a name: a label, a label it is labelled by or a hint.
+        named: bool,
         rect: egui::Rect,
     }
 
@@ -2891,9 +2951,19 @@ mod tests {
         dialog: &mut DataSourceDialog,
         events: Vec<egui::Event>,
     ) -> Screen {
+        draw_at(ctx, dialog, events, SIZE)
+    }
+
+    /// One frame of the dialog with `events` in a window of `size`.
+    fn draw_at(
+        ctx: &egui::Context,
+        dialog: &mut DataSourceDialog,
+        events: Vec<egui::Event>,
+        size: egui::Vec2,
+    ) -> Screen {
         ctx.enable_accesskit();
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         };
@@ -2914,11 +2984,15 @@ mod tests {
             }
             let bounds = node.bounds()?;
             let corner = |x: f64, y: f64| egui::pos2(x as f32, y as f32);
+            let given = |text: Option<&str>| text.is_some_and(|text| !text.trim().is_empty());
             Some(Node {
                 id: *id,
                 role: node.role(),
                 text: node.label().or(node.value()).unwrap_or_default().to_owned(),
                 hint: node.placeholder().unwrap_or_default().to_owned(),
+                named: given(node.label())
+                    || !node.labelled_by().is_empty()
+                    || given(node.placeholder()),
                 rect: egui::Rect::from_min_max(
                     corner(bounds.x0, bounds.y0),
                     corner(bounds.x1, bounds.y1),
@@ -3288,6 +3362,172 @@ mod tests {
         assert_eq!(saved.profiles, [expected]);
     }
 
+    /// At the width of a phone every control and text of each step lies within the step, so
+    /// nothing has to be scrolled to sideways, and every control keeps its name.
+    #[test]
+    fn every_step_fits_a_phone() {
+        // The steps of the dialog, not those of a test server.
+        use super::Step;
+        // A profile with a row in every table of the three steps.
+        let mut profile = profile("http://127.0.0.1:9");
+        profile.keys = vec!["key".to_owned()];
+        let history = profile.history.as_mut().unwrap();
+        history.headers = vec![("Authorization".to_owned(), "Bearer {key}".to_owned())];
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let trades = TradeFields {
+            time: TimeSpec::Instant {
+                field: key("t"),
+                unit: TimeUnit::Milliseconds,
+            },
+            price: key("p"),
+            condition: key("c"),
+            conditions: vec![("@".to_owned(), ConditionRule::PriceAndVolume)],
+            side: key("m"),
+            buy: "B".to_owned(),
+            sell: "S".to_owned(),
+            ..TradeFields::default()
+        };
+        let route = |value: &str, kind| Route {
+            value: value.to_owned(),
+            kind,
+        };
+        profile.stream = Some(Stream {
+            url: "ws://127.0.0.1:9/stream".to_owned(),
+            protocols: vec!["json".to_owned()],
+            connect: vec![r#"{"action":"subscribe","symbol":"{symbol}"}"#.to_owned()],
+            keep_alive: r#"{"action":"ping"}"#.to_owned(),
+            routes: vec![
+                route("trade", RouteKind::Trades(trades)),
+                route("status", RouteKind::Ignore),
+            ],
+            ..Stream::default()
+        });
+        let saved = Saved {
+            asked: true,
+            current: Some("Local".to_owned()),
+            profiles: vec![profile],
+            keys: vec![(
+                "Local".to_owned(),
+                vec![("key".to_owned(), "k-1".to_owned())],
+            )],
+            ..Saved::default()
+        };
+        // The step, the text at its top and controls it shows.
+        #[rustfmt::skip]
+        let steps = [
+            (Step::Source, "Profile", "New, Import, Export, Delete, Remove, Add interval, Add key"),
+            (Step::History, "Use REST history", "Remove, Add header, Test"),
+            (Step::Live, "Use a WebSocket stream",
+             "Remove, Ignore, Volume only, Side, Add route, Test"),
+        ];
+        let checked = [
+            accesskit::Role::Label,
+            accesskit::Role::Button,
+            accesskit::Role::CheckBox,
+            accesskit::Role::ComboBox,
+            accesskit::Role::SpinButton,
+            accesskit::Role::TextInput,
+            accesskit::Role::MultilineTextInput,
+            accesskit::Role::PasswordInput,
+        ];
+        let mut faults = Vec::new();
+        for size in [egui::vec2(393.0, 852.0), egui::vec2(360.0, 800.0)] {
+            for (step, top, controls) in steps {
+                let storage = Arc::new(DemoStorage::default());
+                saved.save(&storage);
+                let mut dialog = DataSourceDialog::new(storage, true);
+                dialog.open();
+                dialog.step = step;
+                // An error below the time zone, so that its text is laid out too.
+                dialog.draft.zone = "Mars/Base".to_owned();
+                let ctx = egui::Context::default();
+                // The modal takes its place in its second frame, and the step measures what
+                // it holds in the frame after.
+                for _ in 0..3 {
+                    draw_at(&ctx, &mut dialog, vec![], size);
+                }
+                let screen = draw_at(&ctx, &mut dialog, vec![], size);
+                let name = format!("{} at {} px", step.tab_label(), size.x);
+                let (.., area) = screen
+                    .texts
+                    .iter()
+                    .find(|(text, ..)| text == top)
+                    .unwrap_or_else(|| panic!("{name}: no {top}"));
+                // The step and the footer below it, which shares its width.
+                let below =
+                    |node: &&Node| checked.contains(&node.role) && node.rect.top() >= area.top();
+                for node in screen.nodes.iter().filter(below) {
+                    let inside = node.rect.left() >= area.left() - 0.5
+                        && node.rect.right() <= area.right() + 0.5;
+                    if !inside {
+                        let (text, rect) = (&node.text, node.rect);
+                        faults.push(format!("{name}: {text:?} at {rect:?}, step at {area:?}"));
+                    }
+                    if egui::accessibility::is_input(node.role) && !node.named {
+                        let (role, text) = (node.role, &node.text);
+                        faults.push(format!("{name}: {role:?} {text:?} has no name"));
+                    }
+                }
+                for control in controls.split(", ") {
+                    let shown = screen.nodes.iter().any(|node| node.text == control);
+                    assert!(shown, "{name}: no {control}");
+                }
+            }
+        }
+        assert!(faults.is_empty(), "\n{}", faults.join("\n"));
+    }
+
+    /// A click on a time-of-day field picks the form its value reads in, so the preview reads
+    /// the bar without a choice by hand. A value that no form reads keeps the form held.
+    #[test]
+    fn a_time_of_day_is_read_in_the_form_its_value_has() {
+        use ClockUnit as C;
+        use serde_json::json;
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let at = |text: &str| Some(Stamp::At(text.parse().unwrap()));
+        // The value of the clicked field, the form held before, the form picked and the time
+        // of the record {"d": 20261111, "c": value} in UTC. 09:30:00 is second 34,200 and
+        // millisecond 34,200,000 of the day. 86,400 seconds is a whole day, past the last
+        // second of one, so 86,400 is read as milliseconds: 1 minute and 26.4 seconds.
+        #[rustfmt::skip]
+        let rows = [
+            (json!("09:30:00"), None, C::Text, at("2026-11-11T09:30:00Z")),
+            (json!("09:30"), Some(C::Milliseconds), C::Text, at("2026-11-11T09:30:00Z")),
+            (json!(34200), Some(C::Text), C::Seconds, at("2026-11-11T09:30:00Z")),
+            (json!("34200"), None, C::Seconds, at("2026-11-11T09:30:00Z")),
+            (json!(34200000), Some(C::Text), C::Milliseconds, at("2026-11-11T09:30:00Z")),
+            (json!(86400), None, C::Milliseconds, at("2026-11-11T00:01:26.400Z")),
+            (json!(-1), Some(C::Text), C::Text, None),
+            (json!("soon"), Some(C::Seconds), C::Seconds, None),
+            (json!(null), None, C::Milliseconds, None),
+        ];
+        for (value, held, unit, expected) in rows {
+            let clock = held.map(|unit| Clock {
+                field: key("c"),
+                unit,
+            });
+            let mut bar = BarFields {
+                time: TimeSpec::Wall {
+                    date: key("d"),
+                    format: DateFormat::Compact,
+                    clock,
+                },
+                ..BarFields::default()
+            };
+            Fields::bar(&mut bar).assign(Slot::Clock, key("c"), &value);
+            let TimeSpec::Wall {
+                clock: Some(clock), ..
+            } = &bar.time
+            else {
+                panic!("{value}: no time of day");
+            };
+            assert_eq!(clock.unit, unit, "{value}");
+            let record = json!({"d": 20261111, "c": value});
+            let read = time::stamp(&record, &bar.time, &TimezoneId::utc());
+            assert_eq!(read, expected, "{value}");
+        }
+    }
+
     /// The life of a key: an exported file does not hold it, an import connects once it is
     /// entered again, and a browser keeps it only when the box is ticked.
     #[test]
@@ -3379,7 +3619,7 @@ mod tests {
         assert!(dialog.startup().is_none() && dialog.is_open());
         // Kept by choice, the key is stored, and the start after that connects by itself.
         enter(&ctx, &mut dialog, "key value", SECRET);
-        click(&ctx, &mut dialog, "Keep keys in this browser");
+        click(&ctx, &mut dialog, "Keep keys on this device");
         let connected = click(&ctx, &mut dialog, "Connect");
         assert!(matches!(connected, Some(Outcome::Connect { .. })));
         assert!(stored(&fresh).contains(SECRET));
@@ -3391,7 +3631,7 @@ mod tests {
         assert!(!dialog.is_open());
         // The box cleared and the profile saved, the key is forgotten.
         dialog.open();
-        click(&ctx, &mut dialog, "Keep keys in this browser");
+        click(&ctx, &mut dialog, "Keep keys on this device");
         click(&ctx, &mut dialog, "Save");
         assert!(!stored(&fresh).contains(SECRET));
     }

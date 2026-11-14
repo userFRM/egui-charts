@@ -165,10 +165,10 @@ impl Chart {
 
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
     /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
-    /// that studies request for other symbols and intervals. A bar's close is its
-    /// `BarClock::next_open`; without a timeframe or on numeric and custom horizontal axes,
-    /// keys strictly before `time` are available. Supply finer bars with `set_replay_source`
-    /// to build the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
+    /// that studies request for other symbols and intervals. A bar closes at its next open on
+    /// [`Self::bar_clock`]; without a timeframe or on numeric and custom horizontal axes, keys
+    /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
+    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
     ///
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
