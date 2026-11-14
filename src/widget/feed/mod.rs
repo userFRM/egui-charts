@@ -555,7 +555,9 @@ impl Chart {
             {
                 return false;
             }
-            self.symbol_drawings.remove(symbol);
+            if self.symbol_drawings.remove(symbol).is_some() {
+                self.drawing_resets += 1;
+            }
             self.symbol_drawings.shrink_to_fit();
         }
         #[cfg(not(feature = "drawings"))]

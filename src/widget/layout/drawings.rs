@@ -52,6 +52,13 @@ fn content(chart: &Chart, drawing: &Drawing) -> String {
     format!("{}{:?}", live_key(chart, drawing), drawing.notes)
 }
 
+/// Whether `drawing` changed since `old`, the layout's record of it.
+fn differs(chart: &Chart, drawing: &Drawing, old: &Snapshot) -> bool {
+    serde_json::to_string(drawing).is_ok_and(|style| style != old.style)
+        || timed_points(chart, drawing) != old.points
+        || drawing.notes != old.notes
+}
+
 type Change = (Key, Option<Drawing>, Option<usize>);
 
 #[derive(Clone, Default)]
@@ -75,6 +82,8 @@ pub(super) struct DrawingLinks {
     /// The frames `sync` ran in, which order the changes it sees: edit times cannot, as an undo
     /// puts back the time of the state it restores and a copy is stamped when it is written.
     frame: u64,
+    /// The `drawing_resets` of each chart at the last frame.
+    resets: Vec<u64>,
 }
 
 impl DrawingLinks {
@@ -105,6 +114,9 @@ impl DrawingLinks {
             .collect();
         if a.max(b) < self.shown.len() {
             self.shown.swap(a, b);
+        }
+        if a.max(b) < self.resets.len() {
+            self.resets.swap(a, b);
         }
         self.arriving = self
             .arriving
@@ -292,27 +304,50 @@ impl DrawingLinks {
             }
         }
         // A drawing a chart put aside with its symbol keeps the drawings of that symbol it was
-        // linked to: those on show, and those put aside that keep it.
-        let put_aside: Vec<_> = self
-            .previous
-            .iter()
-            .filter(|(key, old)| key.0 < count && old.symbol != charts[key.0].symbol())
-            .map(|(&key, old)| {
-                // An edit made before the symbol change in this frame is seen now.
-                let chart = &charts[key.0];
-                let edited = chart
-                    .symbol_drawings
-                    .get(&old.symbol)
-                    .and_then(|(manager, _)| manager.drawings.iter().find(|d| d.id == key.1))
-                    .is_some_and(|d| {
-                        serde_json::to_string(d).is_ok_and(|style| style != old.style)
-                            || timed_points(chart, d) != old.points
-                            || d.notes != old.notes
-                    });
-                let seen = if edited { self.frame } else { old.seen };
-                (key, old.symbol.clone(), seen)
-            })
-            .collect();
+        // linked to: those on show, and those put aside that keep it. A mirrored drawing that the
+        // chart deleted, or confined to it and saves, in the frame in which it left the symbol is
+        // a change of that frame instead, unless the chart dropped or replaced the drawings of a
+        // symbol at once since the last frame. A confined drawing that the chart does not save,
+        // such as a copy on a chart that stores drawings, is put aside like the others: the chart
+        // cannot store it while it shows another symbol, so the copies on show stay, as one of
+        // them may be the stored one.
+        let mut put_aside = Vec::new();
+        let mut left = Vec::new();
+        // Charts that dropped the drawings of a symbol with the last of them.
+        let mut dropped: Vec<(usize, String)> = Vec::new();
+        for (&key, old) in &self.previous {
+            if key.0 >= count || old.symbol == charts[key.0].symbol() {
+                continue;
+            }
+            let chart = &charts[key.0];
+            let manager = chart
+                .symbol_drawings
+                .get(&old.symbol)
+                .map(|(manager, _)| manager);
+            let drawing =
+                manager.and_then(|manager| manager.drawings.iter().find(|d| d.id == key.1));
+            // shortcut: a host that puts an empty manager in place of the shown one through
+            // `drawings_mut` and changes the symbol before the frame reads as deletions; count
+            // such replacements too if hosts need them.
+            if mirrored(old.sync, layout_wide)
+                && drawing
+                    .is_none_or(|d| !mirrored(d.folder_sync_mode(), layout_wide) && d.saveable)
+                && self.resets.get(key.0) == Some(&chart.drawing_resets)
+            {
+                if manager.is_none() && !dropped.contains(&(key.0, old.symbol.clone())) {
+                    dropped.push((key.0, old.symbol.clone()));
+                }
+                left.push((key, old.symbol.clone(), self.origin_of(key)));
+                continue;
+            }
+            // An edit made before the symbol change in this frame is seen now.
+            let edited = drawing.is_some_and(|d| differs(chart, d, old));
+            put_aside.push((
+                key,
+                old.symbol.clone(),
+                if edited { self.frame } else { old.seen },
+            ));
+        }
         for (key, symbol, seen) in &put_aside {
             let mut partners: Vec<Key> = self
                 .aside
@@ -352,9 +387,56 @@ impl DrawingLinks {
                     .insert((key.0, symbol.clone(), key.1), (*seen, partners));
             }
         }
+        // The copies on show of a drawing deleted or confined as its chart left go too, as do the
+        // copies charts put aside, also in this frame: the change counts in this frame, and only
+        // a change of that frame on show wins the tie.
+        for (key, symbol, origin) in &left {
+            let linked: Vec<Key> = (0..count)
+                .filter(|&slot| {
+                    slot != key.0
+                        && groups[slot] == groups[key.0]
+                        && charts[slot].symbol() == symbol
+                })
+                .filter_map(|slot| Some((slot, self.linked_on(charts, slot, *origin)?)))
+                .collect();
+            let newer = linked.iter().any(|&(slot, id)| {
+                let chart = &charts[slot];
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .find(|d| d.id == id)
+                    .zip(self.previous.get(&(slot, id)))
+                    .is_some_and(|(drawing, old)| differs(chart, drawing, old))
+            });
+            if newer {
+                // The link goes on without this copy: a chart that put a copy aside linked to it
+                // takes the copies on show instead.
+                for ((_, aside_symbol, _), (_, partners)) in &mut self.aside {
+                    if aside_symbol == symbol && partners.contains(key) {
+                        for other in &linked {
+                            if !partners.contains(other) {
+                                partners.push(*other);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            changed = true;
+            let mut writers = Vec::new();
+            for (slot, id) in linked {
+                delete_copy(charts, &mut writers, key.0, slot, id);
+            }
+            self.delete_aside_copies(charts, count, groups, symbol, *key);
+        }
         // Ids belong to a symbol's drawings, so the records of a symbol a chart left go before
         // anything is matched by key.
-        for (key, ..) in &put_aside {
+        for key in put_aside
+            .iter()
+            .map(|(key, ..)| key)
+            .chain(left.iter().map(|(key, ..)| key))
+        {
             self.origins.remove(key);
             self.previous.remove(key);
             self.retry.remove(key);
@@ -509,13 +591,7 @@ impl DrawingLinks {
                     }
                 } else if let Some(id) = linked {
                     changed = true;
-                    unlock(charts[slot], id);
-                    if writes(charts, &writers, key.0, slot, id) {
-                        saveable = true;
-                        writers.push(slot);
-                        charts[slot].history.drawing_edits += 1;
-                    }
-                    charts[slot].drawings_mut().delete_drawing(id);
+                    saveable |= delete_copy(charts, &mut writers, key.0, slot, id);
                     deleted.push((slot, id));
                 }
             }
@@ -523,7 +599,7 @@ impl DrawingLinks {
                 // A drawing deleted, or confined to its chart, also leaves the charts that put a
                 // copy aside, which may be linked to any of the drawings removed here.
                 for gone in deleted {
-                    self.delete_aside_copies(charts, count, groups, gone);
+                    self.delete_aside_copies(charts, count, groups, &symbol, gone);
                 }
             }
             // The copy that stays, or the one deleted, is now the only instance, so it is stored
@@ -560,7 +636,7 @@ impl DrawingLinks {
             })
             .cloned()
             .collect();
-        let mut forgotten: Vec<(usize, String)> = Vec::new();
+        let mut forgotten: Vec<(usize, String)> = dropped;
         for (slot, symbol, id) in gone {
             self.aside.remove(&(slot, symbol.clone(), id));
             // A chart away from the symbol that holds it no more forgot its drawings there, whose
@@ -598,6 +674,11 @@ impl DrawingLinks {
                 }
             }
         }
+        self.resets = charts
+            .iter()
+            .take(count)
+            .map(|chart| chart.drawing_resets)
+            .collect();
         self.origins
             .retain(|key, _| self.previous.contains_key(key));
         for (slot, symbol) in forgotten {
@@ -847,22 +928,22 @@ impl DrawingLinks {
         arrivals
     }
 
-    /// Takes the copies of a drawing deleted or confined to its chart out of the charts of its
-    /// group that put them aside with their symbol, so that they do not come back with the chart.
+    /// Takes the copies of a drawing of `symbol` deleted or confined to its chart out of the
+    /// charts of its group that put them aside with the symbol, or took them up again in this
+    /// frame, so that they do not come back with the chart.
     fn delete_aside_copies(
         &mut self,
         charts: &mut [&mut Chart],
         count: usize,
         groups: &[Option<String>; 16],
+        symbol: &str,
         key: Key,
     ) {
         let gone: Vec<_> = self
             .aside
             .iter()
-            .filter(|((slot, symbol, _), (_, partners))| {
-                symbol == charts[key.0].symbol()
-                    && groups[*slot] == groups[key.0]
-                    && partners.contains(&key)
+            .filter(|((slot, aside_symbol, _), (_, partners))| {
+                aside_symbol == symbol && groups[*slot] == groups[key.0] && partners.contains(&key)
             })
             .map(|(entry, _)| entry.clone())
             .collect();
@@ -871,9 +952,18 @@ impl DrawingLinks {
             if slot >= count {
                 continue;
             }
+            let chart = &mut *charts[slot];
             // A drawing the chart stores comes back from its storage, which this does not write.
-            let stores = charts[slot].keeps_stored_drawings();
-            if let Some((manager, _)) = charts[slot].symbol_drawings.get_mut(&symbol)
+            let stores = chart.keeps_stored_drawings();
+            let manager = if chart.symbol() == symbol {
+                Some(&mut chart.drawings)
+            } else {
+                chart
+                    .symbol_drawings
+                    .get_mut(&symbol)
+                    .map(|(manager, _)| manager)
+            };
+            if let Some(manager) = manager
                 && manager
                     .drawings
                     .iter()
@@ -1328,6 +1418,25 @@ fn writes(charts: &[&mut Chart], writers: &[usize], from: usize, slot: usize, id
             .drawings
             .iter()
             .any(|d| d.id == id && d.saveable)
+}
+
+/// Deletes the copy `id` on the chart in `slot` of a drawing deleted on the chart in `from`, and
+/// returns whether the chart in `slot` writes the deletion to its storage.
+fn delete_copy(
+    charts: &mut [&mut Chart],
+    writers: &mut Vec<usize>,
+    from: usize,
+    slot: usize,
+    id: usize,
+) -> bool {
+    unlock(charts[slot], id);
+    let written = writes(charts, writers, from, slot, id);
+    if written {
+        writers.push(slot);
+        charts[slot].history.drawing_edits += 1;
+    }
+    charts[slot].drawings_mut().delete_drawing(id);
+    written
 }
 
 /// `drawing` as a drawing of `target`, at the times its points have on `source`. Without bars on
@@ -2151,7 +2260,10 @@ mod tests {
     /// This chart only, a move out of the folder or a deletion, and undone and redone there, or
     /// undone on the chart it was drawn on. After each, a restart shows what the charts showed,
     /// with or without a later edit on the first chart: the drawing is stored on one chart, never
-    /// on none or both. A drag is written once, when it ends.
+    /// on none or both. A drag is written once, when it ends. Set to This chart only in the frame
+    /// in which its chart leaves the symbol, a copy is not stored there, and the first chart keeps
+    /// the drawing stored. Deleted in that frame, as the chart reads the stored drawings of the
+    /// symbol it goes to, the copy is deleted on the first chart too: a read is no load.
     #[test]
     fn changes_to_a_mirrored_copy_survive_a_restart() {
         use crate::data::Reply;
@@ -2495,6 +2607,76 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+
+        // This chart only, set on the chart that shows the copy in the frame in which that chart
+        // leaves the symbol: the chart cannot store the copy while it shows another symbol, so
+        // the first chart keeps the drawing stored.
+        let storages = [Arc::new(InMemory::default()), Arc::new(InMemory::default())];
+        let mut session = layout();
+        let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+        frames(&mut session, &mut a, &mut b);
+        a.user_action(|chart| {
+            let id = chart.drawings_mut().add_drawing(line(10.0)).unwrap();
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&top, Some(FolderSync::Layout))
+            );
+        });
+        frames(&mut session, &mut a, &mut b);
+        b.user_action(|chart| {
+            chart
+                .drawings_mut()
+                .set_folder_sync(&top, Some(FolderSync::Chart));
+        });
+        b.set_symbol("OTHER");
+        frames(&mut session, &mut a, &mut b);
+        let mut restarted = layout();
+        let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+        frames(&mut restarted, &mut a, &mut b);
+        let mirrored = vec![("Top".to_owned(), 10.0)];
+        assert_eq!(
+            lines(&a, &b),
+            [mirrored.clone(), mirrored],
+            "This chart only as the chart left"
+        );
+
+        // Deleted on the chart that shows the copy in the frame in which that chart leaves for a
+        // symbol whose drawings an earlier session stored, which it reads in that frame.
+        let storages = [Arc::new(InMemory::default()), Arc::new(InMemory::default())];
+        let mut session = layout();
+        let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+        b.set_symbol("OTHER");
+        frames(&mut session, &mut a, &mut b);
+        b.user_action(|chart| {
+            chart.drawings_mut().add_drawing(line(30.0)).unwrap();
+        });
+        frames(&mut session, &mut a, &mut b);
+        let mut session = layout();
+        let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+        frames(&mut session, &mut a, &mut b);
+        a.user_action(|chart| {
+            let id = chart.drawings_mut().add_drawing(line(10.0)).unwrap();
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&top, Some(FolderSync::Layout))
+            );
+        });
+        frames(&mut session, &mut a, &mut b);
+        let copy = first(&b);
+        b.user_action(|chart| {
+            chart.drawings_mut().delete_drawing(copy);
+        });
+        b.set_symbol("OTHER");
+        frames(&mut session, &mut a, &mut b);
+        assert_eq!(
+            lines(&a, &b),
+            [vec![], vec![(String::new(), 30.0)]],
+            "deleted as the chart left for stored drawings"
+        );
     }
 
     /// Two charts of one symbol in a layout with drawing sync on, each holding a line at 104.
@@ -2585,7 +2767,9 @@ mod tests {
     /// meanwhile. A line deleted on another chart of the symbol, also in the frame of the return,
     /// or confined to that chart by its folder, does not come back, and a chart that forgot the
     /// drawings of the symbol draws lines of its own there. A deletion in another group leaves the
-    /// copy put aside.
+    /// copy put aside. A line deleted or confined as its chart leaves leaves the other charts too,
+    /// unless one of them changed it in that frame, while drawings a chart forgets or replaces
+    /// stay.
     #[test]
     fn mirrored_drawings_stay_single_through_a_symbol_round_trip() {
         for sync_symbol in [true, false] {
@@ -2656,6 +2840,178 @@ mod tests {
             charts[1].set_symbol("SAMPLE");
             frames(&mut layout, &mut charts);
             assert_eq!(prices(&charts), expected, "{name}");
+        }
+
+        // A copy deleted, or confined to its chart, in the frame in which its chart leaves: the
+        // line leaves the other chart too and does not come back, unless that chart changed it in
+        // the same frame. Drawings a chart forgets or replaces as it leaves stay on the other
+        // chart.
+        type Leave = fn(&mut ChartLayout, &mut [Chart; 2]);
+        type LeaveRow = (&'static str, Leave, [Vec<f64>; 2], [Vec<f64>; 2]);
+        let rows: [LeaveRow; 7] = [
+            (
+                "deleted as it left",
+                |_, charts| {
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1].set_symbol("OTHER");
+                },
+                [vec![], vec![]],
+                [vec![], vec![]],
+            ),
+            (
+                "deleted as it left, another line kept",
+                |layout, charts| {
+                    draw(&mut charts[1], 70.0);
+                    frames(layout, charts);
+                    let drawings = &charts[1].drawings().drawings;
+                    let line = drawings.iter().find(|d| d.chart_points[0].price == 104.0);
+                    let id = line.unwrap().id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1].set_symbol("OTHER");
+                },
+                [vec![70.0], vec![]],
+                [vec![70.0], vec![70.0]],
+            ),
+            (
+                "deleted as it left, its notice taken",
+                |_, charts| {
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1]
+                        .drawings_mut()
+                        .pending_sync
+                        .lock()
+                        .unwrap()
+                        .clear();
+                    charts[1].set_symbol("OTHER");
+                },
+                [vec![], vec![]],
+                [vec![], vec![]],
+            ),
+            (
+                "confined as it left",
+                |_, charts| {
+                    into_folder(&mut charts[1], FolderSync::Chart);
+                    charts[1].set_symbol("OTHER");
+                },
+                [vec![], vec![]],
+                [vec![], vec![104.0]],
+            ),
+            (
+                "deleted as it left, moved on show",
+                |_, charts| {
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1].set_symbol("OTHER");
+                    move_first(&mut charts[0], 95.0);
+                },
+                [vec![95.0], vec![]],
+                [vec![95.0], vec![95.0]],
+            ),
+            (
+                "forgotten as it left",
+                |_, charts| {
+                    charts[1].set_symbol("OTHER");
+                    assert!(charts[1].forget_symbol("SAMPLE"));
+                },
+                [vec![104.0], vec![]],
+                [vec![104.0], vec![104.0]],
+            ),
+            (
+                "replaced as it left",
+                |_, charts| {
+                    let mut chart = bars(60);
+                    chart.set_symbol("SAMPLE");
+                    let empty = chart.save_drawings().unwrap().to_json().unwrap();
+                    charts[1].load_drawings(&empty).unwrap();
+                    charts[1].set_symbol("OTHER");
+                },
+                [vec![104.0], vec![]],
+                [vec![104.0], vec![104.0]],
+            ),
+        ];
+        for (name, leave, away, back) in rows {
+            let (mut layout, mut charts) = mirrored_pair(false);
+            leave(&mut layout, &mut charts);
+            frames(&mut layout, &mut charts);
+            assert_eq!(prices(&charts), away, "{name}, left");
+            charts[1].set_symbol("SAMPLE");
+            frames(&mut layout, &mut charts);
+            assert_eq!(prices(&charts), back, "{name}, back");
+        }
+        // The same with a third chart that leaves, comes back or comes to the symbol in that
+        // frame, or that came meanwhile and moves its copy in that frame.
+        type Third = fn(&mut ChartLayout, &mut [Chart; 3]);
+        type ThirdRow = (&'static str, [&'static str; 3], Third, [Vec<f64>; 3], [Vec<f64>; 3]);
+        let rows: [ThirdRow; 4] = [
+            (
+                "deleted and moved as both left",
+                ["SAMPLE"; 3],
+                |_, charts| {
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    move_first(&mut charts[2], 95.0);
+                    for chart in &mut charts[1..] {
+                        chart.set_symbol("OTHER");
+                    }
+                },
+                [vec![], vec![], vec![]],
+                [vec![], vec![], vec![]],
+            ),
+            (
+                "deleted as it left while another came back",
+                ["SAMPLE"; 3],
+                |layout, charts| {
+                    charts[2].set_symbol("OTHER");
+                    frames(layout, charts);
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1].set_symbol("OTHER");
+                    charts[2].set_symbol("SAMPLE");
+                },
+                [vec![], vec![], vec![]],
+                [vec![], vec![], vec![]],
+            ),
+            (
+                "deleted as it left while another came",
+                ["SAMPLE", "SAMPLE", "OTHER"],
+                |_, charts| {
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1].set_symbol("OTHER");
+                    charts[2].set_symbol("SAMPLE");
+                },
+                [vec![], vec![], vec![]],
+                [vec![], vec![], vec![]],
+            ),
+            (
+                "deleted as it left while a later copy moved",
+                ["SAMPLE", "SAMPLE", "OTHER"],
+                |layout, charts| {
+                    charts[0].set_symbol("THIRD");
+                    frames(layout, charts);
+                    charts[2].set_symbol("SAMPLE");
+                    frames(layout, charts);
+                    let id = charts[1].drawings().drawings[0].id;
+                    charts[1].drawings_mut().delete_drawing(id);
+                    charts[1].set_symbol("OTHER");
+                    move_first(&mut charts[2], 95.0);
+                },
+                [vec![], vec![], vec![95.0]],
+                [vec![95.0], vec![95.0], vec![95.0]],
+            ),
+        ];
+        for (name, symbols, leave, away, back) in rows {
+            let (mut layout, mut charts) = three_charts(symbols);
+            leave(&mut layout, &mut charts);
+            frames(&mut layout, &mut charts);
+            assert_eq!(prices(&charts), away, "{name}, left");
+            for chart in &mut charts {
+                chart.set_symbol("SAMPLE");
+            }
+            frames(&mut layout, &mut charts);
+            assert_eq!(prices(&charts), back, "{name}, back");
         }
 
         // Ids belong to a symbol's drawings: a drawing made on the other symbol meanwhile may
