@@ -271,6 +271,9 @@ pub struct Chart {
     scroll_animation: Option<time_scale::ScrollAnimation>,
     /// Time axis below the plots in the last frame; zero height while its labels are hidden
     time_axis_rect: Rect,
+    /// Whether the last price frame took a double-click on its plot, below its status line and
+    /// away from the drawings, series and primitives there
+    price_plot_double_click: bool,
     /// Chart type (candlestick, line, area, bar, Renko, Kagi)
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline

@@ -4026,6 +4026,14 @@ impl Chart {
         if let Some(id) = overlay_remove {
             self.user_action(|chart| chart.remove_series(id));
         }
+        // The pane layout reads it to maximize or restore the price pane.
+        self.price_plot_double_click = response.double_clicked()
+            && !is_drawing_interaction
+            && !eraser_mode
+            && self.host_events.target.is_none()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|pos| chart_rect.contains(pos) && pos.y > legend_bottom);
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
         shown

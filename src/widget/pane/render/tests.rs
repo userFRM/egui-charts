@@ -447,6 +447,56 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
             );
             assert_eq!(chart.take_indicator_settings_request(), None);
         }
+        // The price pane takes the gesture on its plot, away from its series, axis and status line.
+        let mapping = chart.get_chart_mapping();
+        let empty = Pos2::new(main.left() + 20.0, main.center().y);
+        assert!(mapping.idx_to_x(0) > empty.x + 10.0);
+        for (at, toggles) in [
+            (empty, true),
+            (
+                Pos2::new(mapping.idx_to_x(70), mapping.price_to_y(107.0)),
+                false,
+            ),
+            (Pos2::new(main.right() + 20.0, main.center().y), false),
+            (main.left_top() + egui::vec2(20.0, 12.0), false),
+        ] {
+            for maximized in [true, false] {
+                for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                    pointer(&ctx, &mut chart, at, pressed);
+                }
+                let shown = chart.get_rendered_indicator_panes().len();
+                assert_eq!(shown, if toggles && maximized { 0 } else { 2 }, "{at:?}");
+                assert_eq!(
+                    chart.get_rendered_price_rect().height() > 500.0,
+                    toggles && maximized
+                );
+            }
+        }
+        // Each toggle of the price pane is one undo step.
+        assert!(chart.undo());
+        assert_eq!(chart.pane_layout.maximized, Some(chart.main_series_pane()));
+        assert!(chart.redo());
+        // A double-click that finishes a drawing only finishes it.
+        #[cfg(feature = "drawings")]
+        {
+            use crate::drawings::DrawingToolType;
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::Path));
+            click(&ctx, &mut chart, empty - egui::vec2(0.0, 40.0));
+            for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                pointer(&ctx, &mut chart, empty, pressed);
+            }
+            assert_eq!(chart.get_rendered_indicator_panes().len(), 2);
+            assert!(
+                chart
+                    .drawings_mut()
+                    .drawings
+                    .iter()
+                    .any(|drawing| drawing.completed)
+            );
+            chart.drawings_mut().set_active_tool(None);
+        }
         let separator = Pos2::new(main.center().x, resized[0].panel_rect.top() - 0.5);
         drag(
             &ctx,

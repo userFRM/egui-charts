@@ -387,7 +387,10 @@ impl Chart {
         // A host series whose legend asked to remove it, hide it, or open its settings.
         let mut pending_series_action = None;
         let mut pending_pane_collapse = None;
-        let mut pending_pane_maximize = None;
+        // A chart without another pane has nothing to hide behind the price pane.
+        let mut pending_pane_maximize = (self.price_plot_double_click
+            && (maximized.is_some() || panes.len() > 1))
+            .then_some(main_pane);
         let current_selection = self.selection.selected_id();
         // Draws the background, grid, axis and crosshair of a pane without a visible study.
         let frame = CustomIndicator::new("", |_| Vec::new())

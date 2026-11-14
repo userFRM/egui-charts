@@ -103,6 +103,7 @@ impl Chart {
             pending_scroll_time: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
+            price_plot_double_click: false,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
             #[cfg(feature = "studies")]
