@@ -299,6 +299,7 @@ mod tests {
             check(&fresh(*mode, &closes), want);
         }
     }
+
     /// At length `n` the first value is at bar `n - 1`, the first bar counting as not rising.
     /// Length 3 on closes 10, 11, 10, 12: bar 2 sees the first bar, up, down (33.33 %, tie) and
     /// bar 3 up, down, up (66.67 %, +1). Length 1: bar 0 is the first bar (0 %, tie), then up,
