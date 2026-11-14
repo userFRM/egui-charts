@@ -858,6 +858,38 @@ mod tests {
         }
     }
 
+    /// Drawings hidden by Ctrl+Alt+H are deselected, so Delete and the arrows leave them alone.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn hidden_drawings_ignore_delete_and_arrow_keys() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::test_frames::frame;
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing.clone());
+        chart.drawings_mut().select(7);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let hide = press(Key::H, Modifiers::COMMAND.plus(Modifiers::ALT));
+        for (i, event) in [
+            hide.clone(),
+            press(Key::Delete, Modifiers::NONE),
+            press(Key::ArrowRight, Modifiers::NONE),
+            hide,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 1.0 + i as f64, vec![event]);
+        }
+        let drawings = &chart.drawings().drawings;
+        assert_eq!(drawings.len(), 1);
+        assert!(drawings[0].visible);
+        assert_eq!(drawings[0].chart_points, drawing.chart_points);
+    }
+
     #[test]
     fn reset_chart_restores_time_and_every_price_scale() {
         use crate::model::SeriesScale;
