@@ -59,6 +59,8 @@ use egui::{Pos2, Rect, Vec2};
 pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
+#[cfg(feature = "ui")]
+pub(crate) use readout::SeriesFingerprint;
 use std::collections::BTreeMap;
 
 // Re-export from logic layer
@@ -259,8 +261,8 @@ pub struct Chart {
     pub(crate) scroll_start_offset: Option<f64>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
-    /// Price-axis drag this frame: anchor y where the drag began, and the y movement (UI state only)
-    pub(crate) price_axis_drag: Option<(f32, f32)>,
+    /// Bar spacing when a time-axis drag began or was last rebased (UI state only)
+    pub(crate) scroll_start_spacing: Option<f32>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.
@@ -464,6 +466,9 @@ pub struct Chart {
     marker_options: crate::model::MarkerOptions,
     /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
     change_marks: Option<change_marks::ChangeMarks>,
+    /// Clock of the last frame that showed the chart, which dates change marks recorded while no
+    /// frame shows it.
+    frame_clock: Option<change_marks::FrameClock>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
     /// The number of price line handles issued.
@@ -767,8 +772,9 @@ impl Chart {
     /// candle colors in that chart type's style instead, a `None` border or wick meaning the
     /// body color, and these colors win over the same colors in `chart_type_params`. A new
     /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
-    /// are in the old mode's units. Call this when the user changes series appearance in a
-    /// settings dialog.
+    /// are in the old mode's units. An ATR or percentage size whose method is unchanged keeps
+    /// its resolved value. Call this when the user changes series appearance in a settings
+    /// dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         let mut params = settings.chart_type_params.clone();
         if let Some(
@@ -800,7 +806,7 @@ impl Chart {
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
-        self.set_chart_type_params(params);
+        self.apply_chart_type_params(params);
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();

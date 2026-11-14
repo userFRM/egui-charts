@@ -148,6 +148,9 @@ impl DemoApp {
     }
 
     pub(super) fn run_sample_backtest(&mut self) {
+        if self.synthetic_only("Strategy tester") {
+            return;
+        }
         self.stop_live_strategy();
         let bars = self.chart.bars(SeriesId::MAIN);
         // The newest bar can still change. Bound this synchronous demonstration to 121 opens.
@@ -326,6 +329,9 @@ impl DemoApp {
 
     /// Keep the existing live analytics when a finished report also supplies fill markers.
     pub(super) fn refresh_strategy_signals(&mut self) {
+        if self.own_data.is_some() {
+            return;
+        }
         for (chart, live) in std::iter::once((&mut self.chart, &self.live)).chain(
             self.extra_charts
                 .iter_mut()

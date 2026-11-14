@@ -927,8 +927,10 @@ mod tests {
         line.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
         // A sticker keeps its kind in its text, which it does not show.
         let sticker = Drawing::new(4, DrawingToolType::Sticker);
-        // A price label shows no text, and its border shares the colour of its badge.
-        let label = Drawing::new(5, DrawingToolType::PriceLabel);
+        // A price label shows no text, and its border shares the colour of its badge, as an older
+        // save holds it.
+        let mut label = Drawing::new(5, DrawingToolType::PriceLabel);
+        label.border_color = Some(label.color);
         let drawings = vec![alpha, beta, line, sticker, label];
         let mut chart = Chart::new(crate::model::BarData::new());
         chart.drawings_mut().drawings = drawings.clone();

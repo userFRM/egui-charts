@@ -362,8 +362,12 @@ impl DrawingManager {
 /// A tag a drawing puts on an axis of its pane.
 #[derive(Clone, Copy)]
 pub(crate) enum DrawingAxisTag {
-    /// `price` on the price axis, on a `color` tag.
-    Price { price: f64, color: Color32 },
+    /// `price` on the price axis, on a `color` tag, at `decimals` places or the scale's.
+    Price {
+        price: f64,
+        color: Color32,
+        decimals: Option<u8>,
+    },
     /// The time of `anchor` on the time axis at screen `x`, on an opaque `color` tag.
     Time {
         x: f32,
@@ -375,14 +379,17 @@ pub(crate) enum DrawingAxisTag {
 impl DrawingManager {
     /// The axis tags of visible drawings of the pane last handled, in drawing order: enabled
     /// price and time labels of horizontal, vertical and cross lines reaching `plot`, position
-    /// levels, whose entry takes `entry_color`, and the time of a vertical line reaching that pane
-    /// from another. Call after the pane handles input so tags follow a drag in the same frame.
-    /// Line tags use opaque RGB so their text stays legible.
-    pub(crate) fn axis_tags(
-        &self,
+    /// levels, whose entry takes `entry_color`, the latest value of an anchored VWAP that tracks
+    /// it over the pane's `bars` at `revision`, and the time of a vertical line reaching that
+    /// pane from another. Call after the pane handles input so tags follow a drag in the same
+    /// frame. Line tags use opaque RGB so their text stays legible.
+    pub(crate) fn axis_tags<'a>(
+        &'a self,
         plot: Rect,
         entry_color: Color32,
-    ) -> impl Iterator<Item = DrawingAxisTag> + '_ {
+        bars: &'a [crate::model::Bar],
+        revision: u64,
+    ) -> impl Iterator<Item = DrawingAxisTag> + 'a {
         self.drawings
             .iter()
             .filter(|drawing| {
@@ -413,7 +420,16 @@ impl DrawingManager {
                     .map(|(anchor, _)| DrawingAxisTag::Price {
                         price: anchor.price,
                         color,
+                        decimals: None,
                     });
+                let vwap =
+                    drawing
+                        .anchored_vwap_last(bars, revision)
+                        .map(|price| DrawingAxisTag::Price {
+                            price,
+                            color,
+                            decimals: drawing.vwap.and_then(|config| config.precision),
+                        });
                 let time = at
                     .filter(|(_, point)| time && plot.x_range().contains(point.x))
                     .map(|(anchor, point)| DrawingAxisTag::Time {
@@ -424,8 +440,12 @@ impl DrawingManager {
                 drawing
                     .position_price_tags(entry_color)
                     .into_iter()
-                    .map(|(price, color)| DrawingAxisTag::Price { price, color })
-                    .chain([price, time].into_iter().flatten())
+                    .map(|(price, color)| DrawingAxisTag::Price {
+                        price,
+                        color,
+                        decimals: None,
+                    })
+                    .chain([price, vwap, time].into_iter().flatten())
             })
     }
 }

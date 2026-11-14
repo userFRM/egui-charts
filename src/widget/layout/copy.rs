@@ -262,7 +262,7 @@ fn apply_to_other_chart(
         own.footprint_colors = params.footprint_colors;
         own.footprint_imbalance_colors = params.footprint_imbalance_colors;
         if &own != chart.chart_type_params() {
-            chart.set_chart_type_params(own);
+            chart.apply_chart_type_params(own);
         }
     }
     let own = ChartSettingsState::from_chart(chart).order_flow;

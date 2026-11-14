@@ -616,6 +616,7 @@ dependencies = [
  "egui",
  "egui-charts",
  "egui_extras",
+ "png 0.17.16",
  "rand",
  "serde_json",
 ]
