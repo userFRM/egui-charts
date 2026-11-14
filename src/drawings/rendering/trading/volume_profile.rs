@@ -47,6 +47,21 @@ impl Drawing {
         if let Some((first, bars)) = bars_between(view.bars, anchor_at.bar_idx, f32::INFINITY) {
             self.draw_vwap(painter, view, first, bars);
         }
+        // Drawn whatever bars are in view, at the value the price axis tags.
+        if let Some(vwap) = self.anchored_vwap_last(view.bars, view.revision) {
+            let clip = painter.clip_rect();
+            let y = (view.price_to_y)(vwap);
+            if clip.y_range().contains(y) {
+                crate::painting::dashed_line::draw_dashed_line(
+                    painter,
+                    Pos2::new(clip.left(), y),
+                    Pos2::new(clip.right(), y),
+                    Stroke::new(1.0, self.color32()),
+                    1.0,
+                    3.0,
+                );
+            }
+        }
     }
 
     fn draw_vwap(&self, painter: &egui::Painter, view: &ChartView, first: usize, bars: &[Bar]) {
@@ -120,23 +135,6 @@ impl Drawing {
             (view.price_to_y)(0.0),
             step,
         );
-        let last = bars.len() - 1;
-        if config.track_price
-            && let Some(Some((vwap, _))) =
-                anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()
-        {
-            let y = (view.price_to_y)(vwap);
-            if clip.y_range().contains(y) {
-                crate::painting::dashed_line::draw_dashed_line(
-                    painter,
-                    Pos2::new(clip.left(), y),
-                    Pos2::new(clip.right(), y),
-                    Stroke::new(1.0, line_color),
-                    1.0,
-                    3.0,
-                );
-            }
-        }
     }
 
     /// The anchored VWAP at the last of `bars`, the pane's bars at `revision`, when its latest
@@ -771,6 +769,36 @@ mod tests {
         let xs = dashes.vertices.iter().map(|v| v.pos.x);
         assert!(xs.clone().fold(f32::MAX, f32::min) < 5.0);
         assert!(xs.fold(f32::MIN, f32::max) > 795.0);
+    }
+
+    /// A tracked VWAP paints its latest-value line whenever its axis tag shows it, also while the
+    /// view lies before the anchor: 100 bars at 10 with volume 1, anchored at bar 80, which sits
+    /// at x = 900, right of the 800 px pane. The VWAP from bar 80 is 200 / 20 = 10, at y = 100.
+    #[test]
+    fn tracked_vwap_draws_its_latest_value_line_with_the_anchor_out_of_view() {
+        let bars: Vec<_> = (0..100)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(i * 60, 0).unwrap();
+                Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0)
+            })
+            .collect();
+        let config = crate::drawings::VwapConfig {
+            track_price: true,
+            ..Default::default()
+        };
+        let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+        drawing.vwap = Some(config);
+        drawing.chart_points = vec![crate::drawings::ChartPoint::new(80.0, 50.0)];
+        // The price axis tags this value.
+        assert_eq!(drawing.anchored_vwap_last(&bars, 0), Some(10.0));
+        let shapes = render_vwap(&bars, 80.0, 1.0, Some(config));
+        let line = shapes.iter().any(|shape| {
+            matches!(shape, Shape::Mesh(mesh) if !mesh.vertices.is_empty()
+                && mesh.vertices.iter().all(|v| (v.pos.y - 100.0).abs() <= 1.0)
+                && mesh.vertices.iter().any(|v| v.pos.x < 5.0)
+                && mesh.vertices.iter().any(|v| v.pos.x > 795.0))
+        });
+        assert!(line, "no latest-value line among {} shapes", shapes.len());
     }
 
     /// Paints an anchored VWAP of a blue drawing over `bars` from `anchor`, 10 px a bar from
