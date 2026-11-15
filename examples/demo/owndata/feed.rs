@@ -60,6 +60,9 @@ struct Key {
 struct Join {
     /// The newest bar of the last latest page that held bars.
     newest: Option<Bar>,
+    /// Whether the last latest page held bars. After one that failed or held none, `newest` may
+    /// be older than the bar a later page brings.
+    held: bool,
     /// Latest pages being fetched. The subscriptions of the key that wait for one fold no trade
     /// meanwhile.
     in_flight: usize,
@@ -86,8 +89,9 @@ struct Live {
     endpoint: String,
     aggregator: Aggregator,
     /// Whether the subscription waits for a latest page of its key to start from: it was made
-    /// while one was in flight or before any held bars. A page joins only the subscriptions that
-    /// wait for it, so a study that loads the chart's interval leaves the chart's bar as it is.
+    /// while one was in flight or when the last one held no bars. A page joins only the
+    /// subscriptions that wait for it, so a study that loads the chart's interval leaves the
+    /// chart's bar as it is.
     waiting: bool,
     /// The slot of the newest bar pushed from a bar route.
     pushed: Option<DateTime<Utc>>,
@@ -288,7 +292,7 @@ impl Datafeed for MappedFeed {
             let mut state = shared.state();
             let mut aggregator = Aggregator::new(key.clock.clone(), timeframe);
             let join = state.join(&key);
-            let waiting = join.in_flight > 0 || join.newest.is_none();
+            let waiting = join.in_flight > 0 || !join.held;
             if join.in_flight == 0 {
                 aggregator.start(join.newest.clone());
             }
@@ -381,6 +385,7 @@ impl Shared {
             let newest = kept.as_ref().ok().and_then(|kept| kept.bars.last());
             let join = state.join(&key);
             join.in_flight = join.in_flight.saturating_sub(1);
+            join.held = newest.is_some();
             if let Some(newest) = newest {
                 join.newest = Some(newest.clone());
                 let joining = state.subscriptions.values_mut();
