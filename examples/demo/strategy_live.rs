@@ -1,8 +1,14 @@
 //! A host-owned live run, fed by the displayed chart and delivered through the alert service.
 
 use super::{DemoApp, SeriesId};
-use egui_charts::model::{Alert, AlertCondition, AlertId, AlertStatus, OrderSide, OrderType};
+use egui_charts::model::{
+    Alert, AlertCondition, AlertId, AlertStatus, CustomAlertEvent, OrderSide, OrderType,
+};
+use egui_charts::services::DetectionKind;
 use egui_charts::strategies::{Backtest, Strategy, StrategyContext};
+
+/// The custom event source of the live run's alert calls.
+const TURNS: &str = "Live momentum turns";
 
 struct Momentum;
 
@@ -45,11 +51,32 @@ impl DemoApp {
         let source = &bars[bars.partition_point(|bar| bar.time < first.time)..];
         // Prime history before arming the alert, so only subsequent executions notify.
         run.update(&mut Momentum, source, &[]);
-        let mut alert = Alert::new(&run.symbol, AlertCondition::StrategyFills(id.clone()));
-        alert.id = Some(AlertId(id.clone()));
-        alert.name = "Live strategy fills".into();
-        alert.timeframe = Some(run.timeframe);
-        self.alerts.save(alert);
+        // The run's fills, its alert calls when its position turns, and the big trades the
+        // order-flow detector finds while it runs.
+        self.alert_host.engine().connect_custom_events(TURNS);
+        for (key, condition, name) in [
+            (
+                "",
+                AlertCondition::StrategyFills(id.clone()),
+                "Live strategy fills",
+            ),
+            (
+                ": turns",
+                AlertCondition::CustomEvents(TURNS.into()),
+                "Live strategy turns",
+            ),
+            (
+                ": big trades",
+                AlertCondition::DetectorSignals(DetectionKind::BigTrade.category().into()),
+                "Big trades during the live run",
+            ),
+        ] {
+            let mut alert = Alert::new(&run.symbol, condition);
+            alert.id = Some(AlertId(format!("{id}{key}")));
+            alert.name = name.into();
+            alert.timeframe = Some(run.timeframe);
+            self.alerts.save(alert);
+        }
         self.strategy_session = self.timeframe_toolbar.state.session_type;
         self.strategy_trade = None;
         self.live_strategy = Some((run, id));
@@ -57,16 +84,23 @@ impl DemoApp {
     }
 
     pub(super) fn stop_live_strategy(&mut self) {
-        if let Some((_, id)) = self.live_strategy.take()
-            && let Some(mut alert) = self
-                .alert_host
-                .engine()
-                .alerts()
-                .into_iter()
-                .find(|alert| alert.id.as_ref() == Some(&AlertId(id.clone())))
-        {
-            alert.status = AlertStatus::Disabled;
-            self.alerts.save(alert);
+        let Some((_, id)) = self.live_strategy.take() else {
+            return;
+        };
+        let ids = [
+            id.clone(),
+            format!("{id}: turns"),
+            format!("{id}: big trades"),
+        ];
+        for mut alert in self.alert_host.engine().alerts() {
+            if alert
+                .id
+                .as_ref()
+                .is_some_and(|alert| ids.contains(&alert.0))
+            {
+                alert.status = AlertStatus::Disabled;
+                self.alerts.save(alert);
+            }
         }
     }
 
@@ -88,16 +122,36 @@ impl DemoApp {
                 .is_some_and(|start| bar.time < start)
         })..];
         let fills = run.update(&mut Momentum, source, &[]);
-        self.alert_host.engine().strategy_fills(
-            id,
-            &run.symbol,
-            self.chart
-                .instrument()
-                .and_then(|instrument| instrument.exchange.as_deref()),
-            run.timeframe,
-            &fills,
-            chrono::Utc::now(),
-        );
+        let exchange = self
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.exchange.as_deref());
+        let now = chrono::Utc::now();
+        let engine = self.alert_host.engine();
+        engine.strategy_fills(id, &run.symbol, exchange, run.timeframe, &fills, now);
+        let turns: Vec<_> = fills
+            .iter()
+            .filter_map(|fill| {
+                let before = fill.position
+                    - match fill.side {
+                        OrderSide::Buy => fill.quantity,
+                        OrderSide::Sell => -fill.quantity,
+                    };
+                let side = match fill.position {
+                    position if position > 0.0 && before <= 0.0 => "long",
+                    position if position < 0.0 && before >= 0.0 => "short",
+                    _ => return None,
+                };
+                let mut event = CustomAlertEvent::new(
+                    fill.sequence,
+                    fill.time,
+                    format!("Momentum turned {side} at {}", fill.price),
+                );
+                event.price = Some(fill.price);
+                Some(event)
+            })
+            .collect();
+        engine.custom_events(TURNS, &run.symbol, exchange, run.timeframe, &turns, now);
         if self.strategy_report.report() != run.report() {
             self.strategy_report
                 .set_report(run.report().cloned(), source);
@@ -130,6 +184,7 @@ mod tests {
         };
         app.chart.set_data(SeriesId::MAIN, snapshot(&app));
         app.start_live_strategy();
+        let id = app.live_strategy.as_ref().unwrap().1.clone();
         app.chart.set_feed_paused(true);
         for _ in 0..3 {
             ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -154,15 +209,29 @@ mod tests {
             app.update_live_strategy();
             app.update_live_strategy();
             app.alerts.poll(&ctx, &mut app.toasts);
-            assert_eq!(app.alerts.log().len(), expected, "second {second}");
+            let fills = app.alerts.log().iter().filter(|t| t.id.0 == id).count();
+            assert_eq!(fills, expected, "second {second}");
         }
         assert!(expected > 0, "the live feed must exercise executions");
+        // The momentum run takes the side of each bar's move, so its fills turn the position
+        // and every turn is an alert call of its own after the fill it follows.
+        let turns: Vec<_> = app
+            .alerts
+            .log()
+            .iter()
+            .filter(|t| t.id.0 == format!("{id}: turns"))
+            .collect();
+        assert!(!turns.is_empty(), "the run must turn its position");
+        assert!(
+            turns
+                .iter()
+                .all(|t| t.message.starts_with("Momentum turned ") && t.symbol == reference.symbol)
+        );
         assert_eq!(app.strategy_report.report(), reference.report());
         app.stop_live_strategy();
         assert!(app.live_strategy.is_none());
-        assert_eq!(
-            app.alert_host.engine().alerts()[0].status,
-            AlertStatus::Disabled
-        );
+        let alerts = app.alert_host.engine().alerts();
+        assert_eq!(alerts.len(), 3);
+        assert!(alerts.iter().all(|a| a.status == AlertStatus::Disabled));
     }
 }

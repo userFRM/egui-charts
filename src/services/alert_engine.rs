@@ -126,6 +126,8 @@ struct State {
     next_id: u64,
     watchlists: HashMap<String, Vec<String>>,
     runs: HashMap<(AlertId, String), Run>,
+    /// The custom event sources the host connected.
+    routes: std::collections::HashSet<String>,
 }
 
 /// What the engine remembers of one alert on one symbol.
@@ -142,8 +144,18 @@ struct Run {
     silent: Option<DateTime<Utc>>,
     /// A watchlist alert with frequency once has fired on this symbol.
     done: bool,
-    #[cfg(feature = "strategies")]
-    last_fill: u64,
+    /// The sequence of the newest strategy fill or custom event received.
+    last_sequence: u64,
+    /// The detector signals that fired, with their anchor times.
+    signals: Vec<(crate::model::SignalId, DateTime<Utc>)>,
+}
+
+/// One firing of an alert on host events: the event's time and price, and the message a trigger
+/// shows when the alert has none.
+struct Occurrence {
+    time: DateTime<Utc>,
+    price: Option<f64>,
+    message: String,
 }
 
 /// The latest observation for conditions sharing one calculation interval.
@@ -240,7 +252,7 @@ impl AlertEngine {
             alert.id.as_ref() == Some(id)
                 && alert.status == AlertStatus::Active
                 && alert.is_valid()
-                && !matches!(alert.condition, AlertCondition::StrategyFills(_))
+                && !alert.condition.is_event()
         }) else {
             return Vec::new();
         };
@@ -345,7 +357,7 @@ impl AlertEngine {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
                 && alert.starts.is_none_or(|starts| starts <= now)
-                && !matches!(alert.condition, AlertCondition::StrategyFills(_))
+                && !alert.condition.is_event()
                 && id.is_none_or(|id| alert.id.as_ref() == Some(id))
         }) {
             let Some(id) = alert.id.clone() else { continue };
@@ -470,6 +482,166 @@ impl AlertEngine {
         fills: &[crate::strategies::StrategyFill],
         now: DateTime<Utc>,
     ) {
+        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+            fills
+                .iter()
+                .filter_map(|fill| {
+                    if fill.sequence <= seen.last_sequence
+                        || !fill.price.is_finite()
+                        || !fill.quantity.is_finite()
+                        || fill.quantity <= 0.0
+                        || !fill.position.is_finite()
+                    {
+                        return None;
+                    }
+                    seen.last_sequence = fill.sequence;
+                    let side = match fill.side {
+                        crate::model::OrderSide::Buy => "Buy",
+                        crate::model::OrderSide::Sell => "Sell",
+                    };
+                    let mut price = fill.price.to_string();
+                    match price.split_once('.') {
+                        None => price.push_str(".00"),
+                        Some((_, fraction)) if fraction.len() == 1 => price.push('0'),
+                        _ => {}
+                    }
+                    Some(Occurrence {
+                        time: fill.time,
+                        price: Some(fill.price),
+                        message: format!(
+                            "{side} {} at {price}, position {}",
+                            fill.quantity, fill.position
+                        ),
+                    })
+                })
+                .collect()
+        });
+    }
+
+    /// Delivers each new formation or target in `signals`, the current signals of `symbol` on
+    /// `timeframe` from the host's [`Signals`](super::Signals) service, to the
+    /// [`DetectorSignals`](AlertCondition::DetectorSignals) alerts naming its category. A signal
+    /// fires once per alert and symbol, at its anchor time and price: a marker's time and price,
+    /// a level's start and price, a price zone's start and price, a zone's start without a
+    /// price. A signal anchored before `from` is history and never fires, nor does a level
+    /// without a start. `AlertEvaluator` passes the open of the bar before the newest, so a
+    /// formation confirmed as its bar closes still fires. Empty messages are the detector's name
+    /// and the signal's tooltip or label; custom messages expand as for
+    /// [`strategy_fills`](Self::strategy_fills).
+    pub fn detector_signals<'a>(
+        &self,
+        symbol: &str,
+        exchange: Option<&str>,
+        timeframe: Timeframe,
+        signals: impl IntoIterator<Item = &'a crate::model::Signal>,
+        from: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) {
+        use crate::model::SignalShape;
+        let signals: Vec<_> = signals.into_iter().collect();
+        let watches = |condition: &AlertCondition| {
+            matches!(condition, AlertCondition::DetectorSignals(detector)
+                if signals.iter().any(|signal| signal.category == *detector))
+        };
+        self.fire_events(
+            symbol,
+            exchange,
+            timeframe,
+            now,
+            watches,
+            |condition, seen| {
+                let AlertCondition::DetectorSignals(detector) = condition else {
+                    return Vec::new();
+                };
+                // Signals anchored before `from` can no longer fire, so their ids are not kept.
+                seen.signals.retain(|(_, time)| *time >= from);
+                signals
+                    .iter()
+                    .filter(|signal| signal.category == *detector)
+                    .filter_map(|signal| {
+                        let (time, price) = match signal.shape {
+                            SignalShape::Marker { time, price, .. } => (time, price),
+                            SignalShape::Level {
+                                price,
+                                from: Some(start),
+                            } => (start, Some(price)),
+                            SignalShape::Level { from: None, .. } => return None,
+                            SignalShape::PriceZone { from, price, .. } => (from, Some(price)),
+                            SignalShape::Zone { from, .. } => (from, None),
+                        };
+                        if time < from || seen.signals.iter().any(|(id, _)| *id == signal.id) {
+                            return None;
+                        }
+                        seen.signals.push((signal.id.clone(), time));
+                        let text = signal.tooltip.as_ref().or(signal.label.as_ref());
+                        Some(Occurrence {
+                            time,
+                            price: price.filter(|price| price.is_finite()),
+                            message: text.map_or_else(
+                                || detector.clone(),
+                                |text| format!("{detector}: {text}"),
+                            ),
+                        })
+                    })
+                    .collect()
+            },
+        );
+    }
+
+    /// Connects the host's custom event source `source`, whose events the host feeds to
+    /// [`custom_events`](Self::custom_events). Until then saving an active
+    /// [`CustomEvents`](AlertCondition::CustomEvents) alert on it fails, since no event could
+    /// reach it. Alerts restored by [`with_alerts`](Self::with_alerts) wait for their source.
+    pub fn connect_custom_events(&self, source: impl Into<String>) {
+        self.lock().routes.insert(source.into());
+    }
+
+    /// Delivers each new event of the host's custom source `source` on `symbol` and
+    /// `timeframe` to the [`CustomEvents`](AlertCondition::CustomEvents) alerts naming it.
+    /// Events numbered at or below one an alert already received are ignored, including after
+    /// edits or rearming the alert. A trigger reports the event's time and finite price, and the
+    /// event's message when the alert has none; custom messages expand as for
+    /// [`strategy_fills`](Self::strategy_fills).
+    pub fn custom_events(
+        &self,
+        source: &str,
+        symbol: &str,
+        exchange: Option<&str>,
+        timeframe: Timeframe,
+        events: &[crate::model::CustomAlertEvent],
+        now: DateTime<Utc>,
+    ) {
+        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::CustomEvents(name) if name == source);
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+            events
+                .iter()
+                .filter_map(|event| {
+                    if event.sequence <= seen.last_sequence {
+                        return None;
+                    }
+                    seen.last_sequence = event.sequence;
+                    Some(Occurrence {
+                        time: event.time,
+                        price: event.price.filter(|price| price.is_finite()),
+                        message: event.message.clone(),
+                    })
+                })
+                .collect()
+        });
+    }
+
+    /// Fires the active alerts of `symbol` on `timeframe` whose condition `watches` accepts,
+    /// with the occurrences `occurrences` takes from what the alert's run has seen.
+    fn fire_events(
+        &self,
+        symbol: &str,
+        exchange: Option<&str>,
+        timeframe: Timeframe,
+        now: DateTime<Utc>,
+        watches: impl Fn(&AlertCondition) -> bool,
+        mut occurrences: impl FnMut(&AlertCondition, &mut Run) -> Vec<Occurrence>,
+    ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
         state.expire(now);
@@ -484,7 +656,7 @@ impl AlertEngine {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
                 && alert.starts.is_none_or(|starts| starts <= now)
-                && matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run)
+                && watches(&alert.condition)
                 && alert.timeframe.is_none_or(|own| own == timeframe)
                 && match &alert.watchlist {
                     Some(list) => watchlists
@@ -501,40 +673,18 @@ impl AlertEngine {
                 }
             }
             let seen = runs.entry((id.clone(), symbol.to_owned())).or_default();
-            for fill in fills {
-                if fill.sequence <= seen.last_fill
-                    || !fill.price.is_finite()
-                    || !fill.quantity.is_finite()
-                    || fill.quantity <= 0.0
-                    || !fill.position.is_finite()
-                {
-                    continue;
-                }
-                seen.last_fill = fill.sequence;
+            for occurrence in occurrences(&alert.condition, seen) {
                 if seen.done {
                     continue;
                 }
-                let side = match fill.side {
-                    crate::model::OrderSide::Buy => "Buy",
-                    crate::model::OrderSide::Sell => "Sell",
-                };
-                let mut price = fill.price.to_string();
-                match price.split_once('.') {
-                    None => price.push_str(".00"),
-                    Some((_, fraction)) if fraction.len() == 1 => price.push('0'),
-                    _ => {}
-                }
+                let Occurrence { time, price, .. } = occurrence;
                 let message = if alert.message.is_empty() {
-                    format!(
-                        "{side} {} at {price}, position {}",
-                        fill.quantity, fill.position
-                    )
+                    occurrence.message
                 } else {
-                    let bar = Bar::new(
-                        fill.time, fill.price, fill.price, fill.price, fill.price, 0.0,
-                    );
-                    alert.expand_message(symbol, exchange, timeframe, &bar, fill.time, |source| {
-                        (*source == AlertSource::Price).then_some(fill.price)
+                    let flat = price.unwrap_or(f64::NAN);
+                    let bar = Bar::new(time, flat, flat, flat, flat, 0.0);
+                    alert.expand_message(symbol, exchange, timeframe, &bar, time, |source| {
+                        price.filter(|_| *source == AlertSource::Price)
                     })
                 };
                 if alert
@@ -546,18 +696,15 @@ impl AlertEngine {
                         events.push(AlertEvent::SilentTriggered {
                             id: id.clone(),
                             symbol: symbol.to_owned(),
-                            time: fill.time,
-                            price: Some(fill.price),
+                            time,
+                            price,
                             message,
                         });
                     }
                     continue;
                 }
-                alert.last_triggered_at = Some(
-                    alert
-                        .last_triggered_at
-                        .map_or(fill.time, |old| old.max(fill.time)),
-                );
+                alert.last_triggered_at =
+                    Some(alert.last_triggered_at.map_or(time, |old| old.max(time)));
                 if alert.frequency == AlertFrequency::Once {
                     seen.done = true;
                     if alert.watchlist.is_none() {
@@ -570,8 +717,8 @@ impl AlertEngine {
                 let event = AlertEvent::TriggeredForSymbol {
                     id: id.clone(),
                     symbol: symbol.to_owned(),
-                    time: fill.time,
-                    price: Some(fill.price),
+                    time,
+                    price,
                     message,
                 };
                 if let Some(events) = events {
@@ -621,7 +768,7 @@ impl State {
                     || old.blink_on_trigger != alert.blink_on_trigger
                     || old.delivery != alert.delivery)
         });
-        let same_strategy = matches!(alert.condition, AlertCondition::StrategyFills(_))
+        let same_events = alert.condition.is_event()
             && self
                 .alerts
                 .iter()
@@ -630,11 +777,11 @@ impl State {
             if Some(id) != alert.id.as_ref() || same_monitoring {
                 return true;
             }
-            if same_strategy {
-                // Editing or rearming a run must not replay its executions.
+            if same_events {
+                // Editing or rearming an alert on host events must not replay them.
                 run.done = false;
             }
-            same_strategy
+            same_events
         });
         match self.alerts.iter_mut().find(|a| a.id == alert.id) {
             Some(kept) => *kept = alert.clone(),
@@ -658,7 +805,7 @@ impl State {
             expired.push(alert.clone());
         }
         for alert in expired {
-            if !matches!(alert.condition, AlertCondition::StrategyFills(_)) {
+            if !alert.condition.is_event() {
                 self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
             }
             self.push(AlertEvent::Upsert(Box::new(alert)));
@@ -687,6 +834,15 @@ impl Alerts for AlertEngine {
             return;
         }
         let mut state = self.lock();
+        if let AlertCondition::CustomEvents(source) = &alert.condition
+            && alert.status == AlertStatus::Active
+            && !state.routes.contains(source)
+        {
+            reply.send(Err(FeedError::Other(format!(
+                "No event route connects the custom event source {source}"
+            ))));
+            return;
+        }
         let alert = state.insert(alert);
         state.push(AlertEvent::Upsert(Box::new(alert)));
         reply.send(Ok(()));
@@ -1012,7 +1168,9 @@ fn condition_holds(
 ) -> bool {
     let [previous, previous_other, previous_second] = previous;
     match condition {
-        AlertCondition::StrategyFills(_) => false,
+        AlertCondition::StrategyFills(_)
+        | AlertCondition::DetectorSignals(_)
+        | AlertCondition::CustomEvents(_) => false,
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
             value,
@@ -2308,6 +2466,119 @@ mod tests {
             fired,
             [(time(170), "1970-01-01T00:02:50+00:00 5min 99".to_owned())],
             "the alert fires at 00:02:50"
+        );
+    }
+
+    /// The trigger symbol, time, price and message of each firing pushed since the last call.
+    fn triggers(host: &Host) -> Vec<(String, DateTime<Utc>, Option<f64>, String)> {
+        host.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol {
+                    symbol,
+                    time,
+                    price,
+                    message,
+                    ..
+                } => Some((symbol, time, price, message)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A detector alert fires once for each new formation or target of its detector on its
+    /// symbol, at the signal's anchor; history, other detectors and other symbols never fire it.
+    #[test]
+    fn detector_alerts_fire_once_per_new_signal_of_their_detector() {
+        use crate::model::{Direction, Signal, SignalId, SignalShape};
+        let detector = AlertCondition::DetectorSignals("Big trades".into());
+        let host = Host::new(vec![alert(detector, AlertFrequency::EveryTime)]);
+        host.events();
+        let marker = |id: &str, category: &str, at, price| {
+            let shape = SignalShape::Marker {
+                time: time(at),
+                price,
+                direction: Direction::Up,
+            };
+            let mut signal = Signal::new(SignalId(id.into()), shape, category);
+            signal.tooltip = Some(format!("Buy {id}"));
+            signal
+        };
+        let level = |id: &str, from| {
+            let shape = SignalShape::Level { price: 105.0, from };
+            Signal::new(SignalId(id.into()), shape, "Big trades")
+        };
+        let signals = [
+            marker("old", "Big trades", 50, Some(99.0)),
+            marker("new", "Big trades", 120, Some(101.0)),
+            marker("other", "Icebergs", 130, Some(102.0)),
+            level("target", Some(time(125))),
+            level("anywhere", None),
+        ];
+        let deliver = |symbol, now| {
+            host.engine.detector_signals(
+                symbol,
+                None,
+                Timeframe::Min1,
+                &signals,
+                time(60),
+                time(now),
+            )
+        };
+        deliver("SYM", 200);
+        deliver("OTHER", 201);
+        deliver("SYM", 202);
+        let at = |seconds, price, message: &str| {
+            ("SYM".to_owned(), time(seconds), price, message.to_owned())
+        };
+        assert_eq!(
+            triggers(&host),
+            [
+                at(120, Some(101.0), "Big trades: Buy new"),
+                at(125, Some(105.0), "Big trades"),
+            ]
+        );
+    }
+
+    /// A custom event alert is saved only once the host connects its source, and fires once per
+    /// event of that source with the event's time, price and message.
+    #[test]
+    fn custom_event_alerts_need_a_connected_source_and_fire_once_per_event() {
+        use crate::model::CustomAlertEvent;
+        let host = Host::new(Vec::new());
+        let condition = AlertCondition::CustomEvents("Turns".into());
+        let mut turns = alert(condition, AlertFrequency::EveryTime);
+        assert_eq!(
+            host.save(turns.clone()),
+            Err(FeedError::Other(
+                "No event route connects the custom event source Turns".into()
+            ))
+        );
+        turns.status = AlertStatus::Disabled;
+        assert_eq!(host.save(turns), Ok(()), "a paused alert needs no route");
+        let mut turns = host.engine.alerts()[0].clone();
+        turns.status = AlertStatus::Active;
+        host.engine.connect_custom_events("Turns");
+        assert_eq!(host.save(turns), Ok(()));
+        host.events();
+        let event = |sequence, at, price| {
+            let mut event = CustomAlertEvent::new(sequence, time(at), format!("Turn {sequence}"));
+            event.price = price;
+            event
+        };
+        let deliver = |source, events: &[CustomAlertEvent]| {
+            host.engine
+                .custom_events(source, "SYM", None, Timeframe::Min1, events, time(500))
+        };
+        deliver("Turns", &[event(1, 100, Some(101.0)), event(2, 160, None)]);
+        deliver("Turns", &[event(2, 160, None)]);
+        deliver("Other", &[event(3, 220, Some(1.0))]);
+        let at = |seconds, price, message: &str| {
+            ("SYM".to_owned(), time(seconds), price, message.to_owned())
+        };
+        assert_eq!(
+            triggers(&host),
+            [at(100, Some(101.0), "Turn 1"), at(160, None, "Turn 2")]
         );
     }
 }

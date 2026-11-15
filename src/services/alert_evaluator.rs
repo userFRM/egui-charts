@@ -319,7 +319,8 @@ impl AlertEvaluator {
     }
 
     /// Poll live inputs and evaluate ready alerts. With `ui`, `ctx` wakes the host on new data
-    /// and follows stored drawings. Headless hosts pass an empty `live` slice.
+    /// and follows stored drawings. Headless hosts pass an empty `live` slice. Detector alerts
+    /// follow the signals of `live`, as `AlertEngine::detector_signals` takes them.
     /// `live` lends compatible loaded chart data; event studies retain independent streams.
     /// Errors leave affected sources unavailable and are returned for the host to report.
     pub fn poll(
@@ -546,6 +547,19 @@ impl AlertEvaluator {
             };
             engine.update_matching(Some(id), symbol, exchange, &inputs, now, value);
         }
+        // Detector alerts follow the signals of the charts lent.
+        for data in live {
+            if let Some(newest) = data.bars.len().checked_sub(1) {
+                engine.detector_signals(
+                    &data.request.symbol,
+                    None,
+                    data.request.timeframe,
+                    data.signals.iter().copied(),
+                    data.bars[newest.saturating_sub(1)].time,
+                    now,
+                );
+            }
+        }
         // Once alerts and removed watchlist members release their readers in the same frame.
         self.runs
             .retain(|(id, symbol, _), _| engine.subjects(id).contains(symbol));
@@ -770,12 +784,14 @@ mod tests {
                 bars: &[],
                 history_complete: true,
                 drawings: &[],
+                signals: Vec::new(),
             },
             AlertData {
                 request: AlertFeed::history_request("SYM", Timeframe::Min15),
                 bars: &drawing_bars,
                 history_complete: true,
                 drawings: std::slice::from_ref(&drawing),
+                signals: Vec::new(),
             },
         ];
         #[cfg(not(feature = "ui"))]

@@ -293,7 +293,7 @@ impl AlertStudy {
 
 impl Alert {
     /// An active alert on `symbol` with no id, no expiry and no message. Frequency is `Once`
-    /// for bar conditions and `EveryTime` for strategy fills.
+    /// for bar conditions and `EveryTime` for strategy fills, detector signals and custom events.
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
@@ -309,7 +309,7 @@ impl Alert {
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             additional_timeframes: Vec::new(),
-            frequency: if matches!(condition, AlertCondition::StrategyFills(_)) {
+            frequency: if condition.is_event() {
                 AlertFrequency::EveryTime
             } else {
                 AlertFrequency::default()
@@ -531,6 +531,16 @@ pub enum AlertCondition {
     /// `AlertEngine::strategy_fills` with the same run id. Uses the price source, no additional
     /// rules, and frequency `EveryTime` (the constructor default) or `Once`. No bars evaluate it.
     StrategyFills(String),
+    /// Each new formation or target of the host's detector named here: every
+    /// [`Signal`](super::Signal) of the symbol whose category is this name, once per signal id.
+    /// `AlertEngine::detector_signals` takes the signals, and `AlertEvaluator` feeds it the
+    /// signals of the charts it is lent. Same source, rules and frequencies as `StrategyFills`.
+    DetectorSignals(String),
+    /// Each [`CustomAlertEvent`] the host's event source named here raises, from its own logic,
+    /// a Rust custom study or a strategy's alert call. Feed them to `AlertEngine::custom_events`
+    /// with the same source name; `AlertEngine` saves the alert only once the host connects that
+    /// source. Same source, rules and frequencies as `StrategyFills`.
+    CustomEvents(String),
     /// The previous value was strictly below or above the level and the current value reaches
     /// or passes it, in either direction.
     Crossing(f64),
@@ -825,10 +835,20 @@ impl AlertCondition {
         }
     }
 
+    /// Whether the host raises the condition's events, which no bars evaluate.
+    pub(crate) fn is_event(&self) -> bool {
+        matches!(
+            self,
+            Self::StrategyFills(_) | Self::DetectorSignals(_) | Self::CustomEvents(_)
+        )
+    }
+
     /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
-            Self::StrategyFills(run) => !run.trim().is_empty(),
+            Self::StrategyFills(name) | Self::DetectorSignals(name) | Self::CustomEvents(name) => {
+                !name.trim().is_empty()
+            }
             Self::Crossing(v)
             | Self::CrossingUp(v)
             | Self::CrossingDown(v)
@@ -871,6 +891,8 @@ impl std::fmt::Display for AlertCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
+            Self::DetectorSignals(detector) => write!(f, "Signals of detector {detector}"),
+            Self::CustomEvents(source) => write!(f, "Events of {source}"),
             Self::Crossing(v) => write!(f, "Crossing {v}"),
             Self::CrossingUp(v) => write!(f, "Crossing up {v}"),
             Self::CrossingDown(v) => write!(f, "Crossing down {v}"),
@@ -908,7 +930,7 @@ impl Alert {
                 .watchlist
                 .as_ref()
                 .is_none_or(|id| !id.trim().is_empty())
-            && (!matches!(self.condition, AlertCondition::StrategyFills(_))
+            && (!self.condition.is_event()
                 || (self.source == AlertSource::Price
                     && self.additional_conditions.is_empty()
                     && matches!(
@@ -918,7 +940,7 @@ impl Alert {
             && self
                 .additional_conditions
                 .iter()
-                .all(|rule| !matches!(rule.condition, AlertCondition::StrategyFills(_)))
+                .all(|rule| !rule.condition.is_event())
             && self.additional_conditions.len() < 5
             && self.additional_timeframes.len() <= self.additional_conditions.len()
             && {
@@ -1060,6 +1082,43 @@ impl std::fmt::Display for AlertComparison {
             Self::Above => "Greater than",
             Self::Below => "Less than",
         })
+    }
+}
+
+/// An event a host's event source raises for its
+/// [`CustomEvents`](AlertCondition::CustomEvents) alerts: the host's own logic, a Rust custom
+/// study or a strategy's alert call decides when.
+///
+/// ```
+/// use egui_charts::model::CustomAlertEvent;
+///
+/// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
+/// let mut event = CustomAlertEvent::new(1, time, "RSI divergence confirmed");
+/// event.price = Some(101.5);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CustomAlertEvent {
+    /// Increasing number within the source, from one. An event numbered at or below one an
+    /// alert already received is a repeat and ignored.
+    pub sequence: u64,
+    /// When the event happened, which the trigger reports.
+    pub time: DateTime<Utc>,
+    /// The price the event refers to, finite, when it has one.
+    pub price: Option<f64>,
+    /// The text a trigger shows when the alert has no message of its own.
+    pub message: String,
+}
+
+impl CustomAlertEvent {
+    /// The event numbered `sequence` at `time` with `message` and no price.
+    pub fn new(sequence: u64, time: DateTime<Utc>, message: impl Into<String>) -> Self {
+        Self {
+            sequence,
+            time,
+            price: None,
+            message: message.into(),
+        }
     }
 }
 
@@ -1235,7 +1294,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 33] = [
+        let rows: [(Edit, bool); 35] = [
             (
                 |a| {
                     a.delivery.webhook = true;
@@ -1270,6 +1329,17 @@ mod tests {
             ),
             (
                 |a| a.condition = AlertCondition::StrategyFills(" ".into()),
+                false,
+            ),
+            (
+                |a| a.condition = AlertCondition::CustomEvents(" ".into()),
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::DetectorSignals("Big trades".into());
+                    a.frequency = AlertFrequency::OncePerBarClose;
+                },
                 false,
             ),
             (

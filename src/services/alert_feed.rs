@@ -19,6 +19,8 @@ pub struct AlertData<'a> {
     /// Current drawings in the same bar coordinates, including edits not yet stored.
     #[cfg(feature = "ui")]
     pub drawings: &'a [crate::drawings::Drawing],
+    /// The signals the host's analytics pushed for these bars, which detector alerts follow.
+    pub signals: Vec<&'a crate::model::Signal>,
 }
 
 impl std::fmt::Debug for AlertData<'_> {
