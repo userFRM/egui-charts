@@ -106,12 +106,12 @@ pub fn render_alert_levels<'a>(
                     continue;
                 }
                 let marker_x = mapping.rect.right() - 12.0;
+                let unnamed = alert
+                    .name
+                    .is_empty()
+                    .then(|| crate::localization::text(ui.ctx(), "Alert"));
                 let caption = |value| {
-                    let name = if alert.name.is_empty() {
-                        "Alert"
-                    } else {
-                        &alert.name
-                    };
+                    let name = unnamed.as_deref().unwrap_or(&alert.name);
                     format!("{name}  {}", format(value))
                 };
                 let mut galley = labels.then(|| {
