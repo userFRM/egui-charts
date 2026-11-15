@@ -792,6 +792,28 @@ mod tests {
         }
         assert!(storage.0[KEY].contains("Drawings/AAPL"));
         assert!(storage.0["watchlists"].contains("AAPL"));
+        // Notes and a recent search of the earlier release, which the workspace above does not
+        // write: the notes move, the former row is dropped and the other row stays.
+        let mut documents: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+        let notes = r#"{"version":1,"notes":"Watch the open"}"#;
+        documents.insert("SymbolNotes/MSFT".into(), notes.into());
+        let sample = serde_json::json!({
+            "name": "SAMPLE",
+            "description": "Synthetic ETF sample",
+            "exchange": "Synthetic",
+            "kind": "Fund",
+        });
+        let former = serde_json::json!({
+            "name": "AAPL",
+            "description": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "kind": "Stock",
+        });
+        documents.insert(
+            "RecentSymbols/recent".into(),
+            serde_json::json!({ "version": 1, "template": [former, sample] }).to_string(),
+        );
+        eframe::set_value(&mut storage, KEY, &documents);
 
         let mut app = restart(&ctx, &storage);
         assert!(!app.workspace_recovery.unreadable);
@@ -818,6 +840,12 @@ mod tests {
             ]
         );
         app.save(&mut storage);
+        let documents: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+        assert_eq!(documents["SymbolNotes/STOCKB"], notes);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&documents["RecentSymbols/recent"]).unwrap(),
+            serde_json::json!({ "version": 1, "template": [sample] })
+        );
         assert!(storage.0.values().all(|value| {
             DemoSymbol::FORMER
                 .iter()
