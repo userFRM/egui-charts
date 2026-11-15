@@ -984,7 +984,9 @@ impl OrderFlowInput {
     /// book when the bar's last update came before the cutoff. On a trade-based interval the
     /// cutoff's bar is the one of `history`, all the chart's bars and not only those before the
     /// cutoff, that holds it, and a page's copy counts for a live execution the store dropped as
-    /// a repeat.
+    /// a repeat. Once the store has lost an execution to its limit, that bar is filled there only
+    /// for a source that sums executions, and only when the executions held after the loss group
+    /// into `history` from that bar or an older one.
     #[cfg(feature = "widget")]
     pub(crate) fn set_replay(
         &self,
@@ -996,11 +998,24 @@ impl OrderFlowInput {
         let mut state = self.state();
         let replay = cutoff.map(|cutoff| {
             let trade_timeframe = clock.timeframe().filter(|tf| tf.is_trade_based());
+            // After a loss only a source that sums each bar's executions gets the cutoff's bar
+            // on a trade-based interval: a rolling window can reach executions the store lost.
+            let sums = matches!(
+                state.source,
+                Source::Footprint
+                    | Source::Fixed(
+                        OrderFlowKind::SizeDelta { .. }
+                            | OrderFlowKind::FlowSum { .. }
+                            | OrderFlowKind::FilteredCvd { .. }
+                    )
+            );
+            let lost = trades.is_some_and(|trades| trades.lost_until().is_some());
             // shortcut: scan the held executions per input per seek; index them by time if
             // replay playback profiles show it.
             let partial = if let Some(timeframe) = trade_timeframe
                 && matches!(state.source, Source::Fixed(_) | Source::Footprint)
-                && let Some(trades) = trades.filter(|trades| trades.lost_until().is_none())
+                && (sums || !lost)
+                && let Some(trades) = trades
             {
                 let tick_size = state.tick_size;
                 let mut part = State::new(state.source);
@@ -1034,6 +1049,10 @@ impl OrderFlowInput {
                     .or_else(|| Self::chart_run(clock, tick_size, trades, history, None, None));
                 let parts = run.map_or_else(
                     || {
+                        // After a loss the oldest held execution need not open a chart bar.
+                        if lost {
+                            return Vec::new();
+                        }
                         // Executions that do not match the chart's bars are grouped from the
                         // oldest live one: history pages did not form the chart's live trade bars.
                         let mut bars = super::inbox::TradeBars::default();
@@ -1073,7 +1092,11 @@ impl OrderFlowInput {
                     }
                     previous = Some(trade);
                 }
-                Some((open.unwrap_or(cutoff), part))
+                // After a loss the run can start after the cutoff's bar, which then has no value.
+                match open {
+                    Some(open) => Some((open, part)),
+                    None => (!lost).then_some((cutoff, part)),
+                }
             } else {
                 None
             };
@@ -1120,14 +1143,7 @@ impl OrderFlowInput {
                 Source::Fixed(kind) => {
                     if let Some((_, part)) = &partial {
                         replay.row = part.bars.get(&open).map(|(row, _)| *row);
-                    } else if !trade_based
-                        && matches!(
-                            kind,
-                            OrderFlowKind::SizeDelta { .. }
-                                | OrderFlowKind::FlowSum { .. }
-                                | OrderFlowKind::FilteredCvd { .. }
-                        )
-                    {
+                    } else if !trade_based && sums {
                         let part = OrderFlowInput::new(kind);
                         held.for_each(|trade| part.push_trade(clock, trade));
                         replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
