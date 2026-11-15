@@ -856,7 +856,7 @@ impl Chart {
         self.follow_live_edge(before, clock);
     }
 
-    fn edge(&self) -> Edge {
+    pub(super) fn edge(&self) -> Edge {
         let bars = &self.state.data().bars;
         Edge {
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
@@ -921,7 +921,7 @@ impl Chart {
     /// Scrolls to the live edge when the view was near it and a bar was appended, or a
     /// whitespace tail gained a value while the options allow shifting on whitespace
     /// replacement. Any other view stays on its bars.
-    fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
+    pub(super) fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
         // Appended only if the last bar moved to a later slot, whatever the length: a rolling
@@ -1072,7 +1072,7 @@ pub(super) struct ViewEdge {
 }
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
-struct Edge {
+pub(super) struct Edge {
     near_live: bool,
     right_edge: ViewEdge,
     tail: Option<Bar>,
