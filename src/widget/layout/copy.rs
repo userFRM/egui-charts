@@ -827,6 +827,40 @@ mod tests {
         assert_eq!(charts[1].config().bullish_color, egui::Color32::RED);
     }
 
+    /// A right margin kept in pixels reaches the other charts in pixels, which each keeps at its
+    /// own bar spacing: a chart that already keeps the same pixels keeps its margin and its view,
+    /// and one with a margin in bars takes the pixels at its newest bar.
+    #[test]
+    fn settings_copy_keeps_a_pixel_right_margin_at_another_zoom() {
+        let mut options = crate::config::ChartOptions::default();
+        options.time_scale.right_offset_pixels = Some(60.0);
+        let factory = IndicatorFactory::new();
+        // 60 pixels at 12 points per bar are 5 bars.
+        for (pixels, kept) in [
+            (Some(60.0), (2.5, Some(60.0), (12.0, -20.0))),
+            (None, (2.5, Some(60.0), (12.0, 5.0))),
+        ] {
+            let mut a = chart(50).with_chart_options(options.clone());
+            let mut own = options.clone();
+            own.time_scale.right_offset_pixels = pixels;
+            let mut b = chart(50).with_chart_options(own);
+            b.apply_synced_time_scale(12.0, -20.0);
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&a)));
+            let mut charts = [&mut a, &mut b];
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let time_scale = &charts[1].chart_options().time_scale;
+            assert_eq!(
+                (
+                    time_scale.right_offset,
+                    time_scale.right_offset_pixels,
+                    charts[1].get_time_scale_state(),
+                ),
+                kept,
+                "{pixels:?}"
+            );
+        }
+    }
+
     /// A locked price-to-bar ratio is in the source's prices. A chart whose prices are a thousandth
     /// of the source's locks at its own view, and a chart that has its own lock keeps it.
     #[test]

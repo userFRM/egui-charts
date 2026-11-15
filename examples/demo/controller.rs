@@ -8188,6 +8188,8 @@ mod tests {
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
         state.margins.right_bars = 17.0;
+        // The demo keeps its margin in pixels, which an edit in bars replaces.
+        state.margins.right_pixels = None;
         state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;

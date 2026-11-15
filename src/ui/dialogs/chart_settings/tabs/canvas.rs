@@ -308,6 +308,10 @@ impl SettingsDialog {
                             DESIGN_TOKENS.sizing.settings_dialog.input_width_margin,
                         );
                         if let Ok(v) = dialog.margin_right_str.parse::<f32>() {
+                            // An edited margin is in bars.
+                            if v != dialog.settings.margins.right_bars {
+                                dialog.settings.margins.right_pixels = None;
+                            }
                             dialog.settings.margins.right_bars = v;
                         }
                     },

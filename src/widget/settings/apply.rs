@@ -45,6 +45,16 @@ fn right_margin_bars(chart: &Chart) -> f32 {
         .max(0.0)
 }
 
+/// The right margin in pixels of a chart that keeps it in pixels; a negative one reads as zero,
+/// as its width in bars does.
+fn right_margin_pixels(chart: &Chart) -> Option<f32> {
+    chart
+        .chart_options()
+        .time_scale
+        .right_offset_pixels
+        .map(|pixels| pixels.max(0.0))
+}
+
 fn thousands_separator(separator: Option<char>) -> ThousandsSeparator {
     match separator {
         None => ThousandsSeparator::Off,
@@ -95,7 +105,7 @@ pub enum ChartSettingsError {
         /// The bottom margin in percent.
         bottom: f32,
     },
-    /// The right margin in bars is not finite or is negative.
+    /// The right margin, in bars or in pixels, is not finite or is negative.
     RightMargin(f32),
     /// The crosshair line width is not finite or not above zero.
     CrosshairWidth(f32),
@@ -315,6 +325,7 @@ impl ChartSettingsState {
         settings.margins.bottom_percent =
             (chart.state().price_scale().options().scale_margins.bottom * 100.0) as f32;
         settings.margins.right_bars = right_margin_bars(chart);
+        settings.margins.right_pixels = right_margin_pixels(chart);
         let scale = chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale = scale.options().mode == PriceScaleMode::Logarithmic;
@@ -425,6 +436,11 @@ impl ChartSettingsState {
         let right = self.margins.right_bars;
         if !right.is_finite() || right < 0.0 {
             return Err(ChartSettingsError::RightMargin(right));
+        }
+        if let Some(pixels) = self.margins.right_pixels
+            && (!pixels.is_finite() || pixels < 0.0)
+        {
+            return Err(ChartSettingsError::RightMargin(pixels));
         }
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err(ChartSettingsError::CrosshairWidth(
@@ -666,19 +682,29 @@ impl ChartSettingsState {
             top: f64::from(self.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
             bottom: f64::from(self.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
         };
-        // An unedited margin keeps the chart's, in bars or in pixels; an edited one is in bars.
-        // Settings saved before the margin could hold part of a bar, which hold none of the
-        // choices `from_chart` fills, hold the whole bars of the bar margin for an unedited one.
-        let whole_bars = chart
-            .chart_options()
-            .time_scale
-            .right_offset
-            .max(0.0)
-            .trunc();
-        let saved_unedited =
-            self.scales_appearance.font_family.is_none() && self.margins.right_bars == whole_bars;
-        if self.margins.right_bars != right_margin_bars(chart) && !saved_unedited {
-            chart.set_right_margin(self.margins.right_bars);
+        // A margin in pixels is kept in pixels, which a chart keeping the same pixels at another
+        // bar spacing already shows. Otherwise an unedited margin keeps the chart's, in bars or in
+        // pixels, and an edited one is in bars. Settings saved before the margin could hold part
+        // of a bar, which hold none of the choices `from_chart` fills, hold the whole bars of the
+        // bar margin for an unedited one.
+        if let Some(pixels) = self.margins.right_pixels {
+            if right_margin_pixels(chart) != Some(pixels) {
+                let mut options = chart.chart_options().clone();
+                options.time_scale.right_offset_pixels = Some(pixels);
+                chart.set_chart_options(options);
+            }
+        } else {
+            let whole_bars = chart
+                .chart_options()
+                .time_scale
+                .right_offset
+                .max(0.0)
+                .trunc();
+            let saved_unedited = self.scales_appearance.font_family.is_none()
+                && self.margins.right_bars == whole_bars;
+            if self.margins.right_bars != right_margin_bars(chart) && !saved_unedited {
+                chart.set_right_margin(self.margins.right_bars);
+            }
         }
         let mode = if self.scales_and_lines.log_scale {
             PriceScaleMode::Logarithmic
@@ -2840,9 +2866,10 @@ mod tests {
             saved.apply_to_chart(&mut chart).unwrap();
             assert_eq!(chart.chart_options().time_scale, kept, "saved, {pixels:?}");
 
-            // An edit, also to the whole bars of the bar margin.
+            // An edit, also to the whole bars of the bar margin, is in bars, as the dialog makes it.
             for bars in [2.0, 7.5] {
                 settings.margins.right_bars = bars;
+                settings.margins.right_pixels = None;
                 settings.apply_to_chart(&mut chart).unwrap();
                 let time_scale = &chart.chart_options().time_scale;
                 assert_eq!(
@@ -2852,6 +2879,12 @@ mod tests {
                 );
             }
             settings.margins.right_bars = -1.0;
+            assert_eq!(
+                settings.apply_to_chart(&mut chart),
+                Err(ChartSettingsError::RightMargin(-1.0))
+            );
+            settings.margins.right_bars = 0.0;
+            settings.margins.right_pixels = Some(-1.0);
             assert_eq!(
                 settings.apply_to_chart(&mut chart),
                 Err(ChartSettingsError::RightMargin(-1.0))
