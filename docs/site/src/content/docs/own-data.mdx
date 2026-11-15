@@ -70,7 +70,8 @@ The market data Coinbase Exchange publishes for everyone:
 
 The spot market data Kraken publishes for everyone:
 
-- **Symbols.** BTC/USD, ETH/USD, BTC/EUR, ETH/EUR and BTC/CHF, with a price step of 0.01.
+- **Symbols.** BTC/USD, ETH/USD, BTC/EUR, ETH/EUR and BTC/CHF, with a price step of 0.01, the
+  step of the ETH pairs; the BTC pairs trade in steps of 0.1.
 - **Intervals.** 1m, 5m, 15m, 30m, 1h, 4h and 1d. Kraken also serves 1w, but its weekly bars
   open on Thursday, not on the Monday the chart's weeks open on.
 - **History.** `https://api.kraken.com/0/public/OHLC`, the 720 most recent bars of the interval
@@ -80,7 +81,9 @@ The spot market data Kraken publishes for everyone:
 - **Live data.** One connection to `wss://ws.kraken.com/v2` subscribes to the pair's `trade`
   channel and sends a ping every 30 seconds. Each trade continues the bar in progress and
   reaches time and sales, the footprint and the order-flow studies with the side Kraken
-  reports, the taker's.
+  reports, the taker's. Kraken's answers to the subscription and to each ping name no
+  channel, so the chart leaves them out and the *Live* step's *Test* shows the first as a
+  message without a route.
 
 A ready profile is read-only. *Connect* uses it as the demo ships it and stores no copy, so a
 later version of the demo updates it. To start a profile of your own from it, give it another
