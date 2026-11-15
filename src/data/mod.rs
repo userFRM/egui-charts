@@ -336,10 +336,28 @@ pub trait Datafeed: MaybeSend + 'static {
         let _ = subscription;
     }
 
-    /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
-    /// which leaves the chart without targets and shows no error.
+    /// Analyst price targets for `symbol`, in its own currency and unit. The chart asks while no
+    /// conversion is chosen, and [`price_targets_converted`](Self::price_targets_converted)
+    /// under one. The default answers [`FeedError::NotSupported`], which leaves the chart
+    /// without targets and shows no error.
     fn price_targets(&self, symbol: &str, reply: Reply<crate::data::PriceTargets>) {
         let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Analyst price targets for `symbol` in `conversion`, the currency or unit the host chose
+    /// with `Chart::set_conversion` (requires `widget`), which
+    /// [`resolve_converted`](Self::resolve_converted) also receives. The chart asks this instead
+    /// of [`price_targets`](Self::price_targets) while a conversion is chosen. The library
+    /// converts nothing: the default answers [`FeedError::NotSupported`], which leaves the chart
+    /// without targets rather than drawing them in another currency, and shows no error.
+    fn price_targets_converted(
+        &self,
+        symbol: &str,
+        conversion: &str,
+        reply: Reply<crate::data::PriceTargets>,
+    ) {
+        let _ = (symbol, conversion);
         reply.send(Err(FeedError::NotSupported));
     }
 

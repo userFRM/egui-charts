@@ -350,8 +350,10 @@ impl Chart {
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
-        // The previous feed's histories, and the bars filled from them, are another request's.
+        // The previous feed's histories, and the bars filled from them, are another request's,
+        // as are the analyst targets it answered.
         self.study_data.clear_feed();
+        self.reload_price_targets();
         let timeframe = self.timeframe.unwrap_or_default();
         self.readout_revision = crate::model::next_revision();
         self.feed_link = Some(FeedLink {
@@ -645,15 +647,18 @@ impl Chart {
     /// Asks the feed for data in a currency or unit the host chose, such as `"EUR"` or `"oz"`,
     /// or in the instrument's own with `None`. The library converts nothing: the feed does, and
     /// labels the resolved instrument's currency and unit, which the legend and scale headers
-    /// show. A changed choice drops the bars, trades and depth held, ignores the replies to the
-    /// previous choice and reloads, resolving through [`Datafeed::resolve_converted`] and
-    /// carrying the choice in every history, trade and depth request and subscription,
-    /// including those of studies on other symbols. A feed that cannot convert answers
-    /// [`FeedError::NotSupported`] and the chart shows no data. A feed attached later uses it.
+    /// show. A changed choice drops the bars, trades, depth and analyst targets held, ignores the
+    /// replies to the previous choice and reloads, resolving through
+    /// [`Datafeed::resolve_converted`], asking for targets through
+    /// [`Datafeed::price_targets_converted`] and carrying the choice in every history, trade,
+    /// footprint and depth request and subscription, including those of studies on other
+    /// symbols. A feed that cannot convert answers [`FeedError::NotSupported`] and the chart shows
+    /// no data. A feed attached later uses it.
     pub fn set_conversion(&mut self, conversion: Option<String>) {
         if self.conversion != conversion {
             self.conversion = conversion;
             self.study_data.clear_feed();
+            self.reload_price_targets();
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
                 // The headers must not keep the previous choice's currency while loading.
