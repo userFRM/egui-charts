@@ -18,7 +18,7 @@
 mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
-#[cfg(feature = "widget")]
+#[cfg(any(feature = "widget", feature = "studies"))]
 pub(crate) use exchange::MarketSession;
 
 use crate::model::{Bar, TimezoneId, local_instant, local_time};

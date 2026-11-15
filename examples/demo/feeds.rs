@@ -679,6 +679,23 @@ impl Notifications for DemoNotifications {
         }
         state.1 = Some(events);
     }
+
+    /// Hands the notification to the desktop's notification service. The web build keeps the
+    /// default answer, so it reports desktop notifications as unsupported.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn deliver(&self, notification: Notification, reply: Reply<()>) {
+        std::thread::spawn(move || {
+            // After `--`, a title or message that starts with a dash is text, not an option.
+            let shown = std::process::Command::new("notify-send")
+                .args(["--", &notification.title, &notification.body])
+                .status();
+            reply.send(match shown {
+                Ok(status) if status.success() => Ok(()),
+                Ok(status) => Err(FeedError::Other(format!("notify-send {status}"))),
+                Err(error) => Err(FeedError::Other(format!("notify-send: {error}"))),
+            });
+        });
+    }
 }
 
 /// Two rooms with a few synthetic messages, echoing what the user posts.
