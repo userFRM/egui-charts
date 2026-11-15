@@ -42,6 +42,7 @@ use crate::ui_kit::ext::UiExt;
 /// let action = panel.show(ui, None, &mut sources);
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ObjectTreePanel {
     /// Configuration
     config: ObjectTreeConfig,

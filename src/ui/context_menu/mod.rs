@@ -151,6 +151,7 @@ pub(crate) fn format_price(price: f64) -> String {
 ///
 /// Manages the lifecycle of a right-click context menu including
 /// positioning, item rendering, and action dispatch.
+#[derive(Debug)]
 pub struct ChartContextMenu {
     is_open: bool,
     position: Pos2,

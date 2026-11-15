@@ -34,6 +34,12 @@ pub(crate) struct Inbox {
     waker: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
+impl std::fmt::Debug for Inbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inbox").finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct State {
     /// Set by the first push after a drain, so a burst wakes the chart once.

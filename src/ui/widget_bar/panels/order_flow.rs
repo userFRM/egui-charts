@@ -17,6 +17,7 @@ use crate::ui_kit::notifications::{Toast, Toasts};
 /// Call [`poll`](Self::poll) every frame even while hidden. The host feeds the service, applies
 /// [`show`](Self::show)'s visibility changes to its chart, renders the shared toasts and plays
 /// the sounds requested by `poll`.
+#[derive(Debug)]
 pub struct OrderFlowPanel {
     service: Arc<OrderFlowDetectors>,
     visible: [bool; DetectionKind::ALL.len()],

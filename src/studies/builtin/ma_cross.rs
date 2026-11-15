@@ -3,7 +3,7 @@ use super::{AverageLine, AverageType, MACombination};
 use crate::studies::palette;
 
 /// MA Cross, a preset of independently configurable averages.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MACross {
     inner: MACombination,
 }

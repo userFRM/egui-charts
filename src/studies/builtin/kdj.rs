@@ -13,7 +13,7 @@ use egui::Color32;
 /// third. `J = 3K - 2D`. The first value is on bar `period - 1`; earlier bars are `None`.
 /// A bar with a non-finite high, low or close has no value and is left out: the windows span usable
 /// bars only, so every other bar is that of the series without it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KDJ {
     /// Period for %K calculation (typically 9)
     period: usize,
@@ -28,7 +28,7 @@ pub struct KDJ {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     range: std::collections::VecDeque<[f64; 2]>,
     smoothed: Option<(f64, f64)>,

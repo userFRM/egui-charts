@@ -38,6 +38,7 @@ impl ConfirmResult {
 }
 
 /// A confirmation dialog
+#[derive(Debug)]
 pub struct ConfirmDialog {
     id: Id,
     title: String,

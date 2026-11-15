@@ -18,6 +18,7 @@ use crate::ui::drawing_toolbar::toolbar::CursorStateData;
 pub use crate::config::CursorType;
 
 /// Cursors category implementation
+#[derive(Debug)]
 pub struct CursorsCategory;
 
 impl ToolCategory for CursorsCategory {

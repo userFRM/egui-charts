@@ -57,6 +57,7 @@ fn kit_size(points: f32) -> ButtonSize {
 /// let action = controls.show(ui, &mut state);
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct ReplayControls<'a> {
     config: &'a ReplayConfig,
 }
@@ -389,6 +390,7 @@ impl<'a> ReplayControls<'a> {
 }
 
 /// Compact replay controls (minimal UI)
+#[derive(Debug)]
 pub struct CompactReplayControls<'a> {
     config: &'a ReplayConfig,
 }
@@ -451,6 +453,7 @@ impl<'a> CompactReplayControls<'a> {
 }
 
 /// Replay keyboard handler
+#[derive(Debug)]
 pub struct ReplayKeyboardHandler;
 
 impl ReplayKeyboardHandler {

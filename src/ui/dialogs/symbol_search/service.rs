@@ -7,7 +7,7 @@ use crate::services::{ExpressionError, StoreKind, SymbolExpression, SymbolQuery,
 use crate::ui::dialogs::templates::TemplateStore;
 use std::sync::Arc;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Recent {
     name: String,
     description: String,
@@ -72,8 +72,25 @@ pub(super) struct Search {
     components: Components,
 }
 
+impl std::fmt::Debug for Search {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Search")
+            .field("query", &self.query)
+            .field("rows", &self.rows)
+            .field("loading", &self.loading)
+            .field("more", &self.more)
+            .field("offset", &self.offset)
+            .field("error", &self.error)
+            .field("exchange", &self.exchange)
+            .field("country", &self.country)
+            .field("sector", &self.sector)
+            .field("data_source", &self.data_source)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The lookups of an expression's symbols: one search each, answered under its position.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Components {
     text: String,
     inbox: Arc<Inbox>,

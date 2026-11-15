@@ -1338,7 +1338,7 @@ mod tests {
     /// The state read from a chart applies back without changing its configuration, so pressing
     /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
     /// left as shown while the one it fell back to changes keeps what it showed. A size resolved
-    /// from history keeps its value until its method is edited.
+    /// from history keeps its value until its method is edited, also through undo and redo.
     #[test]
     fn unedited_settings_apply_records_no_undo() {
         let bars = || {
@@ -1405,26 +1405,34 @@ mod tests {
         });
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
         assert!(!chart.can_undo());
-        // An edited candle style and an unedited series settings apply keep it too.
+        // An edited candle style, its undo and redo, and an unedited series settings apply keep
+        // it too.
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings.candle_colors.show_wick = !settings.candle_colors.show_wick;
-        settings.apply_to_chart(&mut chart).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        assert!(chart.undo());
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        assert!(chart.redo());
         let series = chart.series_settings();
         chart.apply_series_settings(&series);
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        // Undoing the edited period gives ATR(14) a size from the 15 bars loaded now.
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings
             .chart_type_params
             .as_mut()
             .unwrap()
             .kagi_size_method = atr(15);
-        settings.apply_to_chart(&mut chart).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
         assert!((chart.chart_type_params().kagi_reversal - 44.0 / 15.0).abs() < 1e-12);
+        assert!(chart.undo());
+        assert!((chart.chart_type_params().kagi_reversal - 3.0).abs() < 1e-12);
     }
 
     /// A size that waits for more history than is loaded is not invalid: the chart names the
     /// bars it waits for and other settings apply. A fixed size of 0 is still rejected. Whitespace
-    /// bars do not count, so the size resolves once 14 bars with prices are loaded.
+    /// bars do not count, so the size resolves once 14 bars with prices are loaded. A changed
+    /// method resolves again at once, also while the size waits.
     #[test]
     fn settings_apply_while_a_history_derived_size_waits() {
         use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
@@ -1474,6 +1482,17 @@ mod tests {
         }
         chart.show_elements();
         assert!((chart.chart_type_params().renko_brick_size - 2.0).abs() < 1e-12);
+        // A changed method reads the loaded bars at once, also while the size waits: ATR(20)
+        // waits for 6 more bars, and ATR(5) of true ranges of 2 is 2.
+        for (period, size) in [(20, 0.0), (5, 2.0)] {
+            let params = settings.chart_type_params.as_mut().unwrap();
+            params.renko_size_method = BoxSizeMethod::Atr {
+                period,
+                multiplier: 1.0,
+            };
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert!((chart.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the

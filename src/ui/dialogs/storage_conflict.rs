@@ -28,6 +28,7 @@ use crate::ui_kit::modal::Modal;
 /// }
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct StorageConflictDialog {
     title: String,
     message: String,

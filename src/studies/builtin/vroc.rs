@@ -7,7 +7,7 @@ use egui::Color32;
 /// Volume Rate of Change (VROC)
 /// Measures the rate of change in volume over a specified period
 /// Helps identify volume trends and divergences
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VolumeRateOfChange {
     /// Lookback period
     period: usize,

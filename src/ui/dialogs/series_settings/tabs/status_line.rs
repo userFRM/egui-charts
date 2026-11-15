@@ -7,6 +7,7 @@ use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Status line tab renderer
+#[derive(Debug)]
 pub struct StatusLineTab;
 
 impl StatusLineTab {

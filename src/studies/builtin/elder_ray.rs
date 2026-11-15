@@ -8,7 +8,7 @@ use egui::Color32;
 /// Elder Ray Index (Bull Power / Bear Power)
 /// Measures buying and selling pressure
 /// Developed by Alexander Elder
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ElderRay {
     /// EMA period (typically 13)
     period: usize,

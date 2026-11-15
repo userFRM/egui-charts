@@ -60,7 +60,7 @@ impl AnchorPeriod {
 
 /// The exchange time zone and trading session supplied by the chart instrument; UTC
 /// without session windows until one is supplied.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ExchangeDays(Option<(TimezoneId, Vec<SessionWindow>)>);
 
 impl ExchangeDays {

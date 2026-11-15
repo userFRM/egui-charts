@@ -46,6 +46,7 @@ pub struct TimeAndSalesConfig {
 /// trades of unknown side neutral. The user adds, edits and removes size [`filters`](Self::filters)
 /// in the panel: with any filter, only trades matching one are listed, and each filter can ask
 /// for a sound.
+#[derive(Debug)]
 pub struct TimeAndSalesPanel {
     /// Display and layout options for this component.
     pub config: TimeAndSalesConfig,

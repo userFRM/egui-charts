@@ -10,6 +10,7 @@ use crate::ui::drawing_toolbar::components::draw_tool_button;
 use egui::Ui;
 
 /// Measure tool button component.
+#[derive(Debug)]
 pub struct MeasureButton;
 
 impl MeasureButton {
