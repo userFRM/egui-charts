@@ -868,6 +868,9 @@ pub struct ChartLinkGroups {
 struct LinkState {
     groups: [ChartLinkGroups; 16],
     pending: Vec<LinkChange>,
+    /// The steps recorded on chart histories, renumbered by `swap_slots`. A clone shares the
+    /// entries recorded before it, so a replacement layout keeps them in step.
+    recorded: Vec<std::sync::Weak<Mutex<LinkChange>>>,
 }
 
 /// A link membership step, applied like a [`SizeChange`] by the layout that shows the chart.
@@ -1258,13 +1261,32 @@ impl ChartLayout {
     }
 
     /// Moves the sync memberships, detached state and drawing links of two slots with their
-    /// charts, for a host that exchanges those charts. Invalid indices are ignored.
+    /// charts, for a host that exchanges those charts. Undo and redo of a membership change then
+    /// apply to the slot its chart moved to. Invalid indices are ignored.
     pub fn swap_slots(&mut self, a: usize, b: usize) {
         if a.max(b) >= self.groups.len() {
             return;
         }
         self.groups.swap(a, b);
         self.links.groups.swap(a, b);
+        let moved = |index: &mut usize| {
+            if *index == a {
+                *index = b;
+            } else if *index == b {
+                *index = a;
+            }
+        };
+        for change in &mut self.links.pending {
+            moved(&mut change.index);
+        }
+        for step in self
+            .links
+            .recorded
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            moved(&mut step.lock().unwrap().index);
+        }
         self.detached.swap(a, b);
         #[cfg(feature = "drawings")]
         self.drawings.swap_slots(a, b);
@@ -1336,7 +1358,14 @@ impl ChartLayout {
     }
 
     fn record_links(&mut self, chart: &mut Chart) {
-        for change in self.links.pending.drain(..) {
+        let links = &mut self.links;
+        if !links.pending.is_empty() {
+            // Steps no history holds any more cannot be undone and need no renumbering.
+            links.recorded.retain(|step| step.strong_count() > 0);
+        }
+        for change in links.pending.drain(..) {
+            let change = Arc::new(Mutex::new(change));
+            links.recorded.push(Arc::downgrade(&change));
             chart.history.record_links(change);
         }
     }
@@ -4708,6 +4737,62 @@ mod tests {
         );
     }
 
+    /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset
+    /// would hide the active chart, between a group change of the moved chart and its undo. The
+    /// undo and the redo reach the chart in its new slot and leave the chart now in its old slot
+    /// alone, whether the change was recorded before the exchange or at the next frame.
+    #[test]
+    fn link_undo_follows_a_chart_moved_by_swap_slots() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let group = |name: &str| ChartLinkGroups {
+            symbol: ChartLink::Group(name.to_owned()),
+            ..Default::default()
+        };
+        for recorded in [true, false] {
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::Four,
+                ..Default::default()
+            };
+            layout.set_link_groups(0, group("B"), true);
+            layout.set_active(3);
+            show(&mut layout, &mut charts);
+            layout.set_link_groups(3, group("A"), false);
+            if recorded {
+                show(&mut layout, &mut charts);
+            }
+            charts.swap(0, 3);
+            layout.swap_slots(0, 3);
+            layout.set_active(0);
+            if !recorded {
+                show(&mut layout, &mut charts);
+            }
+            let mut seen = Vec::new();
+            for undo in [true, false] {
+                assert!(if undo {
+                    charts[0].undo()
+                } else {
+                    charts[0].redo()
+                });
+                show(&mut layout, &mut charts);
+                seen.push((layout.link_groups(0), layout.link_groups(3)));
+            }
+            assert_eq!(
+                seen,
+                [
+                    (Some(ChartLinkGroups::default()), Some(group("B"))),
+                    (Some(group("A")), Some(group("B"))),
+                ],
+                "recorded before the exchange: {recorded}"
+            );
+        }
+    }
     /// A host opens a saved layout by supplying its charts in the same slots or restoring
     /// snapshots into them. Nobody changed a symbol or interval, so each opened chart keeps its
     /// own, also in slots that share a symbol and an interval group; the next change is sent.

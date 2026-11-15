@@ -244,9 +244,9 @@ impl ChartHistory {
         })
     }
 
-    pub(super) fn record_links(&mut self, change: super::layout::LinkChange) {
+    pub(super) fn record_links(&mut self, change: Arc<Mutex<super::layout::LinkChange>>) {
         self.push(Action {
-            layout_links: Some(Arc::new(Mutex::new(change))),
+            layout_links: Some(change),
             ..Action::default()
         });
     }
