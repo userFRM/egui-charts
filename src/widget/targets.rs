@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub(super) struct TargetState {
     inbox: Arc<Inbox>,
     symbol: Option<String>,
+    /// The conversion `symbol` was asked in.
+    conversion: Option<String>,
     values: Option<PriceTargets>,
     error: Option<FeedError>,
 }
@@ -31,7 +33,7 @@ impl Chart {
         self.show_price_targets
     }
 
-    /// The accepted targets for the current symbol, once answered by the feed.
+    /// The accepted targets for the current symbol and conversion, once answered by the feed.
     pub fn price_targets(&self) -> Option<&PriceTargets> {
         self.targets.values.as_ref()
     }
@@ -53,9 +55,12 @@ impl Chart {
         let Some(link) = &self.feed_link else {
             return;
         };
-        if self.targets.symbol.as_deref() != Some(&self.symbol) {
+        if self.targets.symbol.as_deref() != Some(&self.symbol)
+            || self.targets.conversion != self.conversion
+        {
             self.targets = TargetState {
                 symbol: Some(self.symbol.clone()),
+                conversion: self.conversion.clone(),
                 ..Default::default()
             };
             let repaint = ctx.clone();
@@ -63,8 +68,11 @@ impl Chart {
             self.targets
                 .inbox
                 .set_waker(move || repaint.request_repaint_of(viewport));
-            link.feed
-                .price_targets(&self.symbol, self.targets.inbox.reply(0));
+            let (symbol, reply) = (&self.symbol, self.targets.inbox.reply(0));
+            match self.conversion.as_deref() {
+                Some(conversion) => link.feed.price_targets_converted(symbol, conversion, reply),
+                None => link.feed.price_targets(symbol, reply),
+            }
         }
         for (_, answer) in self.targets.inbox.drain().answers {
             match *answer
@@ -278,6 +286,15 @@ mod tests {
         }
         fn price_targets(&self, symbol: &str, reply: Reply<PriceTargets>) {
             self.0.lock().unwrap().push((symbol.into(), reply));
+        }
+        fn price_targets_converted(
+            &self,
+            symbol: &str,
+            conversion: &str,
+            reply: Reply<PriceTargets>,
+        ) {
+            let asked = format!("{symbol} in {conversion}");
+            self.0.lock().unwrap().push((asked, reply));
         }
     }
     fn targets() -> PriceTargets {
@@ -614,5 +631,41 @@ mod tests {
             Some(&targets()),
             "live targets after the replay"
         );
+    }
+
+    /// A changed conversion drops the targets and the late reply of the previous choice, as it
+    /// drops the bars, and asks the feed in the chosen currency.
+    #[test]
+    fn conversion_drops_targets_of_the_previous_currency() {
+        let ctx = egui::Context::default();
+        let feed = Arc::new(Feed::default());
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("A")
+            .build();
+        chart.set_price_targets_visible(true);
+        chart.pump_targets(&ctx);
+        let (_, late) = feed.0.lock().unwrap().pop().unwrap();
+        chart.set_conversion(Some("EUR".into()));
+        late.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        assert_eq!(
+            chart.price_targets(),
+            None,
+            "a reply to the previous choice"
+        );
+        let (asked, reply) = feed.0.lock().unwrap().pop().unwrap();
+        assert_eq!(asked, "A in EUR");
+        reply.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        assert_eq!(chart.price_targets(), Some(&targets()), "answered in EUR");
+        chart.set_conversion(None);
+        assert_eq!(
+            chart.price_targets(),
+            None,
+            "EUR targets in the own currency"
+        );
+        chart.pump_targets(&ctx);
+        assert_eq!(feed.0.lock().unwrap().pop().unwrap().0, "A");
     }
 }
