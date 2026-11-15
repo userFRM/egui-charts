@@ -3373,6 +3373,10 @@ mod tests {
         click(&ctx, &mut dialog, "Live");
         click(&ctx, &mut dialog, "Test");
         wait(&ctx, &mut dialog, "No route for this message:");
+        // Each line that arrives moves the controls below the log down, so the clicks wait for
+        // the second message: one that arrived between finding a control and clicking it would
+        // put the click on the control above.
+        let line = wait(&ctx, &mut dialog, r#"{"type":"trade""#);
         // The field that tells the kinds of message apart, clicked in the first message.
         click(&ctx, &mut dialog, "route by");
         node(&ctx, &mut dialog, "Message", "type:");
@@ -3382,7 +3386,6 @@ mod tests {
         click(&ctx, &mut dialog, r#"Add route for "trade""#);
         choose(&ctx, &mut dialog, "trade", "Trades");
         // The records of the trades message are the elements of its `data`.
-        let line = wait(&ctx, &mut dialog, r#"{"type":"trade""#);
         click(&ctx, &mut dialog, &line);
         click(&ctx, &mut dialog, "records");
         node(&ctx, &mut dialog, "Message", "data");
