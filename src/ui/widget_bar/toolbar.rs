@@ -144,6 +144,7 @@ impl Default for WidgetBarConfig {
 /// A host-supplied widget entry. Register a content callback with [`WidgetBar::register_panel`],
 /// or render its panel yourself after receiving its id.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct WidgetBarWidget {
     /// Stable host id, unique within the bar.
     pub id: u64,
@@ -153,6 +154,18 @@ pub struct WidgetBarWidget {
     pub tooltip: String,
     /// Host entries precede the built-in entries in their section.
     pub section: WidgetBarSection,
+}
+
+impl WidgetBarWidget {
+    /// The entry `id`, drawn with `icon` and named `tooltip`, in `section`.
+    pub fn new(id: u64, icon: Icon, tooltip: impl Into<String>, section: WidgetBarSection) -> Self {
+        Self {
+            id,
+            icon,
+            tooltip: tooltip.into(),
+            section,
+        }
+    }
 }
 
 /// Action returned by the right icon bar
@@ -256,10 +269,9 @@ impl WidgetBar {
     /// use egui_charts::ui::widget_bar::{WidgetBar, WidgetBarSection, WidgetBarWidget};
     /// let mut bar = WidgetBar::new();
     /// let mut notes = String::new();
-    /// bar.register_panel(WidgetBarWidget {
-    ///     id: 42, icon: icons::WATCHLIST, tooltip: "Session notes".into(),
-    ///     section: WidgetBarSection::Top,
-    /// }, move |ui| { ui.text_edit_multiline(&mut notes); });
+    /// let widget =
+    ///     WidgetBarWidget::new(42, icons::WATCHLIST, "Session notes", WidgetBarSection::Top);
+    /// bar.register_panel(widget, move |ui| { ui.text_edit_multiline(&mut notes); });
     /// // In each frame: bar.show(rail_ui); bar.show_panel(root_ui); then show the chart.
     /// ```
     pub fn register_panel(

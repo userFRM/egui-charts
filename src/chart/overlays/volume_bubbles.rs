@@ -90,6 +90,7 @@ impl Default for VolumeBubblesConfig {
 /// Which trades share a bubble. Each group is one bubble, whatever the chart's bar interval,
 /// except for [`Automatic`](Self::Automatic).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BubbleGrouping {
     /// One bubble per bar and price level, the level being the instrument's tick size, or every
     /// traded price when the feed reports none. Crowded views merge nearby bars and levels into
@@ -131,6 +132,7 @@ pub enum BubbleScalingMode {
 
 /// What the colour of a bubble shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BubbleColor {
     /// The aggressor side with more volume, or the neutral colour on a tie and when no trade
     /// has a side.

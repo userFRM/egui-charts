@@ -174,9 +174,11 @@ impl Terminal {
     pub(super) fn studies_settings(&mut self, settings: &mut UserSettings, direction: Direction) {
         let indicators = &mut self.studies.indicators;
         match direction {
-            Direction::Load => indicators.set_preferences(IndicatorPreferences {
-                favorites: settings.indicator_favorites.iter().cloned().collect(),
-            }),
+            Direction::Load => {
+                let mut preferences = IndicatorPreferences::default();
+                preferences.favorites = settings.indicator_favorites.iter().cloned().collect();
+                indicators.set_preferences(preferences);
+            }
             Direction::Save => {
                 settings.indicator_favorites =
                     indicators.preferences().favorites.into_iter().collect();
