@@ -12,7 +12,9 @@ use std::ops::{Range, RangeInclusive};
 
 #[derive(Clone, Default)]
 pub(super) struct TradeProfiles {
-    context: Option<(String, BarClock)>,
+    /// The symbol and calendar the edits were made under, with the choice that divides its
+    /// sessions further: the extended hours and the segment choices share a calendar.
+    context: Option<(String, BarClock, ProfileSession)>,
     spans: Vec<RangeInclusive<DateTime<Utc>>>,
     splits: Vec<DateTime<Utc>>,
 }
@@ -97,7 +99,8 @@ impl Chart {
     }
 
     /// The calendar that divides the chart into profile sessions and the choice that divides
-    /// those further, [`ProfileSession::Chart`] where the settings' choice does not apply.
+    /// those further: the pre-market, post-market or segment choice, otherwise
+    /// [`ProfileSession::Chart`].
     fn profile_division(&self) -> (BarClock, &ProfileSession) {
         let mut clock = self.bar_clock();
         let instrument = self.instrument();
@@ -114,17 +117,21 @@ impl Chart {
             .and_then(|i| i.time_zone.clone())
             .unwrap_or_else(TimezoneId::utc);
         let hours = instrument.and_then(|i| i.session.as_ref());
-        let by_time_of_day = matches!(
+        let segments = matches!(
             selection,
-            ProfileSession::Custom(_)
-                | ProfileSession::PreMarket
-                | ProfileSession::PostMarket
-                | ProfileSession::Segments
+            ProfileSession::PreMarket | ProfileSession::PostMarket | ProfileSession::Segments
         );
+        let by_time_of_day = segments || matches!(selection, ProfileSession::Custom(_));
         if (intraday || !by_time_of_day)
             && let Some(divided) = selection.session_clock(&clock, &zone, hours)
         {
-            return (divided, selection);
+            // Regular, extended and custom hours divide their sessions no further.
+            let further = if segments {
+                selection
+            } else {
+                &ProfileSession::Chart
+            };
+            return (divided, further);
         }
         // Without instrument hours there is nothing to select among, so the chart's calendar stays.
         if let Some(zone) = instrument
@@ -137,18 +144,21 @@ impl Chart {
     }
 
     fn profile_edits_current(&self) -> bool {
+        let (clock, selection) = self.profile_division();
         self.trade_profiles
             .context
             .as_ref()
-            .is_some_and(|(symbol, clock)| {
-                symbol == self.symbol() && *clock == self.profile_clock()
+            .is_some_and(|(symbol, edited, division)| {
+                symbol == self.symbol() && *edited == clock && division == selection
             })
     }
 
     fn prepare_profile_edits(&mut self) {
         if !self.profile_edits_current() {
             self.reset_trade_profile_ranges();
-            self.trade_profiles.context = Some((self.symbol().to_owned(), self.profile_clock()));
+            let (clock, selection) = self.profile_division();
+            let context = (self.symbol().to_owned(), clock, selection.clone());
+            self.trade_profiles.context = Some(context);
         }
     }
 
@@ -451,7 +461,8 @@ mod tests {
 
     /// The pre-market, post-market and segment choices profile only the bars of their hours,
     /// each part ending at the open of the bar after it, and a merge of two segments leaves the
-    /// next one apart. Without extended hours they keep the chart's calendar.
+    /// next one apart and stays with its choice. Without extended hours they keep the chart's
+    /// calendar.
     #[test]
     fn segment_sessions_profile_each_part_of_the_day_apart() {
         use Weekday::*;
@@ -498,6 +509,12 @@ mod tests {
             ranges(&merged),
             [segments[0], segments[1], "11 08:00-11 20:00", segments[4]]
         );
+        // On the same calendar, the post-market choice starts from its own profiles.
+        merged.set_trade_profile_settings(TradeProfileSettings {
+            session: ProfileSession::PostMarket,
+            ..Default::default()
+        });
+        assert_eq!(ranges(&merged), [segments[1], segments[4]]);
         let regular = Instrument::new("X")
             .with_time_zone(new_york)
             .with_session(Session::new([SessionWindow::new(
