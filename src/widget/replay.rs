@@ -172,9 +172,12 @@ impl Chart {
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
     /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
     /// that studies request for other symbols and intervals. A bar closes at its next open on
-    /// [`Self::bar_clock`]; without a timeframe or on numeric and custom horizontal axes, keys
-    /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
-    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
+    /// [`Self::bar_clock`], and a daily, weekly or monthly bar of an instrument with a session
+    /// when its last trading window closes, extended hours included when
+    /// [`Self::set_extended_hours`] selects them; without a timeframe or on numeric and custom
+    /// horizontal axes, keys strictly before `time` are available. Supply finer bars with
+    /// `set_replay_source` to build the unfinished chart bar. No future OHLC is inferred from a
+    /// completed coarse bar.
     ///
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
@@ -493,11 +496,22 @@ impl Chart {
 
 pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Utc>) -> &'a [Bar] {
     let end = bars.partition_point(|bar| {
-        clock
-            .next_open(clock.bar_open(bar.time))
-            .map_or(bar.time < time, |end| end <= time)
+        bar_close(clock, clock.bar_open(bar.time)).map_or(bar.time < time, |end| end <= time)
     });
     &bars[..end]
+}
+
+/// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
+/// daily, weekly or monthly bar of a clock with an exchange session when its last trading window
+/// closes. A bar without a trading window closes at its next open. `ReplayController::cutoff`
+/// and `seek_cutoff` close bars here too.
+pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    (clock.timeframe())
+        .filter(|timeframe| {
+            clock.has_session() && timeframe.duration_ms() >= Timeframe::Day1.duration_ms()
+        })
+        .and_then(|timeframe| clock.sessions().bar_session_close(open, timeframe, true))
+        .or_else(|| clock.next_open(open))
 }
 
 /// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do
@@ -1053,12 +1067,16 @@ mod tests {
     /// 00:00 UTC of the next date, and the Chicago session of Tuesday 6 February opens at 23:00
     /// UTC on Monday. In the break before it, the hour from 16:00 joins no bar, and a 4-hour bar
     /// from 16:00 holds the session's first hours. Evicting the dates before the source's keeps
-    /// all of its bars. Daily bars carry volume 100 and source bars volume 1.
-    #[cfg(feature = "timezones")]
+    /// all of its bars. Bar replay completes the bar of 5 February when its last window closes,
+    /// at 01:00 UTC on 6 February in New York and at 22:00 UTC on 5 February in Chicago, and a
+    /// replay controller over the daily bars on the chart's clock seeks and cuts off there too.
+    /// Daily bars carry volume 100 and source bars volume 1.
+    #[cfg(all(feature = "timezones", feature = "ui"))]
     #[test]
     fn replay_folds_post_market_bars_into_their_trading_date() {
         use crate::model::{Instrument, Session, SessionWindow, TimezoneId};
         use crate::scales::TimezoneMode;
+        use crate::ui::replay::ReplayController;
         use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
         use chrono::{Duration, NaiveTime, TimeZone};
         let at = |day, hour| Utc.with_ymd_and_hms(2024, 2, day, hour, 0, 0).unwrap();
@@ -1077,8 +1095,18 @@ mod tests {
         let weekdays = [Mon, Tue, Wed, Thu, Fri];
         let new_york = TimezoneId::named("America/New_York").unwrap();
         let chicago = TimezoneId::named("America/Chicago").unwrap();
-        // Each source with the dates and volumes the chart shows once it is set.
-        for (zone, session, cursor, sources, evict) in [
+        let daily: Vec<_> = [1, 2, 5, 6, 7]
+            .into_iter()
+            .map(|day| Bar::new(at(day, 0), 100.0, 110.0, 100.0, 110.0, 100.0))
+            .collect();
+        let dated = |days: &[(u32, f64)]| -> Vec<_> {
+            (days.iter())
+                .map(|&(day, volume)| (format!("Feb {day:02}, 2024"), volume))
+                .collect()
+        };
+        // The close of 5 February and, at the cursor, each source with the dates and volumes
+        // the chart shows once it is set.
+        for (zone, session, close, cursor, sources, evict) in [
             (
                 new_york.clone(),
                 Session::new([SessionWindow::new(weekdays, hm(9, 30), hm(16, 0))])
@@ -1086,6 +1114,8 @@ mod tests {
                         SessionWindow::new(weekdays, hm(4, 0), hm(9, 30)),
                         SessionWindow::new(weekdays, hm(16, 0), hm(20, 0)),
                     ]),
+                // 20:00 on Monday 5 February in New York, when its post-market closes.
+                at(6, 1),
                 // 21:00 on Monday 5 February in New York, an hour after its post-market closed.
                 at(6, 2),
                 vec![
@@ -1107,6 +1137,8 @@ mod tests {
             (
                 chicago.clone(),
                 Session::new([SessionWindow::new(weekdays, hm(17, 0), hm(16, 0))]),
+                // 16:00 on Monday 5 February in Chicago, when its session closes.
+                at(5, 22),
                 // 09:00 on Tuesday 6 February in Chicago, 16 hours into its session.
                 at(6, 15),
                 vec![
@@ -1126,28 +1158,39 @@ mod tests {
                 3,
             ),
         ] {
-            let mut chart = Chart::new(BarData::from_bars(
-                [1, 2, 5, 6, 7]
-                    .into_iter()
-                    .map(|day| Bar::new(at(day, 0), 100.0, 110.0, 100.0, 110.0, 100.0))
-                    .collect(),
-            ));
+            let mut chart = Chart::new(BarData::from_bars(daily.clone()));
             chart.set_timeframe(Timeframe::Day1);
             chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(zone.clone());
             let instrument = Instrument::new("XYZ").with_time_zone(zone.clone());
             chart.set_instrument(Some(instrument.with_session(session)));
             chart.set_extended_hours(true);
-            chart.set_replay_time(Some(cursor));
             let shown = |chart: &Chart| -> Vec<_> {
                 (chart.bars(SeriesId::MAIN).iter())
                     .map(|bar| (chart.format_time(bar.time), bar.volume))
                     .collect()
             };
+            let clock = chart.bar_clock();
+            let mut controller = ReplayController::new(daily.clone(), Vec::new());
+            for (time, days) in [
+                (
+                    close - Duration::nanoseconds(1),
+                    vec![(1, 100.0), (2, 100.0)],
+                ),
+                (close, vec![(1, 100.0), (2, 100.0), (5, 100.0)]),
+            ] {
+                chart.set_replay_time(Some(time));
+                assert!(controller.seek_cutoff(time, &clock));
+                assert_eq!(
+                    (shown(&chart), controller.curr_ts().copied()),
+                    (dated(&days), days.last().map(|&(day, _)| at(day, 0))),
+                    "{zone:?}"
+                );
+            }
+            assert_eq!(controller.cutoff(&clock), Some(close), "{zone:?}");
+            chart.set_replay_time(Some(cursor));
             let mut expected = Vec::new();
             for (source, clock, days) in sources {
-                expected = (days.iter())
-                    .map(|&(day, volume)| (format!("Feb {day:02}, 2024"), volume))
-                    .collect();
+                expected = dated(&days);
                 let accepted = chart.set_replay_source(source, clock);
                 assert_eq!(
                     (accepted, shown(&chart)),

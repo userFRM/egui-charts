@@ -112,7 +112,7 @@ mod primitives;
 #[cfg(feature = "png-export")]
 mod raster;
 mod readout;
-mod replay;
+pub(crate) mod replay;
 mod selection;
 mod series;
 pub mod settings;
