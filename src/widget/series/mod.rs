@@ -66,6 +66,7 @@ pub enum MismatchDirection {
 /// [`Chart::bars_in_logical_range`], or the points of a custom series, from
 /// [`Chart::custom_points_in_logical_range`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BarsInRange {
     /// Indices into [`Chart::bars`] or [`Chart::custom_points`] of the items inside the range,
     /// empty when none is.
@@ -82,6 +83,7 @@ pub struct BarsInRange {
 
 /// A valued bar selected by [`Chart::series_last_value`], on its series' price scale.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SeriesLastValue {
     /// The selected bar's close in raw price units.
     pub value: f64,

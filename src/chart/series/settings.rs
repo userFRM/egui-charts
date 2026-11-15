@@ -8,6 +8,16 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Settings for chart series appearance
+///
+/// ```
+/// use egui_charts::chart::series::SeriesSettings;
+///
+/// # fn apply(chart: &mut egui_charts::Chart) {
+/// let mut settings = SeriesSettings::new();
+/// settings.bullish_color = egui::Color32::from_rgb(38, 166, 154);
+/// chart.apply_series_settings(&settings);
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SeriesSettings {

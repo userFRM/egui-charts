@@ -36,6 +36,7 @@ pub enum GannFanDirection {
 /// field that holds it says how its value is read.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(from = "SavedGannLevel")]
+#[non_exhaustive]
 pub struct GannLevel {
     /// Where the line lies, in the unit of the field that holds it.
     pub value: f32,
