@@ -381,6 +381,9 @@ jobs:
       - name: Run library tests (widget only)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features widget --lib
+      - name: Run library tests (drawings and studies without ui)
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo test --no-default-features --features drawings,studies --lib
       - name: Run library tests (PNG export only)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features png-export --lib
