@@ -9,6 +9,7 @@ use egui::Color32;
 // ============================================================================
 
 /// Dialog layout configuration (width, height, colors)
+#[derive(Debug)]
 pub struct SettingsDialogConfig {
     /// Width, in egui logical points.
     pub width: f32,

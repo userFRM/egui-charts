@@ -1032,7 +1032,7 @@ impl Chart {
         if let Some((kind, params)) = &mut action.chart_type {
             let current = (self.chart_type, self.chart_type_params.clone());
             self.set_chart_type(*kind);
-            self.set_chart_type_params(params.clone());
+            self.apply_chart_type_params(params.clone());
             (*kind, *params) = current;
         }
         if let Some(interval) = &mut action.interval {

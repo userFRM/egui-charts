@@ -5,7 +5,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Hamming Weighted Moving Average
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HammingMA {
     period: usize,
     values: IndicatorValues,

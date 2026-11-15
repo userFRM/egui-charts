@@ -15,7 +15,7 @@ use egui::Color32;
 /// Applied study settings edit each guide and the fill independently.
 ///
 /// Developed by Larry Connors
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ConnorsRSI {
     /// RSI period (typically 3)
     rsi_period: usize,
@@ -29,7 +29,7 @@ pub struct ConnorsRSI {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<f64>,
     streak: f64,

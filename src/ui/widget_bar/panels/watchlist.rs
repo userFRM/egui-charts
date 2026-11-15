@@ -196,6 +196,25 @@ pub struct WatchlistPanel {
     subscribed: Vec<String>,
 }
 
+impl std::fmt::Debug for WatchlistPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WatchlistPanel")
+            .field("lists", &self.lists)
+            .field("active", &self.active)
+            .field("quotes", &self.quotes)
+            .field("decimals", &self.decimals)
+            .field("marks", &self.marks)
+            .field("columns", &self.columns)
+            .field("sort", &self.sort)
+            .field("section", &self.section)
+            .field("flag_filter", &self.flag_filter)
+            .field("selected", &self.selected)
+            .field("generation", &self.generation)
+            .field("subscribed", &self.subscribed)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for WatchlistPanel {
     fn default() -> Self {
         Self::new(Vec::new())

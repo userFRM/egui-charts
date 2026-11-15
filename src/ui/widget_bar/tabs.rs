@@ -125,6 +125,7 @@ pub enum RightPanelAction {
 }
 
 /// Right Panel with Tab Navigation
+#[derive(Debug)]
 pub struct RightPanelTabs {
     /// Currently selected tab.
     pub active_tab: RightPanelTab,

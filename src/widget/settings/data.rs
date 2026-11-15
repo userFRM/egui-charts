@@ -254,7 +254,19 @@ impl Default for ButtonsSettings {
 }
 
 /// Canvas tab: Margins settings
+///
+/// Built from [`Default`] or [`ChartSettingsState::from_chart`], then filled field by field:
+///
+/// ```
+/// use egui_charts::widget::settings::{ChartSettingsState, MarginsSettings};
+///
+/// let mut margins = MarginsSettings::default();
+/// margins.right_pixels = Some(60.0);
+/// let mut settings = ChartSettingsState::default();
+/// settings.margins = margins;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct MarginsSettings {
     /// Empty space above prices, as a percentage of pane height.
     pub top_percent: f32,
@@ -265,6 +277,14 @@ pub struct MarginsSettings {
     /// [`ScalesAppearanceSettings::font_family`], as saved when this held whole bars, keep the
     /// chart's margin when this equals its whole bars.
     pub right_bars: f32,
+    /// Empty space after the latest bar in pixels, for a chart that keeps its margin in pixels.
+    /// It has priority over `right_bars`, as
+    /// [`TimeScaleOptions::right_offset_pixels`](crate::config::TimeScaleOptions::right_offset_pixels)
+    /// has over `right_offset`, so that every chart the settings reach keeps the same pixels at
+    /// its own bar spacing. `None` applies `right_bars`; the settings dialog clears it when the
+    /// margin is edited, and settings saved without it hold `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_pixels: Option<f32>,
 }
 
 impl Default for MarginsSettings {
@@ -275,6 +295,7 @@ impl Default for MarginsSettings {
             top_percent: (price.top * 100.0) as f32,
             bottom_percent: (price.bottom * 100.0) as f32,
             right_bars: crate::config::TimeScaleOptions::default().right_offset,
+            right_pixels: None,
         }
     }
 }

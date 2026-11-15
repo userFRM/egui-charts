@@ -84,7 +84,7 @@ impl SmoothingType {
 }
 
 /// Resumable [`SmoothingType`] average of a study's defined values.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Smoothed {
     seeded: Smoothing,
     /// The last `length` values and the volumes of their bars.
@@ -161,7 +161,7 @@ impl Smoothed {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Smoothing {
     count: usize,
     value: f64,

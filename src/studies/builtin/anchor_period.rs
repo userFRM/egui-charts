@@ -38,11 +38,29 @@ impl AnchorPeriod {
             Self::Century => (day.year().div_euclid(100), 0),
         }
     }
+
+    /// The number of the period holding trading day `day`, counted on one grid for all time so
+    /// that `n` consecutive periods can be grouped by `index / n`: days since the common era, ISO
+    /// weeks from Monday 1970-01-05, months, quarters, years, decades or centuries.
+    pub(super) fn index(self, day: NaiveDate) -> i64 {
+        let year = i64::from(day.year());
+        match self {
+            Self::Session => i64::from(day.num_days_from_ce()),
+            Self::Week => (day - NaiveDate::from_ymd_opt(1970, 1, 5).unwrap())
+                .num_days()
+                .div_euclid(7),
+            Self::Month => year * 12 + i64::from(day.month0()),
+            Self::Quarter => year * 4 + i64::from(day.month0() / 3),
+            Self::Year => year,
+            Self::Decade => year.div_euclid(10),
+            Self::Century => year.div_euclid(100),
+        }
+    }
 }
 
 /// The exchange time zone and trading session supplied by the chart instrument; UTC
 /// without session windows until one is supplied.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ExchangeDays(Option<(TimezoneId, Vec<SessionWindow>)>);
 
 impl ExchangeDays {

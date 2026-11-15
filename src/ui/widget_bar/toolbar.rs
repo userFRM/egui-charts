@@ -143,7 +143,7 @@ impl Default for WidgetBarConfig {
 
 /// A host-supplied widget entry. Register a content callback with [`WidgetBar::register_panel`],
 /// or render its panel yourself after receiving its id.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WidgetBarWidget {
     /// Stable host id, unique within the bar.
     pub id: u64,
@@ -185,6 +185,20 @@ pub struct WidgetBar {
     /// Controls the host hid.
     hidden: HashSet<Control>,
     panels: HashMap<u64, PanelContent>,
+}
+
+impl std::fmt::Debug for WidgetBar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WidgetBar")
+            .field("config", &self.config)
+            .field("icons", &self.icons)
+            .field("active_icon", &self.active_icon)
+            .field("widgets", &self.widgets)
+            .field("active_widget", &self.active_widget)
+            .field("notification_counts", &self.notification_counts)
+            .field("hidden", &self.hidden)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The host control that hides `icon`, if any.

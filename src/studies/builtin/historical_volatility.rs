@@ -8,7 +8,7 @@ use egui::Color32;
 /// Historical Volatility (HV)
 /// Measures the annualized standard deviation of log returns
 /// Used for options pricing and risk assessment
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HistoricalVolatility {
     /// Lookback period (typically 20 or 30)
     period: usize,

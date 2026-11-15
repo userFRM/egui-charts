@@ -9,6 +9,7 @@ use crate::ui::drawing_toolbar::components::draw_tool_button;
 use egui::Ui;
 
 /// Lock All Drawings button.
+#[derive(Debug)]
 pub struct LockButton;
 
 impl LockButton {

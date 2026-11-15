@@ -40,7 +40,7 @@ use egui::Color32;
 /// The difference of a fast and a slow volume-weighted moving average of the
 /// close, with an EMA signal line seeded with the first line value, as the
 /// signal of [`MACD`](super::MACD) is.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VolumeWeightedMACD {
     fast_period: usize,
     slow_period: usize,

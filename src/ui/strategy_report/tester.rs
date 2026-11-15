@@ -61,7 +61,7 @@ pub enum StrategyTesterAction {
     Report(StrategyReportAction),
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Tab {
     Inputs,
     Properties,
@@ -81,6 +81,7 @@ impl TabLabel for Tab {
     }
 }
 
+#[derive(Debug)]
 struct Trial {
     inputs: Vec<StudyInput>,
     label: String,
@@ -129,6 +130,36 @@ pub struct StrategyTester {
     trials: Vec<Trial>,
     sort: usize,
     ascending: bool,
+}
+
+impl std::fmt::Debug for StrategyTester {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StrategyTester")
+            .field("factory", &self.factory)
+            .field("name", &self.name)
+            .field("inputs", &self.inputs)
+            .field("settings", &self.settings)
+            .field("undo_settings", &self.undo_settings)
+            .field("redo_settings", &self.redo_settings)
+            .field("settings_edit", &self.settings_edit)
+            .field("start", &self.start)
+            .field("lower", &self.lower)
+            .field("lower_timeframe", &self.lower_timeframe)
+            .field("tab", &self.tab)
+            .field("report", &self.report)
+            .field("stale", &self.stale)
+            .field("error", &self.error)
+            .field("scope", &self.scope)
+            .field("revision", &self.revision)
+            .field("pending", &self.pending)
+            .field("completed", &self.completed)
+            .field("total", &self.total)
+            .field("ranges", &self.ranges)
+            .field("trials", &self.trials)
+            .field("sort", &self.sort)
+            .field("ascending", &self.ascending)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for StrategyTester {

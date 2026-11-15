@@ -8,7 +8,7 @@ use egui::Color32;
 /// price rises above it. `MD = MD[1] + (close - MD[1]) / (N x (close / MD[1])^4)` with N the
 /// period, starting at the first close. While MD is zero, or the divisor is zero, MD keeps its
 /// value.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct McGinleyDynamic {
     /// Period (typically 10 or 14)
     period: usize,

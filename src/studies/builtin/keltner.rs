@@ -52,7 +52,7 @@ pub enum KeltnerBand {
 }
 
 /// Keltner Channels indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KeltnerChannels {
     ema_period: usize,
     atr_period: usize,
@@ -69,7 +69,7 @@ pub struct KeltnerChannels {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     bar: usize,
     previous: Option<f64>,

@@ -38,6 +38,7 @@ pub enum SeriesContextMenuAction {
 // ============================================================================
 
 /// Series context menu state
+#[derive(Debug)]
 pub struct SeriesContextMenu {
     is_open: bool,
     position: Pos2,

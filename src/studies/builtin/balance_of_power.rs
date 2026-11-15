@@ -14,7 +14,7 @@ use egui::Color32;
 ///   than `n` has none on any bar. Length 1 (or 0) keeps the unsmoothed ratio on every bar.
 /// - A bar with a non-finite price has no value, and the average is taken as if it were not
 ///   in the series.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BalanceOfPower {
     /// Length of the simple average (0 or 1 = no smoothing)
     smooth_period: usize,

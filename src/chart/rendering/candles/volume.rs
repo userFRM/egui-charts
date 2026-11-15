@@ -5,24 +5,22 @@ use crate::model::Bar;
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Vec2};
 
-/// Render volume bars for chart types that show volume
+/// Render volume bars for chart types that show volume, each `width` wide, the width
+/// [`ChartMapping::volume_bar_width`](crate::chart::rendering::ChartMapping::volume_bar_width)
+/// gives the volume study and the hit test too.
 pub(crate) fn render_volume_bars(
     volume_ctx: &RenderContext,
     visible_data: &[Bar],
     start_idx: usize,
     max_volume: f64,
+    width: f32,
     colors: &StyleColors,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
 ) {
-    let min_pitch = (start_idx.saturating_sub(1)..start_idx + visible_data.len())
-        .map(|i| (idx_to_coord(i + 1, chart_rect_min_x) - idx_to_coord(i, chart_rect_min_x)).abs())
-        .filter(|pitch| pitch.is_finite() && *pitch > 0.0)
-        .fold(f32::INFINITY, f32::min);
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
-        let volume_params = BarRenderParams::new(x, pitch.min(min_pitch) * 0.8, 0.0);
+        let volume_params = BarRenderParams::new(x, width, 0.0);
         render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
     }
 }

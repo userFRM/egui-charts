@@ -13,6 +13,7 @@ use egui::{RichText, Ui};
 /// A loading spinner with optional message text.
 ///
 /// Renders a horizontal layout with spinner + label, vertically padded.
+#[derive(Debug)]
 pub struct LoadingIndicator<'a> {
     message: Option<&'a str>,
 }
