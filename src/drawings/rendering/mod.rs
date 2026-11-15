@@ -89,6 +89,16 @@ pub struct ChartView<'a> {
     pub finer: &'a [crate::data::StudyData<'a>],
 }
 
+impl std::fmt::Debug for ChartView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChartView")
+            .field("revision", &self.revision)
+            .field("time_axis", &self.time_axis)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Index of the first bar and the bars from anchor `a` to anchor `b`
 /// (inclusive, either order), clamped to the series; `None` when no bar lies
 /// between them.
@@ -1670,7 +1680,7 @@ mod tests {
         );
         assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
         // The popup is a card in the theme's colours whatever the pin's colour, tied to the pin's
-        // head by a thin line in the pin's colour.
+        // head by a thin neutral line.
         let theme = crate::theme::Theme::dark();
         let [card] = &selected.rects[..] else {
             panic!("one popup");
@@ -1685,7 +1695,7 @@ mod tests {
             selected.segments,
             [(
                 [pos(200.0, card.rect.max.y), pos(200.0, 278.0)],
-                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+                egui::Stroke::new(1.0, theme.chart.axis_text_secondary),
             )]
         );
 

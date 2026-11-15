@@ -137,21 +137,23 @@ impl Chart {
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
-    /// A view scrolled back stays on its bars when older or newer bars arrive, and stops with the
-    /// oldest bar in view once the replacement no longer holds them.
+    /// A view scrolled back keeps the bars it shows in place when other bars arrive or go; when the
+    /// bar at its right edge goes, the newest bar before it takes its place. The view stops with
+    /// the oldest bar in view once the replacement no longer holds its bars.
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning, and so is
-    /// the main series while it is removed from a chart that keeps the original pane.
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series, a study
+    /// or the main series while it is removed from a chart that keeps the original pane. Unknown
+    /// ids and study ids also log a warning.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
     /// observe every accepted call, including empty and unchanged replacements.
-    pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
+    pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) -> bool {
         if (series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay_retains(series)
         {
             self.replay_set_data(series, bars);
             self.data_set(series);
-            return;
+            return true;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let (mut bars, rejected) = clean(bars, &self.clock());
@@ -164,13 +166,14 @@ impl Chart {
             }
             item.feed.rejected_bars += rejected;
             self.data_set(series);
-            return;
+            return true;
         }
         if !self.main_bars_live() || !holds_bars(series, "set_data") {
-            return;
+            return false;
         }
         self.replace_main_data(bars);
         self.data_set(series);
+        true
     }
 
     pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
@@ -206,10 +209,12 @@ impl Chart {
     /// oldest bar in view once a bar limit has evicted them. A merged bar is
     /// reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    /// A series that holds bars returns `true`, also when the bar is dropped as invalid.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
     /// observe every accepted call, including unchanged updates.
-    pub fn update(&mut self, series: SeriesId, bar: Bar) {
+    pub fn update(&mut self, series: SeriesId, bar: Bar) -> bool {
         let operation = if self.host_events.data_operations && valid(&bar) {
             let clock = self.clock();
             let slot = clock.bar_open(bar.time);
@@ -255,7 +260,7 @@ impl Chart {
                 .first_changed
                 .is_some()
         } else {
-            return;
+            return false;
         };
         if changed {
             self.data_updated(series);
@@ -263,12 +268,16 @@ impl Chart {
         if let Some(operation) = operation {
             self.data_operation(series, operation);
         }
+        true
     }
 
     /// Removes the last `count` bars of `series`, or all of them for a larger count, and returns
     /// them oldest first, leaving the other bars in place. Drawings, studies and the view follow
     /// as for [`update`](Self::update), and [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated)
-    /// reports the removal. During a replay the bars are removed from the retained history.
+    /// reports the removal. Near the live edge the view keeps its right offset; a view scrolled
+    /// back keeps the bars it shows in place until the bar at its right edge is removed, when the
+    /// newest bar left takes its place. During a replay the bars are removed from the retained
+    /// history.
     ///
     /// Bar series accept this; unknown ids and study ids are ignored with a warning.
     pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
@@ -324,10 +333,11 @@ impl Chart {
     /// Each eviction restarts the studies on the retained window, including their warm-up, so a
     /// stream of new bars restarts them once per `limit / 8 + 1` bars. Drawing timestamps
     /// are kept, even for evicted bars; markers and raw trades have independent lifetimes.
-    /// Unknown ids and study ids are ignored with a warning.
-    pub fn set_bar_limit(&mut self, series: SeriesId, limit: Option<NonZeroUsize>) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_bar_limit(&mut self, series: SeriesId, limit: Option<NonZeroUsize>) -> bool {
         if !self.bar_series_present(series, "set_bar_limit") {
-            return;
+            return false;
         }
         match limit {
             Some(limit) => {
@@ -341,6 +351,7 @@ impl Chart {
         if !self.replay_windows(series) && self.enforce_bar_limit(series) > 0 {
             self.data_updated(series);
         }
+        true
     }
 
     /// The retained-bar limit of `series`, or `None` when unlimited or absent. The main bars keep
@@ -578,13 +589,17 @@ impl Chart {
 
     /// Replaces the markers drawn on the bars of `series` (trade signals, events).
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
-    pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) -> bool {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.markers = markers.into();
         } else if self.main_series_present && holds_bars(series, "set_markers") {
             self.marks = markers.into();
+        } else {
+            return false;
         }
+        true
     }
 
     /// The markers of `series` from [`set_markers`](Self::set_markers), without those of a
@@ -613,13 +628,17 @@ impl Chart {
     /// Sets whether the markers of `series` widen its autoscaled price range and where they
     /// are painted. The main series' options also apply to the bar marks of a mark source.
     ///
-    /// Bar series accept options; unknown ids and study ids are ignored with a warning.
-    pub fn set_marker_options(&mut self, series: SeriesId, options: MarkerOptions) {
+    /// Returns `false` when `series` holds no bars, such as an unknown or removed series or a
+    /// study, and logs a warning.
+    pub fn set_marker_options(&mut self, series: SeriesId, options: MarkerOptions) -> bool {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.marker_options = options;
         } else if self.main_series_present && holds_bars(series, "set_marker_options") {
             self.marker_options = options;
+        } else {
+            return false;
         }
+        true
     }
 
     /// Replaces the price lines drawn on the scale of `series`. Handles of its previous lines,
@@ -627,12 +646,16 @@ impl Chart {
     ///
     /// Every bar series accepts price lines. The price
     /// scale does not fit to them: a line whose price is off the scale or not finite is not drawn.
-    pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) {
+    /// Returns `false` when `series` holds no bars, as
+    /// [`add_price_line`](Self::add_price_line) returns `None`.
+    pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) -> bool {
         let first = self.next_price_line;
         self.next_price_line += lines.len() as u64;
-        if let Some(stored) = self.price_lines_mut(series, "set_price_lines") {
-            *stored = (first..).map(PriceLineId).zip(lines).collect();
-        }
+        let Some(stored) = self.price_lines_mut(series, "set_price_lines") else {
+            return false;
+        };
+        *stored = (first..).map(PriceLineId).zip(lines).collect();
+        true
     }
 
     /// Adds `line` to the price lines drawn on the scale of `series` and returns its handle,
@@ -920,16 +943,15 @@ impl Chart {
             && (appended || shift_for_whitespace);
         if follow {
             self.scroll_to_live_edge();
-        } else if !self.state.shows_elements()
-            && let Some(tail) = before.tail
-        {
-            self.keep_bars_in_view(clock, tail.time, before.right_edge);
+        } else if !self.state.shows_elements() && before.tail.is_some() {
+            self.keep_bars_in_view(clock, before.right_edge);
         }
     }
 
-    /// [`follow_live_edge`](Self::follow_live_edge) for the slots an added series gave a chart
-    /// without main bars after `tail`, the last slot before the refresh, when the view's
-    /// [right edge](Self::right_edge) was at `right_edge`.
+    /// [`follow_live_edge`](Self::follow_live_edge) for the slots the added series give a chart
+    /// without main bars, after a refresh that may have added, inserted or removed some: `tail`
+    /// is the last slot before the refresh and `right_edge` the view's
+    /// [right edge](Self::right_edge) then.
     pub(super) fn added_slots_arrived(
         &mut self,
         tail: DateTime<Utc>,
@@ -939,14 +961,21 @@ impl Chart {
         if !self.state.shows_fallback() {
             return;
         }
-        if self.state.shown().last().is_none_or(|bar| bar.time <= tail) {
-            self.stop_at_oldest_bar(right_edge);
-            return;
-        }
-        if self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
+        let shown = self.state.shown();
+        let appended = shown.last().is_some_and(|bar| bar.time > tail);
+        // As many slots after the kept one as before: nothing moved, as on most frames.
+        let in_place = right_edge.kept.is_some_and(|(time, after)| {
+            shown
+                .len()
+                .checked_sub(after + 1)
+                .is_some_and(|at| shown[at].time == time)
+        });
+        if appended && self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();
+        } else if in_place {
+            self.stop_at_oldest_bar(right_edge);
         } else {
-            self.keep_bars_in_view(&self.clock(), tail, right_edge);
+            self.keep_bars_in_view(&self.clock(), right_edge);
         }
     }
 
@@ -956,30 +985,50 @@ impl Chart {
         self.pending_start_idx = None;
     }
 
-    /// Moves the right offset against the slots after the one of `tail`. The right edge is the
-    /// last slot plus the right offset: without this a view scrolled back would move one bar
-    /// forward per appended bar. A bar stamped later in the slot of the last bar replaces it
-    /// and appends nothing. `right_edge` is the view's [right edge](Self::right_edge) before the
-    /// bars changed.
-    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>, right_edge: ViewEdge) {
+    /// Moves the right offset against the change in the number of slots after the slot the view
+    /// keeps in place (see [`right_edge`](Self::right_edge)), so the bars it shows stay where
+    /// they are when bars after that slot arrive or go. Once the kept slot goes, the newest slot
+    /// before it takes its place: near the live edge, where the last slot is kept, removing the
+    /// last bars keeps the right offset. A bar stamped later in a held slot replaces its bar and
+    /// moves nothing, and a series left without bars keeps the offset. `right_edge` is the
+    /// view's right edge before the bars changed.
+    fn keep_bars_in_view(&mut self, clock: &BarClock, right_edge: ViewEdge) {
         // Numeric refresh already preserves the view by key, including gaps and insertions.
-        if self.state.time_scale().numeric_positions().is_none() {
-            let tail = clock.bar_open(tail);
+        if self.state.time_scale().numeric_positions().is_none()
+            && let Some((time, after)) = right_edge.kept
+            && !self.state.shown().is_empty()
+        {
+            let kept = clock.bar_open(time);
             let shown = self.state.shown();
-            let appended =
-                shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= tail);
-            let time_scale = self.state.time_scale_mut();
-            time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
+            let now = shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= kept);
+            let moved = now as f64 - after as f64;
+            // From the offset before the change: the new bar count has clamped the uncorrected
+            // one, and at a fixed left edge that moves the view by up to the bars removed.
+            self.state
+                .time_scale_mut()
+                .set_right_offset(right_edge.offset - moved);
         }
         self.stop_at_oldest_bar(right_edge);
     }
 
-    /// Retain the view's right edge and oldest key across data updates.
+    /// Retain the view's right edge, oldest key and the slot it keeps in place across data
+    /// updates: the last slot near the live edge, otherwise the slot at the right edge, or the
+    /// first slot while the edge is before it.
     pub(super) fn right_edge(&self) -> ViewEdge {
         let scale = self.state.time_scale();
+        let shown = self.state.shown();
+        let right = scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0);
+        let last = shown.len().saturating_sub(1);
+        let at = if scale.is_near_live_edge() {
+            last
+        } else {
+            (right.floor().max(0.0) as usize).min(last)
+        };
         ViewEdge {
-            right: scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0),
-            first: self.state.shown().first().map(|bar| bar.time),
+            right,
+            offset: scale.right_offset_precise(),
+            first: shown.first().map(|bar| bar.time),
+            kept: shown.get(at).map(|bar| (bar.time, last - at)),
         }
     }
 
@@ -1012,10 +1061,14 @@ impl Chart {
     }
 }
 
-/// The viewport and oldest loaded key before bars change.
+/// The viewport, oldest loaded key and kept slot before bars change.
 pub(super) struct ViewEdge {
     right: f64,
+    offset: f64,
     first: Option<DateTime<Utc>>,
+    /// The time of the bar in the slot the view keeps in place and the number of bars after it,
+    /// on an ordinal scale; `None` without bars.
+    kept: Option<(DateTime<Utc>, usize)>,
 }
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].

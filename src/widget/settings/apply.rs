@@ -322,12 +322,7 @@ impl ChartSettingsState {
             scale.options().mode == PriceScaleMode::Percentage;
         settings.scales_and_lines.invert_scale = scale.options().invert_scale;
 
-        settings.timezone = match &chart.chart_options().time_scale.timezone {
-            TimezoneMode::Utc => "UTC".into(),
-            TimezoneMode::Local => "Local".into(),
-            TimezoneMode::Timezone(zone) => zone.to_string(),
-            TimezoneMode::Exchange(zone) => format!("Exchange:{zone}"),
-        };
+        settings.set_timezone_mode(&chart.chart_options().time_scale.timezone);
         settings.grid_lines.mode = match (
             config.show_grid && config.show_horizontal_grid,
             config.show_grid && config.show_vertical_grid,
@@ -389,8 +384,20 @@ impl ChartSettingsState {
         settings
     }
 
-    pub(crate) fn validate(&self) -> Result<TimezoneMode, ChartSettingsError> {
-        let timezone = match self.timezone.as_str() {
+    /// Writes `mode` to [`timezone`](Self::timezone) as saved settings hold it: `UTC`, `Local`,
+    /// a zone name, or `Exchange:` and the fallback zone.
+    pub(crate) fn set_timezone_mode(&mut self, mode: &TimezoneMode) {
+        self.timezone = match mode {
+            TimezoneMode::Utc => "UTC".into(),
+            TimezoneMode::Local => "Local".into(),
+            TimezoneMode::Timezone(zone) => zone.to_string(),
+            TimezoneMode::Exchange(zone) => format!("Exchange:{zone}"),
+        };
+    }
+
+    /// The mode [`timezone`](Self::timezone) names.
+    pub(crate) fn timezone_mode(&self) -> Result<TimezoneMode, ChartSettingsError> {
+        Ok(match self.timezone.as_str() {
             "UTC" => TimezoneMode::Utc,
             "Local" => TimezoneMode::Local,
             name => {
@@ -400,7 +407,11 @@ impl ChartSettingsState {
                     TimezoneMode::Timezone(name.parse().map_err(ChartSettingsError::Timezone)?)
                 }
             }
-        };
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<TimezoneMode, ChartSettingsError> {
+        let timezone = self.timezone_mode()?;
         let top = self.margins.top_percent;
         let bottom = self.margins.bottom_percent;
         if !top.is_finite()

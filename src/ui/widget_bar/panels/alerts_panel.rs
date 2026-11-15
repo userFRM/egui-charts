@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
-use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertStatus};
+use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertSourceName, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::alert_dialog::rule_form;
@@ -163,7 +163,7 @@ pub struct AlertsPanel {
     restoring: Option<PresentationRestore>,
     staged_display: Vec<(u64, PresentationEdit, bool)>,
     next_reply: u64,
-    sources: Vec<(AlertSource, String)>,
+    sources: Vec<(AlertSource, AlertSourceName)>,
     symbol: String,
     draft: Alert,
     inputs: Option<(crate::model::AlertInputs, Option<crate::model::Timeframe>)>,
@@ -331,9 +331,9 @@ impl AlertsPanel {
         }
     }
 
-    /// Offer these study outputs and drawings, as stable identifiers and display names, to the
-    /// inline alert form.
-    pub fn set_sources(&mut self, sources: Vec<(AlertSource, String)>) {
+    /// Offer these study outputs and drawings, as stable identifiers and names, which are
+    /// translated when shown, to the inline alert form.
+    pub fn set_sources(&mut self, sources: Vec<(AlertSource, AlertSourceName)>) {
         self.sources = sources;
     }
 

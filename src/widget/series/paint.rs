@@ -650,6 +650,8 @@ impl Chart {
                 ));
             }
             if study_axis.show_study_values {
+                let last_in_view =
+                    crate::chart::rendering::axes::last_bar_in_view(&self.get_chart_mapping());
                 for study in &assigned {
                     let mapping = study
                         .scale_mapping()
@@ -661,6 +663,7 @@ impl Chart {
                         label_rect,
                         &mapping,
                         *study,
+                        last_in_view,
                         axis.right(),
                         &mut tags,
                         None,
@@ -689,6 +692,8 @@ impl Chart {
                     .edge_ticks_visible
                     .then_some(label_rect),
             ));
+            // A tag led by a long name can be wider than the scale's tick labels.
+            measured = measured.max(crate::chart::rendering::axes::axis_tags_width(&tags));
             ui.interact(
                 axis,
                 ui.scope_id().with(("series_axis", key)),

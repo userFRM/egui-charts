@@ -51,6 +51,7 @@ pub enum DrawingSyncAction {
 /// of each frame to ensure the manager stays in sync with toolbar selections,
 /// keyboard shortcuts, and other UI actions that modify drawing state.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct DrawingState {
     /// Currently selected drawing tool. `None` means selection/pointer mode.
     pub active_tool: Option<DrawingToolType>,
@@ -72,6 +73,7 @@ pub struct DrawingState {
 /// Controls default colors, snapping behavior, magnet mode thresholds, and
 /// selection handle appearance.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DrawingManagerOptions {
     /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes. `None`
     /// (the default) keeps each tool's colour; a default saved for a tool wins over both.
@@ -166,6 +168,8 @@ impl TextEditState {
             );
         }
         shown.text = Some(self.shown_text(ctx));
+        // A pin whose popup is switched off still shows the text being written.
+        shown.marker.show_text = true;
         shown
     }
 }
@@ -286,6 +290,15 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
+}
+
+impl std::fmt::Debug for DrawingManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrawingManager")
+            .field("active_tool", &self.active_tool)
+            .field("drawings", &self.drawings.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for DrawingManager {
@@ -515,8 +528,15 @@ impl DrawingManager {
         {
             drawing.modified_at.get_or_insert(now);
         }
-        self.selection
-            .prune(&self.drawings.iter().map(|d| d.id).collect());
+        // A step that hides a selected drawing deselects it, as hiding it by an edit does.
+        self.selection.prune(
+            &self
+                .drawings
+                .iter()
+                .filter(|d| d.visible)
+                .map(|d| d.id)
+                .collect(),
+        );
         true
     }
 

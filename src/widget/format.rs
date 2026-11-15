@@ -157,7 +157,14 @@ impl Chart {
         crate::scales::median_bar_duration(bars[at..end].iter().map(|bar| bar.time)).num_seconds()
     }
 
-    pub(crate) fn display_timezone(&self) -> crate::scales::TimezoneMode {
+    /// The zone the time axis and the crosshair show: the chosen
+    /// [`TimezoneMode`](crate::scales::TimezoneMode), with exchange time resolved to the zone of
+    /// the [instrument](Self::instrument), or to the fallback zone it carries when the instrument
+    /// names none. Local time stays [`TimezoneMode::Local`](crate::scales::TimezoneMode::Local),
+    /// the system's zone. Supplied bars of a day or longer can still date in UTC, so that they
+    /// keep their trading date. The bottom toolbar's clock follows the chart through
+    /// `TimeframeToolbarState::set_display_timezone`.
+    pub fn display_timezone(&self) -> crate::scales::TimezoneMode {
         match &self.chart_options.time_scale.timezone {
             crate::scales::TimezoneMode::Exchange(fallback) => {
                 crate::scales::TimezoneMode::Exchange(
@@ -173,11 +180,12 @@ impl Chart {
 
     /// The zone that dates the bars. Supplied bars of a day or longer carry their trading date at
     /// 00:00 UTC. A display zone behind UTC shows that stamp as the evening before, so there they
-    /// read in UTC unless they sit at its midnight; UTC gives a bar at that midnight, such as one
-    /// bar replay forms, the same date. Other zones keep the date of the stamp and of their own
-    /// midnight, so they read in the display zone, as intraday bars and the bars of the chart's
-    /// feed always do. `bar_seconds` gives [`time_label_seconds`](Self::time_label_seconds), read
-    /// only for supplied bars on a time interval.
+    /// read in UTC unless they sit at its midnight; UTC gives a bar at that midnight the same
+    /// date. Other zones keep the date of the stamp and of their own midnight, so they read in
+    /// the display zone, as intraday bars and the bars of the chart's feed always do. Bar replay
+    /// decides on the history it retains, since its window is cut on this zone's calendar.
+    /// `bar_seconds` gives [`time_label_seconds`](Self::time_label_seconds), read only for
+    /// supplied bars on a time interval.
     pub(crate) fn label_timezone(
         &self,
         bar_seconds: impl FnOnce() -> i64,
@@ -187,7 +195,9 @@ impl Chart {
             crate::scales::TimezoneMode::Local => crate::model::local_time(chrono::Local, bar.time),
             zone => crate::model::local_time(zone.to_tz().unwrap_or_default(), bar.time),
         };
-        let bars = &self.state.data().bars;
+        let bars = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&super::SeriesId::MAIN))
+            .unwrap_or(&self.state.data().bars);
         let edges = || bars.first().into_iter().chain(bars.last());
         let utc_dates = self.feed_link.is_none()
             && !self
@@ -980,36 +990,66 @@ mod tests {
         assert_eq!(chart.format_time(first), "Thu 04 Jan '24 22:00");
     }
 
-    /// Bar replay folds a host source on the display zone's bar clock, so the bar it forms sits
-    /// at that zone's midnight beside history stamped at 00:00 UTC; east of UTC both keep their
-    /// date.
+    /// Bar replay completes supplied daily bars, forms the bar of its cursor's date and lets
+    /// studies group weeks on the dates the labels give the bars: in the display zone east of
+    /// UTC, and in UTC behind it, where the history keeps its 00:00 UTC stamps.
     #[cfg(feature = "timezones")]
     #[test]
-    fn replayed_daily_bar_keeps_its_date_east_of_utc() {
+    fn replay_follows_the_dates_of_supplied_daily_bars_in_every_zone() {
         use crate::model::{Bar, BarClock, BarData, Timeframe};
         use crate::scales::TimezoneMode;
+        use crate::widget::SeriesId;
         use chrono::{Duration, TimeZone, Utc};
         let bar = |time| Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0);
-        let first = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        let mut chart = crate::widget::Chart::new(BarData::from_bars(
-            (0..40).map(|i| bar(first + Duration::days(i))).collect(),
-        ));
-        chart.set_timeframe(Timeframe::Day1);
-        chart.chart_options.time_scale.timezone =
-            TimezoneMode::Timezone("Asia/Tokyo".parse().unwrap());
-        chart.set_replay_time(Some(Utc.with_ymd_and_hms(2024, 2, 5, 12, 0, 0).unwrap()));
-        // The hours of 5 February in Tokyo, from its midnight at 15:00 UTC.
-        let midnight = Utc.with_ymd_and_hms(2024, 2, 4, 15, 0, 0).unwrap();
-        let hours = (0..24)
-            .map(|i| bar(midnight + Duration::hours(i)))
-            .collect();
-        assert!(chart.set_replay_source(hours, BarClock::new(Timeframe::Hour1)));
-        let bars = chart.bars(crate::widget::SeriesId::MAIN);
-        let labels: Vec<_> = bars[bars.len() - 2..]
-            .iter()
-            .map(|bar| chart.format_time(bar.time))
-            .collect();
-        assert_eq!(labels, ["Feb 04, 2024", "Feb 05, 2024"]);
+        let at = |month, day, hour| Utc.with_ymd_and_hms(2024, month, day, hour, 0, 0).unwrap();
+        // The zone, a cursor on 5 February and the zone's midnight starting that date.
+        for (zone, cursor, midnight) in [
+            ("Asia/Tokyo", at(2, 5, 12), at(2, 4, 15)),
+            ("America/New_York", at(2, 5, 17), at(2, 5, 5)),
+        ] {
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(
+                (0..40)
+                    .map(|i| bar(at(1, 1, 0) + Duration::days(i)))
+                    .collect(),
+            ));
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(zone.parse().unwrap());
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::<crate::studies::HigherIntervalCandles>::default());
+            // 1 January completes when its date ends, also after a cursor that showed no bar.
+            chart.set_replay_time(Some(at(1, 1, 12)));
+            chart.set_replay_time(Some(at(1, 2, 6)));
+            let early = chart.bars(SeriesId::MAIN).len();
+            chart.set_replay_time(Some(cursor));
+            let hours = (0..24)
+                .map(|i| bar(midnight + Duration::hours(i)))
+                .collect();
+            assert!(
+                chart.set_replay_source(hours, BarClock::new(Timeframe::Hour1)),
+                "{zone}"
+            );
+            let bars = chart.bars(SeriesId::MAIN);
+            let labels: Vec<_> = (bars[bars.len() - 2..].iter())
+                .map(|bar| chart.format_time(bar.time))
+                .collect();
+            assert_eq!(
+                (early, bars.len(), labels),
+                (
+                    1,
+                    36,
+                    vec!["Feb 04, 2024".to_owned(), "Feb 05, 2024".to_owned()]
+                ),
+                "{zone}"
+            );
+            #[cfg(feature = "studies")]
+            {
+                chart.refresh_studies(1.0);
+                let study = chart.indicators().next().unwrap().1;
+                // The Mondays from 1 January; the last is the bar replay forms.
+                let starts: Vec<_> = (study.candles().iter()).map(|c| c.bars.start).collect();
+                assert_eq!(starts, [0, 7, 14, 21, 28, 35], "{zone}");
+            }
+        }
     }
 
     #[cfg(feature = "timezones")]

@@ -48,17 +48,21 @@ fuzz_target!(|input: Input| {
         match op {
             Op::Append(prices) => {
                 let next = last.checked_add_signed(Duration::minutes(1));
-                chart.update(SeriesId::MAIN, prices.at(next.unwrap_or(last)))
+                chart.update(SeriesId::MAIN, prices.at(next.unwrap_or(last)));
             }
-            Op::Live(prices) => chart.update(SeriesId::MAIN, prices.at(last)),
-            Op::Any(bar) => chart.update(SeriesId::MAIN, bar.bar()),
+            Op::Live(prices) => {
+                chart.update(SeriesId::MAIN, prices.at(last));
+            }
+            Op::Any(bar) => {
+                chart.update(SeriesId::MAIN, bar.bar());
+            }
             Op::Prepend(older) => {
                 let mut bars: Vec<_> = older.iter().map(FuzzBar::bar).collect();
                 bars.extend_from_slice(chart.bars(SeriesId::MAIN));
                 chart.set_data(SeriesId::MAIN, bars);
             }
             Op::Replace(bars) => {
-                chart.set_data(SeriesId::MAIN, bars.iter().map(FuzzBar::bar).collect())
+                chart.set_data(SeriesId::MAIN, bars.iter().map(FuzzBar::bar).collect());
             }
         }
     }

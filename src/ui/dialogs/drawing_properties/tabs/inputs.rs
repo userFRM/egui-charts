@@ -580,6 +580,7 @@ impl InputsTab {
             | Tool::ElliottTripleCombo => {
                 FormGrid::new("elliott_inputs").show(ui, |ui| {
                     let label = ui.label(l10n::text(ui.ctx(), "Degree"));
+                    let ctx = ui.ctx().clone();
                     ui.label_inputs_by(label.id, |ui| {
                         ui.combo_select(
                             "elliott_degree",
@@ -588,7 +589,7 @@ impl InputsTab {
                             |degree| {
                                 format!(
                                     "{}: {}, {}",
-                                    degree.name(),
+                                    l10n::text(&ctx, degree.name()),
                                     degree.label('1'),
                                     degree.label('A')
                                 )

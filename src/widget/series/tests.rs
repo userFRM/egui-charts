@@ -212,6 +212,37 @@ fn window(start: i64, len: i64) -> Vec<Bar> {
     (start..start + len).map(|i| bar(i * 60, 10.0)).collect()
 }
 
+/// The bar setters report whether `series` holds bars, not whether the call changed them.
+#[test]
+fn bar_setters_report_whether_the_series_holds_bars() {
+    let mut chart = Chart::new(BarData::from_bars(vec![bar(0, 10.0), bar(60, 11.0)]));
+    let added = chart.add_series(SeriesOptions::default());
+    let removed = chart.add_series(SeriesOptions::default());
+    assert!(chart.remove_series(removed));
+    let study = chart.add_indicator(Box::new(SMA::new(2)));
+    for (series, holds_bars) in [
+        (SeriesId::MAIN, true),
+        (added, true),
+        (removed, false),
+        (study, false),
+    ] {
+        let results = [
+            chart.set_data(series, vec![bar(0, 10.0)]),
+            chart.update(series, bar(60, 11.0)),
+            chart.set_bar_limit(series, NonZeroUsize::new(10)),
+            chart.set_markers(series, Vec::new()),
+            chart.set_marker_options(series, MarkerOptions::default()),
+            chart.set_price_lines(series, Vec::new()),
+            chart.set_change_markers(series, None),
+        ];
+        assert_eq!(results, [holds_bars; 7], "{series:?}");
+    }
+    // A negative volume is invalid, so the bar is dropped.
+    let mut dropped = bar(120, 12.0);
+    dropped.volume = -1.0;
+    assert!(chart.update(SeriesId::MAIN, dropped));
+}
+
 /// Streaming keeps the configured live offset, or the same scrolled-back element.
 #[test]
 fn appended_bars_keep_the_view() {
@@ -486,6 +517,155 @@ fn removed_whitespace_tail_keeps_the_view() {
     );
 }
 
+/// A view scrolled back from the live edge keeps the bars it shows in place when bars after its
+/// right edge go or are inserted, as it does when bars are appended. 100 one-minute bars from
+/// 10:00 at a right offset of -30 put 11:09 (index 69) at the right edge. Removing the newest
+/// five bars by either data API, by a replay cutoff at 11:35 or from the added series of a chart
+/// without main bars leaves 95 slots, where 11:09 is at the edge at an offset of 69 - 94 = -25.
+/// Popping the last bar and adding it again, moving a replay cutoff from 11:40 back to 11:39 and
+/// forward again, and pausing and resuming a feed, which pops the last bar and adds it again from
+/// the latest page, end with the same 100 bars at -30. A bar inserted at 11:20:30 adds a slot
+/// after the edge: 11:09 stays at index 69 of 101, an offset of -31. Popping 31 bars removes
+/// 11:09 as well, and 11:08, the last bar left at index 68, takes its place at an offset of 0.
+/// At -1.5 the view is near the live edge and keeps its offset when the last bar goes. Emptying
+/// the series and filling it again keeps the offset of -30. At 20 px a bar with a fixed left
+/// edge, a view scrolled back as far as the edge allows has the first bar at its left edge, and
+/// popping five bars raises its offset by five, so the first bar stays there.
+#[test]
+fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
+    struct WindowFeed;
+    impl crate::data::Datafeed for WindowFeed {
+        fn history(
+            &self,
+            _: crate::data::HistoryRequest,
+            reply: crate::data::Reply<crate::data::HistoryPage>,
+        ) {
+            reply.send(Ok(crate::data::HistoryPage::new(window(0, 100), true)));
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut got = Vec::new();
+    for (operation, offset) in [
+        ("pop_bars", -30.0),
+        ("set_data", -30.0),
+        ("replay", -30.0),
+        ("pop and update", -30.0),
+        ("replay back and forth", -30.0),
+        ("insert", -30.0),
+        ("pop through the right edge", -30.0),
+        ("near the live edge", -1.5),
+        ("emptied and filled again", -30.0),
+    ] {
+        let mut chart = Chart::new(BarData::from_bars(window(0, 100)));
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.scroll_to_position(offset, false);
+        match operation {
+            "pop_bars" => {
+                chart.pop_bars(SeriesId::MAIN, 5);
+            }
+            "set_data" => {
+                chart.set_data(SeriesId::MAIN, window(0, 95));
+            }
+            "replay" => chart.set_replay_time(Some(bar(95 * 60, 10.0).time)),
+            "pop and update" => {
+                let popped = chart.pop_bars(SeriesId::MAIN, 1);
+                chart.update(SeriesId::MAIN, popped[0].clone());
+            }
+            "replay back and forth" => {
+                for minute in [100, 99, 100] {
+                    chart.set_replay_time(Some(bar(minute * 60, 10.0).time));
+                }
+            }
+            "insert" => {
+                chart.update(SeriesId::MAIN, bar(80 * 60 + 30, 10.0));
+            }
+            "pop through the right edge" => {
+                chart.pop_bars(SeriesId::MAIN, 31);
+            }
+            "near the live edge" => {
+                chart.pop_bars(SeriesId::MAIN, 1);
+            }
+            "emptied and filled again" => {
+                chart.set_data(SeriesId::MAIN, Vec::new());
+                chart.set_data(SeriesId::MAIN, window(0, 100));
+            }
+            _ => unreachable!(),
+        }
+        frame(&ctx, &mut chart, 1.0, Vec::new());
+        got.push((operation, chart.state.time_scale().right_offset()));
+    }
+
+    let mut chart = Chart::new(BarData::from_bars(Vec::new()));
+    let id = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(id, window(0, 100));
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    chart.scroll_to_position(-30.0, false);
+    chart.pop_bars(id, 5);
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    got.push((
+        "added series pop_bars",
+        chart.state.time_scale().right_offset(),
+    ));
+
+    let mut chart = crate::widget::ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(WindowFeed))
+        .with_symbol("A")
+        .build();
+    for time in [0.0, 0.1, 0.2] {
+        frame(&ctx, &mut chart, time, Vec::new());
+    }
+    assert_eq!(chart.bars(SeriesId::MAIN), window(0, 100), "loaded");
+    chart.scroll_to_position(-30.0, false);
+    chart.set_feed_paused(true);
+    chart.set_feed_paused(false);
+    for time in [1.0, 1.1, 1.2] {
+        frame(&ctx, &mut chart, time, Vec::new());
+    }
+    assert_eq!(chart.bars(SeriesId::MAIN), window(0, 100), "resumed");
+    got.push((
+        "feed pause and resume",
+        chart.state.time_scale().right_offset(),
+    ));
+
+    let options = crate::config::ChartOptions {
+        time_scale: crate::config::TimeScaleOptions {
+            bar_spacing: 20.0,
+            fix_left_edge: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut chart = Chart::new(BarData::from_bars(window(0, 100))).with_chart_options(options);
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    chart.scroll_to_position(-100.0, false);
+    let stopped = chart.state.time_scale().right_offset_precise();
+    chart.pop_bars(SeriesId::MAIN, 5);
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    got.push((
+        "pop_bars at a fixed left edge",
+        (chart.state.time_scale().right_offset_precise() - stopped) as f32,
+    ));
+
+    assert_eq!(
+        got,
+        [
+            ("pop_bars", -25.0),
+            ("set_data", -25.0),
+            ("replay", -25.0),
+            ("pop and update", -30.0),
+            ("replay back and forth", -30.0),
+            ("insert", -31.0),
+            ("pop through the right edge", 0.0),
+            ("near the live edge", -1.5),
+            ("emptied and filled again", -30.0),
+            ("added series pop_bars", -25.0),
+            ("feed pause and resume", -30.0),
+            ("pop_bars at a fixed left edge", 5.0),
+        ]
+    );
+}
+
 /// A scrolled-back view keeps its time range while it shows held bars, and otherwise stops with
 /// the oldest held bar in view instead of moving into the whitespace before it. At 6 px a bar
 /// the plot of an 800x600 frame holds more than 100 bars, so a view stopped there shows them all.
@@ -711,9 +891,15 @@ fn updates_reach_bars_studies_and_revision() {
         let revision = chart.state.revision();
         for action in actions {
             match action {
-                Update(bar) => chart.update(SeriesId::MAIN, bar),
-                SetData(bars) => chart.set_data(SeriesId::MAIN, bars),
-                Limit(count) => chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(count)),
+                Update(bar) => {
+                    chart.update(SeriesId::MAIN, bar);
+                }
+                SetData(bars) => {
+                    chart.set_data(SeriesId::MAIN, bars);
+                }
+                Limit(count) => {
+                    chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(count));
+                }
                 RemoveOldest(count) => {
                     assert_eq!(
                         chart.remove_oldest_bars(SeriesId::MAIN, count),

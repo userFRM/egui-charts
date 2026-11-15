@@ -62,6 +62,7 @@ impl Default for PriceMarkGeneratorConfig {
 
 /// Smart price axis mark generator
 /// Implements "nice numbers" algorithm for price ticks
+#[derive(Debug)]
 pub struct PriceMarkGenerator {
     config: PriceMarkGeneratorConfig,
 }

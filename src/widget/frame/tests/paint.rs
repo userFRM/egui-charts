@@ -1225,6 +1225,13 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
 }
 
 /// Saved settings drive feed footprints, selected statistics and session profiles together.
+///
+/// Rows from the average true range take the bars before the newest, which may still be
+/// forming. Their true ranges are 103 - 98 = 5, then max(102 - 97, |102 - 100|, |97 - 100|) = 5,
+/// then max(124 - 114, |124 - 99|, |114 - 99|) = 25 from the close of 99 below the gap. Length
+/// 14 averages the three bars there are: 35 / 3 = 11.67, a fifth is 2.33, so rows of 2 ticks.
+/// Length 2 averages the last two, the older by its own range of 5: (5 + 25) / 2 = 15, a fifth
+/// is 3, so rows of 3.
 #[cfg(feature = "ui")]
 #[test]
 fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
@@ -1235,7 +1242,14 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     };
     use crate::widget::{Chart, ChartBuilder, ChartSnapshot};
     use chrono::{TimeDelta, Utc};
-    struct Executions(bool);
+    /// One traded bar, a session profile, or the bars of the average true range above.
+    #[derive(PartialEq)]
+    enum Flow {
+        Bar,
+        Profile,
+        Atr,
+    }
+    struct Executions(Flow);
     impl Datafeed for Executions {
         fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
             reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
@@ -1244,20 +1258,32 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             let time = "2026-01-05T10:00:00Z"
                 .parse::<chrono::DateTime<Utc>>()
                 .unwrap();
-            let high = if self.0 { 102.0 } else { 101.0 };
-            reply.send(Ok(HistoryPage::new(
-                vec![Bar::new(time, 100.0, high, 100.0, 101.0, 10.0)],
-                true,
-            )));
+            let bars: Vec<_> = match self.0 {
+                Flow::Atr => [
+                    (100.0, 103.0, 98.0, 100.0),
+                    (100.0, 102.0, 97.0, 99.0),
+                    (115.0, 124.0, 114.0, 115.0),
+                    (104.0, 105.0, 100.0, 101.0),
+                ]
+                .into_iter()
+                .zip((-3..=0).map(|minutes| time + TimeDelta::minutes(minutes)))
+                .map(|((open, high, low, close), time)| {
+                    Bar::new(time, open, high, low, close, 10.0)
+                })
+                .collect(),
+                Flow::Profile => vec![Bar::new(time, 100.0, 102.0, 100.0, 101.0, 10.0)],
+                Flow::Bar => vec![Bar::new(time, 100.0, 101.0, 100.0, 101.0, 10.0)],
+            };
+            reply.send(Ok(HistoryPage::new(bars, true)));
         }
         fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
             let time = "2026-01-05T10:00:00Z"
                 .parse::<chrono::DateTime<Utc>>()
                 .unwrap();
-            let levels = if self.0 {
-                vec![(100.0, 1.0), (101.0, 6.0), (102.0, 3.0)]
-            } else {
-                vec![(100.0, 2.0), (101.0, 3.0)]
+            let levels = match self.0 {
+                Flow::Atr => (0..6).map(|i| (100.0 + i as f64, 2f64.powi(i))).collect(),
+                Flow::Profile => vec![(100.0, 1.0), (101.0, 6.0), (102.0, 3.0)],
+                Flow::Bar => vec![(100.0, 2.0), (101.0, 3.0)],
             };
             reply.send(Ok(TradePage::new(
                 levels
@@ -1282,7 +1308,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     }
     let ctx = egui::Context::default();
     let mut chart = ChartBuilder::new()
-        .with_feed(std::sync::Arc::new(Executions(false)))
+        .with_feed(std::sync::Arc::new(Executions(Flow::Bar)))
         .with_symbol("FLOW")
         .with_timeframe(Timeframe::Min1)
         .with_chart_type(ChartType::VolumeFootprint)
@@ -1372,9 +1398,62 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         lows[0],
         lows[1]
     );
+    let mut atr = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions(Flow::Atr)))
+        .with_symbol("ATR")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::VolumeFootprint)
+        .build();
+    atr.set_server_time(Some(
+        "2026-01-05T10:02:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap(),
+    ));
+    for _ in 0..5 {
+        draw(&mut atr);
+    }
+    // Rows of 100..105 traded 1, 2, 4, 8, 16 and 32, so every row has a number at its centre.
+    for (length, ticks) in [(14, 2.0), (2, 3.0)] {
+        atr.set_chart_type_params(ChartTypeParams {
+            footprint_modes: vec![FootprintMode::Volume],
+            footprint_row_atr: true,
+            footprint_row_atr_length: length,
+            footprint_poc: false,
+            ..Default::default()
+        });
+        // A zoom in time, and a zoom and a pan in price.
+        for (spacing, low, high) in [(160.0, 90.0, 120.0), (120.0, 80.0, 140.0)] {
+            atr.price_scale_mut().set_range(low, high);
+            draw_at(&mut atr, spacing);
+            let shapes = draw_at(&mut atr, spacing);
+            let map = atr.get_chart_mapping();
+            let mut centres: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(text)
+                        if (text.pos.x - map.idx_to_x(3)).abs() < 70.0
+                            && text.pos.y > map.rect.top() + 40.0
+                            && text.pos.y < map.rect.bottom() - 20.0
+                            && text.galley.text().parse::<u32>().is_ok() =>
+                    {
+                        Some(map.y_to_price(text.pos.y + text.galley.size().y / 2.0))
+                    }
+                    _ => None,
+                })
+                .collect();
+            centres.sort_by(f64::total_cmp);
+            let heights: Vec<_> = centres.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            assert!(
+                heights.len() >= 2 && heights.iter().all(|row| (row - ticks).abs() < 0.25),
+                "length {length}, spacing {spacing}, prices {low} to {high}: rows {heights:?}"
+            );
+        }
+    }
     let params = ChartTypeParams {
         footprint_modes: vec![FootprintMode::Delta],
         footprint_row_ticks: 1,
+        footprint_row_atr: true,
+        footprint_row_atr_length: 30,
         footprint_statistics: true,
         footprint_statistics_rows: vec![FootprintStatistic::Volume, FootprintStatistic::Delta],
         profile: TradeProfileSettings {
@@ -1404,10 +1483,11 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     assert_eq!(restored.chart_type_params(), &params);
     assert!(chart.undo());
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.7));
+    assert!(!chart.chart_type_params().footprint_row_atr);
     assert!(chart.redo());
     assert_eq!(chart.chart_type_params(), &params);
     let mut profile = ChartBuilder::new()
-        .with_feed(std::sync::Arc::new(Executions(true)))
+        .with_feed(std::sync::Arc::new(Executions(Flow::Profile)))
         .with_symbol("PROFILE")
         .with_timeframe(Timeframe::Min1)
         .with_chart_type(ChartType::SessionVolumeProfile)

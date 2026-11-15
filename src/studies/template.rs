@@ -7,6 +7,7 @@ use crate::studies::{
 /// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
 /// own study factory when they supply custom studies.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct StudyTemplate {
     /// Study factory name.
     pub name: String,
@@ -817,7 +818,8 @@ mod tests {
                 vec![("start_time", Number(-8e15))],
                 vec![("start_time", Text(String::new()))],
             ),
-            // Saved before the levels could extend past their profiles.
+            // Saved before the levels could extend past their profiles, and before sessions and
+            // rows in ticks could be chosen.
             (
                 "Vol Profile Session",
                 vec![("row_count", Length(30))],
@@ -826,6 +828,8 @@ mod tests {
                     ("extend_poc", Toggle(false)),
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
+                    ("sessions", Choice(0)),
+                    ("row_ticks", Length(0)),
                 ],
             ),
             // Saved before the twelve lengths were inputs.
@@ -845,6 +849,8 @@ mod tests {
                     ("extend_poc", Toggle(false)),
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
+                    ("period_count", Length(1)),
+                    ("row_ticks", Length(0)),
                 ],
             )
         });

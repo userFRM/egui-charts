@@ -34,6 +34,14 @@ pub struct StrategyFactory {
     constructors: HashMap<String, StrategyConstructor>,
 }
 
+impl std::fmt::Debug for StrategyFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StrategyFactory")
+            .field("constructors", &self.constructors.keys())
+            .finish_non_exhaustive()
+    }
+}
+
 impl StrategyFactory {
     /// Creates a catalogue with every built-in enabled by the current features.
     pub fn new() -> Self {

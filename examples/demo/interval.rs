@@ -17,14 +17,24 @@ impl super::DemoApp {
             .show(ctx, &mut open, |ui| {
                 ui.label("Minutes, or an interval such as 30s, 2h, 1D, 10T, 100V, 10R or 100delta");
                 let input_id = egui::Id::unique("interval_entry_input");
-                if std::mem::take(&mut self.interval_focus) {
+                // The dialog is laid out unseen in its first frame, where a field cannot take
+                // focus: ask until the field has it, with the caret after the typed text.
+                if self.interval_focus {
                     ui.memory_mut(|memory| memory.request_focus(input_id));
+                    let mut state =
+                        egui::TextEdit::load_state(ui.ctx(), input_id).unwrap_or_default();
+                    let end = egui::text::CCursor::end_of_str(&text);
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                    state.store(ui.ctx(), input_id);
                 }
-                ui.add(
+                let field = ui.add(
                     egui::TextEdit::singleline(&mut text)
                         .id(input_id)
                         .desired_width(ui.available_width()),
                 );
+                self.interval_focus &= !field.has_focus();
                 apply = DialogFooter::new("Apply").show(ui).0
                     || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             });

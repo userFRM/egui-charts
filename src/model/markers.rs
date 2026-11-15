@@ -36,6 +36,7 @@ pub enum MarkerShape {
 
 /// Marker position relative to the data point
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum MarkerPos {
     /// Above the high price
     #[default]
@@ -100,6 +101,7 @@ impl Default for MarkerOptions {
 
 /// Marker for chart annotations
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Marker {
     /// Time of the marker (matches a data point)
     pub time: DateTime<Utc>,
@@ -250,6 +252,7 @@ impl Default for ChangeMarkers {
 
 /// Line style of drawings, series, grid and price lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineStyle {
     /// A continuous line.
     #[default]

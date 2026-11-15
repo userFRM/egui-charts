@@ -8,11 +8,14 @@ use egui_charts::model::{Timeframe, TimezoneId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::Secrets;
+
 /// Version written into every profile. A file with a higher version is refused on import.
 pub(crate) const VERSION: u32 = 1;
 
 /// The names every template knows. A key cannot take one of them.
-pub(crate) const PLACEHOLDERS: [&str; 5] = ["symbol", "interval", "from", "to", "limit"];
+pub(crate) const PLACEHOLDERS: [&str; 6] =
+    ["symbol", "symbol_lower", "interval", "from", "to", "limit"];
 
 /// One step of a path into a JSON value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,8 +96,8 @@ pub(crate) struct Interval {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct History {
-    /// URL template. `{symbol}`, `{interval}`, `{from}`, `{to}`, `{limit}` and the key names are
-    /// replaced, each value percent-encoded.
+    /// URL template. `{symbol}`, `{symbol_lower}`, `{interval}`, `{from}`, `{to}`, `{limit}` and
+    /// the key names are replaced, each value percent-encoded.
     pub(crate) url: String,
     /// Request headers as a name and a value template. Values are sent as typed.
     pub(crate) headers: Vec<(String, String)>,
@@ -151,7 +154,8 @@ pub(crate) enum RangeFormat {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Rows {
-    /// From the root of the response to the rows. Empty when the root holds them.
+    /// From the root of the response to the rows. Empty when the root holds them. A key may be
+    /// `{symbol}` or `{symbol_lower}`; see [`Rows::for_symbol`].
     pub(crate) path: FieldPath,
     /// How the rows are laid out there.
     pub(crate) layout: Layout,
@@ -266,15 +270,15 @@ pub(crate) enum ClockUnit {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Stream {
-    /// `ws://` or `wss://` URL template. `{symbol}`, `{interval}` and the key names are replaced,
-    /// each value percent-encoded.
+    /// `ws://` or `wss://` URL template. `{symbol}`, `{symbol_lower}`, `{interval}` and the key
+    /// names are replaced, each value percent-encoded.
     pub(crate) url: String,
     /// Subprotocols offered in the handshake, as templates. A browser cannot send headers when
     /// it opens a socket, so a key travels in the URL, in a subprotocol or in a connect message.
     pub(crate) protocols: Vec<String>,
     /// Messages sent in this order every time the socket opens: the login first, then the
-    /// subscribe message. Templates with `{symbol}`, `{interval}` and the key names, sent as
-    /// typed.
+    /// subscribe message. Templates with `{symbol}`, `{symbol_lower}`, `{interval}` and the key
+    /// names, sent as typed.
     pub(crate) connect: Vec<String>,
     /// Keep-alive message, sent as typed. Empty sends none.
     pub(crate) keep_alive: String,
@@ -443,6 +447,54 @@ impl Profile {
     pub(crate) fn has_trades(&self) -> bool {
         let mut routes = self.stream.iter().flat_map(|stream| &stream.routes);
         routes.any(|route| matches!(route.kind, RouteKind::Trades(_)))
+    }
+}
+
+/// The values of a stream's templates for `symbol` at `interval`: `{symbol}` as listed,
+/// `{symbol_lower}` in lower case, `{interval}` as the interval table has it, and the key values
+/// of `secrets`. The feed's subscriptions and the dialog's Test fill with them, so a Test opens
+/// the socket the chart opens.
+pub(crate) fn stream_values(
+    symbol: &str,
+    interval: &str,
+    secrets: &Secrets,
+) -> Vec<(String, String)> {
+    let mut values = vec![
+        ("symbol".to_owned(), symbol.to_owned()),
+        ("symbol_lower".to_owned(), symbol.to_lowercase()),
+        ("interval".to_owned(), interval.to_owned()),
+    ];
+    values.extend(secrets.iter().cloned());
+    values
+}
+
+impl Rows {
+    /// Where the rows of a response for `symbol` are: `{symbol}` and `{symbol_lower}` in a key
+    /// of the path, or of the header's path, become the symbol as listed and in lower case, for
+    /// a service that files the rows under the symbol, such as `["result", "{symbol}"]`. Other
+    /// keys stay as they are.
+    pub(crate) fn for_symbol(&self, symbol: &str) -> Rows {
+        let lower = symbol.to_lowercase();
+        let values = [("symbol", symbol), ("symbol_lower", lower.as_str())];
+        let filled = |path: &FieldPath| -> FieldPath {
+            let step = |segment: &Segment| match segment {
+                Segment::Key(key) => Segment::Key(fill(key, &values)),
+                index => index.clone(),
+            };
+            path.iter().map(step).collect()
+        };
+        let layout = match &self.layout {
+            Layout::Arrays {
+                header: Some(header),
+            } => Layout::Arrays {
+                header: Some(filled(header)),
+            },
+            layout => layout.clone(),
+        };
+        Rows {
+            path: filled(&self.path),
+            layout,
+        }
     }
 }
 
