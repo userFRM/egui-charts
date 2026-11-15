@@ -726,7 +726,7 @@ mod tests {
                 output.drop_without_applying_deltas();
                 click(&mut app, trades_tab);
                 // Selection must restore the report scope after unrelated navigation.
-                app.switch_symbol("BTCUSD");
+                app.switch_symbol("TOKENA");
                 app.switch_timeframe(Timeframe::Hour1);
                 app.live.set_paused(true);
                 for _ in 0..3 {
