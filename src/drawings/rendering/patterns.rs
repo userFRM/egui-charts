@@ -529,7 +529,9 @@ mod tests {
             }
         };
         for (tool, prices, expected) in cases {
-            let drawing = pattern(tool, prices);
+            let mut drawing = pattern(tool, prices);
+            // The boxes in the stored colour, not its shade on the default dark theme.
+            drawing.theme_shade = false;
             let shapes = paint(&drawing);
             let mut painted: Vec<_> = texts(&shapes).into_iter().map(|(t, _)| t).collect();
             painted.sort();

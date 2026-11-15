@@ -255,6 +255,7 @@ impl DrawingPropertiesDialog {
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
                 drawing.channel_midline = old.channel_midline;
+                drawing.theme_shade = old.theme_shade;
                 drawing.line_measurements = old.line_measurements;
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
