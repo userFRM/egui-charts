@@ -169,6 +169,10 @@ pub(crate) mod tool_interaction;
 pub use keyboard::{ShortcutMap, ShortcutRequest};
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
+/// The main bars' revision, length and last high, low and close, and the pending sizes, that
+/// the sizes derived from history were last resolved from.
+type BoxSizesRead = (u64, usize, Option<[u64; 3]>, [bool; 4]);
+
 /// Interactive financial chart widget for egui.
 ///
 /// `Chart` is the core rendering and interaction engine for displaying OHLCV
@@ -281,6 +285,9 @@ pub struct Chart {
     #[cfg(feature = "studies")]
     trade_profiles: trade_profile::TradeProfiles,
     pending_box_sizes: [bool; 4],
+    /// What the pending sizes were last resolved from: a size those bars could not give is not
+    /// read again until the bars or the pending sizes change.
+    box_sizes_read: Option<BoxSizesRead>,
     /// Whether older source bars can contribute to the shown series.
     pub(crate) older_bars_drawn: bool,
     /// Whether tracking mode is currently active
