@@ -14,7 +14,7 @@ use crate::data::inbox::Inbox;
 use crate::data::trades::Trades;
 use crate::data::{
     Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, FootprintRequest,
-    HistoryRequest, Reply, SubscriptionId, TradeRequest,
+    FootprintState, HistoryRequest, Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{Bar, BarClock, Instrument, OrderBook, Tick, Timeframe};
 use crate::theme::ThemeExt;
@@ -83,7 +83,7 @@ pub(crate) struct FeedLink {
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
     /// profile drawing reads them. Raw-only history uses [`FOOTPRINT_BARS`] and
     /// [`FOOTPRINT_ROWS`]; prepared pages outlive those budgets and the raw tape.
-    pub(super) footprint: Option<Footprint>,
+    pub(super) footprint: Option<FootprintState>,
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
     /// The footprint of the trades before the cutoff, while a candle replay runs under a visible
@@ -155,11 +155,11 @@ impl FeedLink {
         if let Some(flow) = self
             .footprint
             .as_mut()
-            .filter(|flow| flow.prepared_before().is_some())
+            .filter(|flow| flow.live.prepared_before().is_some())
         {
-            flow.rebuild_prepared(&self.trades);
+            flow.live.rebuild_prepared(&self.trades);
         } else if self.footprint.is_some() {
-            self.footprint = self.footprint(None, history);
+            self.footprint = self.footprint(None, history).map(FootprintState::new);
         }
     }
 

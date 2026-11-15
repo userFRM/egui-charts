@@ -478,7 +478,8 @@ impl Chart {
                 if self.replay.is_some() {
                     link.replay_footprint.as_ref()?.1.as_ref()
                 } else {
-                    link.footprint.as_ref()
+                    // shortcut: shared pages use the labelled bar estimate until ChartView accepts them.
+                    link.footprint.as_ref().and_then(|flow| flow.owned())
                 }
             }),
             timeframe: self.drawing_timeframe(),

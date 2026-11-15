@@ -565,6 +565,8 @@ fn over_finite_bars(
 }
 
 mod trade_profile;
+#[cfg(feature = "widget")]
+pub(crate) use trade_profile::trade_profiles_with_rows_read;
 pub use trade_profile::{
     TradeProfile, TradeProfileRanges, trade_profiles, trade_profiles_with_rows,
 };

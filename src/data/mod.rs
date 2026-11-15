@@ -41,6 +41,7 @@ pub(crate) mod depth;
 mod depth_history;
 mod financials;
 mod footprint;
+mod footprint_view;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg_attr(
@@ -68,9 +69,14 @@ mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
+#[cfg(feature = "widget")]
+pub(crate) use footprint::FootprintState;
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub(crate) use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
@@ -599,9 +605,10 @@ pub struct FootprintRequest {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FootprintPage {
-    /// Unique, clock-aligned bars on the requested grid, in any order, within the requested
-    /// `[since, before)` range. Unknown-side volume stays separate from bid and ask.
-    pub bars: Vec<FootprintBar>,
+    /// Unique, clock-aligned bars on the requested grid within the requested `[since, before)`
+    /// range. Owned bars may arrive in any order; shared bars must be strictly chronological.
+    /// Unknown-side volume stays separate from bid and ask.
+    pub bars: FootprintBars,
     /// Exclusive execution cutoff, later than every supplied bar's open. Every eligible trade
     /// before this instant is included, and none at this instant is. Held or live trades at
     /// or after it continue the page; trade IDs do not order or define this boundary.
@@ -619,13 +626,73 @@ pub struct FootprintPage {
 
 impl FootprintPage {
     /// A page containing every execution before `complete_before`, from its first bar on.
+    ///
+    /// ```
+    /// use egui_charts::data::{FootprintBar, FootprintLevel, FootprintPage};
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let cutoff = "2026-01-05T00:01:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// bar.levels.insert(100, FootprintLevel {
+    ///     level: 100, unknown: 3.0, unknown_trades: 1, ..Default::default()
+    /// });
+    /// bar.unknown = 3.0;
+    /// let page = FootprintPage::new(vec![bar], cutoff, true);
+    /// assert_eq!(page.bars.len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn new(
         bars: Vec<FootprintBar>,
         complete_before: DateTime<Utc>,
         end_of_history: bool,
     ) -> Self {
         Self {
-            bars,
+            bars: FootprintBars::Owned(bars),
+            complete_before,
+            end_of_history,
+            continue_before: None,
+        }
+    }
+
+    /// A page that keeps its immutable owner alive instead of copying its price rows.
+    /// Bars must be in strictly ascending order, unlike the owned constructor. Shared payload
+    /// equality is owner identity. The same admission validation applies to both forms.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use chrono::{DateTime, Utc};
+    /// use egui_charts::data::{
+    ///     FootprintBarView, FootprintLevel, FootprintPage, FootprintRows, FootprintSource,
+    /// };
+    /// struct SavedBar { time: DateTime<Utc>, rows: [FootprintLevel; 1] }
+    /// impl FootprintSource for SavedBar {
+    ///     fn len(&self) -> usize { 1 }
+    ///     fn bar(&self, index: usize) -> FootprintBarView<'_> {
+    ///         assert_eq!(index, 0);
+    ///         let mut bar = FootprintBarView::new(self.time, FootprintRows::Slice(&self.rows));
+    ///         bar.unknown = 3.0;
+    ///         bar
+    ///     }
+    /// }
+    /// let owner = Arc::new(SavedBar {
+    ///     time: "2026-01-05T00:00:00Z".parse()?,
+    ///     rows: [FootprintLevel {
+    ///         level: 100, unknown: 3.0, unknown_trades: 1, ..Default::default()
+    ///     }],
+    /// });
+    /// let cutoff = "2026-01-05T00:01:00Z".parse()?;
+    /// let page = FootprintPage::from_shared(owner.clone(), cutoff, true);
+    /// let second_chart = page.clone();
+    /// assert_eq!(page, second_chart); // Both retain the same immutable owner.
+    /// assert_eq!(page.bars.iter().next().unwrap().unknown, 3.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_shared(
+        source: std::sync::Arc<dyn FootprintSource>,
+        complete_before: DateTime<Utc>,
+        end_of_history: bool,
+    ) -> Self {
+        Self {
+            bars: FootprintBars::Shared(source),
             complete_before,
             end_of_history,
             continue_before: None,

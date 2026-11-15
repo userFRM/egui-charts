@@ -11,7 +11,7 @@ use super::selection::hit_test_main_chart;
 use super::{Chart, PrimitivePass, RightClickTarget, primitives};
 use crate::chart::overlays::FootprintConfig;
 use crate::chart::rendering::{self, ChartMapping, RenderContext, StyleColors};
-use crate::data::Footprint;
+use crate::data::{Footprint, FootprintView};
 use crate::localization as l10n;
 use crate::model::{AutoscaleMargins, ChartType, MarkerZOrder, PriceLine};
 use crate::theme::ThemeExt;
@@ -167,13 +167,13 @@ impl Chart {
         flow: &Footprint,
         config: &FootprintConfig,
     ) -> Response {
-        self.show_content(ui, Some((flow, config)))
+        self.show_content(ui, Some((flow.into(), config)))
     }
 
     fn show_content(
         &mut self,
         ui: &mut Ui,
-        footprint: Option<(&Footprint, &FootprintConfig)>,
+        footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
@@ -206,7 +206,7 @@ impl Chart {
     fn show_themed_content(
         &mut self,
         ui: &mut Ui,
-        footprint: Option<(&Footprint, &FootprintConfig)>,
+        footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
         self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
@@ -448,7 +448,7 @@ impl Chart {
         ui: &mut Ui,
         shared_time_axis: Option<Rect>,
         shared_plot: Option<&Response>,
-        footprint: Option<(&Footprint, &FootprintConfig)>,
+        footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
         let primary_side = self.primary_axis_side();
         let show_left_axis = primary_side == Some(crate::model::AxisSide::Left);
@@ -1011,6 +1011,7 @@ impl Chart {
             .feed_link
             .as_ref()
             .and_then(|link| link.footprint.as_ref())
+            .map(|flow| flow.view())
             .filter(|_| {
                 self.main_series_visible
                     && footprint.is_none()
@@ -1032,7 +1033,7 @@ impl Chart {
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles =
-                    crate::studies::trade_profiles_with_rows(flow, &ranges, settings.rows);
+                    crate::studies::trade_profiles_with_rows_read(flow, &ranges, settings.rows);
                 profiles.retain(|profile| {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
@@ -1053,6 +1054,7 @@ impl Chart {
             .feed_link
             .as_ref()
             .and_then(|link| link.footprint.as_ref())
+            .map(|flow| flow.view())
             .map_or(0, |flow| {
                 self.chart_type_params
                     .footprint_row_size(&self.state.data().bars, flow.tick_size())
@@ -1074,6 +1076,7 @@ impl Chart {
                 .feed_link
                 .as_ref()
                 .and_then(|link| link.footprint.as_ref())
+                .map(|flow| flow.view())
                 .filter(|_| self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint)
                 .filter(|_| {
                     // The cell width does not depend on the colours.
@@ -1214,7 +1217,7 @@ impl Chart {
         if self.main_series_visible && time_based {
             // The summary below the lowest ladder bar is drawn whole or not at all; bars left to
             // candles keep the range candles fit.
-            let room = |flow: &Footprint, config: &FootprintConfig| {
+            let room = |flow: FootprintView<'_>, config: &FootprintConfig| {
                 if flow.complete_bars(..).next().is_some() && drawn_as_cells(config) {
                     crate::chart::overlays::summary_room(config)
                 } else {
@@ -1227,6 +1230,7 @@ impl Chart {
                     self.feed_link
                         .as_ref()
                         .and_then(|link| link.footprint.as_ref())
+                        .map(|flow| flow.view())
                         .map_or(0.0, |flow| {
                             // The room does not depend on the colours.
                             let colors = [egui::Color32::TRANSPARENT; 4];
@@ -1735,6 +1739,7 @@ impl Chart {
             .feed_link
             .as_ref()
             .and_then(|link| link.footprint.as_ref())
+            .map(|flow| flow.view())
             .filter(|_| {
                 time_based
                     && self.replay.is_none()
@@ -2254,7 +2259,7 @@ impl Chart {
                                 price_rect.right(),
                             );
                         }
-                        crate::chart::overlays::render_footprint(
+                        crate::chart::overlays::render_footprint_read(
                             &clipped_painter,
                             &mapping,
                             bars,
@@ -2298,7 +2303,7 @@ impl Chart {
                     let sessions = trading_days
                         .as_ref()
                         .map(|days| self.session_provider.as_deref().unwrap_or(days));
-                    crate::chart::overlays::render_footprint_statistics_rows(
+                    crate::chart::overlays::render_footprint_statistics_rows_read(
                         &painter,
                         &self.get_chart_mapping().with_rect(table),
                         self.bars(super::SeriesId::MAIN),
