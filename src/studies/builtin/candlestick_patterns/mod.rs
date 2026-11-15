@@ -124,7 +124,7 @@ use rules::{BODY_AVERAGE, Candle, PATTERNS, Pattern, Side};
 
 /// All Candlestick Patterns: the common candlestick patterns, each with a toggle, marked
 /// and labelled at the bar that completes them.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CandlestickPatterns {
     trend: PatternTrend,
     pattern_type: PatternType,
@@ -137,7 +137,7 @@ pub struct CandlestickPatterns {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     closes: std::collections::VecDeque<f64>,
     bodies: std::collections::VecDeque<f64>,

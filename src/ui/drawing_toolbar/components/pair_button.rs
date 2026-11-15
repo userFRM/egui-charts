@@ -70,6 +70,7 @@ pub enum ArrowDirection {
 /// }
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct PairButton<'a> {
     /// Icon to display
     pub icon: &'a Icon,

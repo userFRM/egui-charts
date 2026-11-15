@@ -18,6 +18,7 @@ use egui::{Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
 
 /// Bottom panel component
+#[derive(Debug)]
 pub struct TimeframeToolbar {
     /// State
     pub state: TimeframeToolbarState,

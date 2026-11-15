@@ -10,6 +10,7 @@ use crate::icons::{Icon, icons};
 use crate::ui::drawing_toolbar::icons as toolbar_icons;
 
 /// Fibonacci & Gann category implementation
+#[derive(Debug)]
 pub struct FibonacciCategory;
 
 impl ToolCategory for FibonacciCategory {

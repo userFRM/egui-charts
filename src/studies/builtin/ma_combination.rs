@@ -125,6 +125,25 @@ pub struct MACombination {
     visible: bool,
 }
 
+impl std::fmt::Debug for MACombination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MACombination")
+            .field("lines", &self.lines)
+            .field("defaults", &self.defaults)
+            .field("values", &self.values)
+            .field("sourced", &self.sourced)
+            .field("crossing", &self.crossing)
+            .field("markers", &self.markers)
+            .field("cross", &self.cross)
+            .field("default_cross", &self.default_cross)
+            .field("wait_for_all", &self.wait_for_all)
+            .field("directional", &self.directional)
+            .field("default_directional", &self.default_directional)
+            .field("visible", &self.visible)
+            .finish_non_exhaustive()
+    }
+}
+
 impl MACombination {
     /// Create two to fourteen lines. Returns an error for any other count.
     pub fn new(lines: Vec<AverageLine>) -> Result<Self, &'static str> {

@@ -30,7 +30,7 @@ enum Action {
     Settings,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct AxisMenus {
     open: Option<(bool, Pos2)>,
     just_opened: bool,

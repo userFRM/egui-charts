@@ -35,7 +35,7 @@ const PERIODS: [AnchorPeriod; 7] = [
     AnchorPeriod::Century,
 ];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DeltaCandles {
     clock: BarClock,
     /// The interval chosen in the Lower interval input; `None` picks one from the chart interval.
@@ -172,7 +172,7 @@ impl DeltaCandles {
 macro_rules! delta_study {
     ($(#[$meta:meta])* $ty:ident, $name:literal, $desc:literal, $anchor:expr) => {
         $(#[$meta])*
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $ty {
             core: DeltaCandles,
         }

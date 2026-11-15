@@ -94,7 +94,7 @@ impl AutoDrawingKind {
 /// rebuilds the anchors; generated drawings belong to the study, not the editable drawing list.
 /// Output 0 contains anchor prices for scaling and readouts; the drawing renderer paints the
 /// construction instead of joining these values. Its colour, width and visibility use plot 0.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AutoDrawing {
     kind: AutoDrawingKind,
     zigzag: ZigZag,

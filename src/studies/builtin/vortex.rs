@@ -8,7 +8,7 @@ use egui::Color32;
 /// Vortex Indicator (VI)
 /// Identifies trend direction and strength
 /// Uses True Range and directional movement concepts
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VortexIndicator {
     /// Lookback period (typically 14)
     period: usize,

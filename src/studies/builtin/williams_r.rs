@@ -36,7 +36,7 @@ use egui::Color32;
 use std::collections::VecDeque;
 
 /// Williams %R indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WilliamsR {
     period: usize,
     smoothing: SmoothingType,
@@ -50,7 +50,7 @@ pub struct WilliamsR {
 }
 
 /// The highs and lows of the last `period` bars with a finite high and low, and the average of %R.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Rolling {
     window: VecDeque<(f64, f64)>,
     smoothed: Smoothed,

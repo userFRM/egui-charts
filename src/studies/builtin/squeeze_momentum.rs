@@ -9,7 +9,7 @@ use egui::Color32;
 /// Squeeze Momentum Indicator
 /// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
 /// When BB is inside KC = "squeeze" (low volatility period)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SqueezeMomentum {
     /// Bollinger Bands period (typically 20)
     bb_period: usize,

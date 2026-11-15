@@ -9,7 +9,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Linear regression fitted to closing prices over a rolling window.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LinearRegression {
     /// Lookback period (typically 14)
     period: usize,
@@ -161,7 +161,7 @@ impl Indicator for LinearRegression {
 }
 
 /// Linear Regression Slope
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LinearRegressionSlope {
     period: usize,
     values: IndicatorValues,

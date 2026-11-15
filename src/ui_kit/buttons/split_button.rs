@@ -34,6 +34,7 @@ use egui::{Rect, Response, Sense, Ui, Vec2, vec2};
 /// }
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct SplitButton {
     icon: &'static Icon,
     size: ButtonSize,

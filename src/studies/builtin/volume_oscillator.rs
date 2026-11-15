@@ -8,7 +8,7 @@ use egui::Color32;
 /// Volume Oscillator
 /// Measures the difference between two volume moving avgs
 /// Similar to MACD but for volume
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VolumeOscillator {
     /// Short EMA period (typically 5)
     short_period: usize,

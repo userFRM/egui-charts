@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
 
 /// A confirmed swing pivot.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Swing {
     /// Position among the usable bars.
     pub position: usize,
@@ -24,7 +24,7 @@ pub(super) struct Swing {
     pub high: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Entry {
     position: usize,
     index: usize,
@@ -34,7 +34,7 @@ struct Entry {
 }
 
 /// The bars around the next pivot and the latest confirmed swings.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Swings {
     window: VecDeque<Entry>,
     /// Number of usable bars so far, the position of the next one.

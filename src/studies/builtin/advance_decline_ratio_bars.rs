@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
 /// Up bars over down bars within a window.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AdvanceDeclineRatioBars {
     period: usize,
     values: IndicatorValues,

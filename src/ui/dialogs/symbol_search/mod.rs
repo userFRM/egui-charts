@@ -68,7 +68,7 @@ pub use compare::{
 // Instrument Search Dialog
 // =============================================================================
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Category(Option<SymbolType>);
 
 impl TabLabel for Category {
@@ -166,6 +166,7 @@ impl Default for SymbolSearchConfig {
 /// }
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct SymbolSearchDialog {
     is_open: bool,
     focus_search: bool,
