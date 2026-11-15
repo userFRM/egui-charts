@@ -303,14 +303,14 @@ mod tests {
         let older = source.annotations(&request);
         assert!(!older.events.is_empty());
         assert_eq!(source.annotations(&request).events, older.events);
-        request.symbol = "BTCUSD".into();
+        request.symbol = "TOKENA".into();
         let other = source.annotations(&request);
         assert!(!other.events.is_empty());
         assert!(
             other
                 .events
                 .iter()
-                .all(|event| event.id.starts_with("demo-event-BTCUSD-"))
+                .all(|event| event.id.starts_with("demo-event-TOKENA-"))
         );
         request.symbol = "SAMPLE".into();
         assert_eq!(source.annotations(&request).events, older.events);
