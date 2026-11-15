@@ -68,14 +68,16 @@ pub fn trade_delta(
             ask += flow.ask;
             bid += flow.bid;
         }
+        let close = side_delta(ask, bid);
         let value = TradeDeltaValue {
             delta,
             delta_high,
             delta_low,
             open: cumulative,
-            high: cumulative + delta_high,
-            low: cumulative + delta_low,
-            close: side_delta(ask, bid),
+            // The run reaches its close too, which the side sums can round past an extreme.
+            high: (cumulative + delta_high).max(close),
+            low: (cumulative + delta_low).min(close),
+            close,
             rolling_volume: volume_sum,
             rolling_delta: delta_sum,
         };
@@ -351,7 +353,8 @@ mod tests {
             (1e308, -1e308, 0.0)
         );
         // Sells of 0.1 and 0.2 sum to 0.30000000000000004, so the bar deltas -0.30000000000000004
-        // and 0.3 add up to -5.55e-17 while the sides of the run are balanced.
+        // and 0.3 add up to -5.55e-17 while the sides of the run are balanced: the buy closes the
+        // run at 0, which is also the candle's high.
         let mut rounded = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         for (bar, size, side) in [
             (0, 0.1, OrderSide::Sell),
@@ -362,9 +365,10 @@ mod tests {
                 .push(&Tick::new(bars[bar].time, 100.0, size, Some(side)))
                 .unwrap();
         }
+        let candle = trade_delta(&rounded, &bars[..2], 2, |_, _| false)[1];
         assert_eq!(
-            trade_delta(&rounded, &bars[..2], 2, |_, _| false)[1].close,
-            0.0
+            [candle.open, candle.high, candle.low, candle.close],
+            [-0.30000000000000004, 0.0, -0.30000000000000004, 0.0]
         );
     }
 }
