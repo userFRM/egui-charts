@@ -3046,8 +3046,8 @@ mod tests {
         }
     }
 
-    /// A host that dispatches the active chart's shortcuts before it shows the layout, as the
-    /// demo does, presses Ctrl+Z in the frame a divider drag starts. The undo is ignored as it is
+    /// A host dispatches the active chart's shortcuts before it shows the layout, as the demo
+    /// does, and Ctrl+Z comes in the frame a divider drag starts. The undo is ignored as it is
     /// when `show` dispatches, so the drag neither starts from undone sizes nor drops a step.
     #[test]
     fn undo_dispatched_before_the_layout_at_drag_start_keeps_size_steps() {
@@ -4809,6 +4809,7 @@ mod tests {
             );
         }
     }
+
     /// A host opens a saved layout by supplying its charts in the same slots or restoring
     /// snapshots into them. Nobody changed a symbol or interval, so each opened chart keeps its
     /// own, also in slots that share a symbol and an interval group; the next change is sent.
