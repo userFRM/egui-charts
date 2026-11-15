@@ -104,7 +104,8 @@ impl Chart {
     /// step by calendar months in the display time zone. Numeric and custom axes use key
     /// spacing regardless of the chart timeframe. Empty charts export retained
     /// anchors; an index with no loaded mapping returns an error rather than clamping or
-    /// inventing time.
+    /// inventing time. The document names this chart as its writer in
+    /// [`DrawingStorage::saved_by`].
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
             self.drawings
@@ -122,6 +123,7 @@ impl Chart {
         storage.timeframe = self
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
+        storage.saved_by = Some(self.data_table_identity);
         for drawing in drawings {
             for (at, point) in drawing.chart_points.iter().enumerate() {
                 if point
@@ -170,7 +172,8 @@ impl Chart {
 
     /// [`Self::load_drawings`]; with `remap`, a drawing whose study was replaced when a snapshot
     /// was restored takes the replacement before its stored pane is matched, since a study's
-    /// input naming another study as its source holds that study's local id.
+    /// input naming another study as its source holds that study's local id. Pass `remap` only
+    /// for drawings whose study ids are those of the chart that took that snapshot.
     pub(super) fn load_drawings_remapped(
         &mut self,
         json: &str,
