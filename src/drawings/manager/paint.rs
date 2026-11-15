@@ -496,8 +496,11 @@ mod tests {
             manager.drawings.push(drawing);
             manager.select(7);
             let render = |manager: &mut DrawingManager, bars: &[Bar]| {
-                manager
-                    .update_all_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+                manager.update_all_screen_coords(
+                    |b| 100.0 + b * 100.0,
+                    |p| 500.0 - p as f32 * 10.0,
+                    100.0,
+                );
                 ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(pane),
@@ -515,6 +518,7 @@ mod tests {
                                 bars,
                                 revision: 0,
                                 bar_to_x: &|b| 100.0 + b * 100.0,
+                                bar_spacing: 100.0,
                                 price_to_y: &|p| 500.0 - p as f32 * 10.0,
                                 y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                 time_axis: true,
@@ -678,6 +682,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
+                        bar_spacing: 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
@@ -764,6 +769,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b * 10.0,
+                    bar_spacing: 10.0,
                     price_to_y: &|p| 500.0 - p as f32,
                     y_to_price: &|y| 500.0 - f64::from(y),
                     time_axis: true,

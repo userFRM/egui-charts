@@ -59,6 +59,24 @@ pub struct NewsPanel {
     request: u64,
 }
 
+impl std::fmt::Debug for NewsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewsPanel")
+            .field("highlights", &self.highlights)
+            .field("symbol", &self.symbol)
+            .field("market", &self.market)
+            .field("more_symbols", &self.more_symbols)
+            .field("topics", &self.topics)
+            .field("providers", &self.providers)
+            .field("stories", &self.stories)
+            .field("open", &self.open)
+            .field("error", &self.error)
+            .field("loading", &self.loading)
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for NewsPanel {
     fn default() -> Self {
         Self::new()

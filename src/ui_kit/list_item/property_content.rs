@@ -18,6 +18,7 @@ use super::content::{ContentContext, ListItemContent};
 ///         .value_color(Color32::GREEN));
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct PropertyContent {
     label: String,
     value: String,

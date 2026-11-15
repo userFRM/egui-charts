@@ -86,7 +86,7 @@ impl MarketHeatmapMetric {
 /// by the second. Store [`selection`](Self::selection) with the settings and assign it back to
 /// restore the choices; one the host does not offer at the moment stays chosen and shows as
 /// unavailable.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct MarketHeatmapPanel {
     /// The markets to choose from.
     pub universes: Vec<MarketHeatmapUniverse>,

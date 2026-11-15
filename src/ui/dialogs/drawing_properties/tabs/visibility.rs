@@ -27,6 +27,7 @@ const UNITS: [(TimeframeUnit, &str, RangeInclusive<u64>); 11] = [
 ];
 
 /// Visibility tab renderer
+#[derive(Debug)]
 pub struct VisibilityTab;
 
 impl VisibilityTab {

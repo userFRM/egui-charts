@@ -8,6 +8,7 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::dialog::dialog_frame;
 
 /// Manages modal open/close state
+#[derive(Debug)]
 pub struct ModalHandler<T = ()> {
     id: Id,
     open: bool,

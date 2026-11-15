@@ -7,7 +7,7 @@ use egui::Color32;
 /// Volume Price Trend (VPT)
 /// Cumulative volume indicator that considers price changes
 /// Similar to OBV but uses percentage changes
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VolumePriceTrend {
     values: IndicatorValues,
     stepper: Stepper<(Option<f64>, f64)>,
@@ -153,7 +153,7 @@ fn volume_index(
 /// Outputs `Multiple([index, signal])`: the signal line is the EMA of the index over the EMA
 /// length, 255 by default, seeded with the first index value so that it starts at bar 0 like the
 /// index.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NegativeVolumeIndex {
     values: IndicatorValues,
     stepper: Stepper<(Option<[f64; 2]>, f64, f64)>,
@@ -281,7 +281,7 @@ impl Indicator for NegativeVolumeIndex {
 /// Outputs `Multiple([index, signal])`: the signal line is the EMA of the index over the EMA
 /// length, 255 by default, seeded with the first index value so that it starts at bar 0 like the
 /// index.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PositiveVolumeIndex {
     values: IndicatorValues,
     stepper: Stepper<(Option<[f64; 2]>, f64, f64)>,

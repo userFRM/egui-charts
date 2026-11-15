@@ -23,7 +23,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Double Exponential Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DEMA {
     period: usize,
     values: IndicatorValues,

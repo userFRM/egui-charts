@@ -31,7 +31,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Money Flow Index indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MoneyFlowIndex {
     period: usize,
     values: IndicatorValues,

@@ -8,7 +8,7 @@ use egui::Color32;
 /// Close-to-Close Volatility
 /// Standard deviation of log returns, annualized by the square root of the bars per year (252
 /// by default)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CloseToCloseVol {
     period: usize,
     /// Trading days per year the result is annualized over, one bar per day (252 for stocks, 365

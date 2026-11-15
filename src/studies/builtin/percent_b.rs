@@ -8,7 +8,7 @@ use egui::Color32;
 /// Percent B (%B)
 /// Shows where price is relative to Bollinger Bands
 /// 0 = at lower band, 1 = at upper band
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PercentB {
     /// Period for Bollinger Bands (typically 20)
     period: usize,

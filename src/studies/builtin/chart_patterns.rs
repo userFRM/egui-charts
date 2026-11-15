@@ -229,7 +229,7 @@ struct Config {
 }
 
 /// A straight line in position and price.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Line {
     seq: f64,
     price: f64,
@@ -250,14 +250,14 @@ impl Line {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Outcome {
     Confirm(PatternDirection),
     Fail,
 }
 
 /// A formation whose pivots are known, waiting for a close beyond a boundary.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Candidate {
     kind: FormationKind,
     anchors: Vec<Swing>,
@@ -646,7 +646,7 @@ fn cup(config: &Config, pivots: &VecDeque<Swing>, bull: bool) -> Option<Candidat
 
 /// The detectors' state after a bar: the bars of the latest pivot test, the pivots,
 /// the formations waiting for a break and the confirmed ones.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     /// Bars seen, finite or not.
     index: usize,
@@ -824,7 +824,7 @@ impl State {
 /// high, each labelled with the abbreviations of the formations it confirms. Boundaries are
 /// also generated as drawings, dashed while developing; a reversal formation draws only its
 /// neckline or breakout level.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChartPatterns {
     family: PatternFamily,
     config: Config,

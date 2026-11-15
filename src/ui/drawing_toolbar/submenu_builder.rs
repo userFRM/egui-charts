@@ -54,6 +54,16 @@ pub struct SubmenuBuilder<'a> {
     toggle: Option<ToggleConfig<'a>>,
 }
 
+impl std::fmt::Debug for SubmenuBuilder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubmenuBuilder")
+            .field("items", &self.items)
+            .field("width", &self.width)
+            .field("toggle", &self.toggle)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A single item in a submenu
 #[derive(Default)]
 pub struct SubmenuItem {
@@ -75,7 +85,22 @@ pub struct SubmenuItem {
     pub on_click: Option<Box<dyn Fn() -> Option<DrawingToolbarAction>>>,
 }
 
+impl std::fmt::Debug for SubmenuItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubmenuItem")
+            .field("icon", &self.icon)
+            .field("label", &self.label)
+            .field("tooltip", &self.tooltip)
+            .field("is_sel", &self.is_sel)
+            .field("is_favorite", &self.is_favorite)
+            .field("is_checked", &self.is_checked)
+            .field("is_danger", &self.is_danger)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Configuration for a toggle checkbox at the bottom of a submenu
+#[derive(Debug)]
 pub struct ToggleConfig<'a> {
     /// Text displayed by the component.
     pub label: String,

@@ -27,7 +27,7 @@ const ACTIONS_WIDTH: f32 = 64.0;
 pub(super) const HISTORY_LIMIT: usize = 1_000;
 
 /// The account's orders and executions, shared by the ladder, chart and account history.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct Fills {
     pub(super) orders: HashMap<OrderId, OrderRequest>,
     pub(super) executions: Vec<Execution>,
@@ -166,7 +166,7 @@ pub enum AccountPanelAction {
 /// one, a page at a time, until the broker has nothing older or the history lists 1,000
 /// entries. Each entry is listed once, whether a page or the broker's stream brings it first,
 /// and pages change no working order or position.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct AccountPanel {
     /// The broker's name, shown on the tab and in the account selector.
     pub broker: String,
@@ -337,6 +337,7 @@ struct Column {
 
 /// One table cell: its text and colour, a unit in small muted text after it, and whether it is a
 /// symbol chip.
+#[derive(Debug)]
 struct Cell {
     text: String,
     color: Color32,

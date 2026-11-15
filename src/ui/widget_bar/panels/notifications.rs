@@ -47,6 +47,16 @@ pub struct NotificationsPanel {
     unread: usize,
 }
 
+impl std::fmt::Debug for NotificationsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificationsPanel")
+            .field("generation", &self.generation)
+            .field("log", &self.log)
+            .field("unread", &self.unread)
+            .finish_non_exhaustive()
+    }
+}
+
 impl NotificationsPanel {
     /// An unconnected panel. Attach a service with [`set_service`](Self::set_service).
     pub fn new() -> Self {
