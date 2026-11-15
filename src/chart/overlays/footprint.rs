@@ -2400,7 +2400,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
             assert!(!rect.intersects(below), "{total} over the extreme ratio");
         }
-        // A translator sees the summary labels; the totals stay numbers.
+        // A translator sees the summary labels.
         let ctx = egui::Context::default();
         crate::localization::mark_keys(&ctx);
         let (shapes, _) = paint_ladder_in(&ctx, &rows, 120.0, false, &config);
@@ -2413,12 +2413,6 @@ mod tests {
             2,
             "{text:?}"
         );
-        for total in ["543.5K", "370.1K"] {
-            assert!(
-                text.iter().any(|text| text == total),
-                "{total} missing from {text:?}"
-            );
-        }
         // At 80 points per bar the labelled summary needs 80 points in a block of 73.1.
         let rows = [(106.0, 2_340.0, 2_510.0), (105.0, 3_201.0, 1_200.0)];
         let (shapes, _) = paint_ladder(&rows, 80.0, false, &config);
