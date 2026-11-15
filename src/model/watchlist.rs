@@ -108,6 +108,15 @@ pub enum WatchlistItem {
 }
 
 /// A named list of symbols and sections, in the order the user arranged them.
+///
+/// ```
+/// use egui_charts::model::{Watchlist, WatchlistColumn};
+///
+/// let mut list = Watchlist::new("Tech");
+/// list.favorite = true;
+/// list.show_descriptions = true;
+/// list.column_widths.insert(WatchlistColumn::Last, 72.0);
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Watchlist {
