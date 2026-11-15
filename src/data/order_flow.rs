@@ -1000,15 +1000,24 @@ impl OrderFlowInput {
             let trade_timeframe = clock.timeframe().filter(|tf| tf.is_trade_based());
             // After a loss only a source that sums each bar's executions gets the cutoff's bar
             // on a trade-based interval: a rolling window can reach executions the store lost.
-            let sums = matches!(
-                state.source,
+            // Every kind is named, so that a new one has to be placed here.
+            let sums = match state.source {
                 Source::Footprint
-                    | Source::Fixed(
-                        OrderFlowKind::SizeDelta { .. }
-                            | OrderFlowKind::FlowSum { .. }
-                            | OrderFlowKind::FilteredCvd { .. }
-                    )
-            );
+                | Source::Fixed(
+                    OrderFlowKind::SizeDelta { .. }
+                    | OrderFlowKind::FlowSum { .. }
+                    | OrderFlowKind::FilteredCvd { .. },
+                ) => true,
+                Source::Fixed(
+                    OrderFlowKind::Spread
+                    | OrderFlowKind::BookSize { .. }
+                    | OrderFlowKind::TradeRate { .. }
+                    | OrderFlowKind::AggressorRate { .. }
+                    | OrderFlowKind::LevelsExecuted { .. }
+                    | OrderFlowKind::LevelsTradedThrough { .. },
+                )
+                | Source::Book(_) => false,
+            };
             let lost = trades.is_some_and(|trades| trades.lost_until().is_some());
             // shortcut: scan the held executions per input per seek; index them by time if
             // replay playback profiles show it.
