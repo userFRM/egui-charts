@@ -1683,6 +1683,20 @@ mod tests {
             want.visible = tool != DrawingToolType::Arrow;
             assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
         }
+        // A version 1 anchored VWAP stored one point and neither a line style nor bands: it
+        // loads with a solid line and the default bands.
+        let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["tool_type"] = "Anchored VWAP".into();
+        records[0]["points"].as_array_mut().unwrap().truncate(1);
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let drawing = &loaded.drawings[0].drawing;
+        assert_eq!(
+            (drawing.tool_type, drawing.line_style, drawing.vwap),
+            (DrawingToolType::AnchoredVWAP, LineStyle::Solid, None)
+        );
 
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();

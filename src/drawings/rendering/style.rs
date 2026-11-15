@@ -278,6 +278,7 @@ impl Drawing {
                     | DrawingToolType::FibonacciCircles
                     | DrawingToolType::FibonacciSpeedResistanceArcs
                     | DrawingToolType::FibonacciWedge
+                    | DrawingToolType::AnchoredVWAP
             ) {
             None
         } else {

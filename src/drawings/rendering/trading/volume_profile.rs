@@ -37,8 +37,8 @@ thread_local! {
 impl Drawing {
     /// Renders the anchored VWAP from the anchor bar to the last bar as its
     /// [`VwapConfig`](crate::drawings::VwapConfig) sets: the background, the first band's fill,
-    /// the shown lines of the enabled bands as each is styled, the line at the drawing's colour
-    /// and width, and the tracked latest values across the pane.
+    /// the shown lines of the enabled bands as each is styled, the line at the drawing's colour,
+    /// width and line style, and the tracked latest values across the pane.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(anchor_at) = self.chart_points.first() else {
             return;
@@ -147,7 +147,7 @@ impl Drawing {
             painter,
             vwap_line,
             config.plot_type,
-            LineStyle::Solid,
+            self.line_style,
             Stroke::new(self.stroke_width, line_color),
             zero,
             step,
@@ -663,9 +663,10 @@ mod tests {
         assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
     }
 
-    /// The line keeps the drawing's width and only the enabled bands are drawn, band 1 filled.
-    /// The line, its plot, the fill, the background, the latest-value line and each band line
-    /// follow their own settings, so styling one band line leaves the other and the VWAP alone.
+    /// The line keeps the drawing's width and line style and only the enabled bands are drawn,
+    /// band 1 filled. The line, its plot, the fill, the background, the latest-value line and each
+    /// band line follow their own settings, so styling one band line leaves the other and the VWAP
+    /// alone, and a dashed drawing leaves its solid band lines solid.
     #[test]
     fn anchored_vwap_draws_its_line_and_enabled_bands_only() {
         use crate::drawings::{VwapBand, VwapBandLine, VwapConfig, VwapFill};
@@ -698,11 +699,13 @@ mod tests {
             .unwrap();
         let mut no_bands = VwapConfig::default();
         no_bands.bands[0].enabled = false;
-        let render = |anchor, width, config| render_vwap(&bars, anchor, width, config);
-        for (name, anchor, config, width, fill, expected) in [
+        let render =
+            |anchor, width, style, config| render_vwap(&bars, anchor, width, style, config);
+        for (name, anchor, style, config, width, fill, expected) in [
             (
                 "default",
                 0.0,
+                LineStyle::Solid,
                 None,
                 1.0,
                 true,
@@ -715,6 +718,7 @@ mod tests {
             (
                 "bands 2 and 3",
                 0.0,
+                LineStyle::Solid,
                 Some(other_bands),
                 3.0,
                 false,
@@ -729,6 +733,7 @@ mod tests {
             (
                 "styled upper line",
                 0.0,
+                LineStyle::Solid,
                 Some(styled),
                 1.0,
                 true,
@@ -745,15 +750,36 @@ mod tests {
             (
                 "no bands",
                 0.0,
+                LineStyle::Solid,
                 Some(no_bands),
                 1.0,
                 false,
                 vec![(mid, blue, 1.0)],
             ),
-            ("past last bar", 4.0, None, 1.0, false, vec![]),
+            // The default band's solid lines at the values above, then the VWAP line in dashes.
+            (
+                "dashed line, solid bands",
+                0.0,
+                LineStyle::Dashed,
+                None,
+                1.0,
+                true,
+                vec![
+                    ([100.0, 80.0, 85.0], green, 1.0),
+                    ([100.0, 100.0, 95.0], green, 1.0),
+                ],
+            ),
+            (
+                "past last bar",
+                4.0,
+                LineStyle::Solid,
+                None,
+                1.0,
+                false,
+                vec![],
+            ),
         ] {
-            let shapes = render(anchor, width, config);
-            assert_eq!(shapes.len(), expected.len() + usize::from(fill), "{name}");
+            let shapes = render(anchor, width, style, config);
             if fill {
                 let Shape::Mesh(mesh) = &shapes[0] else {
                     panic!("{name}: band fill")
@@ -765,7 +791,8 @@ mod tests {
                     "{name}"
                 );
             }
-            for (shape, (ys, color, width)) in shapes[usize::from(fill)..].iter().zip(expected) {
+            let (paths, dashes) = shapes[usize::from(fill)..].split_at(expected.len());
+            for (shape, (ys, color, width)) in paths.iter().zip(expected) {
                 let Shape::Path(line) = shape else {
                     panic!("{name}: unexpected shape")
                 };
@@ -777,12 +804,45 @@ mod tests {
                     .collect();
                 assert_eq!(line.points, points, "{name}");
             }
+            // The VWAP line runs 14.14 px and then 10 px from (110, 100) through (120, 90) to
+            // (130, 90) in its colour and width; dashed 8 px on and 4 px off from its start, it
+            // paints pieces of 8, 8 and 0.14 px.
+            let pieces: Vec<f32> = dashes
+                .iter()
+                .filter_map(|shape| {
+                    let points = match shape {
+                        Shape::Noop => return None,
+                        Shape::LineSegment { points, stroke } => {
+                            assert_eq!(*stroke, Stroke::new(width, blue), "{name}");
+                            points.to_vec()
+                        }
+                        Shape::Path(line) => {
+                            assert_eq!(line.stroke, Stroke::new(width, blue).into(), "{name}");
+                            line.points.clone()
+                        }
+                        other => panic!("{name}: {other:?}"),
+                    };
+                    Some(points.windows(2).map(|p| p[0].distance(p[1])).sum())
+                })
+                .collect();
+            if style == LineStyle::Solid {
+                assert!(pieces.is_empty(), "{name}: {pieces:?}");
+            } else {
+                assert!(
+                    pieces.iter().all(|&piece| piece < 8.001),
+                    "{name}: {pieces:?}"
+                );
+                assert!(
+                    (pieces.iter().sum::<f32>() - 16.14).abs() < 0.01,
+                    "{name}: {pieces:?}"
+                );
+            }
         }
 
         let edited = |edit: fn(&mut VwapConfig)| {
             let mut config = VwapConfig::default();
             edit(&mut config);
-            render(0.0, 1.0, Some(config))
+            render(0.0, 1.0, LineStyle::Solid, Some(config))
         };
         let strokes = |shapes: &[Shape]| -> Vec<Color32> {
             shapes
@@ -866,7 +926,7 @@ mod tests {
         // Anchored on the last bar: one bar wide, centred on it.
         let mut config = VwapConfig::default();
         config.background.visible = true;
-        let Shape::Rect(wash) = &render(3.0, 1.0, Some(config))[0] else {
+        let Shape::Rect(wash) = &render(3.0, 1.0, LineStyle::Solid, Some(config))[0] else {
             panic!("background on the last bar")
         };
         assert_eq!(
@@ -892,7 +952,7 @@ mod tests {
         // VWAP's own latest value stays untracked.
         let mut config = VwapConfig::default();
         config.bands[0].lower.track_price = true;
-        let shapes = render(0.0, 1.0, Some(config));
+        let shapes = render(0.0, 1.0, LineStyle::Solid, Some(config));
         let Shape::Mesh(dashes) = &shapes[4] else {
             panic!("band price line")
         };
@@ -929,7 +989,7 @@ mod tests {
             tracked.iter().map(|(price, _)| *price).collect::<Vec<_>>(),
             [10.0]
         );
-        let shapes = render_vwap(&bars, 80.0, 1.0, Some(config));
+        let shapes = render_vwap(&bars, 80.0, 1.0, LineStyle::Solid, Some(config));
         let line = shapes.iter().any(|shape| {
             matches!(shape, Shape::Mesh(mesh) if !mesh.vertices.is_empty()
                 && mesh.vertices.iter().all(|v| (v.pos.y - 100.0).abs() <= 1.0)
@@ -939,17 +999,20 @@ mod tests {
         assert!(line, "no latest-value line among {} shapes", shapes.len());
     }
 
-    /// Paints an anchored VWAP of a blue drawing over `bars` from `anchor`, 10 px a bar from
-    /// x = 100 and 10 px a price from 20 at the top of an 800 by 600 pane.
+    /// Paints an anchored VWAP of a blue drawing in `style` over `bars` from `anchor`, as the
+    /// chart paints a drawing, 10 px a bar from x = 100 and 10 px a price from 20 at the top of an
+    /// 800 by 600 pane.
     fn render_vwap(
         bars: &[Bar],
         anchor: f32,
         width: f32,
+        style: LineStyle,
         config: Option<crate::drawings::VwapConfig>,
     ) -> Vec<Shape> {
         let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
         drawing.color = [41, 98, 255, 255];
         drawing.stroke_width = width;
+        drawing.line_style = style;
         drawing.vwap = config;
         drawing.chart_points = vec![crate::drawings::ChartPoint::new(anchor, 50.0)];
         let view = ChartView {
@@ -968,13 +1031,11 @@ mod tests {
             timeframe: None,
             finer: &[],
         };
+        drawing.update_screen_coords(view.bar_to_x, view.price_to_y);
         let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-            let painter = egui::Painter::new(
-                ui.ctx().clone(),
-                egui::LayerId::background(),
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
-            );
-            drawing.render_anchored_vwap(&painter, &view);
+            let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+            let painter = egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), pane);
+            drawing.render(&painter, pane, &view);
         });
         let shapes = std::mem::take(&mut output.shapes);
         output.drop_without_applying_deltas();
