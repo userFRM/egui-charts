@@ -1614,8 +1614,11 @@ fn ambiguous_trade_page_boundary_keeps_prepared_cells_but_not_the_join_bar() {
 /// 7. After an interval change the stream starts with 1380 s (5), older than every kept execution,
 ///    and the page holds 1200 s (1) and 1440 s (4): the 20 min bar holds 1, 5 and 4. In both, the
 ///    stream's 1380 s without an id is taken by its time for a repeat and dropped.
+/// 8. Without prepared history, the page answers an interval change before the stream starts with
+///    1530 s (5), older than the kept 1560 s (13), then sends 1680 s (17): the 25 min bar holds 5,
+///    13 and 17. Without an id 1530 s is taken by its time for a repeat and dropped.
 #[test]
-fn prepared_bars_across_resumes_and_interval_changes_complete_with_every_execution() {
+fn bars_across_resumes_and_interval_changes_complete_with_every_execution() {
     enum Step {
         /// Executions the stream sends: seconds and size.
         Stream(&'static [(i64, f64)]),
@@ -1672,6 +1675,11 @@ fn prepared_bars_across_resumes_and_interval_changes_complete_with_every_executi
             Stream(&[(1380, 5.0), (1680, 17.0)]),
             Trades(&[(1200, 1.0), (1440, 4.0), (1500, 7.0), (1560, 13.0), (1620, 3.0)]),
             Prepared(&[(600, 1.0)], 1200), Bar(1200, Some(5.0), Some(10.0)),
+        ]),
+        ("without prepared history, a stream that starts before a kept execution", vec![
+            Trades(&[(1200, 1.0)]), Stream(&[(1560, 13.0)]), Interval,
+            Trades(&[(1200, 1.0), (1560, 13.0)]), Stream(&[(1530, 5.0), (1680, 17.0)]),
+            Bar(1500, Some(30.0), Some(35.0)),
         ]),
     ];
     let start = bars(1)[0].time;

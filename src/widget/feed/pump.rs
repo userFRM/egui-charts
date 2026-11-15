@@ -362,16 +362,18 @@ impl Chart {
             {
                 flow.drop_through(lost, link.trades.iter());
             }
-            // Trades before the oldest held one may never have arrived.
+            // Trades before the oldest held one may never have arrived, and a streamed trade
+            // stamped before held ones joins its bar in time order.
             if let Some(flow) = &mut link.footprint
                 && flow.prepared_before().is_some()
             {
-                // A streamed trade stamped before held ones joins its bar in time order.
                 if unplaced {
                     flow.rebuild_prepared(&link.trades);
                 } else {
                     flow.refresh_prepared_gap(&link.trades);
                 }
+            } else if unplaced {
+                link.footprint = link.footprint(None, &self.state.data().bars);
             } else if let (Some(first), Some(flow)) =
                 (link.unconfirmed_start(), &mut link.footprint)
             {
