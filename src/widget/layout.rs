@@ -1588,11 +1588,11 @@ impl ChartLayout {
         let known = self.previous_charts;
         for (index, chart) in charts.iter().enumerate() {
             if self.previous_charts[index] != chart.layout_identity {
-                // A chart new to the layout brings drawings new to it, while one that
-                // `swap_slots` moved keeps its links.
+                // A chart new to the layout brings drawings new to it, except those of a restored
+                // chart that it held before, while one that `swap_slots` moved keeps its links.
                 #[cfg(feature = "drawings")]
                 if !known.contains(&chart.layout_identity) {
-                    self.drawings.forget_slot(index);
+                    self.drawings.forget_slot(index, chart);
                 }
                 self.previous_charts[index] = chart.layout_identity;
                 self.previous[index] = None;
