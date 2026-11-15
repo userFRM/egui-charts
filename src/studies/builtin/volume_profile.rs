@@ -24,8 +24,9 @@
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::data::{
-    FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, ProfileLevel,
-    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
+    FootprintBar, FootprintLevel, OrderFlowFootprints, OrderFlowInput, ProfileDisplay,
+    ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
+    VolumeProfileConfig, grid_row,
 };
 use crate::model::{
     Bar, BarClock, CustomProfileSession, Instrument, ProfileResolution, ProfileSession, Session,
@@ -710,18 +711,13 @@ impl ProfileStudy {
     /// The executions the chart holds from the bar before chart bar `start` on, while the source
     /// opens its bars by this study's calendar; executions keyed by another calendar, as the
     /// chart's are while the study runs on another interval, cannot be assigned to these bars.
-    fn held_executions(&self, start: usize) -> Option<OrderFlowBars<FootprintBar>> {
-        if self.flow.footprint_clock().as_ref() != Some(&self.clock) {
-            return None;
-        }
+    fn held_executions(&self, start: usize) -> Option<OrderFlowFootprints> {
         let from = start
             .checked_sub(1)
             .map_or(DateTime::<Utc>::MIN_UTC, |before| {
                 self.clock.bar_open(self.data[before].time)
             });
-        // shortcut: viewport queries copy up to 110,000 held rows; retain the copy by revision
-        // if panning shows the cost.
-        Some(self.flow.footprints_from(from))
+        self.flow.footprint_snapshot_for_clock(from, &self.clock)
     }
 
     /// The executions of chart bars `range` in `flow`, merged per tick, and whether `flow` holds
@@ -732,7 +728,7 @@ impl ProfileStudy {
     fn executions_of(
         &self,
         range: &Range<usize>,
-        flow: &OrderFlowBars<FootprintBar>,
+        flow: &OrderFlowFootprints,
     ) -> Option<(FootprintBar, bool)> {
         let open = |bar: &Bar| self.clock.bar_open(bar.time);
         let (start, end) = (
@@ -752,8 +748,8 @@ impl ProfileStudy {
         }
         // Rows before the first bar's slot belong to bars the chart has dropped or never held.
         let lower = before.map_or(Bound::Included(start), Bound::Excluded);
-        let held = flow.bars.range((lower, Bound::Included(end)));
-        let first = *held.clone().next()?.0;
+        let mut held = flow.bars((lower, Bound::Included(end))).peekable();
+        let first = held.peek()?.time;
         // Bars stamped before the first held bar hold none of the executions.
         let from = range.start + self.data[range.clone()].partition_point(|bar| bar.time < first);
         let mut opens = Vec::with_capacity(range.end - from);
@@ -766,22 +762,16 @@ impl ProfileStudy {
         }
         let mut opens = opens.into_iter().peekable();
         let mut merged = FootprintBar::empty(start);
-        for (&time, bar) in held {
+        for bar in held {
+            let time = bar.time;
             while opens.next_if(|&open| open < time).is_some() {}
             // Executions in a slot that no bar of the range opens belong to bars it lacks.
             if opens.peek() != Some(&time) {
                 return None;
             }
-            merged.absorb(bar);
+            merged.absorb_grouped(bar, 1);
         }
-        // During a replay the bar containing the cutoff is absent when its executions before the
-        // cutoff are not known.
-        let unknown = flow.cutoff.is_some_and(|cutoff| {
-            end <= cutoff
-                && self.clock.next_open(end).is_none_or(|next| cutoff < next)
-                && !flow.bars.contains_key(&end)
-        });
-        let complete = flow.complete_from.is_some_and(|from| from <= start) && !unknown;
+        let complete = flow.span_is_complete(start, end);
         Some((merged, complete))
     }
 
@@ -792,7 +782,7 @@ impl ProfileStudy {
         &self,
         range: &Range<usize>,
         config: &VolumeProfileConfig,
-        flow: &OrderFlowBars<FootprintBar>,
+        flow: &OrderFlowFootprints,
     ) -> Option<VolumeProfile> {
         let tick = flow.tick_size?;
         let (bar, complete) = self.executions_of(range, flow)?;
@@ -1084,7 +1074,7 @@ impl ProfileStudy {
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
         // Copied once, from the bar before the first profile built here on.
-        let mut held: Option<Option<OrderFlowBars<FootprintBar>>> = None;
+        let mut held: Option<Option<OrderFlowFootprints>> = None;
         for range in ranges {
             if let Some(plot) = cache.iter().find(|cached| {
                 cached.plot.bars == range && cached.plot.config == config && !cached.dirty

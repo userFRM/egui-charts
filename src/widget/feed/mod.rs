@@ -321,7 +321,7 @@ impl FeedLink {
                 for trade in self.trades.live().take_while(|trade| trade.ts < cutoff) {
                     let _ = live.push(trade);
                 }
-                flow.copy_trade_bars(&live, None);
+                flow.copy_trade_bars((&live).into(), None);
             }
         } else if let Some((input, _)) = &self.footprint_input {
             input.copy_footprint(&mut flow, u64::MAX);

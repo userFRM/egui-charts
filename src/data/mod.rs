@@ -101,7 +101,7 @@ pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
-pub use order_flow::{BarBook, OrderFlowBars, OrderFlowInput, OrderFlowKind};
+pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
 pub use orders::{
     OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
     RestingOrder,
