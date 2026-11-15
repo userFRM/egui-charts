@@ -135,7 +135,7 @@ fn main() {
         std::env::var("FRAME_TIME_FRAMES").map_or(300, |v| v.parse().expect("a frame count"));
     assert!(frames > 0, "at least one measured frame");
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let all = args.iter().any(|arg| arg == "--all-studies");
+    let all = args.iter().any(|arg| arg == "--all-annotations");
     let delta = args.iter().any(|arg| arg == "--delta-poc");
     let stacks = args.iter().any(|arg| arg == "--stacks");
     let annotations = !args.iter().any(|arg| arg == "--no-annotations");
@@ -284,7 +284,7 @@ fn main() {
             chart.trades(SeriesId::MAIN).count(),
             if prepared { 1 } else { BARS * ROWS + 1 } + frame::WARMUP + frames
         );
-        println!("signature {name}: {before:016x} {after:016x}");
+        eprintln!("signature {name}: {before:016x} {after:016x}");
         println!(
             "| {name} | {load:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} |",
             milliseconds(&steady, 0.5),
