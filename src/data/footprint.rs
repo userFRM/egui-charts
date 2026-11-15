@@ -16,12 +16,13 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
 ///
 /// # Layout
 ///
-/// `repr(C)` fixes the field order below, with a size of 56 bytes and an alignment of 8 bytes.
+/// `repr(C, align(8))` fixes the field order below, with a size of 56 bytes and an alignment of
+/// 8 bytes on every target.
 /// Changing this order, size or alignment is a breaking change and requires a changelog note.
 /// Hosts borrowing rows from encoded buffers must check byte order, alignment, bounds and field
 /// representation before creating a slice. Byte conversion belongs to the host; the chart's
 /// numerical validation is still required.
-#[repr(C)]
+#[repr(C, align(8))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
