@@ -76,7 +76,8 @@ impl Chart {
     }
 
     /// Replaces the live feed with a shared recording-backed driver, or restores it with `None`.
-    /// Retains the live bars, quotes, pause state and feed configuration for exit. Recorded trades
+    /// Retains the live bars, quotes, pause state and feed configuration for exit, which gives
+    /// back the ATR and percentage sizes as [`Self::set_replay_time`] describes. Recorded trades
     /// build partial bars through the normal feed path, alongside quotes, orders and depth.
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
@@ -414,7 +415,7 @@ impl Chart {
                 partial.into_iter().map(|bar| (bar, Origin::Live)).collect(),
             );
         }
-        // A step keeps the sizes resolved for the session, as bars streaming in do.
+        // A step forward keeps the sizes resolved for the session, as bars streaming in do.
         let (replay, pending) = (self.replay.take(), self.pending_box_sizes);
         self.replace_main_data(visible);
         (self.replay, self.pending_box_sizes) = (replay, pending);
