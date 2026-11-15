@@ -13,7 +13,7 @@
 //! what the stream sent at that instant. A loss of older trades to stay within capacity leaves the
 //! page's trades there held, so the live ones stay apart until the loss reaches that instant. The
 //! sink drops live trades from the oldest it holds, at or after that instant, so once it drops
-//! any, the kept ones go and no more are kept apart.
+//! any, no more are kept apart, and the kept ones go when its drop reaches their instant.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
