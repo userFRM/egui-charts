@@ -79,14 +79,14 @@ struct State {
 
 impl VolatilityIndex {
     /// Create with the ATR period (typically 10, clamped into 2 to 10000) and the ATR
-    /// multiplier (typically 3, clamped into -10000 to 10000, NaN to 0), over Wilder's average.
+    /// multiplier (typically 3, clamped into 0 to 10000, NaN to 0), over Wilder's average.
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
             period: period.clamp(2, 10_000),
             multiplier: if multiplier.is_nan() {
                 0.0
             } else {
-                multiplier.clamp(-10_000.0, 10_000.0)
+                multiplier.clamp(0.0, 10_000.0)
             },
             smoothing: VolatilityIndexSmoothing::Wilder,
             values: IndicatorValues::new(),
@@ -113,7 +113,7 @@ impl Default for VolatilityIndex {
 impl Indicator for VolatilityIndex {
     crate::studies::inputs::study_inputs!(self;
         period: length("Periods", 2, 10_000),
-        multiplier: number("ATR multiplier", -10_000.0, 10_000.0),
+        multiplier: number("ATR multiplier", 0.0, 10_000.0),
         smoothing: choice("Method", [VolatilityIndexSmoothing::Exponential, VolatilityIndexSmoothing::Wilder])
     ; {});
 
@@ -248,13 +248,10 @@ mod tests {
         );
         let n = None;
         #[rustfmt::skip]
-        let rows: [Row; 4] = [
+        let rows: [Row; 3] = [
             (2, 1.0, Wilder,
                 [n, Some(9.0), n, Some(10.0), Some(9.5), Some(11.5), Some(10.0), Some(7.5)],
                 [n, Some(13.5), n, Some(13.75), Some(13.625), Some(11.5625), Some(10.03125), Some(7.484375)]),
-            (2, -1.0, Wilder,
-                [n, Some(15.0), n, Some(10.0), Some(6.5), Some(11.5), Some(5.0), Some(13.5)],
-                [n, Some(7.5), n, Some(16.25), Some(6.375), Some(11.5625), Some(4.96875), Some(13.515625)]),
             (3, 2.0, Exponential,
                 [n, n, n, Some(7.0), Some(6.0), Some(7.0), Some(8.0), Some(7.0)],
                 [n, n, n, Some(20.0 / 3.0), Some(35.0 / 6.0), Some(83.0 / 12.0), Some(191.0 / 24.0), Some(335.0 / 48.0)]),
