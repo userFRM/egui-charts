@@ -445,17 +445,26 @@ impl Indicator for RsiDivergence {
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
-        use crate::studies::PlotType;
-        let plot_type = match line {
-            0..=4 => PlotType::Line,
-            5 | 6 => PlotType::TriangleUp,
-            _ => PlotType::TriangleDown,
-        };
+        use crate::studies::PlotType::{Line, TriangleDown, TriangleUp};
+        // A table like the colours: a `match` on the line crashed the optimiser of the compiler
+        // the performance job pins once inlined into `settings`.
+        let plot_types = [
+            Line,
+            Line,
+            Line,
+            Line,
+            Line,
+            TriangleUp,
+            TriangleUp,
+            TriangleDown,
+            TriangleDown,
+        ];
+        let line = line.min(8);
         crate::studies::PlotStyle {
-            color: self.plot_colors[line.min(8)],
+            color: self.plot_colors[line],
             width: 2.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type,
+            plot_type: plot_types[line],
             visible: true,
         }
     }
