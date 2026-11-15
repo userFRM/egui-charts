@@ -65,12 +65,14 @@ pub(crate) fn route(stream: &Stream, message: &str) -> Vec<Routed> {
             (!stream.routes.is_empty()).then_some(0)
         } else {
             // The record's own value, then the one the message names once at its root, then
-            // the record itself when it is a bare value.
-            at(record, &stream.route_by)
+            // the record itself when it is a bare value. A record without one takes the route
+            // whose value is empty.
+            let value = at(record, &stream.route_by)
                 .and_then(text)
                 .or_else(|| at(&root, &stream.route_by).and_then(text))
                 .or_else(|| text(record))
-                .and_then(|value| stream.routes.iter().position(|route| route.value == value))
+                .unwrap_or_default();
+            stream.routes.iter().position(|route| route.value == value)
         };
         match route {
             Some(route) if matches!(stream.routes[route].kind, RouteKind::Ignore) => {
@@ -449,7 +451,8 @@ pub(crate) mod tests {
             value: value.to_owned(),
             kind,
         };
-        // A status route, a keep-alive answer, trades, and a route whose value is a number.
+        // A status route, a keep-alive answer, trades, a route whose value is a number, and one
+        // without a value for the records that have no `type`.
         let stream = Stream {
             records: key("data"),
             route_by: key("type"),
@@ -458,6 +461,7 @@ pub(crate) mod tests {
                 to("pong", RouteKind::Ignore),
                 to("trade", RouteKind::Trades(TradeFields::default())),
                 to("7", RouteKind::Bars(BarFields::default())),
+                to("", RouteKind::Ignore),
             ],
             ..Stream::default()
         };
@@ -502,19 +506,20 @@ pub(crate) mod tests {
                 r#"{"type":7,"data":[{"o":1}]}"#,
                 vec![record(3, json!({"o": 1}))],
             ),
-            // 9: the root is a list, so `data` leads nowhere and a list has no `type`.
+            // 9: an answer to a subscribe or a ping that names no `type` anywhere.
             (
-                whole,
-                vec![Routed::Unrouted {
-                    record: serde_json::from_str(whole).unwrap(),
-                }],
+                r#"{"method":"pong","time_in":"2026-11-11T14:33:00.000000Z"}"#,
+                vec![Routed::Ignored { route: 4 }],
             ),
+            // 10: the root is a list, so `data` leads nowhere and the list is one record, which
+            // has no `type`.
+            (whole, vec![Routed::Ignored { route: 4 }]),
         ];
         for (message, expected) in rows {
             assert_eq!(route(&stream, message), expected, "{message}");
         }
 
-        // With the root as the place of the records, the list of row 9 is split.
+        // With the root as the place of the records, the list of row 10 is split.
         let rooted = Stream {
             records: vec![],
             ..stream.clone()
