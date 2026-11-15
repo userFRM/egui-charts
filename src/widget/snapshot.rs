@@ -501,6 +501,7 @@ impl Chart {
         }
         self.config.show_volume = show_volume;
         self.restored_studies.clear();
+        self.restored_from = snapshot.saved_by;
         self.pane_layout
             .panes
             .retain(|pane| (main_present && pane.id == PaneId::MAIN) || !pane.members.is_empty());
