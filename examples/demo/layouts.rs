@@ -746,6 +746,11 @@ impl DemoApp {
                 return false;
             }
         };
+        // Layouts saved before the demo's instruments were renamed name the former tickers.
+        for (saved, snapshot) in comparisons.iter_mut().zip(&mut layout.charts) {
+            super::comparison::rename_former(saved);
+            DemoSymbol::rename_former(snapshot);
+        }
         for (saved, snapshot) in comparisons.iter().zip(&layout.charts) {
             if let Err(error) = super::comparison::validate(saved, snapshot.panes.len()) {
                 self.toasts.error(error);
@@ -888,11 +893,16 @@ impl DemoApp {
 
     /// Applies stored settings, opening the layout that was open last.
     pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
-        self.object_tree.state_mut().drawing_sort = settings.drawing_sort.clone();
+        self.object_tree.state_mut().drawing_sort = settings
+            .drawing_sort
+            .iter()
+            .map(|(symbol, sort)| (DemoSymbol::current(symbol), sort.clone()))
+            .collect();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
         if let Some(symbol) = settings
             .symbol
+            .map(|symbol| DemoSymbol::current(&symbol))
             .filter(|symbol| *symbol != self.state.symbol)
         {
             self.switch_symbol(&symbol);
@@ -1220,7 +1230,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let sorted: std::collections::BTreeMap<_, _> =
-            [("AAPL".to_owned(), DrawingSort::LastModified)].into();
+            [("STOCKA".to_owned(), DrawingSort::LastModified)].into();
         app.object_tree.state_mut().drawing_sort = sorted.clone();
         let json = app.user_settings().to_json();
         app.object_tree.state_mut().drawing_sort.clear();
@@ -1259,10 +1269,10 @@ mod tests {
                 ..Default::default()
             });
         app.handle_comparison(super::super::CompareAction::AddSymbol(
-            "AAPL".into(),
+            "STOCKA".into(),
             Default::default(),
         ));
-        app.add_spread("AAPL-MSFT");
+        app.add_spread("STOCKA-STOCKB");
         super::super::tests::finish_spreads(&mut app.chart, &mut app.spreads);
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
@@ -1317,7 +1327,7 @@ mod tests {
             let spread = copy
                 .chart
                 .series()
-                .find(|(_, series)| series.name == "AAPL-MSFT")
+                .find(|(_, series)| series.name == "STOCKA-STOCKB")
                 .expect("chart slots retain spread series")
                 .0;
             assert!(!copy.chart.bars(spread).is_empty());
@@ -1381,7 +1391,7 @@ mod tests {
                 egui::Color32::from_gray(10 + slot as u8)
             );
         }
-        app.handle_comparison(super::super::CompareAction::RemoveSymbol("AAPL".into()));
+        app.handle_comparison(super::super::CompareAction::RemoveSymbol("STOCKA".into()));
         app.activate_chart_slot(1);
         app.sync_comparisons();
         assert_eq!(app.compare_dialog.compared_symbols.len(), 1);
@@ -1479,10 +1489,10 @@ mod tests {
             drawing
         };
         for (slot, symbol, interval) in [
-            (1, "MSFT", Timeframe::Hour1),
-            (3, "BTCUSD", Timeframe::Min5),
-            (0, "EURUSD", Timeframe::Min15),
-            (2, "ETHUSD", Timeframe::Day1),
+            (1, "STOCKB", Timeframe::Hour1),
+            (3, "TOKENA", Timeframe::Min5),
+            (0, "FOREXA", Timeframe::Min15),
+            (2, "TOKENB", Timeframe::Day1),
         ] {
             app.activate_chart_slot(slot);
             app.switch_symbol(symbol);
@@ -1498,10 +1508,10 @@ mod tests {
         app.layout.set_sync_group(0, Some("First".into()));
         let assert_charts = |app: &DemoApp| {
             for (slot, symbol, interval, price) in [
-                (0, "ETHUSD", Timeframe::Day1, 2.0),
-                (1, "MSFT", Timeframe::Hour1, 1.0),
-                (2, "EURUSD", Timeframe::Min15, 0.0),
-                (3, "BTCUSD", Timeframe::Min5, 3.0),
+                (0, "TOKENB", Timeframe::Day1, 2.0),
+                (1, "STOCKB", Timeframe::Hour1, 1.0),
+                (2, "FOREXA", Timeframe::Min15, 0.0),
+                (3, "TOKENA", Timeframe::Min5, 3.0),
             ] {
                 let chart = if slot == app.layout_slot {
                     &app.chart
@@ -1521,8 +1531,8 @@ mod tests {
         assert!(app.replay.is_some(), "the replayed chart stays on screen");
         assert_eq!(app.replay_slots, [0]);
         assert_eq!((app.layout_slot, app.layout.active()), (0, 0));
-        assert_eq!(app.chart.symbol(), "ETHUSD");
-        assert_eq!(app.state.symbol, "ETHUSD");
+        assert_eq!(app.chart.symbol(), "TOKENB");
+        assert_eq!(app.state.symbol, "TOKENB");
         assert_eq!(
             (app.layout.sync_group(0), app.layout.sync_group(2)),
             (Some("Kept"), Some("First"))

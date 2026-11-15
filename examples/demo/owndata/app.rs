@@ -226,7 +226,10 @@ mod tests {
         settle(&mut app, &ctx);
         // A synthetic workspace that is not the default one: two charts, a comparison, a study.
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        app.handle_comparison(CompareAction::AddSymbol(
+            "STOCKA".into(),
+            Default::default(),
+        ));
         app.chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         settle(&mut app, &ctx);
@@ -304,9 +307,9 @@ mod tests {
         assert_eq!(app.layout_tabs.len(), tabs);
         assert!(notified(&app, "Layouts: available on synthetic data only."));
         // A symbol outside the profile is refused. One of the profile is asked of its service.
-        app.switch_symbol("AAPL");
+        app.switch_symbol("STOCKA");
         assert_eq!(app.chart.symbol(), "ABC");
-        assert!(notified(&app, "AAPL is not a symbol of this data source"));
+        assert!(notified(&app, "STOCKA is not a symbol of this data source"));
         app.switch_symbol("XYZ");
         until(&ctx, &mut app.chart, "the other symbol", complete);
         assert_eq!(

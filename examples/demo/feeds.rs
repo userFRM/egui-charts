@@ -27,22 +27,25 @@ pub(super) fn search_catalog(
     let mut symbols = DemoSymbol::symbols();
     for symbol in &mut symbols {
         symbol.source = Some("Synthetic".into());
-        if matches!(symbol.exchange.as_deref(), Some("NASDAQ" | "CME" | "Index")) {
+        if matches!(
+            symbol.exchange.as_deref(),
+            Some("Stocks" | "Futures" | "Index")
+        ) {
             symbol.country = Some("US".into());
         }
         symbol.sector = match symbol.symbol.as_str() {
-            "AAPL" | "MSFT" | "NVDA" => Some("Technology".into()),
-            "TSLA" => Some("Consumer discretionary".into()),
+            "STOCKA" | "STOCKB" | "STOCKC" => Some("Technology".into()),
+            "STOCKD" => Some("Consumer discretionary".into()),
             _ => None,
         };
-        if symbol.symbol == "AAPL" {
-            symbol.root = Some("AAPL".into());
+        if symbol.symbol == "STOCKA" {
+            symbol.root = Some("STOCKA".into());
         }
     }
     // A second synthetic provider serves the same security and historical series.
     let mut mirror = symbols
         .iter()
-        .find(|symbol| symbol.symbol == "AAPL")
+        .find(|symbol| symbol.symbol == "STOCKA")
         .unwrap()
         .clone();
     mirror.source = Some("Synthetic mirror".into());
@@ -425,7 +428,7 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                 CalendarKind::Earnings | CalendarKind::Dividends => {
                     let stocks: Vec<_> = DemoSymbol::catalog()
                         .iter()
-                        .filter(|spec| spec.exchange == "NASDAQ")
+                        .filter(|spec| spec.exchange == "Stocks")
                         .collect();
                     let spec = stocks[n % stocks.len()];
                     let dividends = query.kind == CalendarKind::Dividends;
@@ -691,7 +694,7 @@ impl DemoChats {
                     "General",
                     "Ravi",
                     37,
-                    "SPX holding above yesterday's close so far.",
+                    "INDEXA holding above yesterday's close so far.",
                 ),
                 message(
                     "General",
@@ -699,7 +702,7 @@ impl DemoChats {
                     12,
                     "Volume looks light ahead of the CPI release.",
                 ),
-                message("Crypto", "Lee", 25, "BTCUSD testing the range high again."),
+                message("Crypto", "Lee", 25, "TOKENA testing the range high again."),
                 message(
                     "Crypto",
                     "Mia",
@@ -744,8 +747,8 @@ pub(super) fn heatmap_universes() -> Vec<egui_charts::ui::widget_bar::MarketHeat
             .map(|spec| MarketHeatmapEntry {
                 symbol: spec.symbol.into(),
                 group: match spec.symbol {
-                    "AAPL" | "MSFT" | "NVDA" => "Technology",
-                    "TSLA" => "Consumer",
+                    "STOCKA" | "STOCKB" | "STOCKC" => "Technology",
+                    "STOCKD" => "Consumer",
                     _ => spec.exchange,
                 }
                 .into(),
@@ -1136,7 +1139,7 @@ mod tests {
         assert_eq!(state.0.len(), 100);
         assert_eq!(state.0.last().unwrap().time, event(119).time);
         drop(state);
-        notifications.notify_event("BTCUSD", &event(0));
+        notifications.notify_event("TOKENA", &event(0));
         assert_eq!(
             notifications
                 .0
@@ -1147,7 +1150,7 @@ mod tests {
                 .unwrap()
                 .symbol
                 .as_deref(),
-            Some("BTCUSD")
+            Some("TOKENA")
         );
     }
 
@@ -1210,7 +1213,7 @@ mod tests {
             egui_charts::widget::ChartLayoutMode::TwoHorizontal,
         ));
         app.activate_chart_slot(1);
-        app.switch_symbol("MSFT");
+        app.switch_symbol("STOCKB");
         for slot in [1, 0, 1] {
             app.activate_chart_slot(slot);
             app.live.set_paused(true);
@@ -1233,13 +1236,17 @@ mod tests {
         (1..=40)
             .find(|step| {
                 app.live.advance(now + TimeDelta::milliseconds(step * 100));
-                app.live.market_quote("MSFT", app.live.now()).unwrap().last != frozen.last
+                app.live
+                    .market_quote("STOCKB", app.live.now())
+                    .unwrap()
+                    .last
+                    != frozen.last
             })
             .expect("the other slot advances the market beyond the paused quote");
         for _ in 0..4 {
             demo_frame(&mut app, &ctx, vec![]);
         }
-        assert_ne!(app.watchlist.quote("MSFT").unwrap().last, frozen.last);
+        assert_ne!(app.watchlist.quote("STOCKB").unwrap().last, frozen.last);
         app.activate_chart_slot(1);
         let texts = demo_frame(&mut app, &ctx, vec![]);
         assert!(
@@ -1251,8 +1258,8 @@ mod tests {
         app.live.set_paused(true);
         let now = app.live.now();
         app.handle_layout_action(LayoutAction::CreateNew);
-        app.switch_symbol("EURUSD");
-        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
+        app.switch_symbol("FOREXA");
+        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());
         super::super::tests::finish_feed(&app.live);
         let before = app.live.quote(app.live.now()).unwrap();
@@ -1261,7 +1268,7 @@ mod tests {
         }
         let texts = demo_frame(&mut app, &ctx, vec![]);
         assert_eq!(
-            app.watchlist.quote("EURUSD"),
+            app.watchlist.quote("FOREXA"),
             app.live.quote(app.live.now()).as_ref()
         );
         assert!(
@@ -1310,8 +1317,8 @@ mod tests {
             let now = start + TimeDelta::seconds(2);
             live.advance(now);
             live.set_view(egui_charts::ui::timeframe_toolbar::SessionType::RTH, false);
-            for symbol in ["MSFT", "BTCUSD"] {
-                if symbol == "MSFT" {
+            for symbol in ["STOCKB", "TOKENA"] {
+                if symbol == "STOCKB" {
                     assert!(live.market_quote(symbol, now).is_none());
                     assert!(
                         live.loading(),
@@ -1351,7 +1358,7 @@ mod tests {
                     output.drop_without_applying_deltas();
                 }
                 assert!(displayed, "the screener must share {symbol}'s price basis");
-                if symbol == "MSFT" {
+                if symbol == "STOCKB" {
                     assert_eq!(
                         after.extended.is_some(),
                         at == "2026-10-23T13:00:00Z" || at == "2026-10-23T22:00:00Z"
@@ -1372,13 +1379,13 @@ mod tests {
             now,
             true,
         );
-        app.switch_symbol("BTCUSD");
+        app.switch_symbol("TOKENA");
         app.trading.set_service(app.paper.clone());
         app.trading.display.instant_orders = true;
         demo_frame(&mut app, &ctx, vec![]);
         let price = app.live.quote(now).unwrap().last;
-        app.paper.set_price("BTCUSD", price);
-        let reference = LiveFeed::new("BTCUSD", now);
+        app.paper.set_price("TOKENA", price);
+        let reference = LiveFeed::new("TOKENA", now);
         super::super::tests::finish_feed(&reference);
         reference.set_paused(false);
         let (at, trigger) = (1..=40)
@@ -1395,7 +1402,7 @@ mod tests {
             OrderType::Limit(trigger)
         };
         app.trading
-            .open_ticket(OrderRequest::new("BTCUSD", OrderSide::Buy, 1.0, kind));
+            .open_ticket(OrderRequest::new("TOKENA", OrderSide::Buy, 1.0, kind));
         let mut texts = Vec::new();
         for _ in 0..3 {
             texts = demo_frame(&mut app, &ctx, vec![]);
@@ -1403,7 +1410,7 @@ mod tests {
         let point = texts
             .iter()
             .find(|(text, _)| {
-                text.contains("BTCUSD @") && (text.contains("STOP") || text.contains("LIMIT"))
+                text.contains("TOKENA @") && (text.contains("STOP") || text.contains("LIMIT"))
             })
             .expect("the pending order submit button")
             .1
@@ -1423,9 +1430,9 @@ mod tests {
                 .iter()
                 .any(|toast| toast.message.starts_with("Filled:"))
         );
-        app.switch_symbol("MSFT");
+        app.switch_symbol("STOCKB");
         super::super::tests::finish_feed(&app.live);
-        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
+        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());
         app.live.set_paused(false);
         super::super::tests::finish_feed(&app.live);
@@ -1435,7 +1442,7 @@ mod tests {
             app.toasts
                 .toasts()
                 .iter()
-                .any(|toast| toast.message.starts_with("Filled: Buy 1 BTCUSD")),
+                .any(|toast| toast.message.starts_with("Filled: Buy 1 TOKENA")),
             "the off-chart order must fill: {:?}",
             app.toasts.toasts()
         );
@@ -1451,7 +1458,7 @@ mod tests {
         app.live.advance(next_time);
         demo_frame(&mut app, &ctx, vec![]);
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let _ = app.trading.show_account_panel(ui, "MSFT");
+            let _ = app.trading.show_account_panel(ui, "STOCKB");
         });
         // One unit bought at the trigger has unrealized P&L = current price - trigger.
         let pnl = format!("{:+.2}", next_price - trigger);
@@ -1491,14 +1498,14 @@ mod tests {
         app.feed_market_panels(&ctx);
         app.trading.poll(&ctx, &mut app.toasts);
         for _ in 0..2 {
-            app.trading.trade("MSFT".into(), OrderSide::Buy);
+            app.trading.trade("STOCKB".into(), OrderSide::Buy);
             app.trading.poll(&ctx, &mut app.toasts);
         }
         assert!(
             app.toasts
                 .toasts()
                 .iter()
-                .any(|toast| toast.message == "Filled: Buy 1 MSFT at 100.00"),
+                .any(|toast| toast.message == "Filled: Buy 1 STOCKB at 100.00"),
             "the broker must keep the replay price: {:?}",
             app.toasts.toasts()
         );

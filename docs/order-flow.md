@@ -86,7 +86,7 @@ orders.
 A feed that sends order events through [`Sink::push_order_snapshot`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_order_snapshot) and [`push_order_event`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_order_event) lets the
 book, the heatmap and the ladder count individual resting orders. [`RestingOrder::with_participant`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.RestingOrder.html#method.with_participant)
 and [`with_placed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.RestingOrder.html#method.with_placed) carry the participant id and placement time the venue supplies; neither is ever
-inferred from changes between snapshots. The demo's ESZ2026 futures contract is fed this way:
+inferred from changes between snapshots. The demo's INDEXFZ2026 futures contract is fed this way:
 `examples/demo/orders.rs` turns each change of its synthetic book into order events with placement
 times and rests a few large orders beside them, so the size tiers, the largest-order profile and
 the Book Size study's age inputs can be tried there. The other demo instruments send aggregate
