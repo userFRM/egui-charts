@@ -167,15 +167,15 @@ impl FootprintBar {
     /// [`absorb`](Self::absorb) with every `group` neighbouring rows of `next` summed into the
     /// row keyed by their quotient.
     pub(crate) fn absorb_grouped(&mut self, next: &FootprintBar, group: i64) {
-        let open = self.delta();
+        // An extreme of `next` adds its excess of buys or sells to one side so far, so the merged
+        // point balances as `delta` does, and a bar absorbed into an empty one keeps its path.
+        let low = side_delta(self.ask, self.bid - next.min_delta);
+        let high = side_delta(self.ask + next.max_delta, self.bid);
+        self.min_delta = self.min_delta.min(low);
+        self.max_delta = self.max_delta.max(high);
         self.bid += next.bid;
         self.ask += next.ask;
         self.unknown += next.unknown;
-        // A point of the path within the rounding of the merged sides is balanced, as `delta` is.
-        let slack = 1e-9 * self.bid.max(self.ask);
-        let point = |delta: f64| if delta.abs() <= slack { 0.0 } else { delta };
-        self.min_delta = self.min_delta.min(point(open + next.min_delta));
-        self.max_delta = self.max_delta.max(point(open + next.max_delta));
         for (&level, row) in &next.levels {
             let level = level.div_euclid(group);
             let target = self.levels.entry(level).or_insert_with(|| FootprintLevel {
@@ -2245,23 +2245,34 @@ mod tests {
     }
 
     #[test]
-    fn profile_path_balanced_up_to_rounding_reaches_zero() {
+    fn profile_path_is_balanced_only_where_its_sides_are() {
+        use OrderSide::{Buy, Sell};
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        // A buy of 0.3, then sells of 0.1 and 0.2 that sum to 0.30000000000000004 in the next bar.
-        for (minutes, size, side) in [
-            (0, 0.3, OrderSide::Buy),
-            (1, 0.1, OrderSide::Sell),
-            (1, 0.2, OrderSide::Sell),
+        // A buy of 0.3 is balanced by sells of 0.1 and 0.2 in the next bar, which sum to
+        // 0.30000000000000004. A first buy of 1e-8 is the high of a bar that then sells 100: its
+        // sides there are 1e-8 and 0, so the profile keeps it.
+        for (trades, path) in [
+            (
+                &[(0, 0.3, Buy), (1, 0.1, Sell), (1, 0.2, Sell)][..],
+                (0.0, 0.0, 0.3),
+            ),
+            (
+                &[(0, 1e-8, Buy), (0, 100.0, Sell)],
+                (-99.99999999, -99.99999999, 1e-8),
+            ),
         ] {
-            let at = start + TimeDelta::minutes(minutes);
-            flow.push(&Tick::new(at, 100.0, size, Some(side))).unwrap();
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for &(minutes, size, side) in trades {
+                let at = start + TimeDelta::minutes(minutes);
+                flow.push(&Tick::new(at, 100.0, size, Some(side))).unwrap();
+            }
+            let profile = flow.profile(start, start + TimeDelta::minutes(1));
+            assert_eq!(
+                (profile.delta(), profile.min_delta, profile.max_delta),
+                path,
+                "{trades:?}"
+            );
         }
-        let profile = flow.profile(start, start + TimeDelta::minutes(1));
-        assert_eq!(
-            (profile.delta(), profile.min_delta, profile.max_delta),
-            (0.0, 0.0, 0.3)
-        );
     }
 
     #[test]
