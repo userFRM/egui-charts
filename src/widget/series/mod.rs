@@ -437,6 +437,7 @@ impl Chart {
                 }
                 self.scroll_animation = None;
                 self.stop_at_oldest_bar(right_edge);
+                self.move_drag_start(right_edge);
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
@@ -910,8 +911,15 @@ impl Chart {
             );
         }
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
+        // New elements keep the one at the right edge in place unless the view follows the live
+        // edge, as bars do; a drag in progress keeps it there too.
+        let right_edge = self.right_edge();
+        let follows = follow && self.state.time_scale().is_near_live_edge();
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        if !follows {
+            self.move_drag_start(right_edge);
+        }
         self.refresh_time_scale_content();
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
@@ -972,9 +980,8 @@ impl Chart {
         if appended && self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();
         } else if in_place {
-            let offset = right_edge.offset;
             self.stop_at_oldest_bar(right_edge);
-            self.move_drag_start(offset);
+            self.move_drag_start(right_edge);
         } else {
             self.keep_bars_in_view(&self.clock(), right_edge);
         }
@@ -1009,23 +1016,23 @@ impl Chart {
                 .time_scale_mut()
                 .set_right_offset(right_edge.offset - moved);
         }
-        let offset = right_edge.offset;
         self.stop_at_oldest_bar(right_edge);
-        self.move_drag_start(offset);
+        self.move_drag_start(right_edge);
     }
 
     /// Moves the right offset a drag on the time axis or the plot started with by as much as the
-    /// bars moved the view from `offset`, since the drag sets the view from its start on every
-    /// frame and would undo the move.
-    fn move_drag_start(&mut self, offset: f64) {
-        if let Some(start) = &mut self.scroll_start_offset {
-            *start += self.state.time_scale().right_offset_precise() - offset;
+    /// bars moved the view since `before`, since the drag sets the view from its start on every
+    /// frame and would undo the move. It moves from the start `before` holds, so that a change
+    /// made within another one, such as the eviction after the bars of a replay seek, counts once.
+    fn move_drag_start(&mut self, before: ViewEdge) {
+        if let (Some(start), Some(from)) = (&mut self.scroll_start_offset, before.drag_start) {
+            *start = from + self.state.time_scale().right_offset_precise() - before.offset;
         }
     }
 
-    /// Retain the view's right edge, oldest key and the slot it keeps in place across data
-    /// updates: the last slot near the live edge, otherwise the slot at the right edge, or the
-    /// first slot while the edge is before it.
+    /// Retain the view's right edge, oldest key, drag start and the slot it keeps in place across
+    /// data updates: the last slot near the live edge, otherwise the slot at the right edge, or
+    /// the first slot while the edge is before it.
     pub(super) fn right_edge(&self) -> ViewEdge {
         let scale = self.state.time_scale();
         let shown = self.state.shown();
@@ -1041,6 +1048,7 @@ impl Chart {
             offset: scale.right_offset_precise(),
             first: shown.first().map(|bar| bar.time),
             kept: shown.get(at).map(|bar| (bar.time, last - at)),
+            drag_start: self.scroll_start_offset,
         }
     }
 
@@ -1073,7 +1081,8 @@ impl Chart {
     }
 }
 
-/// The viewport, oldest loaded key and kept slot before bars change.
+/// The viewport, oldest loaded key, kept slot and drag start before bars change.
+#[derive(Clone, Copy)]
 pub(super) struct ViewEdge {
     right: f64,
     offset: f64,
@@ -1081,6 +1090,8 @@ pub(super) struct ViewEdge {
     /// The time of the bar in the slot the view keeps in place and the number of bars after it,
     /// on an ordinal scale; `None` without bars.
     kept: Option<(DateTime<Utc>, usize)>,
+    /// The right offset a drag in progress started with.
+    drag_start: Option<f64>,
 }
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
