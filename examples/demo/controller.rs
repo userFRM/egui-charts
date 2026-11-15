@@ -3063,6 +3063,12 @@ impl DemoApp {
             if let Some(decimals) = live::price_decimals(&symbol) {
                 self.watchlist.set_price_decimals(&symbol, decimals);
             }
+            if let Some(spec) = DemoSymbol::catalog()
+                .iter()
+                .find(|spec| spec.symbol.eq_ignore_ascii_case(&symbol))
+            {
+                self.watchlist.set_description(&symbol, spec.company_name);
+            }
         }
         self.watchlist.set_selected(&selected);
         self.feed_paper_prices();
