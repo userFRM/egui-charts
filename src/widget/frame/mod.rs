@@ -1700,16 +1700,9 @@ impl Chart {
                 (merge(line), volume)
             });
         let merged_x = |merged: &super::merge::Merged, index: usize, min_x: f32| {
-            // Past the last merged bar, one group further per index.
-            let past = |last: f32| last + (index + 1 - merged.index.len()) as f32 * factor as f32;
-            let index = merged
-                .index
-                .get(index)
-                .copied()
-                .unwrap_or_else(|| merged.index.last().map_or(0.0, |&last| past(last)));
             self.state
                 .time_scale()
-                .idx_to_coord_precise(index, min_x, chart_rect_width)
+                .idx_to_coord_precise(merged.index[index], min_x, chart_rect_width)
         };
         let merged_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width * factor as f32, self.config.wick_width),
