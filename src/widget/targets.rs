@@ -181,9 +181,9 @@ impl Chart {
             let change = percent_change(last.close, price)
                 .map(|change| format!(" ({change:+.2}%)"))
                 .unwrap_or_default();
-            let text = format!("{name} {price_text}{change}");
+            let shown = l10n::text(ui.ctx(), name);
             let galley = painter.layout_no_wrap(
-                l10n::text(ui.ctx(), text),
+                format!("{shown} {price_text}{change}"),
                 FontId::proportional(12.0),
                 color,
             );
@@ -223,7 +223,7 @@ impl Chart {
                 ui.ctx(),
                 "{name}: {price_text}{change}\n{0} analysts\nPublished: {1}\nHorizon: {2}",
                 &[
-                    ("name", name.to_string()),
+                    ("name", shown),
                     ("price_text", price_text.to_string()),
                     ("change", change.to_string()),
                     ("0", format!("{}", targets.analysts)),
