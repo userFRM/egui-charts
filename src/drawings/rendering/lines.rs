@@ -524,7 +524,8 @@ impl Drawing {
         let height = rect.height();
         let width = rect.width();
         let [width_label, height_label] =
-            <[String; 2]>::try_from(self.size_labels(price_formatter)).unwrap_or_default();
+            <[String; 2]>::try_from(self.size_labels(painter.ctx(), price_formatter))
+                .unwrap_or_default();
         let chart = painter.ctx().active_theme().chart;
         let label_bg = chart.bg_axis;
 
@@ -924,6 +925,7 @@ mod tests {
                     finer: &[],
                     revision: 0,
                     bar_to_x: &|b| 100. + b * 100.,
+                    bar_spacing: 100.0,
                     price_to_y: &|p| 500. - p as f32 * 10.,
                     y_to_price: &|y| f64::from((500. - y) / 10.),
                     time_axis: true,
@@ -1287,6 +1289,7 @@ mod tests {
                         finer: &[],
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y: &|p| p as f32,
                         y_to_price: &f64::from,
                         time_axis: true,
@@ -1636,6 +1639,7 @@ mod tests {
                             finer: &[],
                             revision: 0,
                             bar_to_x: &|x| x,
+                            bar_spacing: 1.0,
                             price_to_y: &|p| p as f32,
                             y_to_price: &f64::from,
                             time_axis: true,
@@ -1701,6 +1705,7 @@ mod tests {
                         finer: &[],
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y: &|p| p as f32,
                         y_to_price: &f64::from,
                         time_axis: true,
@@ -1759,6 +1764,7 @@ mod tests {
                     finer: &[],
                     revision: 0,
                     bar_to_x: &|x| x,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| p as f32,
                     y_to_price: &f64::from,
                     time_axis: true,
@@ -1797,6 +1803,7 @@ mod tests {
                 bars: &[],
                 revision: 0,
                 bar_to_x: &x,
+                bar_spacing: 1.0,
                 price_to_y: &y,
                 y_to_price: &inverse,
                 time_axis: false,

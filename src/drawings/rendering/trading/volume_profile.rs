@@ -47,6 +47,21 @@ impl Drawing {
         if let Some((first, bars)) = bars_between(view.bars, anchor_at.bar_idx, f32::INFINITY) {
             self.draw_vwap(painter, view, first, bars);
         }
+        // Drawn whatever bars are in view, at the value the price axis tags.
+        if let Some(vwap) = self.anchored_vwap_last(view.bars, view.revision) {
+            let clip = painter.clip_rect();
+            let y = (view.price_to_y)(vwap);
+            if clip.y_range().contains(y) {
+                crate::painting::dashed_line::draw_dashed_line(
+                    painter,
+                    Pos2::new(clip.left(), y),
+                    Pos2::new(clip.right(), y),
+                    Stroke::new(1.0, self.color32()),
+                    1.0,
+                    3.0,
+                );
+            }
+        }
     }
 
     fn draw_vwap(&self, painter: &egui::Painter, view: &ChartView, first: usize, bars: &[Bar]) {
@@ -88,10 +103,10 @@ impl Drawing {
         let line_color = self.color32();
         if config.background.visible {
             let color = config.background.color.map_or(line_color, rgba);
-            let anchor = (view.bar_to_x)(first as f32);
-            let last = (view.bar_to_x)((first + bars.len() - 1) as f32);
+            let left = (view.bar_to_x)(first as f32 - 0.5);
+            let right = (view.bar_to_x)((first + bars.len() - 1) as f32 + 0.5);
             painter.rect_filled(
-                egui::Rect::from_x_y_ranges(anchor..=last, clip.y_range()),
+                egui::Rect::from_x_y_ranges(left..=right, clip.y_range()),
                 0.0,
                 color.gamma_multiply(config.background.opacity()),
             );
@@ -120,23 +135,6 @@ impl Drawing {
             (view.price_to_y)(0.0),
             step,
         );
-        let last = bars.len() - 1;
-        if config.track_price
-            && let Some(Some((vwap, _))) =
-                anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()
-        {
-            let y = (view.price_to_y)(vwap);
-            if clip.y_range().contains(y) {
-                crate::painting::dashed_line::draw_dashed_line(
-                    painter,
-                    Pos2::new(clip.left(), y),
-                    Pos2::new(clip.right(), y),
-                    Stroke::new(1.0, line_color),
-                    1.0,
-                    3.0,
-                );
-            }
-        }
     }
 
     /// The anchored VWAP at the last of `bars`, the pane's bars at `revision`, when its latest
@@ -322,9 +320,7 @@ impl Drawing {
     ) -> Rc<Option<VolumeProfile>> {
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
-            let complete = flow
-                .complete_from()
-                .is_some_and(|from| from <= executed.time);
+            let complete = flow.span_is_complete(start.time, end.time);
             if let Some(profile) = VolumeProfile::from_executions(
                 &executed,
                 flow.price_step(),
@@ -343,8 +339,8 @@ impl Drawing {
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
     /// with its [source](VolumeProfile::source): executed volume when
-    /// [`ChartView::executions`] holds complete bars in the selected span, those from
-    /// [`Footprint::complete_from`](crate::data::Footprint::complete_from), else the finer bars
+    /// [`ChartView::executions`] holds complete bars in the selected span, including prepared
+    /// bars before a missing join, else the finer bars
     /// of [`ChartView::finer`], else the bar estimate.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
@@ -743,8 +739,8 @@ mod tests {
         };
         let red = Color32::from_rgb(200, 0, 0).gamma_multiply(0.5);
         assert!(mesh.vertices.iter().all(|v| v.color == red));
-        // Background: green at 5% from the anchor bar to the last bar, full height, under the
-        // fill.
+        // Background: green at 5% from half a bar before the anchor bar to half a bar after the
+        // last bar, full height, under the fill.
         let shapes = edited(|c| c.background.visible = true);
         let Shape::Rect(wash) = &shapes[0] else {
             panic!("background")
@@ -752,12 +748,22 @@ mod tests {
         assert_eq!(
             (wash.rect, wash.fill),
             (
-                Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(130.0, 600.0)),
+                Rect::from_min_max(Pos2::new(95.0, 0.0), Pos2::new(135.0, 600.0)),
                 green.gamma_multiply(0.05)
             )
         );
         assert!(matches!(shapes[1], Shape::Mesh(_)));
         assert_eq!(shapes.len(), 5);
+        // Anchored on the last bar: one bar wide, centred on it.
+        let mut config = VwapConfig::default();
+        config.background.visible = true;
+        let Shape::Rect(wash) = &render(3.0, 1.0, Some(config))[0] else {
+            panic!("background on the last bar")
+        };
+        assert_eq!(
+            wash.rect,
+            Rect::from_min_max(Pos2::new(125.0, 0.0), Pos2::new(135.0, 600.0))
+        );
         // Latest value: a dotted line in the line colour across the pane at VWAP 11, y = 90.
         let shapes = edited(|c| c.track_price = true);
         assert_eq!(shapes.len(), 5);
@@ -773,6 +779,36 @@ mod tests {
         let xs = dashes.vertices.iter().map(|v| v.pos.x);
         assert!(xs.clone().fold(f32::MAX, f32::min) < 5.0);
         assert!(xs.fold(f32::MIN, f32::max) > 795.0);
+    }
+
+    /// A tracked VWAP paints its latest-value line whenever its axis tag shows it, also while the
+    /// view lies before the anchor: 100 bars at 10 with volume 1, anchored at bar 80, which sits
+    /// at x = 900, right of the 800 px pane. The VWAP from bar 80 is 200 / 20 = 10, at y = 100.
+    #[test]
+    fn tracked_vwap_draws_its_latest_value_line_with_the_anchor_out_of_view() {
+        let bars: Vec<_> = (0..100)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(i * 60, 0).unwrap();
+                Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0)
+            })
+            .collect();
+        let config = crate::drawings::VwapConfig {
+            track_price: true,
+            ..Default::default()
+        };
+        let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+        drawing.vwap = Some(config);
+        drawing.chart_points = vec![crate::drawings::ChartPoint::new(80.0, 50.0)];
+        // The price axis tags this value.
+        assert_eq!(drawing.anchored_vwap_last(&bars, 0), Some(10.0));
+        let shapes = render_vwap(&bars, 80.0, 1.0, Some(config));
+        let line = shapes.iter().any(|shape| {
+            matches!(shape, Shape::Mesh(mesh) if !mesh.vertices.is_empty()
+                && mesh.vertices.iter().all(|v| (v.pos.y - 100.0).abs() <= 1.0)
+                && mesh.vertices.iter().any(|v| v.pos.x < 5.0)
+                && mesh.vertices.iter().any(|v| v.pos.x > 795.0))
+        });
+        assert!(line, "no latest-value line among {} shapes", shapes.len());
     }
 
     /// Paints an anchored VWAP of a blue drawing over `bars` from `anchor`, 10 px a bar from
@@ -796,6 +832,7 @@ mod tests {
             bars,
             revision: 0,
             bar_to_x: &|b| 100.0 + 10.0 * b,
+            bar_spacing: 10.0,
             price_to_y: &|p| ((20.0 - p) * 10.0) as f32,
             y_to_price: &|y| 20.0 - f64::from(y) / 10.0,
             time_axis: true,
@@ -959,6 +996,7 @@ mod tests {
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y,
                         y_to_price: &|y| {
                             8.0 + f64::from(y - price_to_y(8.0))
@@ -1130,6 +1168,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &bar_to_x,
+            bar_spacing: 10.0,
             price_to_y: &|p| 500.0 - p as f32 * 10.0,
             y_to_price: &|y| f64::from(500.0 - y) / 10.0,
             time_axis: true,
@@ -1280,6 +1319,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &bar_to_x,
+            bar_spacing: 10.0,
             price_to_y: &|p| 500.0 - p as f32 * 10.0,
             y_to_price: &|y| f64::from(500.0 - y) / 10.0,
             time_axis: true,
@@ -1365,7 +1405,7 @@ mod tests {
             ] {
                 let mut manager = crate::drawings::DrawingManager::new();
                 manager.drawings.push(vwap.clone());
-                manager.update_all_screen_coords(bar_to_x, view.price_to_y);
+                manager.update_all_screen_coords(bar_to_x, view.price_to_y, 10.0);
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 ctx.run_ui(
@@ -1432,6 +1472,7 @@ mod tests {
                 bars,
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|price| price as f32,
                 y_to_price: &f64::from,
                 time_axis: true,
@@ -1494,6 +1535,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &|x| x,
+            bar_spacing: 1.0,
             price_to_y: &|price| price as f32,
             y_to_price: &f64::from,
             time_axis: true,
@@ -1557,6 +1599,13 @@ mod tests {
             ProfileSource::Executions { complete: false }
         );
         assert_eq!(profile.volume(), [3.0]);
+        let mut gap = flow.clone();
+        gap.add_missing(bars[2].time, bars[3].time);
+        for (first, last, complete) in [(0.0, 1.0, false), (1.0, 1.0, true), (1.0, 2.0, false)] {
+            select(&mut drawing, first, last);
+            let profile = drawing.volume_profile_of(&view(Some(&gap))).unwrap();
+            assert_eq!(profile.source(), ProfileSource::Executions { complete });
+        }
     }
 
     /// Finer bars replace only the chart bars they cover; executions still take precedence.
@@ -1684,6 +1733,7 @@ mod tests {
                 bars: &daily,
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|price| price as f32,
                 y_to_price: &f64::from,
                 time_axis: true,

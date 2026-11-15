@@ -4,7 +4,7 @@ use super::FeedError;
 use crate::model::{BarClock, OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 
 /// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
 /// summed trade by trade, and is far below one lot at any realistic volume.
@@ -13,6 +13,16 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
 }
 
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
+///
+/// # Layout
+///
+/// `repr(C, align(8))` fixes the field order below, with a size of 56 bytes and an alignment of
+/// 8 bytes on every target.
+/// Changing this order, size or alignment is a breaking change and requires a changelog note.
+/// Hosts borrowing rows from encoded buffers must check byte order, alignment, bounds and field
+/// representation before creating a slice. Byte conversion belongs to the host; the chart's
+/// numerical validation is still required.
+#[repr(C, align(8))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
@@ -30,6 +40,19 @@ pub struct FootprintLevel {
     /// Number of executions whose aggressor is unknown.
     pub unknown_trades: u64,
 }
+
+const _: () = {
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<FootprintLevel>() == 56);
+    assert!(align_of::<FootprintLevel>() == 8);
+    assert!(offset_of!(FootprintLevel, level) == 0);
+    assert!(offset_of!(FootprintLevel, bid) == 8);
+    assert!(offset_of!(FootprintLevel, ask) == 16);
+    assert!(offset_of!(FootprintLevel, unknown) == 24);
+    assert!(offset_of!(FootprintLevel, bid_trades) == 32);
+    assert!(offset_of!(FootprintLevel, ask_trades) == 40);
+    assert!(offset_of!(FootprintLevel, unknown_trades) == 48);
+};
 
 impl FootprintLevel {
     pub(crate) fn absorb(&mut self, next: &Self) {
@@ -92,7 +115,29 @@ pub struct FootprintBar {
 
 impl FootprintBar {
     /// A bar with no executions, opening at `time`.
-    pub(crate) fn empty(time: DateTime<Utc>) -> Self {
+    /// Fill its rows, side totals and delta extrema from the prepared data, then validate the
+    /// aggregate through [`Footprint::from_bars`].
+    ///
+    /// ```
+    /// use egui_charts::{
+    ///     data::{Footprint, FootprintBar, FootprintLevel},
+    ///     model::{BarClock, Timeframe},
+    /// };
+    ///
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// let mut row = FootprintLevel::default();
+    /// row.level = 400;
+    /// row.ask = 2.0;
+    /// row.ask_trades = 1;
+    /// bar.levels.insert(row.level, row);
+    /// bar.ask = 2.0;
+    /// bar.max_delta = 2.0;
+    /// let footprint = Footprint::from_bars(BarClock::new(Timeframe::Min1), 0.25, 1, [bar])?;
+    /// assert_eq!(footprint.bar_at(time).unwrap().volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn empty(time: DateTime<Utc>) -> Self {
         Self {
             time,
             levels: BTreeMap::new(),
@@ -298,6 +343,11 @@ pub struct Footprint {
     max_rows: usize,
     /// Bars opening up to this time lack executions that were dropped or never received.
     incomplete_through: Option<DateTime<Utc>>,
+    /// Execution coverage missing between prepared history and the retained stream.
+    missing: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Only the partial boundary is copied; completed prepared trees stay in `bars`.
+    #[cfg(feature = "widget")]
+    prepared: Option<(DateTime<Utc>, Option<FootprintBar>)>,
     revision: u64,
 }
 
@@ -523,6 +573,9 @@ impl Footprint {
             max_bars: usize::MAX,
             max_rows: usize::MAX,
             incomplete_through: None,
+            missing: Vec::new(),
+            #[cfg(feature = "widget")]
+            prepared: None,
             revision: next_revision(),
         })
     }
@@ -541,24 +594,235 @@ impl Footprint {
         self.enforce_budget();
     }
 
-    /// Open of the oldest bar whose executions are all held: earlier bars were cut by the
-    /// budget or by trades dropped from the host's store, or may lack trades that never
-    /// arrived, and must not be shown as complete.
+    /// Open of the first bar in the complete suffix after any loss or missing join.
+    /// Earlier bars may lack executions or have been evicted. Complete prepared bars can
+    /// also precede a missing join; readers such as [`profile`](Self::profile) include them.
     pub fn complete_from(&self) -> Option<DateTime<Utc>> {
-        self.complete_bars(..).next().map(|bar| bar.time)
+        let start = match (self.incomplete_through, self.missing.last().copied()) {
+            (Some(cut), Some((_, end))) if cut < end => Bound::Included(end),
+            (Some(cut), _) => Bound::Excluded(cut),
+            (None, Some((_, end))) => Bound::Included(end),
+            (None, None) => Bound::Unbounded,
+        };
+        self.bars
+            .range((start, Bound::Unbounded))
+            .next()
+            .map(|(time, _)| *time)
     }
 
-    /// The bars in `range` from [`complete_from`](Self::complete_from) on. Panics as
-    /// [`BTreeMap::range`] does.
+    /// Complete bars in `range`, including prepared bars before a missing join.
+    /// Panics as [`BTreeMap::range`] does.
     pub(crate) fn complete_bars(
         &self,
         range: impl RangeBounds<DateTime<Utc>>,
     ) -> impl Iterator<Item = &FootprintBar> {
-        let cut = self.incomplete_through;
         self.bars
             .range(range)
-            .filter(move |(time, _)| cut.is_none_or(|cut| **time > cut))
+            .filter(|(time, _)| self.complete_at(**time))
             .map(|(_, bar)| bar)
+    }
+
+    fn complete_at(&self, open: DateTime<Utc>) -> bool {
+        self.incomplete_through.is_none_or(|cut| open > cut)
+            && self
+                .missing
+                .get(self.missing.partition_point(|(_, end)| *end <= open))
+                .is_none_or(|(from, _)| open < self.clock.bar_open(*from))
+    }
+
+    /// The complete execution bar in this slot, using the same coverage check as readers.
+    #[cfg(feature = "widget")]
+    pub(crate) fn complete_bar_at(&self, time: DateTime<Utc>) -> Option<&FootprintBar> {
+        let open = self.clock.bar_open(time);
+        self.bars.get(&open).filter(|_| self.complete_at(open))
+    }
+
+    /// A span of whole bars must start inside held coverage and contain no incomplete bar.
+    #[cfg(any(feature = "drawings", feature = "studies"))]
+    pub(crate) fn span_is_complete(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
+        let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
+        first <= last
+            && self
+                .bars
+                .first_key_value()
+                .is_some_and(|(held, _)| *held <= first)
+            && self.complete_at(first)
+            && self.complete_at(last)
+            && !self.span_has_gap(first, Some(last))
+    }
+
+    /// Whether missing executions could change a result spanning these times.
+    #[cfg(any(feature = "widget", feature = "studies"))]
+    pub(crate) fn span_has_gap(&self, from: DateTime<Utc>, through: Option<DateTime<Utc>>) -> bool {
+        self.missing
+            .get(self.missing.partition_point(|(_, end)| *end <= from))
+            .is_some_and(|(start, _)| through.is_none_or(|end| *start <= end))
+    }
+
+    /// Keeps disjoint reconnect gaps separate so complete bars between them remain usable.
+    #[cfg(feature = "widget")]
+    pub(crate) fn add_missing(&mut self, mut from: DateTime<Utc>, mut end: DateTime<Utc>) {
+        if from >= end {
+            return;
+        }
+        let first = self.missing.partition_point(|(_, stop)| *stop < from);
+        let mut last = first;
+        while let Some(&(start, stop)) = self.missing.get(last) {
+            if start > end {
+                break;
+            }
+            from = from.min(start);
+            end = end.max(stop);
+            last += 1;
+        }
+        if last == first + 1 && self.missing[first] == (from, end) {
+            return;
+        }
+        self.missing.splice(first..last, [(from, end)]);
+        self.revision = next_revision();
+    }
+
+    /// Removes only execution coverage actually supplied by a trade page.
+    #[cfg(feature = "widget")]
+    pub(crate) fn cover_missing(&mut self, from: DateTime<Utc>, end: DateTime<Utc>) {
+        if from >= end {
+            return;
+        }
+        let mut at = self.missing.partition_point(|(_, stop)| *stop <= from);
+        while let Some(&(start, stop)) = self.missing.get(at) {
+            if start >= end {
+                break;
+            }
+            self.revision = next_revision();
+            if start < from {
+                self.missing[at].1 = from;
+                at += 1;
+                if stop > end {
+                    self.missing.insert(at, (end, stop));
+                    break;
+                }
+            } else if stop > end {
+                self.missing[at].0 = end;
+                break;
+            } else {
+                self.missing.remove(at);
+            }
+        }
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepared_before(&self) -> Option<DateTime<Utc>> {
+        self.prepared.as_ref().map(|(before, _)| *before)
+    }
+
+    /// Saves only the unfinished prepared bar needed to replay a changed raw suffix.
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepare_history(
+        &mut self,
+        before: DateTime<Utc>,
+        trades: &super::trades::Trades,
+        from_start: bool,
+    ) {
+        let boundary = self.bars.get(&self.clock.bar_open(before)).cloned();
+        self.prepared = Some((before, boundary));
+        if !from_start {
+            let first = trades.iter().next();
+            let unconfirmed = first.is_some_and(|first| {
+                trades
+                    .live()
+                    .next()
+                    .is_some_and(|live| std::ptr::eq(first, live))
+            });
+            self.add_missing(
+                before,
+                first.map_or(DateTime::<Utc>::MAX_UTC, |trade| {
+                    if unconfirmed {
+                        trade
+                            .ts
+                            .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                            .unwrap_or(DateTime::<Utc>::MAX_UTC)
+                    } else {
+                        trade.ts
+                    }
+                }),
+            );
+        }
+    }
+
+    /// Moves a validated, adjoining older page into the existing prepared history.
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepend_prepared(&mut self, page: Self) {
+        for (time, bar) in page.bars {
+            self.rows += bar.levels.len();
+            self.bars.insert(time, bar);
+        }
+        self.revision = next_revision();
+    }
+
+    /// Replays only the mutable suffix after a trade-page reply, never completed history.
+    #[cfg(feature = "widget")]
+    pub(crate) fn rebuild_prepared(&mut self, trades: &super::trades::Trades) {
+        let Some(before) = self.prepared_before() else {
+            return;
+        };
+        let open = self.clock.bar_open(before);
+        let removed = self.bars.split_off(&open);
+        self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
+        self.restore_boundary();
+        self.last = None;
+        for trade in trades.iter().filter(|trade| trade.ts >= before) {
+            let _ = self.push(trade);
+        }
+        if let Some(lost) = trades.lost_until() {
+            self.drop_through(lost, trades.iter());
+        }
+        self.refresh_prepared_gap(trades);
+        self.revision = next_revision();
+    }
+
+    #[cfg(feature = "widget")]
+    fn restore_boundary(&mut self) {
+        if let Some(bar) = self.prepared.as_ref().and_then(|(_, bar)| bar.as_ref()) {
+            self.rows += bar.levels.len();
+            self.bars.insert(bar.time, bar.clone());
+        }
+    }
+
+    /// Adds actual loss and subscription gaps; a later reconnect never certifies an older gap.
+    #[cfg(feature = "widget")]
+    pub(crate) fn refresh_prepared_gap(&mut self, trades: &super::trades::Trades) {
+        let Some(before) = self.prepared_before() else {
+            return;
+        };
+        let after = |at: DateTime<Utc>| {
+            at.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                .unwrap_or(DateTime::<Utc>::MAX_UTC)
+        };
+        let oldest = trades.iter().next().map(|trade| trade.ts);
+        if let Some(lost) = trades.lost_until().filter(|lost| *lost >= before) {
+            self.add_missing(before, after(lost).max(oldest.unwrap_or(after(lost))));
+        }
+        if let Some(left) = trades.left_out_at().filter(|left| *left >= before) {
+            self.add_missing(left, after(left));
+        }
+        let tape = trades.retained_until();
+        let stream = trades
+            .live()
+            .find(|trade| tape.is_none_or(|until| trade.ts >= until))
+            .map(|trade| after(trade.ts));
+        if let Some(retained) = tape {
+            self.add_missing(
+                retained.max(before),
+                stream.unwrap_or(DateTime::<Utc>::MAX_UTC),
+            );
+        }
+        // Once a stream begins, only the open-ended join gains a known upper boundary.
+        if let Some(&(from, end)) = self.missing.last()
+            && end == DateTime::<Utc>::MAX_UTC
+            && let Some(first) = stream
+        {
+            self.cover_missing(first.max(from), end);
+        }
     }
 
     /// Takes out the executions dropped from the host's store, the newest at `through`, and
@@ -573,6 +837,30 @@ impl Footprint {
         through: DateTime<Utc>,
         held: impl IntoIterator<Item = &'a Tick>,
     ) {
+        #[cfg(feature = "widget")]
+        if let Some(before) = self.prepared_before() {
+            if through < before {
+                return;
+            }
+            let (first, open) = (self.clock.bar_open(before), self.clock.bar_open(through));
+            while let Some((&time, _)) = self.bars.range(first..=open).next() {
+                self.rows -= self.bars.remove(&time).unwrap().levels.len();
+            }
+            self.restore_boundary();
+            let last = self.last.take();
+            for trade in held {
+                let at = self.clock.bar_open(trade.ts);
+                if at > open {
+                    break;
+                }
+                if trade.ts >= before && at == open {
+                    let _ = self.push(trade);
+                }
+            }
+            self.last = self.last.max(last);
+            self.revision = next_revision();
+            return;
+        }
         if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             // Keep the allocation anchor: rebuilding from the retained suffix shifts count bars.
             if let Some(open) = self
@@ -607,6 +895,9 @@ impl Footprint {
                 trade_starts: BTreeMap::new(),
                 rows: 0,
                 last: None,
+                missing: Vec::new(),
+                #[cfg(feature = "widget")]
+                prepared: None,
                 ..*self
             };
             for trade in held
@@ -719,7 +1010,7 @@ impl Footprint {
     }
 
     /// The calendar the bars open by.
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn clock(&self) -> &BarClock {
         &self.clock
     }
@@ -746,9 +1037,9 @@ impl Footprint {
     }
 
     /// The executions of the bars that contain `first` through `last`, inclusive, as one bar
-    /// opening with the first of them: the exact profile of a span of the chart. Bars before
-    /// [`complete_from`](Self::complete_from) are left out, as their executions are not all
-    /// held. Empty when no complete bar traded there or `last` precedes `first`.
+    /// opening with the first of them: the exact profile of the complete bars in a span of
+    /// the chart. Incomplete bars, including a missing history join, are left out.
+    /// Empty when no complete bar traded there or `last` precedes `first`.
     /// Counts add the contributing bars, including split executions counted in more than one bar.
     pub fn profile(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> FootprintBar {
         let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
@@ -781,7 +1072,11 @@ impl Footprint {
     /// page's end only when it ends with the last of `history`. The newest proven run is kept, so
     /// its bars have no gap. Older bars get no cells and draw candles. With `before`, adds only
     /// the executions strictly before it. Unless `ended`, executions after the last one may be
-    /// missing: the page does not end there, and that end proves nothing.
+    /// missing: the page does not end there, and that end proves nothing. Bars that open at or
+    /// after `stream_from`, the time of the oldest live execution the store kept apart at an
+    /// instant the page covers, get no cells: the sink opened them, and the page's executions
+    /// there may include some the stream never sent. They still count in the matching, so the
+    /// bars before keep their proof.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
@@ -789,6 +1084,7 @@ impl Footprint {
         history: &[crate::model::Bar],
         before: Option<DateTime<Utc>>,
         ended: bool,
+        stream_from: Option<DateTime<Utc>>,
     ) {
         let Some(timeframe) = self.clock.timeframe().filter(|tf| tf.is_trade_based()) else {
             return;
@@ -843,7 +1139,9 @@ impl Footprint {
             }
         }
         for (trade, open, size) in newest {
-            if before.is_none_or(|before| trade.ts < before) {
+            if before.is_none_or(|before| trade.ts < before)
+                && stream_from.is_none_or(|from| open < from)
+            {
                 let _ = self.push_part(trade, open, size);
             }
         }
@@ -1164,6 +1462,40 @@ mod tests {
 
     fn aggregate(bars: impl IntoIterator<Item = FootprintBar>) -> Result<Footprint, FeedError> {
         Footprint::from_bars(BarClock::new(Timeframe::Min1), 0.25, 2, bars)
+    }
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn disjoint_gaps_keep_known_bars_and_only_shrink_with_proven_coverage() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |minute| start + TimeDelta::minutes(minute);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for minute in 0..10 {
+            flow.push(&Tick::new(at(minute), 100.0, 1.0, None)).unwrap();
+        }
+        flow.add_missing(at(2), at(4));
+        flow.add_missing(at(6), at(9));
+        assert_eq!(
+            flow.complete_bars(..).map(|b| b.time).collect::<Vec<_>>(),
+            [0, 1, 4, 5, 9].map(at)
+        );
+        flow.cover_missing(at(7), at(8));
+        assert!(!flow.span_has_gap(at(7), Some(at(7))));
+        assert!(flow.span_has_gap(at(4), Some(at(8))));
+        flow.cover_missing(at(1), at(7));
+        assert_eq!(
+            flow.complete_bars(..).map(|b| b.time).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 5, 6, 7, 9].map(at)
+        );
+        flow.add_missing(at(7), at(8));
+        flow.add_missing(at(6), at(10));
+        assert_eq!(
+            flow.complete_bars(..).map(|b| b.time).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 5].map(at)
+        );
+        flow.cover_missing(at(0), at(10));
+        assert_eq!(flow.complete_from(), Some(start));
+        assert!(!flow.span_has_gap(start, None));
     }
 
     #[test]
@@ -1493,9 +1825,9 @@ mod tests {
         let references: Vec<_> = trades.iter().collect();
         let mut flow = fresh();
         let empty = flow.revision();
-        flow.push_history(&references, &history, Some(time), true);
+        flow.push_history(&references, &history, Some(time), true, None);
         assert_eq!(flow.revision(), empty);
-        flow.push_history(&references, &history, None, true);
+        flow.push_history(&references, &history, None, true, None);
         assert_ne!(flow.revision(), empty);
         assert_eq!(flow.bars().len(), 2);
         let mut copied = fresh();

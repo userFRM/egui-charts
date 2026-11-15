@@ -67,6 +67,12 @@ pub struct ChartView<'a> {
     pub revision: u64,
     /// Screen x of a (fractional) bar index.
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
+    /// Points per bar of `bar_to_x`; on a numeric horizontal scale, points per spacing unit,
+    /// the mean key gap when the scale was set, as
+    /// [`TimeScale::bar_spacing`](crate::model::TimeScale::bar_spacing) returns. Text that
+    /// follows the zoom is drawn at its ratio to [`Drawing::text_zoom_spacing`]; a value that
+    /// is not a positive number draws such text at its set size.
+    pub bar_spacing: f32,
     /// Screen y of a price.
     pub price_to_y: &'a dyn Fn(f64) -> f32,
     /// Price at a screen y, using the same scale and orientation as `price_to_y`.
@@ -852,6 +858,7 @@ mod tests {
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|b| b * 40.0,
+                        bar_spacing: 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
@@ -1533,6 +1540,7 @@ mod tests {
                 },
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
+                bar_spacing: 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
                 y_to_price: &|y| 500.0 - f64::from(y),
                 time_axis: true,
@@ -1680,7 +1688,7 @@ mod tests {
         );
         assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
         // The popup is a card in the theme's colours whatever the pin's colour, tied to the pin's
-        // head by a thin line in the pin's colour.
+        // head by a thin neutral line.
         let theme = crate::theme::Theme::dark();
         let [card] = &selected.rects[..] else {
             panic!("one popup");
@@ -1695,7 +1703,7 @@ mod tests {
             selected.segments,
             [(
                 [pos(200.0, card.rect.max.y), pos(200.0, 278.0)],
-                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+                egui::Stroke::new(1.0, theme.chart.axis_text_secondary),
             )]
         );
 
@@ -1874,6 +1882,7 @@ mod tests {
                 bars: &[],
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|p| p as f32,
                 y_to_price: &f64::from,
                 time_axis: true,

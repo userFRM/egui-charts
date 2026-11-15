@@ -5,6 +5,7 @@
 //! outside any egui closure: a feed may answer or push inline, and that runs the waker, which
 //! takes the egui context's lock.
 
+mod footprints;
 mod pump;
 
 use super::{Chart, SeriesId};
@@ -12,8 +13,8 @@ use crate::chart::overlays::{VolumeBubbles, VolumeBubblesConfig};
 use crate::data::inbox::Inbox;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, HistoryRequest,
-    Reply, SubscriptionId, TradeRequest,
+    Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, FootprintRequest,
+    HistoryRequest, Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{Bar, BarClock, Instrument, OrderBook, Tick, Timeframe};
 use crate::theme::ThemeExt;
@@ -23,9 +24,9 @@ use std::time::Duration;
 
 /// Trades kept per series for order flow.
 pub(crate) const TRADE_CAPACITY: usize = 100_000;
-/// Bars a feed-backed footprint keeps, the oldest dropped first.
+/// Bars a raw-trade footprint keeps, the oldest dropped first.
 const FOOTPRINT_BARS: usize = 5_000;
-/// Price rows a feed-backed footprint keeps in all its bars, the oldest bars dropped first.
+/// Price rows a raw-trade footprint keeps, the oldest bars dropped first.
 const FOOTPRINT_ROWS: usize = TRADE_CAPACITY / 2;
 
 /// Bars from the first visible bar to the oldest one below which an older page is asked for.
@@ -80,7 +81,8 @@ pub(crate) struct FeedLink {
     pub(super) bubbles: Option<VolumeBubbles>,
     pub(super) bubbles_config: VolumeBubblesConfig,
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
-    /// profile drawing reads them, within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
+    /// profile drawing reads them. Raw-only history uses [`FOOTPRINT_BARS`] and
+    /// [`FOOTPRINT_ROWS`]; prepared pages outlive those budgets and the raw tape.
     pub(super) footprint: Option<Footprint>,
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
@@ -92,6 +94,8 @@ pub(crate) struct FeedLink {
     /// The order book over time, when the host turned it on.
     pub(super) depth_history: Option<DepthHistory>,
     depth_complete: bool,
+    footprints_complete: bool,
+    footprint_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// Where older history continues after an empty page, by source: bars, trades, depth. The
     /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
     bar_cursor: Option<(
@@ -126,6 +130,7 @@ enum Request {
         scroll_back: bool,
     },
     Trades(TradeRequest),
+    Footprints(FootprintRequest),
     Depth(DepthRequest),
 }
 
@@ -147,7 +152,13 @@ impl FeedLink {
         if let Some(bubbles) = self.bubbles.take() {
             self.bubbles = Some(self.bubbles(bubbles.config));
         }
-        if self.footprint.is_some() {
+        if let Some(flow) = self
+            .footprint
+            .as_mut()
+            .filter(|flow| flow.prepared_before().is_some())
+        {
+            flow.rebuild_prepared(&self.trades);
+        } else if self.footprint.is_some() {
             self.footprint = self.footprint(None, history);
         }
     }
@@ -188,6 +199,8 @@ impl FeedLink {
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
+            footprints_complete: true,
+            footprint_cursor: None,
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -208,9 +221,11 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// open before the live executions, or without them before the oldest pushed bar the history
-    /// lacks or holds with other values, and that they rebuild ([`Footprint::push_history`]). With
-    /// `before`, includes only executions strictly before that replay cutoff.
+    /// open before the live executions, held ones or those the store kept apart at the first
+    /// instant a page covers while the chart holds a bar at or before the oldest of them, or
+    /// without them before the oldest pushed bar the history lacks or holds with other values,
+    /// and that they rebuild ([`Footprint::push_history`]). With `before`, includes only
+    /// executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -248,7 +263,15 @@ impl FeedLink {
             // Until a trade page fills the time after the retained executions, some that traded
             // after them may be missing: their end is not the page's and proves nothing.
             let ended = self.trades.retained_until().is_none();
-            flow.push_history(&paged, &history[..paged_bars], before, ended);
+            // The sink opened the bars from the oldest live execution the store kept apart, where
+            // the page may hold executions the stream never sent: its allocations fill those
+            // bars, as `OrderFlowInput::chart_run` rebuilds them. A chart that starts after it
+            // holds no bar with the page's executions of that instant.
+            let stream_from = (self.trades.unheld_live())
+                .and_then(|(_, kept)| kept.first())
+                .map(|trade| trade.ts)
+                .filter(|at| history.first().is_some_and(|bar| bar.time <= *at));
+            flow.push_history(&paged, &history[..paged_bars], before, ended, stream_from);
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
             for trade in trades() {
                 let _ = flow.push(trade);
@@ -361,6 +384,8 @@ impl Chart {
             order_queue: None,
             depth_history: None,
             depth_complete: false,
+            footprints_complete: false,
+            footprint_cursor: None,
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -555,7 +580,9 @@ impl Chart {
             {
                 return false;
             }
-            self.symbol_drawings.remove(symbol);
+            if self.symbol_drawings.remove(symbol).is_some() {
+                self.drawing_resets += 1;
+            }
             self.symbol_drawings.shrink_to_fit();
         }
         #[cfg(not(feature = "drawings"))]

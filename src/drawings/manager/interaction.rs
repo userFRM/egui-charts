@@ -1146,7 +1146,7 @@ mod tests {
                     peer.add_synced_drawing(copy).unwrap();
                 }
             }
-            peer.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            peer.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32, 10.0);
             assert_eq!(peer.drawings.len(), 2);
             assert_eq!(top_tool(&peer), expected);
             assert!(manager.undo());
@@ -1154,7 +1154,11 @@ mod tests {
             assert!(!manager.undo());
             assert!(manager.redo());
             assert_eq!(manager.drawings.len(), 4);
-            manager.update_all_screen_coords(|bar| bar * 10.0, |price| (200.0 - price) as f32);
+            manager.update_all_screen_coords(
+                |bar| bar * 10.0,
+                |price| (200.0 - price) as f32,
+                10.0,
+            );
             assert_eq!(top_tool(&manager), expected);
         }
     }

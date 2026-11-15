@@ -1047,6 +1047,16 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
+        // Rows of the chart type's footprint, from all the bars the chart holds and never from
+        // the ones in view.
+        let feed_row_ticks = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .map_or(0, |flow| {
+                self.chart_type_params
+                    .footprint_row_size(&self.state.data().bars, flow.tick_size())
+            });
         // Cells are drawn only while a column is wide enough; narrower bars stay candles.
         let spacing = self.state.time_scale().bar_spacing();
         let drawn_as_cells = move |config: &FootprintConfig| {
@@ -1071,9 +1081,10 @@ impl Chart {
                     drawn_as_cells(&FootprintConfig::from_chart_params(
                         &self.chart_type_params,
                         colors,
+                        feed_row_ticks,
                     ))
                 })
-                .map(|flow| (flow, self.chart_type_params.footprint_row_ticks)),
+                .map(|flow| (flow, feed_row_ticks)),
         }
         .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
         let footprint_prices = fixed_footprint
@@ -1204,7 +1215,7 @@ impl Chart {
             // The summary below the lowest ladder bar is drawn whole or not at all; bars left to
             // candles keep the range candles fit.
             let room = |flow: &Footprint, config: &FootprintConfig| {
-                if flow.complete_from().is_some() && drawn_as_cells(config) {
+                if flow.complete_bars(..).next().is_some() && drawn_as_cells(config) {
                     crate::chart::overlays::summary_room(config)
                 } else {
                     0.0
@@ -1220,7 +1231,9 @@ impl Chart {
                             // The room does not depend on the colours.
                             let colors = [egui::Color32::TRANSPARENT; 4];
                             let params = &self.chart_type_params;
-                            room(flow, &FootprintConfig::from_chart_params(params, colors))
+                            let config =
+                                FootprintConfig::from_chart_params(params, colors, feed_row_ticks);
+                            room(flow, &config)
                         })
                 }
                 None => 0.0,
@@ -1736,6 +1749,7 @@ impl Chart {
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
+                feed_row_ticks,
             )
         });
         let session_profiles = host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
@@ -1748,7 +1762,11 @@ impl Chart {
                     || crate::chart::overlays::footprint_column_width(bar_spacing, config).is_some()
             })
             .map(|(flow, config)| {
-                let first = flow.complete_from();
+                let first = if session_profiles {
+                    flow.complete_from()
+                } else {
+                    flow.complete_bars(..).next().map(|bar| bar.time)
+                };
                 let candles = first.map_or(visible_data.len(), |first| {
                     visible_data.partition_point(|bar| bar.time < first)
                 });
@@ -2197,7 +2215,7 @@ impl Chart {
                 paint_series(&data, params, merged.as_ref().map(|(merged, _)| merged));
                 if let Some((flow, config, candles)) = executions {
                     let has_cells = |bar: &crate::model::Bar| {
-                        session_profiles || flow.bar_at(bar.time).is_some()
+                        session_profiles || flow.complete_bar_at(bar.time).is_some()
                     };
                     let mut first = start_idx + candles;
                     // A bar nothing traded in shows its candle among the cells.
@@ -2680,7 +2698,8 @@ impl Chart {
             } else {
                 line
             };
-            // Only a countdown drawn on the axis needs the once-a-second repaint.
+            // Only a countdown drawn on the axis repaints, when its seconds next change on a running
+            // clock. A replay's clock moves only with the frames its host already runs.
             let countdown = self.current_bar_countdown().filter(|_| {
                 line.axis_label
                     && price_map
@@ -2688,10 +2707,12 @@ impl Chart {
                         .contains(price_map.transform().to_scale(last.close))
             });
             if countdown.is_some()
-                && (self.server_time_offset.is_some() || self.feed_link.is_some())
+                && self.replay_time().is_none()
+                && let Some(now) = self.chart_time()
             {
+                let nanos = u64::from(now.timestamp_subsec_nanos() % 1_000_000_000);
                 ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_secs(1));
+                    .request_repaint_after(std::time::Duration::from_nanos(1_000_000_000 - nanos));
             }
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
                 &painter,
@@ -2843,6 +2864,7 @@ impl Chart {
                 ));
         }
         if show_price_axis && study_axis.show_study_values {
+            let last_in_view = rendering::axes::last_bar_in_view(&coords);
             for study in studies
                 .indicators()
                 .iter()
@@ -2871,6 +2893,7 @@ impl Chart {
                             price_rect,
                             &mapping.price,
                             study.as_ref(),
+                            last_in_view,
                             axis_edge,
                             &mut tags,
                             &study_axis,
@@ -2888,6 +2911,7 @@ impl Chart {
                     price_rect,
                     &price_map,
                     study.as_ref(),
+                    last_in_view,
                     axis_edge,
                     &mut tags,
                     price_formatter.as_deref(),
@@ -3922,9 +3946,11 @@ impl Chart {
             self.measured_axis_width += 26.0;
         }
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
-        for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
-            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 6.0);
-        }
+        self.measured_axis_width = self
+            .measured_axis_width
+            .max(rendering::axes::axis_tags_width(
+                tags.iter().skip(usize::from(has_currency)),
+            ));
 
         if show_price_axis && has_currency {
             let currency = self

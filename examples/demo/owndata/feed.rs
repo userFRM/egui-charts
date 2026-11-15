@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::bars::{self, Aggregator, DAY_MS};
 use super::http::{self, Request};
-use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url};
+use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url, stream_values};
 use super::stream::{Routed, Session, StreamEvent};
 use super::{Failure, Secrets, conceal, endpoint, shape, time};
 
@@ -268,11 +268,7 @@ impl Datafeed for MappedFeed {
             return;
         };
         sink.set_status(FeedStatus::Connecting);
-        let mut values = vec![
-            ("symbol".to_owned(), symbol.clone()),
-            ("interval".to_owned(), interval.to_owned()),
-        ];
-        values.extend(shared.secrets.iter().cloned());
+        let values = stream_values(&symbol, interval, &shared.secrets);
         let filled: Vec<(&str, &str)> = values
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -425,6 +421,7 @@ impl Shared {
         let reading = read(
             &response,
             history,
+            &ask.symbol,
             zone,
             &ask.clock,
             ask.timeframe,
@@ -511,6 +508,9 @@ impl Shared {
                                         // is not the newest bar known.
                                         if !bars::ahead(clock, *timeframe, slot, now) {
                                             live.pushed = live.pushed.max(Some(slot));
+                                            // The trades that follow continue the service's
+                                            // own bar.
+                                            live.aggregator.follow(&bar);
                                         }
                                         pushes.push((None, bar));
                                     }
@@ -826,8 +826,10 @@ fn request_for(
     secrets: &Secrets,
 ) -> Request {
     let limit = window.limit.to_string();
+    let lower = symbol.to_lowercase();
     let mut values = vec![
         ("symbol", symbol),
+        ("symbol_lower", lower.as_str()),
         ("interval", interval),
         ("from", window.from.as_str()),
         ("to", window.to.as_str()),
@@ -875,17 +877,21 @@ pub(crate) struct Reading {
 }
 
 /// Reads a parsed history response. The feed and the dialog's Test both call it, so the preview
-/// cannot disagree with the chart. The error says why nothing can be read: the rows are not
-/// where the mapping says, or no row has a readable time.
+/// cannot disagree with the chart. The rows are looked up for `symbol` ([`Rows::for_symbol`]).
+/// The error says why nothing can be read: the rows are not where the mapping says, or no row
+/// has a readable time.
+///
+/// [`Rows::for_symbol`]: super::profile::Rows::for_symbol
 pub(crate) fn read(
     response: &Value,
     history: &History,
+    symbol: &str,
     zone: &TimezoneId,
     clock: &BarClock,
     timeframe: Timeframe,
     now: DateTime<Utc>,
 ) -> Result<Reading, String> {
-    let rows = shape::rows(response, &history.rows)?;
+    let rows = shape::rows(response, &history.rows.for_symbol(symbol))?;
     let read = rows
         .iter()
         .filter_map(|row| bars::bar(row, &history.bar, zone, clock, timeframe));
@@ -1275,6 +1281,25 @@ pub(crate) mod tests {
                 ],
                 FIRST,
                 vec![BEFORE_B3, BEFORE_B0],
+                all(),
+            ),
+            case(
+                "rows filed under the symbol, and the symbol in lower case in the address",
+                |profile| {
+                    let history = profile.history.as_mut().unwrap();
+                    history.url = history.url.replace("{symbol}", "{symbol_lower}");
+                    history.rows.path = vec![Segment::Key("result".into()), Segment::Key("{symbol}".into())];
+                },
+                vec![
+                    format!(r#"{{"error":[],"result":{{"ABC":{},"last":1794407700}}}}"#, list(&[J3, J4, J5])),
+                    format!(r#"{{"error":[],"result":{{"ABC":{},"last":1794407520}}}}"#, list(&[J0, J1, J2])),
+                    r#"{"error":[],"result":{"last":1794407400}}"#.into(),
+                ],
+                "GET /bars?symbol=abc&interval=1m&to=",
+                vec![
+                    "GET /bars?symbol=abc&interval=1m&to=1794407580&limit=3",
+                    "GET /bars?symbol=abc&interval=1m&to=1794407400&limit=3",
+                ],
                 all(),
             ),
             // Five rows for a limit of three: the newest three are B3 to B5 once sorted.
