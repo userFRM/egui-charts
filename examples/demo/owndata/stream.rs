@@ -1019,6 +1019,93 @@ pub(crate) mod tests {
         assert_eq!(listed, [(1794355210000, 101.75)]);
     }
 
+    /// A study that loads the history of the chart's symbol on the chart's interval, as Volume
+    /// Delta does on a one-minute chart, leaves the bar the chart's stream is forming as it was.
+    /// The service's pages end at the last closed bar, so only the stream knows the minute that
+    /// is forming. A second chart on the feed stands for the study.
+    #[test]
+    fn a_study_page_on_the_chart_interval_keeps_the_forming_bar() {
+        use super::super::feed::tests::{Server, Shown, profile, shown, until};
+        // The closed bar of 23:59 on 10 November 2026, the newest the service holds.
+        const BAR: &str = r#"[{"t":1794355140,"o":100.0,"h":100.5,"l":99.5,"c":100.25,"v":500}]"#;
+        const CLOSED: Shown = (1794355140, Some([100.0, 100.5, 99.5, 100.25, 500.0]));
+        // Two trades of the minute of midnight before the study loads, and after it a third one
+        // of that minute and one of the next.
+        const BEFORE: &str = r#"{"type":"trade","data":[{"p":101.0,"s":3,"t":1794355210000},{"p":102.0,"s":2,"t":1794355220000}]}"#;
+        const AFTER: &str = r#"{"type":"trade","data":[{"p":100.5,"s":4,"t":1794355230000},{"p":100.75,"s":1,"t":1794355265000}]}"#;
+        const NEXT: Shown = (1794355260, Some([100.75, 100.75, 100.75, 100.75, 1.0]));
+        let server = Server::start(|_, seen| {
+            // A request for bars before the closed bar gets none, which ends history.
+            let older = seen.line.contains("&to=1794355140&");
+            let page = if older { "[]" } else { BAR };
+            (200, page.to_owned())
+        });
+        // The chart's socket. The study's waits behind it and never opens.
+        let peer = Peer::start(vec![vec![
+            Step::Receive(1),
+            Step::Hold,
+            Step::Send(BEFORE),
+            Step::Hold,
+            Step::Send(AFTER),
+            Step::UntilClosed,
+        ]]);
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let mut profile = profile(&server.origin);
+        profile.stream = Some(Stream {
+            url: peer.url.clone(),
+            connect: vec![r#"{"symbol":"{symbol}"}"#.to_owned()],
+            records: key("data"),
+            route_by: key("type"),
+            routes: vec![Route {
+                value: "trade".to_owned(),
+                kind: RouteKind::Trades(TradeFields {
+                    time: TimeSpec::Instant {
+                        field: key("t"),
+                        unit: TimeUnit::Milliseconds,
+                    },
+                    price: key("p"),
+                    size: key("s"),
+                    ..TradeFields::default()
+                }),
+            }],
+            ..Stream::default()
+        });
+        let feed = Arc::new(MappedFeed::new(profile, Vec::new()));
+        let open = || {
+            ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("ABC")
+                .with_timeframe(Timeframe::Min1)
+                .with_initial_bars(3)
+                .build()
+        };
+        let complete = |chart: &Chart| {
+            let state = chart.feed_state(SeriesId::MAIN);
+            state.is_some_and(|state| state.history_complete)
+        };
+        let ctx = egui::Context::default();
+        let mut chart = open();
+        until(&ctx, &mut chart, "the chart's history", |chart| {
+            complete(chart) && shown(chart) == [CLOSED]
+        });
+        peer.release();
+        let forming: Shown = (1794355200, Some([101.0, 102.0, 101.0, 102.0, 5.0]));
+        until(&ctx, &mut chart, "the forming bar", |chart| {
+            shown(chart) == [CLOSED, forming]
+        });
+        let mut study = open();
+        until(&ctx, &mut study, "the study's history", |study| {
+            complete(study) && shown(study) == [CLOSED]
+        });
+        peer.release();
+        until(&ctx, &mut chart, "the next minute", |chart| {
+            shown(chart).last() == Some(&NEXT)
+        });
+        // The minute of midnight holds its three trades: 3 + 2 + 4.
+        let midnight: Shown = (1794355200, Some([101.0, 102.0, 100.5, 100.5, 9.0]));
+        assert_eq!(shown(&chart), [CLOSED, midnight, NEXT]);
+    }
+
     /// Every ready profile reads its service's history rows, bar messages and trade messages,
     /// in the form the service documents them, into the chart's bars and trades. The service's
     /// hosts are swapped for local ones, so nothing leaves the machine. The fixtures are

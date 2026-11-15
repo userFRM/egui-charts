@@ -60,7 +60,8 @@ struct Key {
 struct Join {
     /// The newest bar of the last latest page that held bars.
     newest: Option<Bar>,
-    /// Latest pages being fetched. The subscriptions of the key fold no trade meanwhile.
+    /// Latest pages being fetched. The subscriptions of the key that wait for one fold no trade
+    /// meanwhile.
     in_flight: usize,
 }
 
@@ -84,6 +85,10 @@ struct Live {
     /// The address of the stream without its query, for errors and log lines.
     endpoint: String,
     aggregator: Aggregator,
+    /// Whether the subscription waits for a latest page of its key to start from: it was made
+    /// while one was in flight or before any held bars. A page joins only the subscriptions that
+    /// wait for it, so a study that loads the chart's interval leaves the chart's bar as it is.
+    waiting: bool,
     /// The slot of the newest bar pushed from a bar route.
     pushed: Option<DateTime<Utc>>,
     /// How often the socket has opened.
@@ -283,6 +288,7 @@ impl Datafeed for MappedFeed {
             let mut state = shared.state();
             let mut aggregator = Aggregator::new(key.clock.clone(), timeframe);
             let join = state.join(&key);
+            let waiting = join.in_flight > 0 || join.newest.is_none();
             if join.in_flight == 0 {
                 aggregator.start(join.newest.clone());
             }
@@ -293,6 +299,7 @@ impl Datafeed for MappedFeed {
                 serial: state.subscribed,
                 endpoint,
                 aggregator,
+                waiting,
                 pushed: None,
                 opens: 0,
                 filling: None,
@@ -368,8 +375,8 @@ impl Shared {
         let kept = result.and_then(|body| self.kept(history, ask, url, &body));
         let mut state = self.state();
         if ask.before.is_none() {
-            // A latest page. The streams of its key go on from its newest bar, which the chart
-            // gets with the page.
+            // A latest page. The streams of its key that wait for one go on from its newest bar,
+            // which the chart gets with the page.
             let key = ask.key();
             let newest = kept.as_ref().ok().and_then(|kept| kept.bars.last());
             let join = state.join(&key);
@@ -377,8 +384,9 @@ impl Shared {
             if let Some(newest) = newest {
                 join.newest = Some(newest.clone());
                 let joining = state.subscriptions.values_mut();
-                for live in joining.filter(|live| live.key == key) {
+                for live in joining.filter(|live| live.key == key && live.waiting) {
                     live.aggregator.start(Some(newest.clone()));
+                    live.waiting = false;
                 }
             }
         }
@@ -483,7 +491,8 @@ impl Shared {
                     let Some(live) = state.subscriptions.get(&id) else {
                         return;
                     };
-                    let folding = live.filling.is_none() && !state.fetching(&live.key);
+                    let folding =
+                        live.filling.is_none() && !(live.waiting && state.fetching(&live.key));
                     let Some(live) = state.subscriptions.get_mut(&id) else {
                         return;
                     };
