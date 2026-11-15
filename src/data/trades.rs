@@ -2,15 +2,15 @@
 //!
 //! A page adds trades up to the first held trade and leaves later ones to the live stream. A trade
 //! whose id is already held is dropped, whatever its time, so history and live trades join exactly
-//! when both carry ids. Otherwise time decides: a page adds a trade at the instant of the first
-//! held trade only if it and every held trade at that instant carry ids, and a live trade is
-//! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
-//! sharing the boundary instant may be lost but are never counted twice. The first page after a
-//! new subscription on a retained tape also fills the time between the tape and the live stream,
-//! from the instant of the newest retained trade through that of the next live trade, each under
-//! the same rule. A page's trades at the stream's first instant may have traded before the
-//! subscription, so the live trades left to a page there are kept apart: they, not the page's, are
-//! what the stream sent at that instant.
+//! when both carry ids. Otherwise time decides: a page adds a trade without an id only before every
+//! held trade, a trade at the instant of a held trade only if it and every held trade at that
+//! instant carry ids, and a live trade is dropped if a page added a trade at or after it and the
+//! two do not both carry ids. Trades sharing the boundary instant may be lost but are never counted
+//! twice. The first page after a new subscription on a retained tape also fills the time between
+//! the tape and the live stream, from the instant of the newest retained trade through that of the
+//! next live trade, each under the same rule. A page's trades at the stream's first instant may
+//! have traded before the subscription, so the live trades left to a page there are kept apart:
+//! they, not the page's, are what the stream sent at that instant.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -428,7 +428,7 @@ impl Trades {
         self.front_reached |= rejected == 0 && !late;
         self.fill_gap(&mut page, changed);
         // The held trades run without a gap from the first one: a live trade stamped before it
-        // marks no boundary.
+        // marks no boundary for a page's trades that ids join to the held ones.
         if let Some(oldest) = self.trades.front().map(|trade| trade.ts) {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
@@ -443,7 +443,18 @@ impl Trades {
                 // Ids join the page's trades of that instant to the held ones: none is missing.
                 self.left_out.remove(&oldest);
             }
-            page.retain(|trade| trade.ts < oldest || (trade.ts == oldest && kept(trade)));
+            // A page's trade joins by id only when it and every held trade at its instant carry
+            // one; any other may repeat a live trade, so it must be older than every held trade.
+            let held_from = (self.trades.iter())
+                .map(|trade| trade.ts)
+                .min()
+                .unwrap_or(oldest);
+            let held_without_id: BTreeSet<_> = (self.trades.iter())
+                .filter(|held| held.ts <= oldest && held.id.is_none())
+                .map(|held| held.ts)
+                .collect();
+            let joins = |trade: &Tick| trade.id.is_some() && !held_without_id.contains(&trade.ts);
+            page.retain(|trade| trade.ts < held_from || (trade.ts <= oldest && joins(trade)));
         }
         let mut room = self.capacity.saturating_sub(self.trades.len());
         let mut added = Vec::new();
@@ -809,6 +820,12 @@ mod tests {
                     Live(vec![id(later(trade(3, 5.0), 400), 5)]),
                     Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(3, 5.0), 5)])],
                 vec![1.0, 2.0, 5.0], 0, vec![5.0]),
+            // Live trades stamped before the first held one: the page may repeat 3 and 4.
+            ("from the oldest held time up to the first held trade, a page takes only trades \
+                that, like every held trade at their instant, carry ids", 10,
+                vec![Live(vec![id(trade(5, 5.0), 5), id(trade(3, 3.0), 3), trade(4, 4.0)]),
+                    Page(vec![trade(2, 2.0), trade(3, 3.0), id(trade(4, 4.0), 4)])],
+                vec![2.0, 5.0, 3.0, 4.0], 0, vec![5.0, 3.0, 4.0]),
         ];
         for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);
