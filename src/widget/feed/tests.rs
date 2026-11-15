@@ -2575,69 +2575,102 @@ fn footprint_turned_on_later_leaves_out_a_paged_execution_the_sink_dropped() {
     }
 }
 
-/// Hand counts on 2t at price 100, executions of 1 without ids, the chart showing candles. A
-/// trade page is answered in the drain that streams the first executions, into a store too small
-/// for both. In the first row the page holds a sell at 23:59:59, a sell at 00:00:00 that traded
-/// before the subscription and a copy of the stream's first buy; the stream buys twice at
-/// 00:00:00 and once at 00:00:01, and the store of three drops the sell at 23:59:59 for the last
-/// buy. In the second the page also holds a sell at 23:59:58, for which the store of three has no
-/// room. The sink's bars are the two buys at 00:00:00 and the buy at 00:00:01, without the sells,
-/// so the page's executions give the first bar no cells, after the footprint is turned on and
-/// after it is turned off and on. In the third row the page holds copies of the buys at 00:00:00
-/// to 00:00:03, the stream buys once a second from 00:00:00 to 00:00:05, and the store of four
-/// drops the page's buys at 00:00:00 and 00:00:01 for the last two: past the stream's first
-/// instant, the page's copies at 00:00:02 and 00:00:03 fill the 00:00:02 bar, bid 0 and ask 2.
+/// Hand counts at price 100, executions of 1 without ids, the chart showing candles. In the first
+/// three rows, on 2t, a trade page is answered in the drain that streams the first executions,
+/// into a store too small for both. In the first row the page holds a sell at 23:59:59, a sell
+/// at 00:00:00 that traded before the subscription and a copy of the stream's first buy; the
+/// stream buys twice at 00:00:00 and once at 00:00:01, and the store of three drops the sell at
+/// 23:59:59 for the last buy. In the second the page also holds a sell at 23:59:58, for which the
+/// store of three has no room. The sink's bars are the two buys at 00:00:00 and the buy at
+/// 00:00:01, without the sells, so the page's executions give the first bar no cells, after the
+/// footprint is turned on and after it is turned off and on. In the third row the page holds
+/// copies of the buys at 00:00:00 to 00:00:03, the stream buys once a second from 00:00:00 to
+/// 00:00:05, and the store of four drops the page's buys at 00:00:00 and 00:00:01 for the last
+/// two: past the stream's first instant, the page's copies at 00:00:02 and 00:00:03 fill the
+/// 00:00:02 bar, bid 0 and ask 2. In the last two rows, on 50000t, the stream buys once a second
+/// from 00:00:00, the page holds copies of its buys at 0 s to 99,999 s and the store holds both,
+/// but the sink holds 100,000 executions between frames. In the fourth row the page is answered
+/// in the drain that streams 100,001 buys, and the sink drops the buy at 0 s. In the fifth the
+/// page's drain streams the buy at 0 s, which the store keeps apart, and the next one streams
+/// 100,001 buys from 1 s, of which the sink drops the buy at 1 s. Either way the stream sent
+/// every execution after the one dropped, so the page's copies fill the 50,000 s bar, bid 0 and
+/// ask 50,000.
 #[test]
 fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
     use crate::model::OrderSide::{Buy, Sell};
     let start = bars(1)[0].time;
     let at = |second: i64| start + TimeDelta::seconds(second);
     let fill = |second, side| Tick::new(at(second), 100.0, 1.0, Some(side));
-    // The store's capacity, the page, the stream's buys, the newest execution the store dropped,
-    // the opens of the chart's bars, all in seconds from 00:00:00, and the bid and ask of each
-    // bar drawn with cells, `None` for a candle.
+    // The interval, the store's capacity, the page, the stream's buys in each drain, the newest
+    // execution dropped, the opens of the chart's bars, all in seconds from 00:00:00, and the bid
+    // and ask of each bar drawn with cells, `None` for a candle.
     type Row = (
+        &'static str,
         &'static str,
         usize,
         Vec<Tick>,
-        &'static [i64],
+        Vec<Vec<i64>>,
         i64,
         &'static [i64],
         &'static [Option<(f64, f64)>],
     );
-    let rows: [Row; 3] = [
+    let copies = || Vec::from_iter((0..100_000).map(|second| fill(second, Buy)));
+    let rows: [Row; 5] = [
         (
             "a live execution evicts an older page execution",
+            "2t",
             3,
             vec![fill(-1, Sell), fill(0, Sell), fill(0, Buy)],
-            &[0, 0, 1],
+            vec![vec![0, 0, 1]],
             -1,
             &[0, 1],
             &[None, None],
         ),
         (
             "the page is larger than the store",
+            "2t",
             3,
             vec![fill(-2, Sell), fill(-1, Sell), fill(0, Sell), fill(0, Buy)],
-            &[0, 0, 1],
+            vec![vec![0, 0, 1]],
             -1,
             &[0, 1],
             &[None, None],
         ),
         (
             "the loss reaches the stream's first instant",
+            "2t",
             4,
             (0..4).map(|second| fill(second, Buy)).collect(),
-            &[0, 1, 2, 3, 4, 5],
+            vec![vec![0, 1, 2, 3, 4, 5]],
             1,
             &[0, 2, 4],
             &[None, Some((0.0, 2.0)), None],
         ),
+        (
+            "the sink drops executions in the page's drain",
+            "50000t",
+            2 * TRADE_CAPACITY,
+            copies(),
+            vec![(0..=100_000).collect()],
+            0,
+            &[0, 50_000, 100_000],
+            &[None, Some((0.0, 50_000.0)), None],
+        ),
+        (
+            "the sink drops executions after the store kept some apart",
+            "50000t",
+            2 * TRADE_CAPACITY,
+            copies(),
+            vec![vec![0], (1..=100_001).collect()],
+            1,
+            &[0, 50_000, 100_000],
+            &[None, Some((0.0, 50_000.0)), None],
+        ),
     ];
-    for (label, capacity, paged, streamed, lost, opens, cells) in rows {
+    for (label, interval, capacity, paged, streamed, lost, opens, cells) in rows {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        chart.set_timeframe("2t".parse().unwrap());
+        chart.set_timeframe(interval.parse().unwrap());
         let mut frames = Frames::new();
         frames.run(&mut chart);
         feed.resolve()
@@ -2648,10 +2681,12 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
         // The chart applies the page before the executions it drains with.
         (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(paged, false)));
         let sink = feed.sink();
-        for second in streamed {
-            sink.push_tick(fill(*second, Buy));
+        for drain in streamed {
+            for second in drain {
+                sink.push_tick(fill(second, Buy));
+            }
+            frames.run(&mut chart);
         }
-        frames.run(&mut chart);
         let trades = &chart.feed_link.as_ref().unwrap().trades;
         assert_eq!(trades.lost_until(), Some(at(lost)), "{label}: loss");
         let opens: Vec<_> = opens.iter().map(|second| at(*second)).collect();
