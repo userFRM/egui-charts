@@ -156,7 +156,7 @@ impl AlertDelivery {
 /// use egui_charts::model::{AlertCalendar, AlertInputs, AlertStudy};
 ///
 /// let mut inputs = AlertInputs::default();
-/// inputs.calendar = Some(AlertCalendar::new("BTCUSD"));
+/// inputs.calendar = Some(AlertCalendar::new("BTCUSD", None, None));
 /// inputs.studies = vec![AlertStudy::new(0, "RSI", Vec::new())];
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -235,20 +235,24 @@ pub struct AlertCalendar {
 }
 
 impl AlertCalendar {
-    /// The calendar of `symbol` with a continuous session and no exchange zone: assign
-    /// [`timezone`](Self::timezone) and [`session`](Self::session) for exchange hours.
+    /// The calendar of `symbol`: its exchange `timezone` and trading `session`, continuous when
+    /// `session` is `None`.
     ///
     /// ```
     /// use egui_charts::model::AlertCalendar;
     ///
-    /// let calendar = AlertCalendar::new("BTCUSD");
+    /// let calendar = AlertCalendar::new("BTCUSD", None, None);
     /// assert_eq!(calendar.session, None);
     /// ```
-    pub fn new(symbol: impl Into<String>) -> Self {
+    pub fn new(
+        symbol: impl Into<String>,
+        timezone: Option<TimezoneId>,
+        session: Option<super::Session>,
+    ) -> Self {
         Self {
             symbol: symbol.into(),
-            timezone: None,
-            session: None,
+            timezone,
+            session,
         }
     }
 }
