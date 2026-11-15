@@ -299,12 +299,13 @@ fn render_profiles(
         }
         // A valley can lie on untraded rows, so nodes are placed by level, not by traded row.
         for (label, nodes) in [("HVN", &high), ("LVN", &low)] {
+            let label = crate::localization::text(painter.ctx(), label);
             for &level in nodes {
                 let y0 = mapping.price_to_y(level as f64 * step - tick * 0.5);
                 let y1 = mapping.price_to_y((level as f64 + 1.0) * step - tick * 0.5);
                 if y0.is_finite() && y1.is_finite() && (y0 - y1).abs() >= config.min_text_height {
                     let galley = painter.layout_no_wrap(
-                        label.into(),
+                        label.clone(),
                         FontId::monospace(crate::styles::typography::TINY),
                         config.text_color,
                     );
