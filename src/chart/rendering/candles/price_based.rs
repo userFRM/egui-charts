@@ -889,6 +889,31 @@ mod tests {
                 if i < 2 { 0.0 } else { 4.0 }
             );
         }
+        // Fourteen flat bars give an ATR(14) of 0, so the size waits for a bar with a range,
+        // streamed in or reached by a replay step: a 15th true range of max(2, 1, 1) = 2 smooths
+        // the seed of 0 to 2 / 14.
+        let mut flat = Chart::new(BarData::new());
+        flat.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Atr {
+                period: 14,
+                multiplier: 1.0,
+            },
+            ..Default::default()
+        });
+        let mut stream = bars(0, &[100.0; 15], None);
+        (stream[14].high, stream[14].low) = (101.0, 99.0);
+        let last = stream[14].time;
+        for (i, bar) in stream.into_iter().enumerate() {
+            flat.update(SeriesId::MAIN, bar);
+            paint(&mut flat);
+            let size = if i < 14 { 0.0 } else { 2.0 / 14.0 };
+            assert!((flat.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
+        for (cursor, size) in [(last, 0.0), (last + Duration::minutes(1), 2.0 / 14.0)] {
+            flat.set_replay_time(Some(cursor));
+            paint(&mut flat);
+            assert!((flat.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
     }
 
     #[test]
