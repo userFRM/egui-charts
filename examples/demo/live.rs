@@ -36,7 +36,7 @@ const LOAD_BATCH: usize = 512;
 const CHURN_PER_TRADE: usize = 6;
 
 /// The instrument whose feed sends individual orders instead of aggregate depth.
-pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
+pub(super) const ORDER_LEVEL_SYMBOL: &str = "INDEXFZ2026";
 
 /// The only demo symbol whose feed answers analyst price targets.
 pub(super) const TARGETS_SYMBOL: &str = "SAMPLE";
@@ -458,7 +458,7 @@ impl LiveFeed {
             instrument = instrument.with_logo(SAMPLE_LOGO);
         }
         // Index quotes are commonly licensed delayed; the legend marks them.
-        if sim.symbol == "SPX" {
+        if sim.symbol == "INDEXA" {
             instrument = instrument.with_data_status(DataStatus::Delayed);
         }
         instrument
@@ -1738,7 +1738,7 @@ impl Datafeed for LiveFeed {
             "Crypto" => "Cryptocurrency",
             "Index" => "Index",
             "Forex" => "Currency pair",
-            "CME" => "Futures",
+            "Futures" => "Futures",
             "Synthetic" => "Fund",
             _ => "Stock",
         };
@@ -2185,7 +2185,7 @@ mod tests {
             let mut references = Vec::new();
             for (symbol, extended) in [
                 ("SAMPLE", false),
-                ("EURUSD", false),
+                ("FOREXA", false),
                 (ORDER_LEVEL_SYMBOL, false),
                 ("SAMPLE", true),
             ] {
@@ -2283,7 +2283,7 @@ mod tests {
         )
         .unwrap();
         assert!(!study.volume_profiles(0..10).is_empty());
-        for (seconds, symbol, shown) in [(1, "AAPL", false), (2, "SAMPLE", true)] {
+        for (seconds, symbol, shown) in [(1, "STOCKA", false), (2, "SAMPLE", true)] {
             feed.set_symbol(symbol);
             feed.advance(now + TimeDelta::seconds(seconds));
             assert_eq!(study.volume_profiles(0..10).is_empty(), !shown, "{symbol}");
@@ -2320,7 +2320,7 @@ mod tests {
         ] {
             let now = now.parse().unwrap();
             for (symbol, factor, dividend) in
-                [("MSFT", 0.97, stock_date), ("SAMPLE", 0.98, fund_date)]
+                [("STOCKB", 0.97, stock_date), ("SAMPLE", 0.98, fund_date)]
             {
                 let dividend = dividend.parse::<DateTime<Utc>>().unwrap();
                 let feed = ready_feed(symbol, now);
@@ -2369,7 +2369,7 @@ mod tests {
             ),
         ] {
             let end = end.parse::<DateTime<Utc>>().unwrap();
-            for symbol in ["AAPL", "SAMPLE"] {
+            for symbol in ["STOCKA", "SAMPLE"] {
                 let feed = ready_feed(symbol, now.parse().unwrap());
                 for view in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
                     for adjusted in [false, true] {
@@ -2390,9 +2390,9 @@ mod tests {
                 }
             }
         }
-        for symbol in ["AAPL", "SAMPLE", "BTCUSD"] {
+        for symbol in ["STOCKA", "SAMPLE", "TOKENA"] {
             let feed = ready_feed(symbol, "2026-10-26T15:00:00Z".parse().unwrap());
-            if matches!(symbol, "AAPL" | "SAMPLE") {
+            if matches!(symbol, "STOCKA" | "SAMPLE") {
                 assert!(feed.regular_quote().unwrap().3.is_none());
             } else {
                 assert!(feed.regular_quote().is_none());
@@ -2405,7 +2405,7 @@ mod tests {
     #[test]
     fn bounded_quote_lookups_keep_the_last_displayed_prices() {
         for now in ["2026-03-06T14:30:00Z", "2026-03-09T08:00:00Z"] {
-            for symbol in ["AAPL", "SAMPLE", "BTCUSD"] {
+            for symbol in ["STOCKA", "SAMPLE", "TOKENA"] {
                 let feed = ready_feed(symbol, now.parse().unwrap());
                 for session in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
                     for adjusted in [false, true] {
@@ -2555,7 +2555,7 @@ mod tests {
         use egui_charts::data::OrderFilter;
 
         let start: DateTime<Utc> = "2026-10-23T14:00:00Z".parse().unwrap();
-        for (symbol, order_level) in [(ORDER_LEVEL_SYMBOL, true), ("BTCUSD", false)] {
+        for (symbol, order_level) in [(ORDER_LEVEL_SYMBOL, true), ("TOKENA", false)] {
             let feed = Arc::new(LiveFeed::new(symbol, start));
             let detectors = feed.detectors();
             let mut settings = detectors.settings();
@@ -2789,7 +2789,7 @@ mod tests {
             assert_eq!(feed.daily_volume(), expected);
             assert_eq!(feed.quote(time).unwrap().volume, Some(expected.0));
         }
-        let whole = ready_feed("BTCUSD", "2026-10-24T02:00:00Z".parse().unwrap());
+        let whole = ready_feed("TOKENA", "2026-10-24T02:00:00Z".parse().unwrap());
         {
             let sim = whole.state();
             assert_eq!(sim.archived_end(), 7 * 24 * 60);
@@ -2808,14 +2808,15 @@ mod tests {
         use std::time::Duration;
         let ctx = egui::Context::default();
         let now = "2026-10-23T19:07:05Z".parse().unwrap();
-        let live = Arc::new(ready_feed("AAPL", now));
+        let live = Arc::new(ready_feed("STOCKA", now));
         live.set_paused(true);
-        for symbol in ["MSFT", "BTCUSD"] {
+        for symbol in ["STOCKB", "TOKENA"] {
             live.market_quote(symbol, now);
         }
         super::super::tests::finish_feed(&live);
         let quotes = Arc::new(DemoQuotes::new(live));
-        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "MSFT,BTCUSD")]);
+        let mut panel =
+            WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "STOCKB,TOKENA")]);
         panel.set_service(quotes.clone());
         let mut time = 0.0;
         let mut delays = Vec::new();
@@ -2864,14 +2865,15 @@ mod tests {
         use std::time::Duration;
         let ctx = egui::Context::default();
         let now = "2026-10-23T22:07:05Z".parse().unwrap();
-        let live = Arc::new(ready_feed("AAPL", now));
+        let live = Arc::new(ready_feed("STOCKA", now));
         live.set_paused(true);
-        for symbol in ["MSFT", "BTCUSD"] {
+        for symbol in ["STOCKB", "TOKENA"] {
             live.market_quote(symbol, now);
         }
         super::super::tests::finish_feed(&live);
         let quotes = Arc::new(DemoQuotes::new(live.clone()));
-        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "MSFT,BTCUSD")]);
+        let mut panel =
+            WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "STOCKB,TOKENA")]);
         panel.set_service(quotes.clone());
         let mut time = 0.0;
         let mut frame = |panel: &mut WatchlistPanel, at: DateTime<Utc>| {
@@ -2906,7 +2908,7 @@ mod tests {
         let (moved, symbol) = (1..=120)
             .map(|seconds| now + chrono::Duration::seconds(seconds))
             .find_map(|at| {
-                ["MSFT", "BTCUSD"].iter().find_map(|symbol| {
+                ["STOCKB", "TOKENA"].iter().find_map(|symbol| {
                     (live.market_quote(symbol, now).map(|q| q.last)
                         != live.market_quote(symbol, at).map(|q| q.last))
                     .then_some((at, *symbol))
@@ -2964,10 +2966,10 @@ mod tests {
 
         // Symbols without trading hours stamp every frame, though details only displays hours and
         // minutes.
-        live.set_symbol("SPX");
+        live.set_symbol("INDEXA");
         panel = WatchlistPanel::new(vec![Watchlist::new("Watchlist")]);
         panel.set_service(quotes.clone());
-        panel.set_selected("SPX");
+        panel.set_selected("INDEXA");
         frame(&mut panel, after);
         frame(&mut panel, after);
         assert_eq!(frame(&mut panel, after), Duration::MAX);
@@ -2977,6 +2979,6 @@ mod tests {
         );
         let next_minute = after + TimeDelta::minutes(1);
         assert!(frame(&mut panel, next_minute) < Duration::MAX);
-        assert_eq!(panel.quote("SPX"), live.quote(next_minute).as_ref());
+        assert_eq!(panel.quote("INDEXA"), live.quote(next_minute).as_ref());
     }
 }
