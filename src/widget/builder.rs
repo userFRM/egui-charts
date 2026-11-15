@@ -120,8 +120,9 @@ impl Chart {
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
             readout_revision: crate::model::next_revision(),
-            // Unique also among the charts of other runs, whose snapshots a host may keep.
-            #[cfg(feature = "ui")]
+            // Unique also among the charts of other runs, whose snapshots and drawings documents a
+            // host may keep.
+            #[cfg(feature = "drawings")]
             data_table_identity: std::hash::BuildHasher::hash_one(
                 &std::hash::RandomState::new(),
                 (chrono::Utc::now(), crate::model::next_revision()),
@@ -155,12 +156,16 @@ impl Chart {
             drawings: DrawingManager::new(),
             #[cfg(feature = "drawings")]
             symbol_drawings: Default::default(),
+            #[cfg(feature = "drawings")]
+            drawing_resets: 0,
             #[cfg(not(feature = "drawings"))]
             symbol_markers: Default::default(),
             #[cfg(feature = "drawings")]
             drawing_store: None,
             #[cfg(feature = "drawings")]
             restored_studies: Default::default(),
+            #[cfg(feature = "drawings")]
+            restored_from: None,
             #[cfg(feature = "drawings")]
             study_column_ids: Default::default(),
             history: super::history::ChartHistory::default(),

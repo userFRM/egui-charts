@@ -18,7 +18,7 @@ pub(crate) fn current_time_seconds() -> f64 {
 }
 
 /// Toasts container for per-instance usage.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Toasts {
     toasts: Vec<Toast>,
     /// Whether the user expanded the stack; a new burst starts collapsed.

@@ -96,6 +96,7 @@ pub enum ReplayToolbarAction {
 }
 
 /// Replay toolbar widget
+#[derive(Debug)]
 pub struct ReplayToolbar<'a> {
     state: &'a ReplayToolbarState,
     config: ReplayToolbarConfig,

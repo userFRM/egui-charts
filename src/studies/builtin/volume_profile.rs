@@ -55,7 +55,7 @@ pub struct ProfileInput {
     pub coverage: f64,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     Visible,
     Fixed,
@@ -65,7 +65,7 @@ enum Kind {
     Auto,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ProfileStudy {
     kind: Kind,
     rows: usize,
@@ -122,7 +122,7 @@ struct ProfileStudy {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CachedProfile {
     plot: StudyProfile,
     opening: Option<VolumeProfile>,
@@ -138,7 +138,7 @@ const LEVELS: [ProfileLevelKind; 3] = [
 ];
 
 /// Levels of finished profiles, kept while their bars and row layout hold.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct LevelCache {
     /// The row layout the levels were found with.
     config: Option<VolumeProfileConfig>,
@@ -147,7 +147,7 @@ struct LevelCache {
 }
 
 /// A level of a finished profile while it extends.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Level {
     kind: ProfileLevelKind,
     price: f64,
@@ -189,7 +189,7 @@ const PERIODS: [AnchorPeriod; 7] = [
 ];
 
 /// What the Period input of a periodic profile counts.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PeriodUnit {
     /// Calendar periods of exchange trading days.
     Calendar(AnchorPeriod),
@@ -1350,7 +1350,7 @@ fn grouped(bar: &FootprintBar, ticks: i64) -> FootprintBar {
 macro_rules! profile_study {
     ($ty:ident, $kind:ident, $name:literal, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $ty {
             profile: ProfileStudy,
         }

@@ -23,7 +23,7 @@ use crate::theme::ThemeExt;
 const ROW: f32 = 20.0;
 
 /// What the price column's profile draws from the traded volume at each price.
-#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Profile {
     /// All volume, including unclassified prints.
     #[default]
@@ -35,7 +35,7 @@ enum Profile {
 }
 
 /// Which trades the profile and the traded column sum.
-#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Accumulation {
     /// Every trade the chart retains.
     #[default]
@@ -51,7 +51,7 @@ enum Accumulation {
 const EXTRAS: [&str; 3] = ["Orders", "Obs. chg", "Traded"];
 
 /// Where the ladder stands between frames.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct Ladder {
     /// The tick of the middle row, until the ladder has a price to centre on.
@@ -136,7 +136,7 @@ fn format_size(value: f64) -> String {
 /// No broker is required and no order actions are emitted. Prices stay fixed until Center
 /// (Shift+Alt+C) is pressed. Keep one panel per chart; serialize it with the workspace to retain
 /// the view and profile choices.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DepthPanel {
     symbol: String,

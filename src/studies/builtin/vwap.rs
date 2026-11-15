@@ -181,7 +181,7 @@ pub(super) fn trading_day(
 /// [`time_zone`](crate::model::Instrument::time_zone) and
 /// [`session`](crate::model::Instrument::session) so that sessions which cross
 /// midnight in the exchange zone, or UTC midnight, stay one period.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VolumeWeightedAvgPrice {
     values: IndicatorValues,
     stepper: Stepper<State>,
@@ -208,7 +208,7 @@ pub struct VolumeWeightedAvgPrice {
     chart_events: Vec<(EventKind, DateTime<Utc>)>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     period: Option<(i32, u32)>,
     events: usize,

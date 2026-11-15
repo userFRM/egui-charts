@@ -25,7 +25,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyCandle};
 use egui::Color32;
 
 /// Bollinger Bars: full-width wick blocks under up or down bodies.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BollingerBars {
     candles: Vec<StudyCandle>,
     values: IndicatorValues,

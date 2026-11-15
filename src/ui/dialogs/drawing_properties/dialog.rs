@@ -18,6 +18,7 @@ use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
 use crate::ui_kit::tab_bar::TabBar;
 
 /// Drawing properties dialog
+#[derive(Debug)]
 pub struct DrawingPropertiesDialog {
     /// Display and layout options for this component.
     pub config: DrawingPropertiesConfig,
@@ -595,6 +596,7 @@ struct UiState {
 }
 
 /// Only previewed drawings are restored; incoming host drawings and metadata stay intact.
+#[derive(Debug)]
 struct PreviewDrawing {
     drawing: Drawing,
     times: Vec<Option<chrono::DateTime<chrono::Utc>>>,

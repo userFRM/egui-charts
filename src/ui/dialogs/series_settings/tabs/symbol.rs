@@ -15,6 +15,7 @@ use chrono::{NaiveTime, Timelike};
 use egui::{Color32, RichText, Ui};
 
 /// Symbol tab renderer - shows chart type and style settings
+#[derive(Debug)]
 pub struct SymbolTab;
 
 impl SymbolTab {

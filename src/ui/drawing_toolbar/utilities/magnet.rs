@@ -23,6 +23,7 @@ use egui::{Align, Align2, Id, Layout, Rect, Response, RichText, Ui, Vec2};
 const HINT_TEXT_WIDTH: f32 = 236.0;
 
 /// Magnet button with dropdown component.
+#[derive(Debug)]
 pub struct MagnetButton;
 
 impl MagnetButton {

@@ -60,7 +60,7 @@ use chrono::{DateTime, Utc};
 ///
 /// Orchestrates the replay system, managing state, data feeding, and action handling.
 /// This is the main entry point for integrating replay functionality into your application.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ReplayController {
     /// Replay state
     pub state: ReplayState,

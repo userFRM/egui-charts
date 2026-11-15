@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// On Balance Volume indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OnBalanceVolume {
     values: IndicatorValues,
     stepper: Stepper<State>,
@@ -38,7 +38,7 @@ pub struct OnBalanceVolume {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<f64>,
     total: f64,

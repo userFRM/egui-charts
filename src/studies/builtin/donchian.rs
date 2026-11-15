@@ -31,7 +31,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Donchian Channels indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DonchianChannels {
     period: usize,
     offset: i32,

@@ -15,7 +15,7 @@ use egui::Color32;
 /// each window ending at the current bar. The width starts at bar `period - 1` and both
 /// extrema start with it. A bar with a non-finite close is skipped as if absent: it has no
 /// value and is in no window, so later values equal those of the series without it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BollingerBandsWidth {
     period: usize,
     std_dev: f64,

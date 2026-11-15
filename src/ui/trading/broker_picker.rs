@@ -101,6 +101,7 @@ pub enum BrokerPickerAction {
 /// whose Connect button returns [`BrokerPickerAction::Connect`] and closes the picker; the host
 /// then connects [`Trading`](super::Trading) to that broker. Open it with
 /// [`open`](Self::open), such as from the toolbar's Trade button while no broker is connected.
+#[derive(Debug)]
 pub struct BrokerPicker {
     /// The tiles, in order. [`new`](Self::new) puts the paper account first.
     pub tiles: Vec<BrokerTile>,

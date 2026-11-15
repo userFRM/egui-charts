@@ -69,7 +69,7 @@ pub struct ZigZagPivot {
 ///   Bars before the first pivot and after the last have no value.
 /// - Optional labels show each pivot's price, change and leg volume; the last leg, whose end
 ///   still moves, is drawn dashed.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ZigZag {
     /// Min percentage change to register a swing
     deviation_percent: f64,
@@ -97,13 +97,13 @@ pub struct ZigZag {
     labels: Vec<StudyLabel>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Detector {
     extremes: Option<((usize, f64), (usize, f64))>,
     trend: Option<(bool, (usize, f64))>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Checkpoint {
     detector: Detector,
     finite: usize,

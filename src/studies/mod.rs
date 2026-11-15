@@ -30,8 +30,6 @@
 
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-// Debug for these types remains follow-up work from #1315.
-#[allow(missing_debug_implementations)]
 mod builtin;
 mod custom;
 mod error;
