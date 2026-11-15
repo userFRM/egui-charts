@@ -526,7 +526,16 @@ impl TradingNotifications {
     }
 }
 
-/// Alerts tab settings
+/// Alerts tab settings. Missing saved fields keep their defaults: toasts close after 20 seconds
+/// and alerts stay off the desktop.
+///
+/// ```
+/// use egui_charts::widget::settings::AlertsSettings;
+///
+/// let mut settings = AlertsSettings::default();
+/// settings.desktop_notifications = true;
+/// settings.close_toasts = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -545,8 +554,15 @@ pub struct AlertsSettings {
     pub alert_color: Color32,
     /// Draw only active alerts; otherwise triggered, disabled and expired alerts are drawn dimmed.
     pub show_active_only: bool,
-    /// Seconds an alert notification stays on screen.
+    /// Seconds an alert notification stays on screen while [`close_toasts`](Self::close_toasts)
+    /// holds.
     pub notification_seconds: u32,
+    /// Close each alert toast after [`notification_seconds`](Self::notification_seconds);
+    /// otherwise it stays until the user dismisses it.
+    pub close_toasts: bool,
+    /// Also show alert popups as desktop notifications, through the host's
+    /// [`Notifications`](crate::services::Notifications) service.
+    pub desktop_notifications: bool,
 }
 
 impl Default for AlertsSettings {
@@ -559,7 +575,9 @@ impl Default for AlertsSettings {
             show_alert_labels: true,
             alert_color: crate::studies::palette::WARM_ORANGE,
             show_active_only: true,
-            notification_seconds: 5,
+            notification_seconds: 20,
+            close_toasts: true,
+            desktop_notifications: false,
         }
     }
 }
