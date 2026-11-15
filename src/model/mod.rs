@@ -143,7 +143,7 @@ pub use trading::{
     TimeInForce, TradingRules,
 };
 
-pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};
+pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
 mod tests {
