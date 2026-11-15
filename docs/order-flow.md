@@ -135,12 +135,10 @@ heatmap:
 use chrono::TimeDelta;
 use egui_charts::data::{DepthHistory, DepthHistoryConfig};
 
-let config = DepthHistoryConfig {
-    cadence: TimeDelta::milliseconds(50),
-    rows: 1000,
-    columns: 240,
-    ..Default::default()
-};
+let mut config = DepthHistoryConfig::default();
+config.cadence = TimeDelta::milliseconds(50);
+config.rows = 1000;
+config.columns = 240;
 chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
 chart.set_liquidity_heatmap(true);
 ```

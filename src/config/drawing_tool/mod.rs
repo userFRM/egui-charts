@@ -15,6 +15,7 @@ pub use interaction_mode::DrawingInteractionMode;
 
 /// The order of a list of drawings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DrawingSort {
     /// Alphabetically by name, ignoring case.
     Name,

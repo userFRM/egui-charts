@@ -183,27 +183,21 @@ const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
 /// Resting order sizes the demo marks: the block orders of the order-level instrument reach them,
 /// its ordinary orders do not.
-const ORDER_TIERS: OrderSizeTiers = OrderSizeTiers {
-    notable: 100.0,
-    large: 250.0,
-};
+const ORDER_TIERS: OrderSizeTiers = OrderSizeTiers::new(100.0, 250.0);
 
 /// The heatmap's history of `symbol`'s book: of its individual orders when its feed sends them, so
 /// the cells mark the large ones, otherwise of the aggregate depth.
 fn depth_history(symbol: &str) -> DepthHistory {
-    DepthHistory::new(DepthHistoryConfig {
-        orders: (symbol == live::ORDER_LEVEL_SYMBOL).then(OrderFilter::default),
-        ..Default::default()
-    })
-    .expect("default depth history")
+    let mut config = DepthHistoryConfig::default();
+    config.orders = (symbol == live::ORDER_LEVEL_SYMBOL).then(OrderFilter::default);
+    DepthHistory::new(config).expect("default depth history")
 }
 
 /// How the live book is shown: highlighted at [`ORDER_TIERS`].
 fn book_view() -> OrderBookView {
-    OrderBookView {
-        tiers: Some(ORDER_TIERS),
-        ..Default::default()
-    }
+    let mut view = OrderBookView::default();
+    view.tiers = Some(ORDER_TIERS);
+    view
 }
 
 fn indicator_tree_id(id: SeriesId) -> usize {
@@ -343,12 +337,9 @@ impl SidePanel {
 
 /// A products launcher entry.
 fn product(id: &str, icon: egui_charts::icons::Icon, title: &str, description: &str) -> Product {
-    Product {
-        id: id.into(),
-        icon,
-        title: title.into(),
-        description: description.into(),
-    }
+    let mut product = Product::new(id, icon, title);
+    product.description = description.into();
+    product
 }
 
 /// Export formats the demo can perform, with browser downloads on the web.
@@ -550,18 +541,18 @@ pub struct DemoApp {
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
     [
-        WidgetBarWidget {
-            id: 4,
-            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
-            tooltip: "Time and sales".into(),
-            section: WidgetBarSection::Bottom,
-        },
-        WidgetBarWidget {
-            id: 2,
-            icon: egui_charts::icons::icons::TEXT,
-            tooltip: "Session notes".into(),
-            section: WidgetBarSection::Bottom,
-        },
+        WidgetBarWidget::new(
+            4,
+            egui_charts::icons::icons::SETTINGS_EVENTS,
+            "Time and sales",
+            WidgetBarSection::Bottom,
+        ),
+        WidgetBarWidget::new(
+            2,
+            egui_charts::icons::icons::TEXT,
+            "Session notes",
+            WidgetBarSection::Bottom,
+        ),
     ]
 }
 
@@ -620,12 +611,13 @@ impl DemoApp {
         chart.set_event_visibility(
             cc.storage
                 .and_then(|storage| eframe::get_value(storage, "event_visibility"))
-                .unwrap_or_else(|| egui_charts::model::EventVisibility {
-                    show_dividends: false,
-                    show_splits: false,
-                    show_news: false,
-                    show_ideas: false,
-                    ..Default::default()
+                .unwrap_or_else(|| {
+                    let mut visibility = egui_charts::model::EventVisibility::default();
+                    visibility.show_dividends = false;
+                    visibility.show_splits = false;
+                    visibility.show_news = false;
+                    visibility.show_ideas = false;
+                    visibility
                 }),
         );
         chart.set_order_book_view(book_view());
@@ -858,10 +850,11 @@ impl DemoApp {
             calendar: CalendarPanel::new(),
             screener: ScreenerPanel::new(feeds::screener_sets()),
             hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
-            market_heatmap: egui_charts::ui::widget_bar::MarketHeatmapPanel {
-                universes: feeds::heatmap_universes(),
-                metrics: feeds::heatmap_metrics(),
-                ..Default::default()
+            market_heatmap: {
+                let mut panel = egui_charts::ui::widget_bar::MarketHeatmapPanel::default();
+                panel.universes = feeds::heatmap_universes();
+                panel.metrics = feeds::heatmap_metrics();
+                panel
             },
             notifications: NotificationsPanel::new(),
             notification_host,
@@ -1615,10 +1608,8 @@ impl DemoApp {
         else {
             return;
         };
-        let range = egui_charts::widget::VisibleTimeRange {
-            from,
-            to: next - chrono::TimeDelta::seconds(1),
-        };
+        let range =
+            egui_charts::widget::VisibleTimeRange::new(from, next - chrono::TimeDelta::seconds(1));
         let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
         charts.insert(self.layout_slot, &mut self.chart);
         self.layout.apply_date_range(&mut charts, range);
@@ -3621,25 +3612,28 @@ impl DemoApp {
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.has_broker() {
                         self.broker_picker.open();
-                    } else if side == egui_charts::widget::QuoteSide::Ticket {
-                        self.trading
-                            .open_ticket(egui_charts::model::OrderRequest::new(
-                                self.chart.symbol(),
-                                egui_charts::model::OrderSide::Buy,
-                                self.trading.quantity,
-                                egui_charts::model::OrderType::Market,
-                            ));
                     } else {
-                        let side = match side {
-                            egui_charts::widget::QuoteSide::Buy => {
-                                egui_charts::model::OrderSide::Buy
+                        match side {
+                            egui_charts::widget::QuoteSide::Ticket => {
+                                self.trading
+                                    .open_ticket(egui_charts::model::OrderRequest::new(
+                                        self.chart.symbol(),
+                                        egui_charts::model::OrderSide::Buy,
+                                        self.trading.quantity,
+                                        egui_charts::model::OrderType::Market,
+                                    ));
                             }
-                            egui_charts::widget::QuoteSide::Sell => {
-                                egui_charts::model::OrderSide::Sell
-                            }
-                            egui_charts::widget::QuoteSide::Ticket => unreachable!(),
-                        };
-                        self.trading.trade(self.chart.symbol().to_owned(), side);
+                            egui_charts::widget::QuoteSide::Buy => self.trading.trade(
+                                self.chart.symbol().to_owned(),
+                                egui_charts::model::OrderSide::Buy,
+                            ),
+                            egui_charts::widget::QuoteSide::Sell => self.trading.trade(
+                                self.chart.symbol().to_owned(),
+                                egui_charts::model::OrderSide::Sell,
+                            ),
+                            // A side added later has no action in the demo yet.
+                            _ => {}
+                        }
                     }
                 }
                 self.trading.show(ui, &mut self.chart);
@@ -4967,13 +4961,10 @@ mod tests {
                 .config()
                 .columns
         };
-        app.chart.set_depth_history(Some(
-            DepthHistory::new(DepthHistoryConfig {
-                columns: 7,
-                ..Default::default()
-            })
-            .unwrap(),
-        ));
+        let mut config = DepthHistoryConfig::default();
+        config.columns = 7;
+        app.chart
+            .set_depth_history(Some(DepthHistory::new(config).unwrap()));
         app.chart
             .set_replay_time(Some(app.chart.bars(SeriesId::MAIN)[5].time));
         assert!(app.chart.depth_history(SeriesId::MAIN).is_none());

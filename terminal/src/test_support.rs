@@ -144,13 +144,7 @@ impl MemoryStorage {
             .get(&key)
             .map_or(1, |stored| stored.revision.0.parse::<u64>().unwrap() + 1);
         let revision = Revision(next.to_string());
-        documents.insert(
-            key,
-            Versioned {
-                document,
-                revision: revision.clone(),
-            },
-        );
+        documents.insert(key, Versioned::new(document, revision.clone()));
         revision
     }
 }
