@@ -36,6 +36,7 @@ pub enum LayoutCopy {
 /// A chart of the layout that a [`LayoutCopy`] cannot fully serve, for the host to show before it
 /// applies the copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LayoutCopyIssue {
     /// The chart's slot in the layout.
     pub slot: usize,

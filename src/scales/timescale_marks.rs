@@ -117,6 +117,15 @@ impl TickMark {
     /// [`HorizontalScale`](crate::scales::HorizontalScale) to return. It is of type
     /// [`TickMarkType::Time`] and not bold; assign [`mark_type`](Self::mark_type) and
     /// [`bold`](Self::bold) to change that.
+    ///
+    /// ```
+    /// use chrono::{DateTime, Utc};
+    /// use egui_charts::scales::{TickMark, TickMarkType, TickMarkWeight};
+    ///
+    /// let time = DateTime::<Utc>::UNIX_EPOCH;
+    /// let mut mark = TickMark::new(time, 0, TickMarkWeight::new(50), "1970");
+    /// mark.mark_type = TickMarkType::Year;
+    /// ```
     pub fn new(
         time: DateTime<Utc>,
         index: usize,

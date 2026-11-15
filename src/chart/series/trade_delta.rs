@@ -6,6 +6,7 @@ use egui::{Color32, Painter, Rect, Stroke, pos2};
 
 /// Trade delta representation in a host-supplied pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TradeDeltaStyle {
     /// Each bar's buy volume minus sell volume, relative to zero.
     Histogram,

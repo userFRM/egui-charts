@@ -117,6 +117,14 @@ impl RenkoConfig {
 /// - When the bars move by more than two million brick sizes, the bricks are built from the latest
 ///   bar after which they move at most that much
 /// - At most the newest 10,000 bricks
+///
+/// ```
+/// use egui_charts::model::{Bar, RenkoConfig, to_renko_bricks};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let bricks = to_renko_bricks(&bars, &RenkoConfig::new(0.5));
+/// assert!(bricks.is_empty());
+/// ```
 pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
     let brick_size = config.brick_size;
     if bars.is_empty() || !(brick_size > 0.0 && brick_size.is_finite()) {
