@@ -18,6 +18,7 @@ const TIERS: usize = 8;
 /// orders, and the history at most `columns * 8` columns: about 15 MB with the defaults, or
 /// 23 MB sampling individual orders, which span at least 42 hours.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DepthHistoryConfig {
     /// Length of a column. The book is sampled at the end of every period of this length counted
     /// from the Unix epoch, and the sample stands for the whole period. At least a millisecond;
@@ -58,7 +59,15 @@ impl Default for DepthHistoryConfig {
 
 /// The resting size at each price row of the book over `[time, time + span)`, and the largest
 /// individual order in each row when the history samples individual orders.
+///
+/// ```
+/// use egui_charts::data::DepthColumn;
+///
+/// let mut column = DepthColumn::default();
+/// column.bids = vec![(100, 5.0)];
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct DepthColumn {
     /// Start of the column, on the cadence grid.
     pub time: DateTime<Utc>,
@@ -89,7 +98,8 @@ pub struct DepthColumn {
 /// ```
 /// use egui_charts::data::{DepthHistory, DepthHistoryConfig};
 ///
-/// let config = DepthHistoryConfig { ticks_per_row: 4, ..Default::default() };
+/// let mut config = DepthHistoryConfig::default();
+/// config.ticks_per_row = 4;
 /// let history = DepthHistory::new(config).unwrap();
 /// assert_eq!(history.columns().count(), 0);
 /// ```

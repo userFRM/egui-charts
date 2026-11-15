@@ -35,7 +35,8 @@ pub struct StudyTable {
     pub text_size: TableTextSize,
 }
 
-/// Where a study table sits in its pane. The `Debug` names are the choices study inputs list.
+/// Where a study table sits in its pane. The `Debug` names are the choices study inputs list. The
+/// set is closed: the nine places of a three by three grid.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum TablePosition {
     /// Upper left corner.
@@ -92,6 +93,7 @@ impl std::fmt::Debug for TablePosition {
 
 /// The text size of a study table. The `Debug` names are the choices study inputs list.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TableTextSize {
     /// 8 points.
     Tiny,

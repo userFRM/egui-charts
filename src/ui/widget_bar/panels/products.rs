@@ -9,6 +9,7 @@ use crate::ui_kit::{EmptyState, PanelHeader};
 
 /// One product the launcher offers.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Product {
     /// Stable host id, returned when the product is opened.
     pub id: String,
@@ -18,6 +19,19 @@ pub struct Product {
     pub title: String,
     /// One line under the title. May be empty.
     pub description: String,
+}
+
+impl Product {
+    /// A product without a description line: assign [`description`](Self::description) to add
+    /// one.
+    pub fn new(id: impl Into<String>, icon: Icon, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            icon,
+            title: title.into(),
+            description: String::new(),
+        }
+    }
 }
 
 /// An action the host performs for the products launcher.
@@ -33,6 +47,7 @@ pub enum ProductsAction {
 
 /// The products the host offers, opened by the host.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct ProductsPanel {
     /// The products in display order.
     pub products: Vec<Product>,

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A colour flag marking a watchlist symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum WatchlistFlag {
     /// Red watchlist flag.
     Red,
@@ -51,6 +52,7 @@ impl WatchlistFlag {
 
 /// One row of a watchlist.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum WatchlistItem {
     /// A symbol, optionally flagged.
     Symbol {
@@ -65,6 +67,7 @@ pub enum WatchlistItem {
 
 /// A named list of symbols and sections, in the order the user arranged them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Watchlist {
     /// Display name.
     pub name: String,

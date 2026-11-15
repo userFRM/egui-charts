@@ -147,14 +147,14 @@ impl Terminal {
                 settings.chart_type_favorites = chart_types.preferences().favorites;
             }
             Direction::Load => {
-                selector.set_preferences(TimeframePreferences {
-                    favorites: settings.interval_favorites.clone(),
-                    custom_timeframes: settings.custom_intervals.clone(),
-                    hidden_timeframes: settings.hidden_intervals.clone(),
-                });
-                chart_types.set_preferences(ChartTypePreferences {
-                    favorites: settings.chart_type_favorites.clone(),
-                });
+                let mut intervals = TimeframePreferences::default();
+                intervals.favorites = settings.interval_favorites.clone();
+                intervals.custom_timeframes = settings.custom_intervals.clone();
+                intervals.hidden_timeframes = settings.hidden_intervals.clone();
+                selector.set_preferences(intervals);
+                let mut types = ChartTypePreferences::default();
+                types.favorites = settings.chart_type_favorites.clone();
+                chart_types.set_preferences(types);
             }
         }
     }
@@ -222,10 +222,7 @@ impl Terminal {
         else {
             return;
         };
-        self.apply_span(VisibleTimeRange {
-            from,
-            to: next - Duration::seconds(1),
-        });
+        self.apply_span(VisibleTimeRange::new(from, next - Duration::seconds(1)));
     }
 
     fn apply_span(&mut self, span: VisibleTimeRange) {
@@ -564,14 +561,12 @@ mod tests {
             terminal
         };
         let custom = "7min".parse().unwrap();
-        let intervals = TimeframePreferences {
-            favorites: vec![Timeframe::Min5, custom],
-            custom_timeframes: vec![custom],
-            hidden_timeframes: vec![Timeframe::Min1],
-        };
-        let chart_types = ChartTypePreferences {
-            favorites: vec![ChartType::Bars],
-        };
+        let mut intervals = TimeframePreferences::default();
+        intervals.favorites = vec![Timeframe::Min5, custom];
+        intervals.custom_timeframes = vec![custom];
+        intervals.hidden_timeframes = vec![Timeframe::Min1];
+        let mut chart_types = ChartTypePreferences::default();
+        chart_types.favorites = vec![ChartType::Bars];
         let mut first = start();
         first
             .top_toolbar
@@ -596,12 +591,11 @@ mod tests {
         let mut older =
             UserSettings::from_json(r#"{"version":1,"interval_favorites":["Min5"]}"#).unwrap();
         restored.time_settings(&mut older, Direction::Load);
+        let mut expected = TimeframePreferences::default();
+        expected.favorites = vec![Timeframe::Min5];
         assert_eq!(
             restored.top_toolbar.timeframe_selector.preferences(),
-            TimeframePreferences {
-                favorites: vec![Timeframe::Min5],
-                ..TimeframePreferences::default()
-            }
+            expected
         );
         assert_eq!(
             restored.top_toolbar.chart_type_selector.preferences(),
