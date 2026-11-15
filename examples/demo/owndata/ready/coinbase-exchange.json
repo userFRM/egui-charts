@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "name": "Coinbase Exchange (public)",
+  "symbols": [
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD",
+    "BTC-EUR",
+    "ETH-EUR"
+  ],
+  "time_zone": "UTC",
+  "tick_size": 0.01,
+  "intervals": [
+    {
+      "chart": "Min1",
+      "service": "60"
+    },
+    {
+      "chart": "Min5",
+      "service": "300"
+    },
+    {
+      "chart": "Min15",
+      "service": "900"
+    },
+    {
+      "chart": "Hour1",
+      "service": "3600"
+    },
+    {
+      "chart": {
+        "Custom": 21600
+      },
+      "service": "21600"
+    },
+    {
+      "chart": "Day1",
+      "service": "86400"
+    }
+  ],
+  "keys": [],
+  "history": {
+    "url": "https://api.exchange.coinbase.com/products/{symbol}/candles?granularity={interval}&start={from}&end={to}",
+    "headers": [],
+    "body": "",
+    "range": "seconds",
+    "page_size": 299,
+    "rows": {
+      "path": [],
+      "layout": {
+        "arrays": {
+          "header": null
+        }
+      }
+    },
+    "bar": {
+      "time": {
+        "instant": {
+          "field": [
+            0
+          ],
+          "unit": "seconds"
+        }
+      },
+      "open": [
+        3
+      ],
+      "high": [
+        2
+      ],
+      "low": [
+        1
+      ],
+      "close": [
+        4
+      ],
+      "volume": [
+        5
+      ]
+    }
+  },
+  "stream": {
+    "url": "wss://ws-feed.exchange.coinbase.com",
+    "protocols": [],
+    "connect": [
+      "{\"type\":\"subscribe\",\"product_ids\":[\"{symbol}\"],\"channels\":[\"matches\"]}"
+    ],
+    "keep_alive": "",
+    "keep_alive_every": 30,
+    "records": [],
+    "route_by": [
+      "type"
+    ],
+    "routes": [
+      {
+        "value": "match",
+        "kind": {
+          "trades": {
+            "time": {
+              "instant": {
+                "field": [
+                  "time"
+                ],
+                "unit": "iso8601"
+              }
+            },
+            "price": [
+              "price"
+            ],
+            "size": [
+              "size"
+            ],
+            "condition": [],
+            "conditions": [],
+            "side": [
+              "side"
+            ],
+            "buy": "sell",
+            "sell": "buy"
+          }
+        }
+      },
+      {
+        "value": "last_match",
+        "kind": "ignore"
+      },
+      {
+        "value": "subscriptions",
+        "kind": "ignore"
+      }
+    ]
+  }
+}

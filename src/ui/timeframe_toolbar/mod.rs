@@ -15,4 +15,4 @@ pub use date_picker::*;
 pub use range_switcher::*;
 pub use state::{SessionType, TimeframeToolbarState};
 pub use timeframe_bar::*;
-pub use toolbar::{TimeframeToolbar, TimeframeToolbarConfig};
+pub use toolbar::{TimeframeToolbar, TimeframeToolbarConfig, default_time_zones};
