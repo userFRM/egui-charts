@@ -55,7 +55,6 @@ impl<T: Send + 'static> Clone for Events<T> {
 }
 
 /// The terminal's end of one stream: dropping it ends the stream.
-#[derive(Debug)]
 pub(crate) struct Listener(Arc<AtomicBool>);
 
 impl Listener {
