@@ -18,6 +18,7 @@ use crate::ui::drawing_toolbar::submenu_builder::{
 };
 
 /// Trend Lines category implementation
+#[derive(Debug)]
 pub struct TrendLinesCategory;
 
 impl ToolCategory for TrendLinesCategory {

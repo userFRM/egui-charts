@@ -9,6 +9,7 @@ use egui::Ui;
 /// A pre-configured 2-column grid for form layouts.
 ///
 /// Default: 2 columns, `[lg, md]` spacing (horizontal, vertical).
+#[derive(Debug)]
 pub struct FormGrid {
     id: String,
     columns: usize,

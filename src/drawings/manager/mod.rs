@@ -291,6 +291,10 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
+    /// Tells this manager from one that replaced it, such as `Chart::load_drawings` makes, whose
+    /// drawing ids start again: unique to each manager, and kept when the manager moves or reads
+    /// its drawings from storage again.
+    pub(crate) identity: u64,
 }
 
 impl std::fmt::Debug for DrawingManager {
@@ -359,6 +363,7 @@ impl DrawingManager {
             eraser_mode: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
+            identity: crate::model::next_revision(),
         }
     }
 
@@ -699,6 +704,7 @@ impl DrawingManager {
                 .filter(|d| !d.saveable)
                 .cloned()
                 .collect(),
+            identity: self.identity,
         }
     }
 
@@ -712,7 +718,10 @@ impl DrawingManager {
             ids,
             next_id,
             unsaved,
+            identity,
         } = previous;
+        // The same drawings to a layout that mirrors them, as their ids are.
+        self.identity = identity;
         self.next_id = self.next_id.max(next_id);
         // The drawings that stay are in place before ids are handed out, so none gets theirs.
         let read = self.drawings.len();
@@ -769,6 +778,8 @@ pub(crate) struct BeforeRead {
     next_id: usize,
     /// The drawings that are never stored.
     unsaved: Vec<Drawing>,
+    /// The `DrawingManager::identity` of the manager.
+    identity: u64,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.

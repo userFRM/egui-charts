@@ -217,6 +217,7 @@ impl ColorPickerState {
 // ============================================================================
 
 /// Color swatch picker
+#[derive(Debug)]
 pub struct ColorPicker<'a> {
     config: ColorPickerConfig,
     state: &'a mut ColorPickerState,

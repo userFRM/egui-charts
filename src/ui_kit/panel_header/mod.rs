@@ -13,6 +13,7 @@ const ROW_HEIGHT: f32 = 28.0;
 /// Panel header with title and optional right-aligned actions.
 ///
 /// The title is in the theme's title size and strong text colour; actions sit 4 px apart.
+#[derive(Debug)]
 pub struct PanelHeader<'a> {
     title: &'a str,
     separator: bool,

@@ -54,6 +54,7 @@ fn alignment_row<T: Copy + PartialEq, const N: usize>(
 }
 
 /// Text tab renderer
+#[derive(Debug)]
 pub struct TextTab;
 
 impl TextTab {

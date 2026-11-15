@@ -62,6 +62,7 @@ impl From<(&ReplayProgress, &str, f32)> for ReplayStatus {
 }
 
 /// Replay status indicator widget
+#[derive(Debug)]
 pub struct ReplayStatusIndicator<'a> {
     /// Current replay status
     status: &'a ReplayStatus,

@@ -3,7 +3,7 @@ use super::{AverageLine, AverageType, MACombination};
 use crate::studies::palette;
 
 /// A simple average crossing an exponential one.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MixedMACross {
     inner: MACombination,
 }
@@ -32,7 +32,7 @@ impl_ma_preset!(
 );
 
 /// Three simple averages with independently chosen lengths.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TripleMA {
     inner: MACombination,
 }
@@ -64,7 +64,7 @@ impl_ma_preset!(
 );
 
 /// Twelve evenly spaced exponential averages coloured by their individual direction.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MARibbon {
     inner: MACombination,
 }

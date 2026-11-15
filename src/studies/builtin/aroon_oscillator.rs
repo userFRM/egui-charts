@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Aroon Up minus Aroon Down.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AroonOscillator {
     period: usize,
     values: IndicatorValues,

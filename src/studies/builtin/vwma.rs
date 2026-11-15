@@ -7,7 +7,7 @@ use egui::Color32;
 
 /// Volume Weighted Moving Avg (VWMA)
 /// Moving avg weighted by volume - gives more importance to high-volume periods
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VWMA {
     period: usize,
     values: IndicatorValues,

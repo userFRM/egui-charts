@@ -79,6 +79,40 @@ pub struct AlertDialog {
     error: Option<String>,
 }
 
+impl std::fmt::Debug for AlertDialog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertDialog")
+            .field("config", &self.config)
+            .field("is_open", &self.is_open)
+            .field("alert", &self.alert)
+            .field("sources", &self.sources)
+            .field("watchlists", &self.watchlists)
+            .field("timezone", &self.timezone)
+            .field("account_timezone", &self.account_timezone)
+            .field("starts", &self.starts)
+            .field("start_date", &self.start_date)
+            .field("start_time", &self.start_time)
+            .field("expires", &self.expires)
+            .field("expiry_date", &self.expiry_date)
+            .field("expiry_time", &self.expiry_time)
+            .field("scheduled", &self.scheduled)
+            .field("schedule_zone", &self.schedule_zone)
+            .field("schedule_days", &self.schedule_days)
+            .field("schedule_windows", &self.schedule_windows)
+            .field("last_schedule", &self.last_schedule)
+            .field("editing_condition", &self.editing_condition)
+            .field("preset_name", &self.preset_name)
+            .field("preset_fields", &self.preset_fields)
+            .field("presets", &self.presets)
+            .field("unsaved_presets", &self.unsaved_presets)
+            .field("initial", &self.initial)
+            .field("pending", &self.pending)
+            .field("loaded", &self.loaded)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for AlertDialog {
     fn default() -> Self {
         Self::new()

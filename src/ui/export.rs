@@ -166,6 +166,7 @@ impl Default for ExportConfig {
 /// }
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ExportDialog {
     is_open: bool,
     config: ExportConfig,
@@ -559,6 +560,7 @@ impl ExportDialog {
 /// }
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ExportButton {
     format: ExportFormat,
 }

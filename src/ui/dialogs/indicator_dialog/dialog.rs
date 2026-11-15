@@ -86,6 +86,32 @@ pub struct IndicatorDialog {
     config: IndicatorDialogConfig,
 }
 
+impl std::fmt::Debug for IndicatorDialog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorDialog")
+            .field("is_open", &self.is_open)
+            .field("search", &self.search)
+            .field("focus_search", &self.focus_search)
+            .field("focus_first_row", &self.focus_first_row)
+            .field("active_tab", &self.active_tab)
+            .field("sel_category", &self.sel_category)
+            .field("favorites", &self.favorites)
+            .field("factory", &self.factory)
+            .field("feed_capabilities", &self.feed_capabilities)
+            .field("unavailable_order_flow", &self.unavailable_order_flow)
+            .field("metric_names", &self.metric_names)
+            .field("metric_error", &self.metric_error)
+            .field("option_profile_registered", &self.option_profile_registered)
+            .field("option_error", &self.option_error)
+            .field("source", &self.source)
+            .field("source_error", &self.source_error)
+            .field("full", &self.full)
+            .field("indicators", &self.indicators)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for IndicatorDialog {
     fn default() -> Self {
         Self::new()

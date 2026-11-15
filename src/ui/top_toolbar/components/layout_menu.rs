@@ -59,6 +59,7 @@ pub enum LayoutAction {
     Rename(String, String),
 }
 
+#[derive(Debug)]
 enum Request {
     List,
     Open(String),
@@ -105,6 +106,28 @@ pub struct LayoutMenu {
     /// The context of the last poll, to translate errors of calls between frames.
     ctx: Option<egui::Context>,
     share: ShareControls,
+}
+
+impl std::fmt::Debug for LayoutMenu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LayoutMenu")
+            .field("curr_layout", &self.curr_layout)
+            .field("layouts", &self.layouts)
+            .field("config", &self.config)
+            .field("autosave", &self.autosave)
+            .field("favorites", &self.favorites)
+            .field("favorites_only", &self.favorites_only)
+            .field("editing", &self.editing)
+            .field("new_name", &self.new_name)
+            .field("failing", &self.failing)
+            .field("edits", &self.edits)
+            .field("saved_edits", &self.saved_edits)
+            .field("observed_layout", &self.observed_layout)
+            .field("changed", &self.changed)
+            .field("error", &self.error)
+            .field("ctx", &self.ctx)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for LayoutMenu {

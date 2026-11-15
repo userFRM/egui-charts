@@ -73,6 +73,19 @@ pub struct BollingerBands {
     visible: bool,
 }
 
+impl std::fmt::Debug for BollingerBands {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BollingerBands")
+            .field("period", &self.period)
+            .field("basis", &self.basis)
+            .field("std_dev", &self.std_dev)
+            .field("values", &self.values)
+            .field("colors", &self.colors)
+            .field("visible", &self.visible)
+            .finish_non_exhaustive()
+    }
+}
+
 impl BollingerBands {
     /// `std_dev` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, std_dev: f64) -> Self {

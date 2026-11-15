@@ -29,6 +29,7 @@ use egui::{RichText, Ui};
 /// ```
 ///
 /// [`NotificationsAction::OpenProfile`]: crate::ui::widget_bar::panels::notifications::NotificationsAction::OpenProfile
+#[derive(Debug)]
 pub struct ProfileCard<'a> {
     id: &'a ProfileId,
 }

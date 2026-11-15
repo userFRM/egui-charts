@@ -10,7 +10,7 @@ use egui::Color32;
 /// Over the last `period` bars, the share of the deviations of the close from its `2 * period` bar simple moving average that lies above it, weighted by size: `100 * SD+ / (SD+ + SD-)`.
 /// Values above 50 indicate an uptrend, below 50 a downtrend.
 /// The first value is on bar `3 * period - 2`; when every deviation is zero the value is 50.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrendIntensityIndex {
     /// Number of deviations summed; the moving average spans twice as many bars.
     period: usize,
@@ -172,7 +172,7 @@ impl Indicator for TrendIntensityIndex {
 /// Qstick (Quantitative Candlestick)
 /// Moving avg of the open-close difference
 /// Positive = bullish, Negative = bearish
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Qstick {
     period: usize,
     values: IndicatorValues,

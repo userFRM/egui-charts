@@ -19,7 +19,7 @@ pub enum ImpulseSignal {
 /// Elder Impulse System
 /// Combines EMA slope and MACD histogram for trend signals
 /// Green = bullish, Red = bearish, Blue = neutral
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ElderImpulseSystem {
     /// EMA period (typically 13)
     ema_period: usize,
