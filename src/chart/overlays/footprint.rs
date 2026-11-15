@@ -1371,20 +1371,22 @@ pub fn render_footprint_statistics_rows(
                 .map(|(i, _)| first + i),
         );
     }
-    let mut cumulative = 0.0;
+    let (mut ask, mut bid) = (0.0, 0.0);
     let mut last_volume = None;
     let mut cumulative_start = None;
     let mut has_data = false;
     let mut columns = Vec::new();
     for (i, bar) in bars.iter().enumerate() {
         if restarts.binary_search(&i).is_ok() {
-            cumulative = 0.0;
+            (ask, bid) = (0.0, 0.0);
             cumulative_start = Some(flow.clock().bar_open(bar.time));
         }
         let Some(row) = flow.complete_bar_at(bar.time) else {
             continue;
         };
-        cumulative += row.delta();
+        // Sides summed over the run, so a run balanced up to rounding reads 0 as a bar does.
+        ask += row.ask;
+        bid += row.bid;
         let volume = row.volume();
         let first_volume = last_volume.is_none();
         let previous = last_volume
@@ -1421,7 +1423,7 @@ pub fn render_footprint_statistics_rows(
             Some(row.delta()),
             Some(row.min_delta),
             Some(row.max_delta),
-            cumulative_known.then_some(cumulative),
+            cumulative_known.then(|| crate::data::side_delta(ask, bid)),
             row.delta_percent(),
             (row.bid > 0.0).then(|| row.ask / row.bid),
             Some(row.trades() as f64),
@@ -3020,6 +3022,65 @@ mod tests {
 
     /// A delta of 5 in the last bar of a UTC day and 2 in the first bar of the next: summed over
     /// every bar the row reads 5 and then 7, restarted with the day 5 and then 2.
+    #[test]
+    fn sums_equal_up_to_rounding_read_as_equal_in_the_statistics() {
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let minute = chrono::TimeDelta::minutes(1);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 against a buy of 0.3, then buys of the
+        // same sizes and one sell of 0.3: every delta and the run's last one are balanced.
+        for (at, size, side) in [
+            (start, 0.1, OrderSide::Sell),
+            (start, 0.2, OrderSide::Sell),
+            (start, 0.3, OrderSide::Buy),
+            (start + minute, 0.1, OrderSide::Buy),
+            (start + minute, 0.2, OrderSide::Buy),
+            (start + minute * 2, 0.3, OrderSide::Sell),
+        ] {
+            flow.push(&Tick::new(at, 100.0, size, Some(side))).unwrap();
+        }
+        let bars = [start, start + minute, start + minute * 2]
+            .map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(360.0, 48.0));
+        let map = ChartMapping::new(
+            rect,
+            60.0,
+            0,
+            2,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                48.0,
+                false,
+            ),
+        );
+        let config = FootprintConfig {
+            statistics_rows: vec![FootprintStatistic::Delta, FootprintStatistic::CumulativeDelta],
+            ..Default::default()
+        };
+        let mut output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint_statistics_rows(ui.painter(), &map, &bars, &flow, &config, None),
+        );
+        output.textures_delta.clear();
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(t) => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        // The sides of the run end at 0.6000000000000001 each, where bar deltas of 0, 0.3 and
+        // -0.3 would sum to 5.55e-17.
+        assert_eq!(texts, ["Delta", "CVD", "0", "0", "0.3", "0.3", "-0.3", "0"]);
+    }
+
     #[test]
     fn cumulative_delta_restarts_with_the_session_when_given_sessions() {
         let last: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
