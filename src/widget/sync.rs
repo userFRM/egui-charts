@@ -10,11 +10,19 @@ pub(super) type CrosshairPeriod = (DateTime<Utc>, DateTime<Utc>);
 
 /// UTC timestamps at the left and right edges of a chart's plot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct VisibleTimeRange {
     /// Time at the leftmost plot pixel.
     pub from: DateTime<Utc>,
     /// Time at the rightmost plot pixel.
     pub to: DateTime<Utc>,
+}
+
+impl VisibleTimeRange {
+    /// The range from `from` at the leftmost plot pixel to `to` at the rightmost.
+    pub fn new(from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
+        Self { from, to }
+    }
 }
 
 impl Chart {

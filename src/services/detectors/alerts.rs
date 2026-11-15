@@ -10,6 +10,7 @@ use crate::services::{Events, Notification, Notifications, SignalEvent};
 
 /// Running detections, including loaded history and excluding updates of an existing signal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DetectionCounts {
     /// Detections since the symbol was tracked or reset, including evicted chart signals.
     pub total: u64,
@@ -21,6 +22,7 @@ pub struct DetectionCounts {
 
 /// The feed-time window of a count alert.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum CountWindow {
     /// Since tracking or reset.
     Total,

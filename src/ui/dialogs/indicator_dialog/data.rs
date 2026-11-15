@@ -10,6 +10,7 @@ use crate::studies::IndicatorFactory;
 /// and restore them with [`IndicatorDialog::set_preferences`](super::IndicatorDialog::set_preferences).
 /// Unknown study names are retained so temporarily unavailable host studies keep their stars.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct IndicatorPreferences {
     /// Favourite factory names, sorted for stable saved documents.
     #[serde(default)]

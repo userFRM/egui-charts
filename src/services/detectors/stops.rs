@@ -12,7 +12,15 @@ use crate::services::SignalEvent;
 /// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
 /// ticks without reversing. If any fill identifies its aggressor, at least three distinct
 /// aggressors are required. Unknown-side fills are excluded.
+///
+/// ```
+/// use egui_charts::services::{StopRunRule, StopSweepRule};
+///
+/// let rules = (StopRunRule::default(), StopSweepRule::default());
+/// println!("{rules:?}");
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct StopRunRule;
 
 /// A closed bar with directional delta of at least 25%, three diagonal imbalances at 3:1,
@@ -20,6 +28,7 @@ pub struct StopRunRule;
 /// Unknown-side fills never count. The latest subscribed time interval supplies the bars.
 /// The first retained bar is left out because its opening executions may be missing.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct StopSweepRule;
 
 #[derive(Default)]

@@ -653,11 +653,7 @@ impl DemoApp {
             .collect::<Result<_, _>>()
             .map_err(|error| format!("Could not save the layout: {error}"))?;
         // The demo keeps the chart sizes in the layout's groups document.
-        Ok(SavedLayout {
-            mode,
-            charts,
-            sizing: None,
-        })
+        Ok(SavedLayout::new(mode, charts))
     }
 
     pub(super) fn capture_comparisons(
@@ -790,10 +786,8 @@ impl DemoApp {
                 }
             }
             // The demo restores its comparisons and spreads itself, with their feeds.
-            let snapshot = egui_charts::widget::ChartSnapshot {
-                series: None,
-                ..snapshot.clone()
-            };
+            let mut snapshot = snapshot.clone();
+            snapshot.series = None;
             let restored = self
                 .chart_in_slot(slot)
                 .map(|chart| chart.restore(&snapshot));
@@ -913,11 +907,10 @@ impl DemoApp {
         toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
-        self.indicator_dialog.set_preferences(
-            egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorPreferences {
-                favorites: settings.indicator_favorites.into_iter().collect(),
-            },
-        );
+        let mut preferences =
+            egui_charts::ui::dialogs::indicator_dialog::IndicatorPreferences::default();
+        preferences.favorites = settings.indicator_favorites.into_iter().collect();
+        self.indicator_dialog.set_preferences(preferences);
         self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
@@ -970,6 +963,13 @@ mod tests {
     use super::super::tests::settle;
     use super::*;
     use egui_charts::widget::{ChartLink, ChartLinkGroups};
+
+    fn links(symbol: ChartLink, interval: ChartLink) -> ChartLinkGroups {
+        let mut groups = ChartLinkGroups::default();
+        groups.symbol = symbol;
+        groups.interval = interval;
+        groups
+    }
 
     #[test]
     fn compact_demo_keeps_hidden_rail_panels_reachable_without_a_single_layout_strip() {
@@ -1126,18 +1126,12 @@ mod tests {
         app.layout.set_active(0);
         app.layout.set_link_groups(
             0,
-            ChartLinkGroups {
-                symbol: ChartLink::Group("🔶".into()),
-                interval: ChartLink::Group("💧".into()),
-            },
+            links(ChartLink::Group("🔶".into()), ChartLink::Group("💧".into())),
             true,
         );
         app.layout.set_link_groups(
             1,
-            ChartLinkGroups {
-                symbol: ChartLink::Unlinked,
-                interval: ChartLink::Group("🍀".into()),
-            },
+            links(ChartLink::Unlinked, ChartLink::Group("🍀".into())),
             true,
         );
         let memberships = app.layout.saved_link_groups();
@@ -1252,12 +1246,10 @@ mod tests {
             .registry
             .set_availability(egui_charts::drawings::DrawingToolType::TrendLine, hidden);
         app.chart.set_main_series_visible(false);
-        app.chart
-            .set_event_visibility(egui_charts::model::EventVisibility {
-                show_earnings: true,
-                show_economic_events: true,
-                ..Default::default()
-            });
+        let mut visibility = egui_charts::model::EventVisibility::default();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        app.chart.set_event_visibility(visibility);
         app.handle_comparison(super::super::CompareAction::AddSymbol(
             "AAPL".into(),
             Default::default(),
@@ -1275,21 +1267,15 @@ mod tests {
         {
             app.layout.set_link_groups(
                 slot,
-                ChartLinkGroups {
-                    symbol: ChartLink::Group(symbol.into()),
-                    interval: ChartLink::Group(interval.into()),
-                },
+                links(
+                    ChartLink::Group(symbol.into()),
+                    ChartLink::Group(interval.into()),
+                ),
                 true,
             );
         }
-        app.layout.set_link_groups(
-            2,
-            ChartLinkGroups {
-                symbol: ChartLink::Unlinked,
-                interval: ChartLink::Layout,
-            },
-            true,
-        );
+        app.layout
+            .set_link_groups(2, links(ChartLink::Unlinked, ChartLink::Layout), true);
         let saved_links = app.layout.saved_link_groups();
         let saved = app.capture_layout().unwrap();
         let comparisons = app.capture_comparisons().unwrap();

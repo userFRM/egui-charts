@@ -355,10 +355,9 @@ mod tests {
         until(&ctx, &mut app.chart, "the price step", |chart| {
             step(chart) == Some(0.001)
         });
-        app.time_and_sales.filters.push(TradeSizeFilter {
-            min_size: 1.0,
-            sound: true,
-        });
+        let mut filter = TradeSizeFilter::new(1.0);
+        filter.sound = true;
+        app.time_and_sales.filters.push(filter);
         let trade = egui_charts::model::Tick::new(chrono::Utc::now(), 12.347, 5.0, None);
         app.feed_time_and_sales(vec![trade]);
         // The step 0.001 has three decimals: the list and the notice write 12.347, not 12.35.
