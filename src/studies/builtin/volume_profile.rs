@@ -34,7 +34,7 @@ use crate::model::{
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
 };
-use chrono::{DateTime, NaiveTime, TimeDelta, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeDelta, Utc};
 use egui::Color32;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -85,6 +85,8 @@ struct ProfileStudy {
     /// The open of the first bar of the last profile counted in bars or trading days, so that
     /// loading older bars leaves every period where it was; `None` until counted.
     period_start: Option<DateTime<Utc>>,
+    /// Start the periods again at the first bar of each trading year.
+    restart: bool,
     anchor: AutoAnchor,
     length: usize,
     interval: Timeframe,
@@ -95,10 +97,13 @@ struct ProfileStudy {
     feed_source: bool,
     adaptive: bool,
     /// The Sessions choice: 0 for the exchange trading day, 1 for regular hours, 2 for regular
-    /// and extended hours, 3 for `custom`.
+    /// and extended hours, 3 for `custom`, 4 for the pre-market, 5 for the post-market and 6 for
+    /// each segment of the day.
     sessions: usize,
     /// The hours of the Custom choice, kept while another choice is selected.
     custom: CustomProfileSession,
+    /// Leave the bars outside regular, extended or custom hours out of each session profile.
+    hours_only: bool,
     tick_size: Option<f64>,
     resolutions: Vec<ProfileResolution>,
     /// The finer interval and data start stated before the chart emptied the profile to wait
@@ -272,6 +277,7 @@ impl ProfileStudy {
             period: PeriodUnit::Calendar(AnchorPeriod::Week),
             period_count: 1,
             period_start: None,
+            restart: false,
             anchor: AutoAnchor::Auto,
             length: 100,
             interval: Timeframe::Min1,
@@ -285,6 +291,7 @@ impl ProfileStudy {
                 end: NaiveTime::MIN,
                 zone: None,
             },
+            hours_only: false,
             tick_size: None,
             resolutions: Vec::new(),
             held: None,
@@ -392,6 +399,16 @@ impl ProfileStudy {
                 InputValue::Choice(PERIOD_UNITS.iter().position(|u| *u == self.period).unwrap()),
                 InputKind::Choice(units.collect()),
             ));
+            inputs.push(
+                StudyInput::new(
+                    "restart_yearly",
+                    "Restart each year",
+                    InputValue::Toggle(self.restart),
+                    InputKind::Toggle,
+                )
+                // Trading days, weeks, months, quarters and bars.
+                .shown_when("period", [0, 1, 2, 3, 7]),
+            );
         }
         if self.kind == Kind::Auto {
             inputs.push(StudyInput::new(
@@ -423,6 +440,9 @@ impl ProfileStudy {
                     "Regular hours".into(),
                     "Regular and extended hours".into(),
                     "Custom hours".into(),
+                    "Pre-market only".into(),
+                    "Post-market only".into(),
+                    "Each segment of the day".into(),
                 ]),
             ));
             // Study inputs have no time of day, so custom hours take minutes after midnight.
@@ -458,6 +478,15 @@ impl ProfileStudy {
                     InputKind::Text,
                 )
                 .shown_when("sessions", [3]),
+            );
+            inputs.push(
+                StudyInput::new(
+                    "hours_only",
+                    "Leave out bars outside the hours",
+                    InputValue::Toggle(self.hours_only),
+                    InputKind::Toggle,
+                )
+                .shown_when("sessions", [1, 2, 3]),
             );
         }
         if matches!(self.kind, Kind::Session | Kind::Periodic) {
@@ -504,6 +533,7 @@ impl ProfileStudy {
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
             ("sessions", InputValue::Choice(v)) => self.sessions = v,
+            ("hours_only", InputValue::Toggle(v)) => self.hours_only = v,
             ("session_start", InputValue::Length(v)) => {
                 self.custom.start = NaiveTime::MIN + TimeDelta::minutes(v as i64)
             }
@@ -540,6 +570,7 @@ impl ProfileStudy {
             }
             ("period", InputValue::Choice(v)) => self.period = PERIOD_UNITS[v],
             ("period_count", InputValue::Length(v)) => self.period_count = v,
+            ("restart_yearly", InputValue::Toggle(v)) => self.restart = v,
             ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
             ("length", InputValue::Length(v)) => self.length = v,
             ("width", InputValue::Number(v)) => self.width = v / 100.0,
@@ -773,10 +804,11 @@ impl ProfileStudy {
         VolumeProfile::from_executions(&grouped(&bar, ticks), ticks as f64 * tick, tick, complete)
     }
 
-    /// The calendar the Sessions input divides intraday bars by: `None` for the trading day, on
-    /// daily and longer bars, which carry a trading date rather than hours, and for regular or
-    /// extended hours without instrument hours.
-    fn session_clock(&self) -> Option<BarClock> {
+    /// The choice of the Sessions input and the calendar it divides intraday bars by: `None` for
+    /// the trading day, on daily and longer bars, which carry a trading date rather than hours,
+    /// for regular or extended hours without instrument hours, and for the pre-market,
+    /// post-market and segment choices without extended hours.
+    fn session_clock(&self) -> Option<(ProfileSession, BarClock)> {
         if self.interval.duration_ms() >= Timeframe::Day1.duration_ms() {
             return None;
         }
@@ -784,10 +816,14 @@ impl ProfileStudy {
             1 => ProfileSession::Regular,
             2 => ProfileSession::Extended,
             3 => ProfileSession::Custom(self.custom.clone()),
+            4 => ProfileSession::PreMarket,
+            5 => ProfileSession::PostMarket,
+            6 => ProfileSession::Segments,
             _ => return None,
         };
         let (zone, hours) = &self.hours;
-        choice.session_clock(&BarClock::new(self.interval), zone, hours.as_ref())
+        let clock = choice.session_clock(&BarClock::new(self.interval), zone, hours.as_ref())?;
+        Some((choice, clock))
     }
 
     fn period_ranges(&self, period: AnchorPeriod) -> Vec<Range<usize>> {
@@ -866,9 +902,11 @@ impl ProfileStudy {
                 }
             }
             Kind::Session => match self.session_clock() {
-                // A session starts at each bar whose trading date differs from the bar before.
-                Some(clock) => {
-                    let breaks = clock.sessions().session_breaks(data);
+                // A session starts at each bar whose trading date differs from the bar before;
+                // the choice keeps the parts of it that it profiles.
+                Some((choice, clock)) => {
+                    let sessions = clock.sessions();
+                    let breaks = sessions.session_breaks(data);
                     let starts: Vec<_> = std::iter::once(0)
                         .chain(breaks.into_iter().map(|(i, _)| i))
                         .chain([data.len()])
@@ -876,7 +914,9 @@ impl ProfileStudy {
                     starts
                         .windows(2)
                         .filter(|pair| pair[0] < pair[1])
-                        .map(|pair| pair[0]..pair[1])
+                        .flat_map(|pair| {
+                            choice.profiled(data, pair[0]..pair[1], &sessions, self.hours_only)
+                        })
                         .collect()
                 }
                 None => self.period_ranges(AnchorPeriod::Session),
@@ -884,18 +924,43 @@ impl ProfileStudy {
             Kind::Periodic => match self.period {
                 // Trading days and bars lie on no grid fixed in time, so they are counted from
                 // the first bar of the newest profile, which loading older bars leaves in place.
-                PeriodUnit::Calendar(AnchorPeriod::Session) => {
-                    let days = self.period_ranges(AnchorPeriod::Session);
-                    counted(days, self.period_count, data, &mut self.period_start)
-                }
-                PeriodUnit::Bar => {
-                    let bars = (0..data.len()).map(|i| i..i + 1).collect();
-                    counted(bars, self.period_count, data, &mut self.period_start)
+                PeriodUnit::Calendar(AnchorPeriod::Session) | PeriodUnit::Bar => {
+                    let units = if self.period == PeriodUnit::Bar {
+                        (0..data.len()).map(|i| i..i + 1).collect()
+                    } else {
+                        self.period_ranges(AnchorPeriod::Session)
+                    };
+                    if self.restart {
+                        let years: Vec<_> = self.days.of(data).iter().map(Datelike::year).collect();
+                        restarted(
+                            units,
+                            &years,
+                            self.period_count,
+                            data,
+                            &mut self.period_start,
+                        )
+                    } else {
+                        counted(units, self.period_count, data, &mut self.period_start)
+                    }
                 }
                 PeriodUnit::Calendar(period) => {
                     let count = self.period_count as i64;
-                    let indices = self.days.of(data).into_iter().map(|day| period.index(day));
-                    runs(indices.map(|index| index.div_euclid(count)))
+                    // Years, decades and centuries start at a year already.
+                    let restart = self.restart
+                        && matches!(
+                            period,
+                            AnchorPeriod::Week | AnchorPeriod::Month | AnchorPeriod::Quarter
+                        );
+                    let group = |day: NaiveDate| {
+                        let index = period.index(day);
+                        if restart {
+                            let first = period.index(day.with_ordinal(1).unwrap());
+                            (day.year(), (index - first).div_euclid(count))
+                        } else {
+                            (0, index.div_euclid(count))
+                        }
+                    };
+                    runs(self.days.of(data).into_iter().map(group))
                 }
                 unit => {
                     let seconds = if unit == PeriodUnit::Minute { 60 } else { 3600 };
@@ -1301,6 +1366,31 @@ fn counted(
     groups
 }
 
+/// `units`, consecutive bar ranges each within one year of `years` (each bar's trading year),
+/// grouped `count` at a time from the first unit of each year, the oldest year's as [`counted`]
+/// groups them from `start`, since its first bar may not be loaded yet.
+fn restarted(
+    units: Vec<Range<usize>>,
+    years: &[i32],
+    count: usize,
+    data: &[Bar],
+    start: &mut Option<DateTime<Utc>>,
+) -> Vec<Range<usize>> {
+    let mut groups = Vec::new();
+    for (i, year) in runs(units.iter().map(|unit| years[unit.start]))
+        .into_iter()
+        .enumerate()
+    {
+        let units = units[year].to_vec();
+        groups.extend(if i == 0 {
+            counted(units, count, data, start)
+        } else {
+            counted(units, count, data, &mut None)
+        });
+    }
+    groups
+}
+
 /// Ticks per row of an executed profile over the traded levels `first..=last`: the row height in
 /// whole ticks, at least one. With equal rows, the levels over the row count, rounded up, when
 /// rows of that many ticks, counted from its multiples as a footprint groups them, stay within
@@ -1499,7 +1589,7 @@ profile_study!(
     VolProfileSession,
     Session,
     "Vol Profile Session",
-    "One volume profile per exchange trading day or chosen session hours, including the whole session of visible bars."
+    "One volume profile per exchange trading day, chosen session hours or segment of the day, including the whole session of visible bars."
 );
 profile_study!(
     VolProfilePeriodic,
@@ -2548,7 +2638,9 @@ mod tests {
     /// Each session starts at the first bar at or after its open: the exchange day's, the
     /// regular or extended hours', or the custom start's in its own zone or the exchange's, east
     /// or west of UTC, across a clock change and in an hour it skips. Bars outside the hours join
-    /// the session before them. Daily bars and an instrument without hours keep the trading day.
+    /// the session before them unless left out; the pre-market, post-market and segment choices
+    /// profile only their own bars, and fall back to the trading day without extended hours.
+    /// Daily bars and an instrument without hours keep the trading day.
     #[cfg(feature = "timezones")]
     #[test]
     fn session_profiles_start_at_the_chosen_hours() {
@@ -2566,6 +2658,13 @@ mod tests {
                         SessionWindow::new(week, at(16, 0), at(20, 0)),
                     ]),
             );
+        let regular_only = Instrument::new("X")
+            .with_time_zone(new_york.clone())
+            .with_session(Session::new([SessionWindow::new(
+                week,
+                at(9, 30),
+                at(16, 0),
+            )]));
         let zoned = Instrument::new("X").with_time_zone(new_york);
         // Half-hourly bars from Thursday 5 March 2026 to Tuesday 10 March. New York clocks move
         // from UTC-5 to UTC-4 at 07:00 UTC on Sunday 8 March.
@@ -2584,27 +2683,42 @@ mod tests {
                 .collect();
             starts.join(", ")
         };
-        let calculated = |sessions, custom: Option<(usize, usize, &str)>, instrument| {
-            let mut study = VolProfileSession::new(24);
-            study.set_timeframe(Timeframe::Min30);
-            study.set_instrument(Some(instrument));
-            study
-                .set_input("sessions", InputValue::Choice(sessions))
-                .unwrap();
-            if let Some((open, close, zone)) = custom {
-                study
-                    .set_input("session_start", InputValue::Length(open))
-                    .unwrap();
-                study
-                    .set_input("session_end", InputValue::Length(close))
-                    .unwrap();
-                study
-                    .set_input("session_zone", InputValue::Text(zone.into()))
-                    .unwrap();
-            }
-            study.calculate(&bars);
-            study
+        let spans = |study: &VolProfileSession| {
+            let at = |i: usize| bars[i].time.format("%d %H:%M").to_string();
+            let profiles = study.volume_profiles(0..bars.len());
+            let spans: Vec<_> = profiles
+                .iter()
+                .map(|profile| format!("{}-{}", at(profile.bars.start), at(profile.bars.end - 1)))
+                .collect();
+            spans.join(", ")
         };
+        let calculated =
+            |sessions, custom: Option<(usize, usize, &str)>, hours_only, instrument| {
+                let mut study = VolProfileSession::new(24);
+                study.set_timeframe(Timeframe::Min30);
+                study.set_instrument(Some(instrument));
+                study
+                    .set_input("sessions", InputValue::Choice(sessions))
+                    .unwrap();
+                if hours_only {
+                    study
+                        .set_input("hours_only", InputValue::Toggle(true))
+                        .unwrap();
+                }
+                if let Some((open, close, zone)) = custom {
+                    study
+                        .set_input("session_start", InputValue::Length(open))
+                        .unwrap();
+                    study
+                        .set_input("session_end", InputValue::Length(close))
+                        .unwrap();
+                    study
+                        .set_input("session_zone", InputValue::Text(zone.into()))
+                        .unwrap();
+                }
+                study.calculate(&bars);
+                study
+            };
         let trading_day = "05 00:00, 05 05:00, 06 05:00, 07 05:00, 08 05:00, 09 04:00, 10 04:00";
         let plus_0530 = "05 00:00, 05 04:00, 06 04:00, 07 04:00, 08 04:00, 09 04:00, 10 04:00";
         for (sessions, custom, instrument, expected) in [
@@ -2652,11 +2766,77 @@ mod tests {
             (3, Some((570, 960, "+05:30")), &exchange, plus_0530),
             (1, None, &zoned, trading_day),
         ] {
-            let study = calculated(sessions, custom, instrument);
+            let study = calculated(sessions, custom, false, instrument);
             assert_eq!(starts(&study), expected, "sessions {sessions} {custom:?}");
         }
+        // In UTC, Thursday and Friday's pre-market runs from 09:00 to 14:30, their regular hours
+        // to 21:00 and their post-market to 01:00; Monday and Tuesday's an hour earlier. The bars
+        // at 00:00 and 00:30 on the 5th are Wednesday's post-market.
+        for (sessions, custom, hours_only, instrument, expected) in [
+            (
+                1,
+                None,
+                true,
+                &exchange,
+                "05 14:30-05 20:30, 06 14:30-06 20:30, 09 13:30-09 19:30, 10 13:30-10 19:30",
+            ),
+            (
+                2,
+                None,
+                true,
+                &exchange,
+                "05 00:00-05 00:30, 05 09:00-06 00:30, 06 09:00-07 00:30, 09 08:00-09 23:30, \
+                 10 08:00-10 23:30",
+            ),
+            // 17:00 to 18:00 New York time is left out.
+            (
+                3,
+                Some((1080, 1020, "")),
+                true,
+                &exchange,
+                "05 00:00-05 21:30, 05 23:00-06 21:30, 06 23:00-07 21:30, 07 23:00-08 20:30, \
+                 08 22:00-09 20:30, 09 22:00-10 20:30, 10 22:00-10 23:30",
+            ),
+            (
+                4,
+                None,
+                false,
+                &exchange,
+                "05 09:00-05 14:00, 06 09:00-06 14:00, 09 08:00-09 13:00, 10 08:00-10 13:00",
+            ),
+            (
+                5,
+                None,
+                false,
+                &exchange,
+                "05 00:00-05 00:30, 05 21:00-06 00:30, 06 21:00-07 00:30, 09 20:00-09 23:30, \
+                 10 20:00-10 23:30",
+            ),
+            (
+                6,
+                None,
+                false,
+                &exchange,
+                "05 00:00-05 00:30, 05 09:00-05 14:00, 05 14:30-05 20:30, 05 21:00-06 00:30, \
+                 06 09:00-06 14:00, 06 14:30-06 20:30, 06 21:00-07 00:30, 09 08:00-09 13:00, \
+                 09 13:30-09 19:30, 09 20:00-09 23:30, 10 08:00-10 13:00, 10 13:30-10 19:30, \
+                 10 20:00-10 23:30",
+            ),
+            // Without extended hours the trading day stays.
+            (
+                6,
+                None,
+                false,
+                &regular_only,
+                "05 00:00-05 04:30, 05 05:00-06 04:30, 06 05:00-07 04:30, 07 05:00-08 04:30, \
+                 08 05:00-09 03:30, 09 04:00-10 03:30, 10 04:00-10 23:30",
+            ),
+        ] {
+            let study = calculated(sessions, custom, hours_only, instrument);
+            assert_eq!(spans(&study), expected, "sessions {sessions} {hours_only}");
+        }
         // A zone no build knows is refused and changes nothing.
-        let mut study = calculated(3, Some((570, 960, "+05:30")), &exchange);
+        let mut study = calculated(3, Some((570, 960, "+05:30")), false, &exchange);
         assert!(
             study
                 .set_input("session_zone", InputValue::Text("Mars/Base".into()))
@@ -2688,14 +2868,16 @@ mod tests {
     /// Weeks and longer group on a calendar fixed in time, minutes and hours as the chart's bar
     /// calendar opens bars of that length, and trading days and bars from the first bar of the
     /// newest profile, so loading older bars leaves every period where it was. A new study
-    /// counts trading days and bars from its first bar.
+    /// counts trading days and bars from its first bar. Restarted each year, weeks and longer
+    /// group from the period holding 1 January, and trading days and bars from each year's first
+    /// bar, the oldest year's as before.
     #[test]
     fn periodic_counts_keep_their_period_starts_when_older_bars_load() {
         let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
         let bar = |time| Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0);
-        // Weekdays from Monday 5 January 2026, at 15:00 UTC.
-        let weekdays = |count| -> Vec<_> {
-            let monday = at("2026-01-05T15:00:00Z");
+        // Weekdays from a Monday, at 15:00 UTC.
+        let weekdays = |monday: &str, count| -> Vec<_> {
+            let monday = at(&format!("{monday}T15:00:00Z"));
             (0..count)
                 .map(|day| bar(monday + TimeDelta::days(day / 5 * 7 + day % 5)))
                 .collect()
@@ -2703,12 +2885,14 @@ mod tests {
         let hours: Vec<_> = (0..16)
             .map(|hour| bar(at("2026-03-05T02:00:00Z") + TimeDelta::hours(hour)))
             .collect();
-        let minutes: Vec<_> = (0..250)
-            .map(|minute| bar(at("2026-03-05T00:00:00Z") + TimeDelta::minutes(minute)))
-            .collect();
+        let minutes = |start| -> Vec<_> {
+            (0..250)
+                .map(|minute| bar(at(start) + TimeDelta::minutes(minute)))
+                .collect()
+        };
         let west = BarClock::new(Timeframe::Hour1)
             .with_timezone(TimezoneId::fixed_offset(-5 * 3600).unwrap());
-        let periodic = |period, count, timeframe, clock: Option<&BarClock>| {
+        let periodic = |period, count, restart, timeframe, clock: Option<&BarClock>| {
             let mut study = VolProfilePeriodic::new(24);
             study.set_timeframe(timeframe);
             if let Some(clock) = clock {
@@ -2720,14 +2904,20 @@ mod tests {
             study
                 .set_input("period_count", InputValue::Length(count))
                 .unwrap();
+            if restart {
+                study
+                    .set_input("restart_yearly", InputValue::Toggle(true))
+                    .unwrap();
+            }
             study
         };
-        for (period, count, bars, timeframe, clock, k, suffix, prepended, fresh) in [
+        for (period, count, restart, bars, timeframe, clock, k, suffix, prepended, fresh) in [
             // Weeks 2922 to 2927 since Monday 5 January 1970 pair as 1461, 1462 and 1463.
             (
                 1,
                 2,
-                weekdays(30),
+                false,
+                weekdays("2026-01-05", 30),
                 Timeframe::Day1,
                 None,
                 10,
@@ -2739,6 +2929,7 @@ mod tests {
             (
                 9,
                 4,
+                false,
                 hours.clone(),
                 Timeframe::Hour1,
                 None,
@@ -2751,6 +2942,7 @@ mod tests {
             (
                 9,
                 4,
+                false,
                 hours,
                 Timeframe::Hour1,
                 Some(west),
@@ -2764,7 +2956,8 @@ mod tests {
             (
                 7,
                 100,
-                minutes,
+                false,
+                minutes("2026-03-05T00:00:00Z"),
                 Timeframe::Min1,
                 None,
                 130,
@@ -2776,13 +2969,43 @@ mod tests {
             (
                 0,
                 2,
-                weekdays(10),
+                false,
+                weekdays("2026-01-05", 10),
                 Timeframe::Day1,
                 None,
                 3,
                 vec![3..5, 5..7, 7..9, 9..10],
                 vec![0..1, 1..3, 3..5, 5..7, 7..9, 9..10],
                 vec![0..2, 2..4, 4..6, 6..8, 8..10],
+            ),
+            // 1 January 2025 lies in week 2869, so 15 to 26 December are weeks 50 and 51 of
+            // 2025 and 29 to 31 December week 52; 1 January 2026 lies in week 2921, which
+            // starts 2026 on its 1 January.
+            (
+                1,
+                2,
+                true,
+                weekdays("2025-12-15", 20),
+                Timeframe::Day1,
+                None,
+                7,
+                vec![7..10, 10..13, 13..20],
+                vec![0..10, 10..13, 13..20],
+                vec![0..10, 10..13, 13..20],
+            ),
+            // Bars 0 to 119 are the last two hours of 2025, whose profiles keep their starts as
+            // without a restart when older bars load; 2026 counts from its own first bar.
+            (
+                7,
+                100,
+                true,
+                minutes("2025-12-31T22:00:00Z"),
+                Timeframe::Min1,
+                None,
+                30,
+                vec![30..120, 120..220, 220..250],
+                vec![0..30, 30..120, 120..220, 220..250],
+                vec![0..100, 100..120, 120..220, 220..250],
             ),
         ] {
             let profiles = |study: &VolProfilePeriodic, shift| -> Vec<_> {
@@ -2792,15 +3015,15 @@ mod tests {
                     .map(|profile| profile.bars.start + shift..profile.bars.end + shift)
                     .collect()
             };
-            let case = format!("period {period} count {count}");
-            let mut study = periodic(period, count, timeframe, clock.as_ref());
+            let case = format!("period {period} count {count} restart {restart}");
+            let mut study = periodic(period, count, restart, timeframe, clock.as_ref());
             study.calculate(&bars[k..]);
             assert_eq!(profiles(&study, k), suffix, "{case}");
             // The chart empties a study before it recomputes it with the older bars.
             study.update(&[], 0);
             study.update(&bars, 0);
             assert_eq!(profiles(&study, 0), prepended, "{case}");
-            let mut new = periodic(period, count, timeframe, clock.as_ref());
+            let mut new = periodic(period, count, restart, timeframe, clock.as_ref());
             new.calculate(&bars);
             assert_eq!(profiles(&new, 0), fresh, "{case}");
         }
