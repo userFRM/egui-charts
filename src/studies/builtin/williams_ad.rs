@@ -7,7 +7,7 @@ use egui::Color32;
 /// Williams Accumulation/Distribution
 /// Developed by Larry Williams
 /// Measures buying and selling pressure
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WilliamsAD {
     values: IndicatorValues,
     stepper: Stepper<State>,
@@ -15,7 +15,7 @@ pub struct WilliamsAD {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     bars: usize,
     count: usize,

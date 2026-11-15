@@ -7,6 +7,8 @@
 use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarState};
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
+use crate::model::TimezoneId;
+use crate::scales::TimezoneMode;
 use crate::styles::{icons as icon_sizes, stroke};
 use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
@@ -18,6 +20,7 @@ use egui::{Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
 
 /// Bottom panel component
+#[derive(Debug)]
 pub struct TimeframeToolbar {
     /// State
     pub state: TimeframeToolbarState,
@@ -27,6 +30,150 @@ pub struct TimeframeToolbar {
     config_theme: Option<(Theme, TimeframeToolbarConfig)>,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    /// Zones the time zone menu offers after UTC, exchange time and local time.
+    time_zones: Vec<TimezoneId>,
+    /// Where the clock was drawn, for the time zone menu to open beside it.
+    clock: Option<(egui::LayerId, egui::PopupAnchor)>,
+}
+
+/// Zone names [`default_time_zones`] offers: the main trading centres, west to east within the
+/// Americas, Europe and Africa, the Middle East, Asia and Oceania. Without the `timezones` feature,
+/// fixed offsets stand in for them.
+#[cfg(feature = "timezones")]
+pub(crate) const DEFAULT_TIME_ZONES: &[&str] = &[
+    "UTC",
+    "Pacific/Honolulu",
+    "America/Anchorage",
+    "America/Los_Angeles",
+    "America/Vancouver",
+    "America/Phoenix",
+    "America/Denver",
+    "America/Chicago",
+    "America/Mexico_City",
+    "America/Bogota",
+    "America/Lima",
+    "America/New_York",
+    "America/Toronto",
+    "America/Caracas",
+    "America/Halifax",
+    "America/Santiago",
+    "America/Sao_Paulo",
+    "America/Argentina/Buenos_Aires",
+    "Atlantic/Reykjavik",
+    "Europe/Dublin",
+    "Europe/Lisbon",
+    "Europe/London",
+    "Africa/Casablanca",
+    "Africa/Lagos",
+    "Europe/Amsterdam",
+    "Europe/Berlin",
+    "Europe/Brussels",
+    "Europe/Copenhagen",
+    "Europe/Luxembourg",
+    "Europe/Madrid",
+    "Europe/Oslo",
+    "Europe/Paris",
+    "Europe/Prague",
+    "Europe/Rome",
+    "Europe/Stockholm",
+    "Europe/Vienna",
+    "Europe/Warsaw",
+    "Europe/Zurich",
+    "Africa/Cairo",
+    "Africa/Johannesburg",
+    "Europe/Athens",
+    "Europe/Bucharest",
+    "Europe/Helsinki",
+    "Europe/Istanbul",
+    "Africa/Nairobi",
+    "Europe/Moscow",
+    "Asia/Jerusalem",
+    "Asia/Bahrain",
+    "Asia/Kuwait",
+    "Asia/Qatar",
+    "Asia/Riyadh",
+    "Asia/Tehran",
+    "Asia/Dubai",
+    "Asia/Muscat",
+    "Asia/Karachi",
+    "Asia/Kolkata",
+    "Asia/Colombo",
+    "Asia/Kathmandu",
+    "Asia/Dhaka",
+    "Asia/Yangon",
+    "Asia/Bangkok",
+    "Asia/Ho_Chi_Minh",
+    "Asia/Jakarta",
+    "Asia/Kuala_Lumpur",
+    "Asia/Manila",
+    "Asia/Shanghai",
+    "Asia/Singapore",
+    "Asia/Hong_Kong",
+    "Asia/Taipei",
+    "Asia/Seoul",
+    "Asia/Tokyo",
+    "Australia/Perth",
+    "Australia/Adelaide",
+    "Australia/Brisbane",
+    "Australia/Sydney",
+    "Pacific/Auckland",
+    "Pacific/Chatham",
+];
+
+#[cfg(not(feature = "timezones"))]
+pub(crate) const DEFAULT_TIME_ZONES: &[&str] = &[
+    "UTC", "-10:00", "-08:00", "-07:00", "-06:00", "-05:00", "-04:00", "-03:00", "+01:00",
+    "+02:00", "+03:00", "+04:00", "+05:30", "+07:00", "+08:00", "+09:00", "+10:00", "+12:00",
+];
+
+/// The zones the chart settings and the time zone menu offer unless the host supplies its own:
+/// UTC and the main trading centres of the Americas, Europe, Africa, the Middle East, Asia and
+/// Oceania. Without the `timezones` feature, fixed offsets from UTC.
+pub fn default_time_zones() -> Vec<TimezoneId> {
+    DEFAULT_TIME_ZONES
+        .iter()
+        .filter_map(|name| name.parse().ok())
+        .collect()
+}
+
+/// The rows of a time zone choice, each a label and the mode it selects: UTC, exchange time,
+/// local time, then `zones`. The exchange row keeps the fallback zone `current` holds, and a zone
+/// `current` holds that `zones` lacks gets a row of its own before them.
+pub(crate) fn zone_rows(
+    zones: &[TimezoneId],
+    current: &TimezoneMode,
+) -> Vec<(String, TimezoneMode)> {
+    let utc = TimezoneId::utc();
+    // A chart a host set to the UTC zone shows it on the UTC row.
+    let utc_row = if *current == TimezoneMode::Timezone(utc.clone()) {
+        current.clone()
+    } else {
+        TimezoneMode::Utc
+    };
+    let mut rows = vec![
+        ("UTC".to_owned(), utc_row),
+        (
+            "Exchange time".to_owned(),
+            match current {
+                TimezoneMode::Exchange(_) => current.clone(),
+                _ => TimezoneMode::Exchange(utc.clone()),
+            },
+        ),
+        ("Local time".to_owned(), TimezoneMode::Local),
+    ];
+    if let TimezoneMode::Timezone(zone) = current
+        && *zone != utc
+        && !zones.contains(zone)
+    {
+        rows.push((zone.name().to_owned(), current.clone()));
+    }
+    rows.extend(
+        zones
+            .iter()
+            .filter(|zone| **zone != utc)
+            .map(|zone| (zone.name().to_owned(), TimezoneMode::Timezone(zone.clone()))),
+    );
+    rows
 }
 
 /// Configuration for the bottom panel appearance
@@ -115,6 +262,8 @@ impl TimeframeToolbar {
             config: TimeframeToolbarConfig::default(),
             config_theme: Some((Theme::dark(), TimeframeToolbarConfig::default())),
             hidden: HashSet::new(),
+            time_zones: default_time_zones(),
+            clock: None,
         }
     }
 
@@ -125,6 +274,8 @@ impl TimeframeToolbar {
             config,
             config_theme: None,
             hidden: HashSet::new(),
+            time_zones: default_time_zones(),
+            clock: None,
         }
     }
 
@@ -132,6 +283,66 @@ impl TimeframeToolbar {
     /// ignores the other controls.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
+    }
+
+    /// Offers `zones` in the time zone menu after UTC, exchange time and local time, in place of
+    /// [`default_time_zones`].
+    pub fn set_time_zones(&mut self, zones: Vec<TimezoneId>) {
+        self.time_zones = zones;
+    }
+
+    /// Shows the time zone menu beside the clock while
+    /// [`timezone_menu_open`](TimeframeToolbarState::timezone_menu_open) is set, as a host does on
+    /// [`TimeframeToolbarAction::OpenTimezoneMenu`]. Call it after [`show`](Self::show) on each
+    /// frame. The menu offers UTC, exchange time, local time and the zones of
+    /// [`set_time_zones`](Self::set_time_zones), as the chart settings do, and marks `current`,
+    /// the chart's chosen [`TimezoneMode`]. It returns the mode the user picks for the host to
+    /// apply, and closes on a choice, Escape or a click elsewhere.
+    pub fn show_timezone_menu(
+        &mut self,
+        ctx: &egui::Context,
+        current: &TimezoneMode,
+    ) -> Option<TimezoneMode> {
+        let (layer, anchor) = self.clock.filter(|_| self.state.timezone_menu_open)?;
+        // The rows scroll where the window above the clock is too short for them.
+        let room = anchor
+            .rect(egui::Id::NULL, ctx)
+            .map_or(ctx.content_rect().height(), |clock| clock.top())
+            - 2.0 * ctx.active_theme().spacing.lg
+            - ctx.global_style().spacing.menu_margin.sum().y;
+        let mut chosen = None;
+        egui::Popup::new(
+            egui::Id::unique("timeframe_toolbar_timezone_menu"),
+            ctx.clone(),
+            anchor,
+            layer,
+        )
+        .kind(egui::PopupKind::Menu)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .style(egui::containers::menu::menu_style)
+        .align(egui::RectAlign::TOP_END)
+        .open_bool(&mut self.state.timezone_menu_open)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            // An area offers 400 points by default; a long list may take the room above the clock.
+            ui.set_max_height(room);
+            egui::ScrollArea::vertical()
+                .max_height(room)
+                .show(ui, |ui| {
+                    for (label, mode) in zone_rows(&self.time_zones, current) {
+                        if ui
+                            .selectable_label(mode == *current, l10n::text(ui.ctx(), &label))
+                            .clicked()
+                        {
+                            chosen = Some(mode);
+                        }
+                    }
+                });
+        });
+        if chosen.is_some() {
+            self.state.timezone_menu_open = false;
+        }
+        chosen
     }
 
     /// Update the current time display
@@ -252,20 +463,20 @@ impl TimeframeToolbar {
 
             // Right section: Timezone, Session, Dividends
             // Timezone button with time
+            self.clock = None;
             if !self.hidden.contains(&Control::TimeZone) {
-                if self
-                    .text_btn(
-                        ui,
-                        &time_text,
-                        &l10n::format_text(
-                            ui.ctx(),
-                            "Timezone: {zone}",
-                            &[("zone", self.state.timezone.as_str())],
-                        ),
-                        false,
-                    )
-                    .clicked()
-                {
+                let clock = self.text_btn(
+                    ui,
+                    &time_text,
+                    &l10n::format_text(
+                        ui.ctx(),
+                        "Timezone: {zone}",
+                        &[("zone", self.state.timezone.as_str())],
+                    ),
+                    false,
+                );
+                self.clock = Some((clock.layer_id, egui::PopupAnchor::from(&clock)));
+                if clock.clicked() {
                     result_action = TimeframeToolbarAction::OpenTimezoneMenu;
                 }
                 ui.space_lg();
@@ -537,6 +748,105 @@ impl TimeframeToolbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The clock opens a menu of UTC, exchange time, local time and the zones, which returns the
+    /// row picked for the chart: #2887.
+    #[test]
+    fn zone_menu_offers_every_mode_and_zone() {
+        let ctx = egui::Context::default();
+        let mut toolbar = TimeframeToolbar::new();
+        let zones: Vec<TimezoneId> = ["+05:45", "-03:00"]
+            .iter()
+            .map(|zone| zone.parse().unwrap())
+            .collect();
+        toolbar.set_time_zones(zones.clone());
+        let mut chart = crate::Chart::new(crate::model::BarData::new());
+        let frame = |toolbar: &mut TimeframeToolbar, chart: &mut crate::Chart, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // A bottom toolbar, with room for the menu above it.
+                    ui.add_space(540.0);
+                    if toolbar.show(ui) == TimeframeToolbarAction::OpenTimezoneMenu {
+                        toolbar.state.timezone_menu_open = true;
+                    }
+                    let current = &chart.chart_options.time_scale.timezone;
+                    if let Some(mode) = toolbar.show_timezone_menu(ui.ctx(), current) {
+                        chart.chart_options.time_scale.timezone = mode;
+                    }
+                },
+            );
+            let texts: Vec<(String, egui::Pos2)> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let click = |toolbar: &mut TimeframeToolbar, chart: &mut crate::Chart, label: &str| {
+            frame(toolbar, chart, vec![]);
+            let texts = frame(toolbar, chart, vec![]);
+            let pos = texts
+                .iter()
+                .find(|(text, _)| text == label || text.ends_with(&format!(" {label}")))
+                .unwrap_or_else(|| panic!("{label} in {texts:?}"))
+                .1;
+            frame(toolbar, chart, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    toolbar,
+                    chart,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+            texts
+        };
+        click(&mut toolbar, &mut chart, "UTC");
+        assert!(toolbar.state.timezone_menu_open, "the clock opens the menu");
+        let texts = click(&mut toolbar, &mut chart, "Exchange time");
+        let rows = ["UTC", "Exchange time", "Local time", "+05:45", "-03:00"].map(|label| {
+            texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("{label} row in {texts:?}"))
+                .1
+                .y
+        });
+        assert!(rows.is_sorted(), "rows in order: {rows:?}");
+        assert!(
+            !toolbar.state.timezone_menu_open,
+            "a choice closes the menu"
+        );
+        assert_eq!(
+            chart.chart_options.time_scale.timezone,
+            TimezoneMode::Exchange(TimezoneId::utc())
+        );
+        click(&mut toolbar, &mut chart, "UTC");
+        click(&mut toolbar, &mut chart, "+05:45");
+        assert_eq!(
+            chart.chart_options.time_scale.timezone,
+            TimezoneMode::Timezone(zones[0].clone())
+        );
+    }
 
     #[test]
     fn visible_clock_schedules_the_next_whole_second() {

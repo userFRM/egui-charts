@@ -13,7 +13,7 @@ use egui::Color32;
 /// the one before, `levels` averages in all:
 /// `100 * (close - mean of the averages) / (highest close - lowest close over the last levels bars)`.
 /// A bar whose range is zero has no value, so a single level never gives one.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RainbowOscillator {
     /// Number of MA levels (typically 10)
     levels: usize,

@@ -10,6 +10,7 @@ use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, Context, Key, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
 
 /// Command palette widget for quick command access
+#[derive(Debug)]
 pub struct CommandPalette {
     /// All registered commands
     commands: Vec<Command>,
@@ -379,6 +380,7 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
 }
 
 /// Handler for managing command palette state
+#[derive(Debug)]
 pub struct CommandPaletteHandler {
     palette: CommandPalette,
     open: bool,

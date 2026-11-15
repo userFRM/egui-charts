@@ -24,6 +24,7 @@ use egui_extras::{Size, StripBuilder};
 /// Two-column layout: fixed-width sidebar + flexible content area.
 ///
 /// Uses `egui_extras::StripBuilder` for clean proportional column sizing.
+#[derive(Debug)]
 pub struct SidebarLayout {
     sidebar_width: f32,
 }
@@ -83,6 +84,7 @@ impl SidebarLayout {
 /// }
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct SidebarTab<'a> {
     label: &'a str,
     icon: Option<&'a crate::icons::Icon>,

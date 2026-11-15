@@ -31,7 +31,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Chaikin Money Flow indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChaikinMoneyFlow {
     period: usize,
     values: IndicatorValues,

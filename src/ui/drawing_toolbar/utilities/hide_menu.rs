@@ -17,6 +17,7 @@ use crate::ui_kit::list_item::ListItem;
 use egui::{Response, Ui};
 
 /// Hide/Show dropdown menu component.
+#[derive(Debug)]
 pub struct HideMenu;
 
 impl HideMenu {

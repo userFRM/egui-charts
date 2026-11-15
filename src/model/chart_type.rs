@@ -446,6 +446,33 @@ pub enum ProfileSession {
     Custom(CustomProfileSession),
 }
 
+#[cfg(feature = "studies")]
+impl ProfileSession {
+    /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
+    /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
+    /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
+    /// and for regular or extended hours without `hours`.
+    pub(crate) fn session_clock(
+        &self,
+        clock: &super::BarClock,
+        zone: &super::TimezoneId,
+        hours: Option<&super::Session>,
+    ) -> Option<super::BarClock> {
+        use chrono::Weekday::*;
+        let (zone, session, extended) = match self {
+            Self::Chart => return None,
+            Self::Custom(custom) => {
+                let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
+                let window = super::SessionWindow::new(every_day, custom.start, custom.end);
+                let zone = custom.zone.as_ref().unwrap_or(zone);
+                (zone, super::Session::new([window]), false)
+            }
+            Self::Regular | Self::Extended => (zone, hours?.clone(), *self == Self::Extended),
+        };
+        Some(clock.clone().with_session(zone.clone(), session, extended))
+    }
+}
+
 /// How a session volume profile groups executions into price rows, in instrument ticks.
 ///
 /// Rows are never finer than the feed's own rows, and align to multiples of their height.
@@ -893,27 +920,18 @@ impl ChartTypeParams {
         ]
     }
 
-    /// Resolve pending sizes only when their history is ready. Each successful calculation is
-    /// frozen until explicitly armed again; prepending history and live corrections keep it.
+    /// Resolves the pending sizes from `bars`. A size stays pending while the bars give it no
+    /// positive value, too few bars for its method included, and once they give one it is kept
+    /// until armed again, through prepends and live corrections.
     #[cfg(feature = "widget")]
     pub(crate) fn resolve_sizes(&mut self, bars: &[super::Bar], pending: &mut [bool; 4]) {
         let methods = self.size_methods();
-        // Whitespace bars have no price and do not count, as in `BoxSizeMethod::resolve`. This
-        // runs every frame, so it reads only as many bars as a pending size needs.
-        let loaded = bars.iter().filter(|bar| !bar.is_whitespace());
         for ((method, size), pending) in methods.into_iter().zip(self.sizes_mut()).zip(pending) {
-            if !*pending {
-                continue;
+            if *pending {
+                let resolved = method.resolve(*size, bars);
+                *size = resolved.unwrap_or(0.0);
+                *pending = resolved.is_none();
             }
-            let waiting = match method {
-                super::BoxSizeMethod::Atr { period, .. } => {
-                    loaded.clone().take(period).count() < period
-                }
-                super::BoxSizeMethod::Percentage(_) => loaded.clone().next().is_none(),
-                super::BoxSizeMethod::Fixed => false,
-            };
-            *size = method.resolve(*size, bars).unwrap_or(0.0);
-            *pending = waiting;
         }
     }
 

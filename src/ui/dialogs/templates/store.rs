@@ -13,6 +13,7 @@ struct Document<T> {
     template: T,
 }
 
+#[derive(Debug)]
 enum Pending {
     List,
     Load(String),
@@ -34,6 +35,17 @@ pub struct TemplateStore<T> {
     loaded: bool,
     /// Last storage or document error. Failed saves retain the edited template in memory.
     pub error: Option<String>,
+}
+
+impl<T> std::fmt::Debug for TemplateStore<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemplateStore")
+            .field("kind", &self.kind)
+            .field("remaining", &self.remaining)
+            .field("loaded", &self.loaded)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {

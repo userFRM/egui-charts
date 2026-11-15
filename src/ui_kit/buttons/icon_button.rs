@@ -31,6 +31,7 @@ use egui::{Rect, Response, Sense, Ui, Vec2};
 /// }
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct IconButton<'a> {
     icon: &'a Icon,
     size: ButtonSize,

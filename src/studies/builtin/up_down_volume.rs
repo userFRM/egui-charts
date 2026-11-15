@@ -19,7 +19,7 @@ use crate::studies::{
 use egui::Color32;
 
 /// Up and down volume from intrabars supplied by the host, in a separate pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UpDownVolume {
     clock: BarClock,
     /// The interval chosen in the Lower interval input; `None` picks one from the chart interval.

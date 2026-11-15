@@ -3,12 +3,9 @@
 use super::frame::session_ranges;
 use super::{Chart, SeriesId};
 use crate::chart::overlays::TradeProfileSettings;
-use crate::model::{
-    BarClock, ChartType, ProfileSession, Session, SessionProvider, SessionWindow, Timeframe,
-    TimezoneId,
-};
+use crate::model::{BarClock, ChartType, ProfileSession, SessionProvider, Timeframe, TimezoneId};
 use crate::studies::TradeProfileRanges;
-use chrono::{DateTime, Utc, Weekday};
+use chrono::{DateTime, Utc};
 use std::ops::{Range, RangeInclusive};
 
 #[derive(Clone, Default)]
@@ -96,11 +93,6 @@ impl Chart {
     pub(crate) fn profile_clock(&self) -> BarClock {
         let mut clock = self.bar_clock();
         let instrument = self.instrument();
-        let exchange_zone = || {
-            instrument
-                .and_then(|i| i.time_zone.clone())
-                .unwrap_or_else(TimezoneId::utc)
-        };
         // The profile settings divide only the session volume profile chart: the market profile
         // chart and its menu keep the chart's calendar.
         let selection = match self.chart_type {
@@ -110,33 +102,23 @@ impl Chart {
         // Daily and longer bars carry a trading date rather than a time of day to divide or re-zone.
         let intraday =
             self.timeframe.unwrap_or_default().duration_ms() < Timeframe::Day1.duration_ms();
-        match selection {
-            ProfileSession::Custom(custom) if intraday => {
-                use Weekday::*;
-                let zone = custom.zone.clone().unwrap_or_else(exchange_zone);
-                let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
-                let session =
-                    Session::new([SessionWindow::new(every_day, custom.start, custom.end)]);
-                clock.with_session(zone, session, false)
-            }
-            // Without instrument hours there is nothing to select among, so the chart's calendar stays.
-            selection @ (ProfileSession::Regular | ProfileSession::Extended)
-                if instrument.is_some_and(|i| i.session.is_some()) =>
-            {
-                let session = instrument.and_then(|i| i.session.clone()).unwrap();
-                let extended = *selection == ProfileSession::Extended;
-                clock.with_session(exchange_zone(), session, extended)
-            }
-            _ => {
-                if let Some(zone) = instrument
-                    .filter(|i| i.session.is_none())
-                    .and_then(|i| i.time_zone.as_ref())
-                {
-                    clock = clock.with_timezone(zone.clone());
-                }
-                clock
-            }
+        let zone = instrument
+            .and_then(|i| i.time_zone.clone())
+            .unwrap_or_else(TimezoneId::utc);
+        let hours = instrument.and_then(|i| i.session.as_ref());
+        if (intraday || !matches!(selection, ProfileSession::Custom(_)))
+            && let Some(divided) = selection.session_clock(&clock, &zone, hours)
+        {
+            return divided;
         }
+        // Without instrument hours there is nothing to select among, so the chart's calendar stays.
+        if let Some(zone) = instrument
+            .filter(|i| i.session.is_none())
+            .and_then(|i| i.time_zone.as_ref())
+        {
+            clock = clock.with_timezone(zone.clone());
+        }
+        clock
     }
 
     fn profile_edits_current(&self) -> bool {

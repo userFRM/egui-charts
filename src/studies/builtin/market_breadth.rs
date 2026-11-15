@@ -25,7 +25,7 @@ pub type CumulativeVolumeIndex = MarketBreadth<false, true>;
 /// with both `true` the study is the "Advance/Decline Ratio" of the volume series. Hosts map the
 /// default symbol keys to their own source, or replace them using the typed inputs. Calculations
 /// require [`Indicator::update_data`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MarketBreadth<const RATIO: bool, const VOLUME: bool> {
     advancing_symbol: String,
     declining_symbol: String,

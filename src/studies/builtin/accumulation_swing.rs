@@ -8,7 +8,7 @@ use egui::Color32;
 /// Accumulation Swing Index (ASI)
 /// Developed by Welles Wilder
 /// Cumulative sum of swing index values
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AccumulationSwingIndex {
     /// Limit move (typically high value for stocks, actual limit for futures)
     limit_move: f64,
@@ -18,7 +18,7 @@ pub struct AccumulationSwingIndex {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     bars: usize,
     count: usize,

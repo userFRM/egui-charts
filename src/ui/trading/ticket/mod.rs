@@ -238,6 +238,7 @@ pub(crate) enum Action {
 }
 
 /// The state of the order ticket panel.
+#[derive(Debug)]
 pub(crate) struct OrderTicket {
     pub open: bool,
     pub symbol: String,

@@ -210,11 +210,6 @@ pub fn handle_active_tool<F1, F2>(
         }
     }
 
-    // Request repaint when drawing for live preview
-    if drawing_manager.curr_drawing.is_some() {
-        ui.ctx().request_repaint();
-    }
-
     // Set crosshair cursor for drag-to-draw tools
     if matches!(
         interaction_mode,
@@ -229,6 +224,60 @@ mod tests {
     use super::*;
     use crate::drawings::ChartPoint;
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
+
+    /// A drawing that waits for its next anchor follows pointer input, which wakes egui by
+    /// itself, so an unfinished drawing under a still pointer leaves the app idle.
+    #[test]
+    fn an_unfinished_drawing_requests_no_idle_repaint() {
+        for tool in [DrawingToolType::TrendLine, DrawingToolType::Path] {
+            let ctx = Context::default();
+            let chart = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+            let mut manager = DrawingManager::new();
+            let button = |pressed| Event::PointerButton {
+                pos: Pos2::new(50.0, 50.0),
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let frames = [
+                vec![Event::PointerMoved(Pos2::new(50.0, 50.0))],
+                vec![button(true)],
+                vec![button(false)],
+                vec![Event::PointerMoved(Pos2::new(100.0, 80.0))],
+                vec![],
+                vec![],
+            ];
+            let mut delay = std::time::Duration::ZERO;
+            for (pass, events) in frames.into_iter().enumerate() {
+                let input = RawInput {
+                    screen_rect: Some(chart),
+                    time: Some(0.1 * pass as f64),
+                    events,
+                    ..Default::default()
+                };
+                let output = ctx.run_ui(input, |ui| {
+                    let response =
+                        ui.interact(chart, Id::NULL.with("chart"), Sense::click_and_drag());
+                    handle_active_tool(
+                        ui,
+                        &mut manager,
+                        &response,
+                        chart,
+                        &|x| x,
+                        &|y| f64::from(y),
+                        tool,
+                    );
+                });
+                delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                output.drop_without_applying_deltas();
+            }
+            assert!(
+                manager.curr_drawing.is_some(),
+                "{tool:?} waits for its next anchor"
+            );
+            assert_eq!(delay, std::time::Duration::MAX, "{tool:?}");
+        }
+    }
 
     #[test]
     fn modifier_placement_constrains_shapes_and_temporarily_inverts_magnet() {

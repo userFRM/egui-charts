@@ -56,6 +56,7 @@ impl Chart {
                 bars: self.state.shown(),
                 revision: self.state.revision(),
                 bar_to_x: &|bar| timescale.idx_to_coord_precise(bar, clip.min.x, clip.width()),
+                bar_spacing: timescale.bar_spacing(),
                 // The card's text and place read the anchors' screen points, not these.
                 price_to_y: &|_| 0.0,
                 y_to_price: &|_| 0.0,
@@ -224,7 +225,7 @@ impl Chart {
         let translate_price = |price, from, to| price_map.translate_price(price, from, to);
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
-        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y, timescale.bar_spacing());
         drawing_manager.anchor_pins_to_bars(x_to_bar_precise, |y| price_map.y_to_price(y));
 
         // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
@@ -445,7 +446,7 @@ impl Chart {
             text::begin_edit(drawing_manager, id, placed);
         }
 
-        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y, timescale.bar_spacing());
 
         let finer = self.study_data.data(
             self.profile_histories(drawing_manager)
@@ -469,6 +470,7 @@ impl Chart {
             bars: self.state.shown(),
             revision: self.state.revision(),
             bar_to_x: &bar_to_x,
+            bar_spacing: timescale.bar_spacing(),
             price_to_y: &price_to_y,
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),

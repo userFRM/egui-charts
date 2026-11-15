@@ -33,7 +33,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Bull Power plus Bear Power.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BullBearPower {
     period: usize,
     values: IndicatorValues,
