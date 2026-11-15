@@ -755,3 +755,32 @@ impl Default for ChartSettingsState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AlertsSettings;
+
+    /// Alerts settings saved before the toast and desktop choices keep their lifetime, close
+    /// their toasts and stay off the desktop; only a save without a lifetime takes 20 seconds.
+    #[test]
+    fn alerts_saved_before_the_toast_choices_keep_closing_toasts_in_the_app() {
+        for (saved, seconds) in [
+            (
+                r#"{"play_sound":false,"sound":"","sound_volume":1.0,"show_alerts":true,"show_alert_labels":true,"alert_color":[255,152,0,255],"show_active_only":true,"notification_seconds":5}"#,
+                5,
+            ),
+            (r#"{"play_sound":true,"show_active_only":false}"#, 20),
+        ] {
+            let alerts: AlertsSettings = serde_json::from_str(saved).unwrap();
+            assert_eq!(
+                (
+                    alerts.notification_seconds,
+                    alerts.close_toasts,
+                    alerts.desktop_notifications
+                ),
+                (seconds, true, false),
+                "{saved}"
+            );
+        }
+    }
+}

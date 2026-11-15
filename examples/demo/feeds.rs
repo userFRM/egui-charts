@@ -683,10 +683,11 @@ impl Notifications for DemoNotifications {
     /// Hands the notification to the desktop's notification service. The web build keeps the
     /// default answer, so it reports desktop notifications as unsupported.
     #[cfg(not(target_arch = "wasm32"))]
-    fn deliver(&self, notification: Notification, reply: egui_charts::data::Reply<()>) {
+    fn deliver(&self, notification: Notification, reply: Reply<()>) {
         std::thread::spawn(move || {
+            // After `--`, a title or message that starts with a dash is text, not an option.
             let shown = std::process::Command::new("notify-send")
-                .args([&notification.title, &notification.body])
+                .args(["--", &notification.title, &notification.body])
                 .status();
             reply.send(match shown {
                 Ok(status) if status.success() => Ok(()),

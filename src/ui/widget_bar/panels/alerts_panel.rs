@@ -150,6 +150,9 @@ pub struct AlertTrigger {
 /// Reply key of the inline draft's save, apart from the stream generations and other replies.
 const DRAFT_REPLY: u64 = u64::MAX;
 
+/// Triggers the log keeps, and toasts the stack keeps while they wait to be dismissed.
+const LOG_BOUND: usize = 10_000;
+
 /// An alert panel connected to the host's [`Alerts`] service.
 ///
 /// Call [`poll`](Self::poll) each frame even while hidden, so triggers produce notifications.
@@ -389,7 +392,8 @@ impl AlertsPanel {
     }
 
     /// Keep each trigger notification on screen for this many seconds, 20 by default, or until
-    /// the user dismisses it when zero.
+    /// the user dismisses it when zero. The stack keeps the most recent 10,000 toasts, as many as
+    /// the [`log`](Self::log) keeps triggers.
     pub fn set_notification_seconds(&mut self, seconds: f32) {
         self.notification_seconds = if seconds.is_finite() {
             seconds.max(0.0)
@@ -400,7 +404,8 @@ impl AlertsPanel {
 
     /// Also show each trigger popup as a desktop notification through
     /// [`Notifications::deliver`], or only in the app when `None`, the default. A refused or
-    /// failed delivery is shown as an error toast.
+    /// failed delivery shows an error toast that stays until the user dismisses it; deliveries
+    /// that fail while it shows add none.
     pub fn set_desktop(&mut self, service: Option<Arc<dyn Notifications>>) {
         self.desktop = service;
     }
@@ -601,7 +606,8 @@ impl AlertsPanel {
             let Ok(result) = answer.downcast::<Result<(), FeedError>>() else {
                 continue;
             };
-            // One failure toast on screen at a time, however many triggers fail meanwhile.
+            // One failure toast on screen at a time, however many triggers fail meanwhile. It
+            // stays until dismissed: a lifetime would bring it back with every later trigger.
             if let Err(error) = *result
                 && !self
                     .desktop_toast
@@ -611,7 +617,8 @@ impl AlertsPanel {
                     ctx,
                     "Desktop notification failed: {error}",
                     &[("error", error.to_string().as_str())],
-                ));
+                ))
+                .permanent();
                 self.desktop_toast = Some(toast.id);
                 toasts.add(toast);
             }
@@ -831,13 +838,15 @@ impl AlertsPanel {
                 desktop.deliver(notification, self.desktop_inbox.reply(0));
             }
             // Make room by closing the oldest toasts that would close by themselves; the others
-            // stay until the user dismisses them.
+            // stay until the user dismisses them, as many as the log keeps.
             let mut extra = toasts.len().saturating_sub(4);
             toasts.toasts_mut().retain(|toast| {
                 let drop = extra > 0 && toast.duration > 0.0;
                 extra -= usize::from(drop);
                 !drop
             });
+            let extra = toasts.len().saturating_sub(LOG_BOUND - 1);
+            toasts.toasts_mut().drain(..extra);
             toasts.add(
                 Toast::info(if message.is_empty() {
                     title
@@ -867,7 +876,7 @@ impl AlertsPanel {
 
     fn log_trigger(&mut self, trigger: AlertTrigger) {
         self.log.push_back(trigger);
-        if self.log.len() > 10_000 {
+        if self.log.len() > LOG_BOUND {
             self.log.pop_front();
         }
     }
@@ -2068,7 +2077,8 @@ mod tests {
     }
 
     /// Trigger toasts kept until dismissed are never closed to make room, and an auto-closing
-    /// trigger toast still shows beside five of them.
+    /// trigger toast still shows beside five of them. The stack keeps as many as the log, the
+    /// oldest closing beyond.
     #[test]
     fn toasts_kept_until_dismissed_are_not_closed_to_make_room() {
         let mut panel = AlertsPanel::default();
@@ -2091,10 +2101,20 @@ mod tests {
         panel.record_trigger(&ctx, trigger(6), &mut toasts);
         assert_eq!(toasts.len(), 7);
         assert_eq!(toasts.toasts()[6].message, "Alert triggered: S6");
+        panel.set_notification_seconds(0.0);
+        while toasts.len() < 10_000 {
+            toasts.add(Toast::info("kept").permanent());
+        }
+        for n in 7..9 {
+            panel.record_trigger(&ctx, trigger(n), &mut toasts);
+        }
+        assert_eq!(toasts.len(), 10_000);
+        assert_eq!(toasts.toasts()[0].message, "Alert triggered: S1");
+        assert_eq!(toasts.toasts()[9_999].message, "Alert triggered: S8");
     }
 
     /// Each trigger popup also goes to the desktop when the host routes it there, and a refused
-    /// delivery shows one error toast while it stays on screen.
+    /// delivery shows one error toast, which stays after the trigger toasts close.
     #[test]
     fn a_popup_goes_to_the_desktop_and_a_refusal_is_shown_once() {
         #[derive(Default)]
@@ -2121,6 +2141,7 @@ mod tests {
         let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
         alert.id = Some(AlertId("1".into()));
         events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        let mut errors = Vec::new();
         for delivered in 1..=2 {
             events.push(AlertEvent::Triggered {
                 id: alert.id.clone().unwrap(),
@@ -2133,18 +2154,23 @@ mod tests {
             assert_eq!(sent.len(), delivered);
             assert_eq!(sent[0].title, "Alert triggered: SYM");
             assert_eq!(sent[0].symbol.as_deref(), Some("SYM"));
-            let errors: Vec<_> = toasts
-                .toasts()
-                .iter()
-                .filter(|t| t.kind == ToastKind::Error)
-                .map(|t| t.message.as_str())
-                .collect();
-            assert_eq!(
-                errors,
-                ["Desktop notification failed: permission denied"],
-                "trigger {delivered}"
+            errors.push(
+                toasts
+                    .toasts()
+                    .iter()
+                    .filter(|t| t.kind == ToastKind::Error)
+                    .map(|t| (t.id, t.message.clone()))
+                    .collect::<Vec<_>>(),
             );
+            // A minute later the trigger toast has closed; the error waits to be dismissed.
+            for toast in toasts.toasts_mut() {
+                toast.created_at -= 60.0;
+            }
+            toasts.cleanup_expired();
         }
+        let refused = "Desktop notification failed: permission denied".to_owned();
+        assert_eq!(errors[0], [(errors[0][0].0, refused)]);
+        assert_eq!(errors[1], errors[0], "the first error toast stays, alone");
     }
 
     #[test]
