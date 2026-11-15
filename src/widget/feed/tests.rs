@@ -563,6 +563,73 @@ fn prepared_page(trades: &[Tick], before: DateTime<Utc>, end: bool) -> Footprint
     FootprintPage::new(flow.bars().values().cloned().collect(), before, end)
 }
 
+#[test]
+fn frozen_export_shares_prepared_rows_and_keeps_its_live_boundary() {
+    use crate::data::{FootprintBars, FootprintLevel};
+    let (feed, mut chart, mut frames) = prepared_chart();
+    chart.config_mut().show_countdown = false;
+    let start = bars(1)[0].time;
+    let cutoff = start + TimeDelta::seconds(90);
+    let saved = [
+        Tick::new(start, 100.0, 3.0, None),
+        Tick::new(start + TimeDelta::minutes(1), 100.0, 5.0, None),
+    ];
+    let FootprintBars::Owned(saved) = prepared_page(&saved, cutoff, true).bars else {
+        unreachable!()
+    };
+    let owner = Arc::new(saved);
+    let weak = Arc::downgrade(&owner);
+    let row = owner[0].levels.get(&100).unwrap() as *const FootprintLevel;
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(FootprintPage::from_shared(owner, cutoff, true)));
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(
+            vec![Tick::new(cutoff, 100.0, 7.0, None).with_id(1)],
+            false,
+        )));
+    frames.run(&mut chart);
+    let values = |chart: &Chart| {
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .view();
+        (
+            flow.bar_at(start).unwrap().levels.get(&100).unwrap() as *const FootprintLevel,
+            flow.complete_bar_at(cutoff).unwrap().unknown,
+        )
+    };
+    assert_eq!(values(&chart), (row, 12.0));
+    let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+    assert_eq!(values(&frozen), (row, 12.0));
+    feed.sink()
+        .push_tick(Tick::new(cutoff + TimeDelta::seconds(1), 100.0, 11.0, None).with_id(2));
+    frames.run(&mut chart);
+    assert_eq!(values(&chart), (row, 23.0));
+    feed.calls();
+    frames.run(&mut frozen);
+    assert!(
+        feed.calls().is_empty(),
+        "an export must not request live data"
+    );
+    assert_eq!(values(&frozen), (row, 12.0));
+    drop(chart);
+    assert!(weak.upgrade().is_some());
+    frames.run(&mut frozen);
+    assert_eq!(values(&frozen), (row, 12.0));
+    drop(frozen);
+    assert!(weak.upgrade().is_none());
+}
+
 /// The exclusive cutoff is independent of reply order and unordered execution ids.
 #[test]
 fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
