@@ -533,7 +533,12 @@ impl Chart {
                     && !self.in_other_pane(origin)
                 {
                     let map = self.last_price_map;
-                    let dy = response.drag_delta().y;
+                    // The chart also senses clicks, as on the price axis.
+                    let dy = if response.drag_started() {
+                        response.total_drag_delta().unwrap_or_default().y
+                    } else {
+                        response.drag_delta().y
+                    };
                     let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);
                     let range = self.state.price_scale().range();
                     self.state
@@ -2082,7 +2087,8 @@ mod tests {
     }
 
     /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the
-    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale.
+    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale. The drag
+    /// takes 20 frames of 5 points, so its first frame stays within the 6 point click distance.
     #[test]
     fn chart_drag_pans_a_manual_price_range() {
         for (invert_scale, sign) in [(false, 1.0), (true, -1.0)] {
@@ -2106,7 +2112,7 @@ mod tests {
                 chart.chart_options.handle_scroll.horz_touch_drag = false;
                 chart.chart_options.kinetic_scroll.enabled = false;
                 chart.state.price_scale_mut().set_range(90.0, 110.0);
-                drag_down(&mut chart, |rect| rect.center(), 10, touch);
+                drag_down(&mut chart, |rect| rect.center(), 20, touch);
                 let enabled = group_enabled && if touch { vertical } else { mouse };
                 let shift = if enabled {
                     sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64
