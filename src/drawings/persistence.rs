@@ -334,6 +334,16 @@ pub struct DrawingStorage {
     pub drawings: Vec<StoredDrawing>,
     /// Metadata
     pub metadata: StorageMetadata,
+    /// The chart that wrote the document, by the identifier the snapshots it takes record as
+    /// their `saved_by`, which no other chart has, also in another run. The study ids in each
+    /// `drawing.pane` are that chart's. A chart reading the document from its storage (see
+    /// [`Chart::set_storage`](crate::widget::Chart::set_storage)) maps them to the studies its
+    /// last restore added if that restore showed a snapshot the writing chart took, and
+    /// otherwise finds each drawing's study pane by its [`StoredDrawing::pane`]. `None` in
+    /// documents written before it was recorded and in those built with [`Self::new`], whose
+    /// ids such a chart maps after any restore, as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_by: Option<u64>,
 }
 
 /// Storage metadata
@@ -378,6 +388,20 @@ impl DrawingStorage {
     pub const CURRENT_VERSION: u32 = 10;
 
     /// Create new storage for a symbol
+    ///
+    /// ```
+    /// use egui_charts::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
+    /// use egui_charts::drawings::{Drawing, DrawingToolType};
+    ///
+    /// let mut line = StoredDrawing::new("line", Drawing::new(1, DrawingToolType::TrendLine));
+    /// line.add_point(StoredCoord::new(1_700_000_000_000, 101.5));
+    /// line.add_point(StoredCoord::new(1_700_003_600_000, 103.0));
+    /// let mut storage = DrawingStorage::new("AAPL");
+    /// storage.add_drawing(line);
+    /// let (read, skipped) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+    /// assert!(skipped.is_empty());
+    /// assert_eq!((read.drawings().len(), read.saved_by), (1, None));
+    /// ```
     pub fn new(symbol: impl Into<String>) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
@@ -385,6 +409,7 @@ impl DrawingStorage {
             timeframe: None,
             drawings: Vec::new(),
             metadata: StorageMetadata::default(),
+            saved_by: None,
         }
     }
 
@@ -486,9 +511,9 @@ impl DrawingStorage {
     }
 
     /// Deserialize from JSON, migrating earlier versions to the current format.
-    /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON or a missing
-    /// or invalid version, symbol, timeframe or metadata, and [`LoadError::UnsupportedVersion`]
-    /// for a version this release does not know. A
+    /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON, a missing or
+    /// invalid version, symbol, timeframe or metadata, or an invalid `saved_by`, and
+    /// [`LoadError::UnsupportedVersion`] for a version this release does not know. A
     /// drawing that cannot be read (a missing field, a `null` an earlier release
     /// wrote for a non-finite number, a number out of the range of its field, a
     /// tool type from a newer release, a cursor, fewer anchors than the tool
@@ -511,6 +536,8 @@ impl DrawingStorage {
             timeframe: Option<String>,
             drawings: Vec<serde_json::Value>,
             metadata: StorageMetadata,
+            #[serde(default)]
+            saved_by: Option<u64>,
         }
         let version = serde_json::from_str::<Version>(json)
             .map_err(LoadError::Json)?
@@ -758,6 +785,7 @@ impl DrawingStorage {
             timeframe: container.timeframe,
             drawings,
             metadata: container.metadata,
+            saved_by: container.saved_by,
         };
         Ok((storage, skipped))
     }

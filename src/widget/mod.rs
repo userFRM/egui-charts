@@ -305,8 +305,9 @@ pub struct Chart {
     /// Changes when what the data table calculates from changes, unlike the steps of the chart's
     /// own refresh, whose results the table does not read.
     readout_revision: u64,
-    /// See [`Self::data_table_identity`].
-    #[cfg(feature = "ui")]
+    /// Tells this chart from every other, also of another run: the data table keys its column
+    /// choices by it, and the snapshots and drawings documents the chart writes name it.
+    #[cfg(feature = "drawings")]
     data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
@@ -361,6 +362,11 @@ pub struct Chart {
     /// The id each study a snapshot saved has since [`Chart::restore`] added it again.
     #[cfg(feature = "drawings")]
     restored_studies: std::collections::HashMap<usize, usize>,
+    /// The chart that took the snapshot of the last restore, as its `saved_by` names it, or
+    /// `None` before any restore and for a snapshot that names none. Only the drawings
+    /// documents that chart wrote hold the saved ids `restored_studies` maps.
+    #[cfg(feature = "drawings")]
+    restored_from: Option<u64>,
     /// Original column ids of restored studies, retained for snapshots from earlier restores.
     #[cfg(feature = "drawings")]
     study_column_ids: std::collections::HashMap<usize, usize>,
