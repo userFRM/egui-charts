@@ -1673,6 +1673,7 @@ impl Chart {
             rendering::VolumeSettings::new(
                 self.config.show_volume && !cfg!(feature = "studies"),
                 max_volume,
+                coords.volume_bar_width(),
             ),
             &self.chart_type_params,
             rendering::TradingColors::new(colors.bullish, colors.bearish),
@@ -1699,22 +1700,18 @@ impl Chart {
                 (merge(line), volume)
             });
         let merged_x = |merged: &super::merge::Merged, index: usize, min_x: f32| {
-            // Past the last merged bar, as a renderer measuring its pitch asks for.
-            let past = |last: f32| last + (index + 1 - merged.index.len()) as f32 * factor as f32;
-            let index = merged
-                .index
-                .get(index)
-                .copied()
-                .unwrap_or_else(|| merged.index.last().map_or(0.0, |&last| past(last)));
-            self.state
-                .time_scale()
-                .idx_to_coord_precise(index, min_x, chart_rect_width)
+            self.state.time_scale().idx_to_coord_precise(
+                merged.index[index],
+                min_x,
+                chart_rect_width,
+            )
         };
         let merged_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width * factor as f32, self.config.wick_width),
             rendering::VolumeSettings::new(
                 render_params.show_volume() && merged.as_ref().is_some_and(|m| m.1.is_none()),
                 max_volume,
+                render_params.volume_width() * factor as f32,
             ),
             &self.chart_type_params,
             rendering::TradingColors::new(colors.bullish, colors.bearish),
@@ -2233,6 +2230,7 @@ impl Chart {
                                 run,
                                 first,
                                 max_volume,
+                                render_params.volume_width(),
                                 &colors,
                                 chart_rect.min.x,
                                 idx_to_coord,
@@ -2313,6 +2311,7 @@ impl Chart {
                         &volume.bars[volume.start..],
                         volume.start,
                         max_volume,
+                        merged_params.volume_width(),
                         &colors,
                         chart_rect.min.x,
                         |index, min_x| merged_x(volume, index, min_x),
