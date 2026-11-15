@@ -122,6 +122,12 @@ harness = false
 required-features = ["widget", "studies", "drawings"]
 
 [[bench]]
+name = "footprint_feed"
+path = "benches/footprint_feed.rs"
+harness = false
+required-features = ["widget", "studies"]
+
+[[bench]]
 name = "stream"
 path = "benches/stream.rs"
 harness = false
