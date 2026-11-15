@@ -363,9 +363,10 @@ impl DrawingStorage {
     /// Current storage format version. Version 10 draws a price label without a border colour
     /// with a border in its own colour; those saved before that change load with the border off,
     /// as drawn. Version 9 draws a callout's border at its stored width; those saved before that
-    /// change load with the 1 px border they were drawn with. Version 8
-    /// extends a trend line past the anchor its Left or Right names; those saved before that
-    /// change load with the reach they were drawn with.
+    /// change load with the fixed width they were drawn with: 1.5 px in version 1 and 1 px, the
+    /// width just before version 9, in versions 2 to 8. Version 8 extends a trend line past the
+    /// anchor its Left or Right names; those saved before that change load with the reach they
+    /// were drawn with.
     /// Version 7 does the same for rays, extended lines, info lines and trend angles.
     /// Version 6 draws arrow marks in their own colour; earlier versions load in the colour they
     /// were drawn in. Version 5 gives Elliott double and triple combinations an unlabelled start
@@ -648,9 +649,10 @@ impl DrawingStorage {
                             }
                         }
                         if version < 9 && tool == T::Callout {
-                            // Earlier renderers drew a callout's border 1 px wide whatever its
-                            // width.
-                            drawing.drawing.stroke_width = 1.0;
+                            // Earlier renderers drew a callout's border at a fixed width whatever
+                            // its own: 1.5 px in version 1 and 1 px just before version 9. The
+                            // width check above still skips an invalid saved width.
+                            drawing.drawing.stroke_width = if version == 1 { 1.5 } else { 1.0 };
                         }
                         if version < 10
                             && tool == T::PriceLabel
@@ -1147,8 +1149,9 @@ mod v1 {
         };
         drawing.position_readout.persistent = true;
         // Rays and extended lines get their former reach from the version 3 step, where a ray
-        // drawn right to left runs to the right edge as it did. Arrow and path heads keep their
-        // geometry; the other creation fields are unset or tool-neutral.
+        // drawn right to left runs to the right edge as it did, and callouts their 1.5 px border
+        // from the version 9 step. Arrow and path heads keep their geometry; the other creation
+        // fields are unset or tool-neutral.
         drawing.stroke_width = stored.line_width;
         if tool_type == DrawingToolType::Measure
             && let [a, b, ..] = stored.points.as_slice()
@@ -2257,7 +2260,9 @@ mod tests {
 
     /// Version 1 held no fill or tool configuration. Fills follow the v0.2.0 renderers: the
     /// area tools in this table tinted in the drawing colour at a fixed alpha, and the measure a
-    /// negative price change red, zero or a rise blue, at alpha 30 and 150.
+    /// negative price change red, zero or a rise blue, at alpha 30 and 150. Those renderers drew
+    /// the measure and a callout's border 1.5 px wide whatever the saved width, which loading
+    /// still checks.
     #[test]
     fn version_1_profile_drawings_restore_without_a_config() {
         use DrawingToolType as T;
@@ -2315,13 +2320,13 @@ mod tests {
                 {"ts_ms": T0 + 60_000, "price": prices[1]},
                 {"ts_ms": T0 + 120_000, "price": prices[0]}
             ]);
-            if tool == T::Measure {
+            if matches!(tool, T::Measure | T::Callout) {
                 let mut invalid = saved.clone();
                 invalid["drawings"][0]["line_width"] = (-1.0).into();
                 let (loaded, skipped) = DrawingStorage::from_json(&invalid.to_string()).unwrap();
                 assert!(
                     loaded.drawings.is_empty(),
-                    "invalid stored width must still be rejected"
+                    "{tool:?}: invalid stored width must still be rejected"
                 );
                 assert_eq!(skipped.len(), 1);
             }
@@ -2360,7 +2365,9 @@ mod tests {
                 assert!(!drawing.channel_midline, "{tool:?}");
                 if tool == T::Measure {
                     assert_eq!(drawing.color, [tint[0], tint[1], tint[2], 150]);
-                    assert_eq!(drawing.stroke_width, 1.5);
+                }
+                if matches!(tool, T::Measure | T::Callout) {
+                    assert_eq!(drawing.stroke_width, 1.5, "{tool:?}");
                 }
                 if matches!(
                     tool,
