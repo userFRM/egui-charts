@@ -50,7 +50,7 @@ pub struct SettingsDialog {
     /// Host-readable chart templates and their optional storage connection.
     pub templates: TemplateStore<ChartSettingsState>,
     save_name: Option<String>,
-    timezones: Vec<String>,
+    timezones: Vec<crate::model::TimezoneId>,
     /// Dialog styling configuration (width, height overrides)
     config: SettingsDialogConfig,
     color_picker_states: ColorPickerStates,
@@ -107,24 +107,6 @@ impl SettingsDialog {
     /// Create a [`SettingsDialog`] with default settings.
     pub fn new() -> Self {
         let settings = ChartSettingsState::default();
-        let timezones: &[&str] = if cfg!(feature = "timezones") {
-            &[
-                "UTC",
-                "America/New_York",
-                "America/Chicago",
-                "America/Los_Angeles",
-                "Europe/London",
-                "Europe/Paris",
-                "Asia/Tokyo",
-                "Asia/Hong_Kong",
-                "Asia/Singapore",
-                "Australia/Sydney",
-            ]
-        } else {
-            &[
-                "UTC", "-08:00", "-06:00", "-05:00", "+01:00", "+08:00", "+09:00", "+10:00",
-            ]
-        };
         Self {
             is_open: false,
             active_tab: SettingsTab::Symbol,
@@ -173,7 +155,7 @@ impl SettingsDialog {
             template_menu_open: false,
             templates: TemplateStore::new(StoreKind::ChartTemplates),
             save_name: None,
-            timezones: timezones.iter().map(|zone| (*zone).to_owned()).collect(),
+            timezones: crate::ui::timeframe_toolbar::default_time_zones(),
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
             apply_to_all: false,
@@ -183,6 +165,12 @@ impl SettingsDialog {
             price_targets_offered: true,
             opened_font_family: None,
         }
+    }
+
+    /// Offers `zones` in the Symbol tab's time zone list after UTC, exchange time and local time,
+    /// in place of [`default_time_zones`](crate::ui::timeframe_toolbar::default_time_zones).
+    pub fn set_time_zones(&mut self, zones: Vec<crate::model::TimezoneId>) {
+        self.timezones = zones;
     }
 
     /// Offers a button that applies the dialog's settings to all charts of the layout and closes
@@ -1335,7 +1323,10 @@ mod tests {
     #[test]
     fn offered_time_zones_and_session_presets_are_available() {
         use crate::config::SessionConfig;
-        let mut zones = SettingsDialog::new().timezones;
+        let mut zones: Vec<String> = crate::ui::timeframe_toolbar::toolbar::DEFAULT_TIME_ZONES
+            .iter()
+            .map(|zone| (*zone).to_owned())
+            .collect();
         zones.extend(
             [
                 SessionConfig::default(),
@@ -1350,6 +1341,34 @@ mod tests {
         for zone in zones {
             assert!(zone.parse::<crate::model::TimezoneId>().is_ok(), "{zone}");
         }
+    }
+
+    /// The time zone list names exchange time and local time as rows, shows the chart's mode by
+    /// its row and applies the row picked, while settings keep the text saved before: #2885.
+    #[test]
+    fn time_zone_dropdown_offers_exchange_and_local_time() {
+        use crate::{Chart, model::BarData, scales::TimezoneMode};
+        let mut chart = Chart::new(BarData::new());
+        let exchange = TimezoneMode::Exchange("+05:45".parse().unwrap());
+        chart.chart_options.time_scale.timezone = exchange.clone();
+        let saved = ChartSettingsState::from_chart(&chart);
+        assert_eq!(saved.timezone, "Exchange:+05:45");
+        let mut dialog = SettingsDialog::new();
+        dialog.open(saved.clone());
+        let SettingsAction::Apply(settings) = click_through(
+            &mut dialog,
+            &["scroll", "Exchange time", "Local time", "Ok"],
+        ) else {
+            panic!("Ok must apply the settings");
+        };
+        assert_eq!(settings.timezone, "Local");
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(
+            chart.chart_options().time_scale.timezone,
+            TimezoneMode::Local
+        );
+        saved.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(chart.chart_options().time_scale.timezone, exchange);
     }
 
     #[test]
@@ -1994,6 +2013,7 @@ mod tests {
 
     /// Clicks the texts `labels` name one after the other in a 1440 by 900 window, as opening a
     /// dropdown, picking an entry and pressing Ok do, and returns the action of the last click.
+    /// The label `scroll` scrolls the tab to its end instead, for the rows below its fold.
     fn click_through(dialog: &mut SettingsDialog, labels: &[&str]) -> SettingsAction {
         fn center(shape: &egui::Shape, label: &str) -> Option<Pos2> {
             match shape {
@@ -2026,6 +2046,24 @@ mod tests {
         };
         let mut action = SettingsAction::None;
         for label in labels {
+            if *label == "scroll" {
+                let pos = Pos2::new(900.0, 450.0);
+                frame(vec![egui::Event::PointerMoved(pos)], label);
+                frame(
+                    vec![egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        source: egui::MouseWheelSource::Wheel,
+                        phase: egui::TouchPhase::Move,
+                        delta: Vec2::new(0.0, -2000.0),
+                        modifiers: Default::default(),
+                    }],
+                    label,
+                );
+                for _ in 0..30 {
+                    frame(vec![], label);
+                }
+                continue;
+            }
             frame(vec![], label);
             let pos = frame(vec![], label).1.expect(label);
             frame(vec![egui::Event::PointerMoved(pos)], label);

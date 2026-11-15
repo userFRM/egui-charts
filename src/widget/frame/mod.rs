@@ -2694,7 +2694,8 @@ impl Chart {
             } else {
                 line
             };
-            // Only a countdown drawn on the axis needs the once-a-second repaint.
+            // Only a countdown drawn on the axis repaints, when its seconds next change on a running
+            // clock. A replay's clock moves only with the frames its host already runs.
             let countdown = self.current_bar_countdown().filter(|_| {
                 line.axis_label
                     && price_map
@@ -2702,10 +2703,12 @@ impl Chart {
                         .contains(price_map.transform().to_scale(last.close))
             });
             if countdown.is_some()
-                && (self.server_time_offset.is_some() || self.feed_link.is_some())
+                && self.replay_time().is_none()
+                && let Some(now) = self.chart_time()
             {
+                let nanos = u64::from(now.timestamp_subsec_nanos() % 1_000_000_000);
                 ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_secs(1));
+                    .request_repaint_after(std::time::Duration::from_nanos(1_000_000_000 - nanos));
             }
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
                 &painter,
