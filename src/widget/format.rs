@@ -157,7 +157,14 @@ impl Chart {
         crate::scales::median_bar_duration(bars[at..end].iter().map(|bar| bar.time)).num_seconds()
     }
 
-    pub(crate) fn display_timezone(&self) -> crate::scales::TimezoneMode {
+    /// The zone the time axis and the crosshair show: the chosen
+    /// [`TimezoneMode`](crate::scales::TimezoneMode), with exchange time resolved to the zone of
+    /// the [instrument](Self::instrument), or to the fallback zone it carries when the instrument
+    /// names none. Local time stays [`TimezoneMode::Local`](crate::scales::TimezoneMode::Local),
+    /// the system's zone. Supplied bars of a day or longer can still date in UTC, so that they
+    /// keep their trading date. The bottom toolbar's clock follows the chart through
+    /// `TimeframeToolbarState::set_display_timezone`.
+    pub fn display_timezone(&self) -> crate::scales::TimezoneMode {
         match &self.chart_options.time_scale.timezone {
             crate::scales::TimezoneMode::Exchange(fallback) => {
                 crate::scales::TimezoneMode::Exchange(
