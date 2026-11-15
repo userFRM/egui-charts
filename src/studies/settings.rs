@@ -824,18 +824,26 @@ impl Indicator for ConfiguredStudy {
     fn data_requests(&self) -> Vec<super::StudyDataRequest> {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
             // The bars come first: `update_data` reads them from the head. The study's own
-            // metric requests (exchange rates) follow, as they are not bars of that interval.
+            // metric requests (exchange rates) follow, and the candles it reads inside the
+            // Interval's bars, as they are not bars of that interval.
             let mut requests = vec![super::StudyDataRequest {
                 metric: None,
                 symbol: self.calculation_symbol.clone(),
                 timeframe: self.calculation_timeframe,
             }];
-            requests.extend(
-                self.study
-                    .data_requests()
-                    .into_iter()
-                    .filter(|request| request.metric.is_some()),
-            );
+            // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
+            // that interval would read (24-hour Volume on 1W reads hourly candles).
+            let inside = |timeframe: Timeframe| {
+                self.calculation_symbol.is_empty()
+                    && !timeframe.is_trade_based()
+                    && self
+                        .calculation_timeframe
+                        .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
+            };
+            requests.extend(self.study.data_requests().into_iter().filter(|request| {
+                request.metric.is_some()
+                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside))
+            }));
             requests
         } else {
             self.study.data_requests()
@@ -1979,6 +1987,60 @@ mod tests {
             .set_input("calculation_timeframe", InputValue::Timeframe(None))
             .unwrap();
         assert_eq!(study.data_requests(), [eur]);
+    }
+
+    /// 24-hour Volume on an Interval longer than a day asks for the lower-interval candles a
+    /// chart of that interval asks for, after that interval's bars, and sums the last 24 hours
+    /// of each of its bars from them.
+    #[test]
+    fn volume_24h_on_a_weekly_interval_sums_lower_candles() {
+        use crate::model::BarClock;
+        let at = |day: i64, hour: i64| {
+            chrono::DateTime::UNIX_EPOCH
+                + chrono::Duration::days(day)
+                + chrono::Duration::hours(hour)
+        };
+        let flat = |time, volume| Bar::new(time, 10.0, 10.0, 10.0, 10.0, volume);
+        let mut study = ConfiguredStudy::new(Box::new(super::super::Volume24h::new()));
+        study.set_timeframe(Timeframe::Hour1);
+        study.set_bar_clock(&BarClock::new(Timeframe::Hour1));
+        let weekly = InputValue::Timeframe(Some(Timeframe::Week1));
+        study.set_input("calculation_timeframe", weekly).unwrap();
+        let bars_request = study.data_requests()[0].clone();
+        let hourly = super::super::StudyDataRequest {
+            metric: None,
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Hour1),
+        };
+        // Weeks open on Monday 1970-01-05 (day 4) and Monday 1970-01-12 (day 11).
+        let weeks = [flat(at(4, 0), 99.0), flat(at(11, 0), 99.0)];
+        // The first week's last candle, Sunday 1970-01-11 23:00, closes at 1970-01-12 00:00, so
+        // its window holds the candles opening from 1970-01-11 00:00: 2 + 3 = 5. The candle of
+        // Saturday 1970-01-10 22:00 is older. The second week has no candles and no value.
+        let candles = [
+            flat(at(9, 22), 7.0),
+            flat(at(10, 22), 2.0),
+            flat(at(10, 23), 3.0),
+        ];
+        let source = |request, bars, timeframe| super::super::StudyData {
+            request,
+            bars,
+            clock: BarClock::new(timeframe),
+            instrument: None,
+            timeframe,
+        };
+        let chart = [flat(at(11, 0), 1.0)];
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(bars_request.clone(), &weeks, Timeframe::Week1),
+                source(hourly.clone(), &candles, Timeframe::Hour1),
+            ],
+        );
+        // The chart bar at 1970-01-12 00:00 shows the first week, which closed then.
+        assert_eq!(study.values().value(0, 0), Some(5.0));
+        assert_eq!(study.data_requests(), [bars_request, hourly]);
     }
 
     #[test]
