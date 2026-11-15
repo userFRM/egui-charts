@@ -118,6 +118,7 @@ pub struct ChartTypePreferences {
 }
 
 /// Chart type selector widget
+#[derive(Debug)]
 pub struct ChartTypeSelector {
     /// Current chart type
     pub current: ChartType,

@@ -5,7 +5,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Smoothed Moving Average (Wilder's Smoothing)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SmoothedMA {
     period: usize,
     values: IndicatorValues,

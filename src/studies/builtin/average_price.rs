@@ -9,7 +9,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// OHLC4 - Avg of Open, High, Low, Close
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OHLC4 {
     values: IndicatorValues,
     color: Color32,
@@ -103,7 +103,7 @@ impl Indicator for OHLC4 {
 /// HLC3 - Avg of High, Low, Close
 /// Note: Same formula as [`TypicalPrice`](super::TypicalPrice); this variant
 /// uses the common HLC3 name.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HLC3 {
     values: IndicatorValues,
     color: Color32,
@@ -197,7 +197,7 @@ impl Indicator for HLC3 {
 /// HL2 - Avg of High and Low (Midpoint)
 /// Note: Same formula as [`MedianPrice`](super::MedianPrice); this variant
 /// uses the common HL2 name.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HL2 {
     values: IndicatorValues,
     color: Color32,
@@ -289,7 +289,7 @@ impl Indicator for HL2 {
 }
 
 /// True Range (not avgd)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrueRange {
     values: IndicatorValues,
     color: Color32,

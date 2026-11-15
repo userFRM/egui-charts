@@ -11,7 +11,7 @@ use egui::Color32;
 ///
 /// The `period` input sets both lengths, as studies saved with a single length expect;
 /// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DirectionalMovement {
     /// Period of the directional indicators (typically 14)
     period: usize,
@@ -25,7 +25,7 @@ pub struct DirectionalMovement {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     index: usize,
     previous: Option<[f64; 3]>,

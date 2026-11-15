@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 /// smoothing inputs add an average of the index, with bands for the band type, as they do for
 /// RSI. [`Default`] is a lookback of 10 with a 14-bar SMA of the index; [`new`](Self::new) stays
 /// without the average, so its values remain single numbers.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RankCorrelationIndex {
     period: usize,
     smoothing: SmoothingType,
@@ -26,7 +26,7 @@ pub struct RankCorrelationIndex {
 }
 
 /// The closes of the last `period` bars with a finite close, and the average of the index.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Rolling {
     window: VecDeque<f64>,
     smoothed: Smoothed,

@@ -13,6 +13,7 @@ use crate::ui_kit::ext::UiExt;
 use egui::{Rect, Ui};
 
 /// Drawing template rows and save dialog.
+#[derive(Debug)]
 pub struct TemplatesButton;
 
 impl TemplatesButton {

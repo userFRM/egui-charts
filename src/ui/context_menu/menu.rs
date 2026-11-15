@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// One row of a context menu, generic over the action it resolves to.
 ///
 /// The chart, series and drawing menus all build their rows from this type.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MenuItem<A = ContextMenuAction> {
     /// Text displayed by the component.
     pub label: String,

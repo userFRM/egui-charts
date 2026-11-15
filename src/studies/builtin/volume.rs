@@ -31,7 +31,7 @@ pub enum VolumeAverage {
 /// Outputs are up volume, down volume and the average. Exactly one volume
 /// column is defined per usable bar. Equal prices count as up under both rules;
 /// a bar with non-finite volume, open or close leaves all outputs missing.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Volume {
     period: usize,
     average: VolumeAverage,
@@ -44,7 +44,7 @@ pub struct Volume {
     stepper: Stepper<State>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<f64>,
     window: VecDeque<f64>,

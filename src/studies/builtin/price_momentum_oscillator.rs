@@ -36,7 +36,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Price Momentum Oscillator: PMO and signal lines in a separate pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PriceMomentumOscillator {
     first_length: usize,
     second_length: usize,
@@ -48,7 +48,7 @@ pub struct PriceMomentumOscillator {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct State {
     previous: Option<f64>,
     first: Smoothing,
@@ -57,7 +57,7 @@ struct State {
 }
 
 /// Recursive smoothing `prev + (x - prev) * alpha`, starting at the mean of the first `length` inputs.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Smoothing {
     length: usize,
     alpha: f64,

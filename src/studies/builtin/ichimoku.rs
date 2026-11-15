@@ -40,7 +40,7 @@ use egui::Color32;
 /// and Chikou a negative one. Displacement counts the current bar as period one:
 /// 26 shifts by 25 bars. Zero and one leave the spans unshifted. All leading
 /// values are retained, including those drawn beyond the last price bar.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IchimokuCloud {
     tenkan_period: usize,
     kijun_period: usize,

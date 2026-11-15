@@ -13,7 +13,7 @@ use egui::Color32;
 /// comparable across instruments; set the contract with [`Self::with_point_value`],
 /// [`Self::with_margin`] and [`Self::with_commission`]. The first value is on bar `3n - 1`; earlier
 /// bars are `None`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommoditySelectionIndex {
     /// Period for calculation
     period: usize,
@@ -177,7 +177,7 @@ impl Indicator for CommoditySelectionIndex {
 /// With `mom = close - close[n]`, `TDI = |sum(mom, n)| - (sum(|mom|, 2n) - sum(|mom|, n))`.
 /// Positive values mean the market is trending, negative values mean it is consolidating.
 /// The first value is on bar `3n - 1`; earlier bars are `None`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrendDetectionIndex {
     period: usize,
     values: IndicatorValues,

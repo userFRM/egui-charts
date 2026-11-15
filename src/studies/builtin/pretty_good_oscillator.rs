@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 /// Measures (close - SMA of closes) / EMA of true range over the same period.
 /// The EMA starts at the mean of the first `period` true ranges.
 /// Values > 3 or < -3 indicate potential reversal
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrettyGoodOscillator {
     /// Period for calculations (typically 14)
     period: usize,
@@ -20,7 +20,7 @@ pub struct PrettyGoodOscillator {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<f64>,
     closes: VecDeque<f64>,

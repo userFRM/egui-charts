@@ -182,7 +182,7 @@ pub(super) fn refresh_level_labels(
 /// direct callers set them with [`Indicator::set_timeframe`] (one minute until then) and
 /// [`Indicator::set_instrument`] (UTC until then). The levels come from the chart's own bars, or
 /// with [`with_daily_bars`](Self::with_daily_bars) from the feed's daily bars. Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PivotPoints {
     method: PivotMethod,
     timeframe: PivotTimeframe,
@@ -211,7 +211,7 @@ pub struct PivotPoints {
     held_start: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Period {
     key: (i32, u32),
     start: usize,
@@ -219,7 +219,7 @@ struct Period {
     levels: [f64; 11],
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     index: usize,
     previous_date: Option<chrono::NaiveDate>,

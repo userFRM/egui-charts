@@ -104,13 +104,14 @@ impl Default for AlertListOptions {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum PresentationEdit {
     List(AlertListOptions),
     Marker(AlertId, bool, bool),
 }
 
 // Reserve both history positions while the host confirms the marker change.
+#[derive(Debug)]
 struct PresentationRestore {
     redo: bool,
     request: u64,
@@ -171,6 +172,31 @@ pub struct AlertsPanel {
     pending: usize,
     sound_choice: Option<String>,
     sound: Option<String>,
+}
+
+impl std::fmt::Debug for AlertsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertsPanel")
+            .field("config", &self.config)
+            .field("generation", &self.generation)
+            .field("alerts", &self.alerts)
+            .field("log", &self.log)
+            .field("error", &self.error)
+            .field("show_log", &self.show_log)
+            .field("notification_seconds", &self.notification_seconds)
+            .field("options", &self.options)
+            .field("marks", &self.marks)
+            .field("next_reply", &self.next_reply)
+            .field("sources", &self.sources)
+            .field("symbol", &self.symbol)
+            .field("draft", &self.draft)
+            .field("inputs", &self.inputs)
+            .field("draft_saving", &self.draft_saving)
+            .field("pending", &self.pending)
+            .field("sound_choice", &self.sound_choice)
+            .field("sound", &self.sound)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for AlertsPanel {

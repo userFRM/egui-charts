@@ -45,7 +45,7 @@ use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
 /// Woodies CCI: CCI 14 columns, CCI Turbo and CCI 14 lines in a separate pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WoodiesCCI {
     turbo_length: usize,
     cci_length: usize,

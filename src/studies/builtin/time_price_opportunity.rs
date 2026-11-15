@@ -23,7 +23,7 @@ fn display_choice(mode: TPODisplayMode) -> InputValue {
 /// [`to_tpo_profiles`](crate::model::to_tpo_profiles), through the same code and cache as the
 /// TPO chart type, so the study's profile of a session equals the chart type's under the same
 /// settings. [`Indicator::tpo`] exposes those settings; the study has no plotted values.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
     instrument_tick: Option<f64>,

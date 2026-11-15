@@ -73,7 +73,7 @@ enum Status {
 }
 
 /// The study editor panel.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StudyEditor {
     title: String,
     text: String,

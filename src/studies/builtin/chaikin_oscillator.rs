@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Fast minus slow EMA of the Accumulation/Distribution line.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChaikinOscillator {
     fast_length: usize,
     slow_length: usize,

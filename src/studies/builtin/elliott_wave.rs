@@ -42,7 +42,7 @@ use egui::Color32;
 use std::collections::VecDeque;
 
 /// Elliott Wave: five-wave impulses in confirmed swing pivots.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ElliottWave {
     left: usize,
     right: usize,
@@ -55,7 +55,7 @@ pub struct ElliottWave {
 }
 
 /// Anchors `P0` to `Pn` of a construction.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Construction {
     anchors: Vec<Swing>,
     confirmed: Option<DateTime<Utc>>,
@@ -72,7 +72,7 @@ impl Construction {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     swings: Swings,
     developing: Option<Construction>,

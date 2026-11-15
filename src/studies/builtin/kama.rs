@@ -37,7 +37,7 @@ use std::collections::VecDeque;
 ///
 /// Adapts its smoothing speed to market conditions via the efficiency
 /// ratio. Overlay indicator drawn on the price chart.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KAMA {
     /// Period for Efficiency Ratio calculation.
     period: usize,
@@ -51,7 +51,7 @@ pub struct KAMA {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     closes: VecDeque<f64>,
     seed_sum: f64,

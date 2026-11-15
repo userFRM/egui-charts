@@ -4,7 +4,7 @@ use egui::Color32;
 
 /// Simple averages of lengths 20, 50, 100 and 200, as a combination preset, without crossing
 /// markers until a pair is chosen.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MultipleMA {
     inner: MACombination,
 }

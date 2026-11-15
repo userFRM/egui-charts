@@ -10,7 +10,7 @@ const FACTOR: f64 = 2.0;
 pub(super) const BODY_AVERAGE: usize = 14;
 
 /// One bar with its body average and trend, the inputs every rule reads.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Candle {
     pub(super) open: f64,
     pub(super) high: f64,
