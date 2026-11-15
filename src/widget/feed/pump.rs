@@ -253,6 +253,9 @@ impl Chart {
             if link.subscription != Some(id) {
                 continue;
             }
+            // A seek empties the bars and rebuilds them through its position: the view follows
+            // the bars it showed before the reset to the rebuilt ones, as playback would.
+            let before = updates.reset.then(|| self.edge());
             if updates.reset {
                 link.time = None;
                 self.bar_close_time = None;
@@ -313,6 +316,9 @@ impl Chart {
                 if merged.first_changed.is_some() {
                     self.data_updated(SeriesId::MAIN);
                 }
+            }
+            if let Some(before) = before {
+                self.follow_live_edge(before, &link.clock);
             }
             if let Some(quote) = updates.quote
                 && self.quote.as_ref().is_none_or(|old| quote.ts >= old.ts)

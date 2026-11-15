@@ -1584,6 +1584,20 @@ impl Datafeed for LiveFeed {
         reply.send(Ok(self.instrument()));
     }
 
+    fn price_targets_converted(
+        &self,
+        symbol: &str,
+        conversion: &str,
+        reply: Reply<egui_charts::data::PriceTargets>,
+    ) {
+        if !matches!(conversion, "adjusted" | "cents" | "cents-adjusted") {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        }
+        // The simulation already prices in the unit `resolve_converted` chose.
+        self.price_targets(symbol, reply);
+    }
+
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let mut sim = self.state();
         if let Some(feed) = sim
