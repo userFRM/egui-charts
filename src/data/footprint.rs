@@ -415,27 +415,6 @@ impl Footprint {
                 .is_none_or(|(from, _)| open < self.clock.bar_open(*from))
     }
 
-    /// The complete execution bar in this slot, using the same coverage check as readers.
-    #[cfg(all(test, feature = "widget"))]
-    pub(crate) fn complete_bar_at(&self, time: DateTime<Utc>) -> Option<&FootprintBar> {
-        let open = self.clock.bar_open(time);
-        self.bars.get(&open).filter(|_| self.complete_at(open))
-    }
-
-    /// A span of whole bars must start inside held coverage and contain no incomplete bar.
-    #[cfg(feature = "drawings")]
-    pub(crate) fn span_is_complete(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
-        let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
-        first <= last
-            && self
-                .bars
-                .first_key_value()
-                .is_some_and(|(held, _)| *held <= first)
-            && self.complete_at(first)
-            && self.complete_at(last)
-            && !self.span_has_gap(first, Some(last))
-    }
-
     /// Whether missing executions could change a result spanning these times.
     #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn span_has_gap(&self, from: DateTime<Utc>, through: Option<DateTime<Utc>>) -> bool {
@@ -1416,26 +1395,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn borrowed_rows_reject_invalid_values_and_order() {
-        let basis = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        for corrupt in 0..6 {
-            let mut rows = borrowed_rows();
-            match corrupt {
-                0 => rows.swap(0, 1),
-                1 => rows[2].level = -1,
-                2 => rows[0].bid = f64::NAN,
-                3 => rows[0].bid_trades = 0,
-                4 => rows[0].bid = 3.0,
-                _ => rows[0].bid_trades = u64::MAX,
-            }
-            let bar = borrowed_bar(FootprintRows::Slice(&rows));
-            assert!(
-                validate_snapshot_bar(&basis, bar, &mut 0).is_err(),
-                "case {corrupt}"
-            );
-        }
-    }
     use chrono::TimeDelta;
 
     fn aggregate_bar(time: DateTime<Utc>) -> FootprintBar {

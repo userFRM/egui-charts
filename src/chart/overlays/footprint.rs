@@ -2008,12 +2008,14 @@ mod tests {
             let grouped: Vec<_> = selected
                 .iter()
                 .filter_map(|bar| {
-                    flow.complete_bar_at(bar.time).map(|source| {
-                        let group = row_group(&map, bar, flow.into(), config);
-                        let mut owned = FootprintBar::empty(source.time);
-                        owned.absorb_grouped(source, group);
-                        (owned, group)
-                    })
+                    FootprintView::from(flow)
+                        .complete_bar_at(bar.time)
+                        .map(|source| {
+                            let group = row_group(&map, bar, flow.into(), config);
+                            let mut owned = FootprintBar::empty(source.time);
+                            owned.absorb_grouped(source, group);
+                            (owned, group)
+                        })
                 })
                 .collect();
             let rows: Vec<_> = grouped

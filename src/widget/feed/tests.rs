@@ -1,8 +1,8 @@
 use super::super::test_frames::{candle_ys, frame, shapes};
 use super::*;
 use crate::data::{
-    DepthPage, FeedError, FootprintPage, FootprintRequest, HistoryPage, Sink, Subscription,
-    TradePage,
+    DepthPage, FeedError, FootprintPage, FootprintRequest, FootprintView, HistoryPage, Sink,
+    Subscription, TradePage,
 };
 use crate::model::{Bar, BarData, ChartType};
 use crate::widget::ChartBuilder;
@@ -758,7 +758,7 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
             .collect::<Vec<_>>(),
         vec![start, start + TimeDelta::minutes(3)]
     );
-    assert!(flow.complete_bar_at(cutoff).is_none());
+    assert!(FootprintView::from(flow).complete_bar_at(cutoff).is_none());
     feed.trades
         .lock()
         .unwrap()
@@ -1093,7 +1093,9 @@ fn prepared_repeated_retained_trade_before_cutoff_keeps_its_bar_complete() {
         .owned()
         .unwrap();
     assert_eq!(
-        flow.complete_bar_at(retained.ts).map(|bar| bar.unknown),
+        FootprintView::from(flow)
+            .complete_bar_at(retained.ts)
+            .map(|bar| bar.unknown),
         Some(7.0)
     );
 }
@@ -1327,9 +1329,9 @@ fn prepared_first_live_instant_needs_trade_history_even_on_a_bar_open() {
             .unwrap()
             .owned()
             .unwrap();
-        assert!(flow.complete_bar_at(start).is_some());
+        assert!(FootprintView::from(flow).complete_bar_at(start).is_some());
         assert!(
-            flow.complete_bar_at(cutoff).is_none(),
+            FootprintView::from(flow).complete_bar_at(cutoff).is_none(),
             "page first {page_first}"
         );
         feed.trades
@@ -1348,7 +1350,9 @@ fn prepared_first_live_instant_needs_trade_history_even_on_a_bar_open() {
             .owned()
             .unwrap();
         assert_eq!(
-            flow.complete_bar_at(cutoff).map(|bar| bar.unknown),
+            FootprintView::from(flow)
+                .complete_bar_at(cutoff)
+                .map(|bar| bar.unknown),
             Some(7.0)
         );
     }

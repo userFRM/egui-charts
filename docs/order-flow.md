@@ -70,7 +70,7 @@ A shared owner can serve several charts. Admission validates its clock, grid, ro
 exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
 unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
 The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
-cells, statistics, annotations and session-profile calculations use the same complete bars,
+cells, statistics and annotations use the same complete bars,
 including valid history before a missing join. `Footprint::bars()` keeps its existing owned
 store API. Profile drawings use their labelled bar estimate with shared history; replay and
 independent trade-driven studies still require individual executions.

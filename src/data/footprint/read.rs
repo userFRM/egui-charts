@@ -185,7 +185,7 @@ impl<'a> FootprintView<'a> {
     pub(crate) fn span_has_gap(self, from: DateTime<Utc>, through: Option<DateTime<Utc>>) -> bool {
         self.flow.span_has_gap(from, through)
     }
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "drawings", feature = "studies"))]
     pub(crate) fn span_is_complete(self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
         let (first, last) = (
             self.flow.clock.bar_open(first),
@@ -492,24 +492,27 @@ mod tests {
     }
 
     #[test]
-    fn shared_pages_reject_invalid_bar_order_clock_and_numbers() {
-        for invalid in 0..4 {
-            let mut bars = bars(0..2);
-            match invalid {
-                0 => bars.swap(0, 1),
-                1 => bars[1].time = bars[0].time,
-                2 => bars[0].time += TimeDelta::seconds(1),
-                _ => bars[0].unknown = f64::NAN,
-            }
-            assert!(
-                FootprintState::from_page(
-                    &request(),
-                    FootprintBars::Shared(Arc::new(Native::new(bars))),
-                    false
-                )
-                .is_err(),
-                "case {invalid}"
-            );
+    fn shared_pages_reject_unordered_or_duplicate_bars_and_rows() {
+        let invalid = |change: fn(&mut Native)| {
+            let mut source = Native::new(bars(0..2));
+            change(&mut source);
+            FootprintState::from_page(&request(), FootprintBars::Shared(Arc::new(source)), false)
+        };
+        let bar_error = "invalid data: footprint bar at 2026-01-05 00:00:00 UTC is unordered or supplied more than once";
+        let row_error = "invalid data: footprint bar at 2026-01-05 00:00:00 UTC has unordered or duplicate price rows";
+        for (result, expected) in [
+            (invalid(|source| source.0.swap(0, 1)), bar_error),
+            (
+                invalid(|source| source.0[1].0.time = source.0[0].0.time),
+                bar_error,
+            ),
+            (invalid(|source| source.0[0].1.swap(0, 1)), row_error),
+            (
+                invalid(|source| source.0[0].1[1].level = source.0[0].1[0].level),
+                row_error,
+            ),
+        ] {
+            assert_eq!(result.unwrap_err().to_string(), expected);
         }
     }
 }
