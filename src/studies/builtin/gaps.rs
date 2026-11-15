@@ -61,7 +61,7 @@ const MAX_GAPS: usize = 500;
 const RANGE_LENGTH: usize = 14;
 
 /// Gaps: zones between consecutive bars that do not overlap, open until price fills them.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Gaps {
     max_gaps: usize,
     deviation: f64,
@@ -80,7 +80,7 @@ pub struct Gaps {
 }
 
 /// One open gap.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Gap {
     /// Gaps found before it.
     index: usize,
@@ -104,7 +104,7 @@ impl Gap {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     usable: usize,

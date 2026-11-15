@@ -4,6 +4,7 @@ use crate::studies::{InputKind, InputValue, StudyInput};
 
 const MAX_TRIALS: usize = 10_000;
 
+#[derive(Debug)]
 pub(super) struct Range {
     pub enabled: bool,
     pub input: StudyInput,

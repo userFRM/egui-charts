@@ -46,7 +46,7 @@ use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
 /// Williams Fractals: up fractals at swing highs and down fractals at swing lows.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WilliamsFractals {
     periods: usize,
     values: IndicatorValues,

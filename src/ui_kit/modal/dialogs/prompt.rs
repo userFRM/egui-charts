@@ -42,6 +42,7 @@ impl PromptResult {
 }
 
 /// A prompt dialog with text input
+#[derive(Debug)]
 pub struct PromptDialog {
     id: Id,
     title: String,

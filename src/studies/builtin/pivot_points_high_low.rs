@@ -69,7 +69,7 @@ pub(super) fn pivots(values: &[f64], left: usize, right: usize, high: bool) -> V
 
 /// [`pivots`] over a stream of bars: the window of the last `left + right + 1` bars with finite
 /// highs and lows, from which each new bar confirms the pivot `right` bars before it.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Swings {
     window: std::collections::VecDeque<(usize, f64, f64)>,
 }
@@ -106,7 +106,7 @@ impl Swings {
 }
 
 /// Pivot Points High Low: swing highs and lows, each labelled with its price.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PivotPointsHighLow {
     high_left: usize,
     high_right: usize,

@@ -21,6 +21,7 @@ use super::content::{ContentContext, ListItemContent};
 ///     .show(ui, LabelContent::new("Hello World").with_icon(&icons::SETTINGS));
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct LabelContent<'a> {
     text: String,
     icon: Option<&'a Icon>,

@@ -45,6 +45,16 @@ fn right_margin_bars(chart: &Chart) -> f32 {
         .max(0.0)
 }
 
+/// The right margin in pixels of a chart that keeps it in pixels; a negative one reads as zero,
+/// as its width in bars does.
+fn right_margin_pixels(chart: &Chart) -> Option<f32> {
+    chart
+        .chart_options()
+        .time_scale
+        .right_offset_pixels
+        .map(|pixels| pixels.max(0.0))
+}
+
 fn thousands_separator(separator: Option<char>) -> ThousandsSeparator {
     match separator {
         None => ThousandsSeparator::Off,
@@ -95,7 +105,7 @@ pub enum ChartSettingsError {
         /// The bottom margin in percent.
         bottom: f32,
     },
-    /// The right margin in bars is not finite or is negative.
+    /// The right margin, in bars or in pixels, is not finite or is negative.
     RightMargin(f32),
     /// The crosshair line width is not finite or not above zero.
     CrosshairWidth(f32),
@@ -315,6 +325,7 @@ impl ChartSettingsState {
         settings.margins.bottom_percent =
             (chart.state().price_scale().options().scale_margins.bottom * 100.0) as f32;
         settings.margins.right_bars = right_margin_bars(chart);
+        settings.margins.right_pixels = right_margin_pixels(chart);
         let scale = chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale = scale.options().mode == PriceScaleMode::Logarithmic;
@@ -425,6 +436,11 @@ impl ChartSettingsState {
         let right = self.margins.right_bars;
         if !right.is_finite() || right < 0.0 {
             return Err(ChartSettingsError::RightMargin(right));
+        }
+        if let Some(pixels) = self.margins.right_pixels
+            && (!pixels.is_finite() || pixels < 0.0)
+        {
+            return Err(ChartSettingsError::RightMargin(pixels));
         }
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err(ChartSettingsError::CrosshairWidth(
@@ -666,19 +682,29 @@ impl ChartSettingsState {
             top: f64::from(self.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
             bottom: f64::from(self.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
         };
-        // An unedited margin keeps the chart's, in bars or in pixels; an edited one is in bars.
-        // Settings saved before the margin could hold part of a bar, which hold none of the
-        // choices `from_chart` fills, hold the whole bars of the bar margin for an unedited one.
-        let whole_bars = chart
-            .chart_options()
-            .time_scale
-            .right_offset
-            .max(0.0)
-            .trunc();
-        let saved_unedited =
-            self.scales_appearance.font_family.is_none() && self.margins.right_bars == whole_bars;
-        if self.margins.right_bars != right_margin_bars(chart) && !saved_unedited {
-            chart.set_right_margin(self.margins.right_bars);
+        // A margin in pixels is kept in pixels, which a chart keeping the same pixels at another
+        // bar spacing already shows. Otherwise an unedited margin keeps the chart's, in bars or in
+        // pixels, and an edited one is in bars. Settings saved before the margin could hold part
+        // of a bar, which hold none of the choices `from_chart` fills, hold the whole bars of the
+        // bar margin for an unedited one.
+        if let Some(pixels) = self.margins.right_pixels {
+            if right_margin_pixels(chart) != Some(pixels) {
+                let mut options = chart.chart_options().clone();
+                options.time_scale.right_offset_pixels = Some(pixels);
+                chart.set_chart_options(options);
+            }
+        } else {
+            let whole_bars = chart
+                .chart_options()
+                .time_scale
+                .right_offset
+                .max(0.0)
+                .trunc();
+            let saved_unedited = self.scales_appearance.font_family.is_none()
+                && self.margins.right_bars == whole_bars;
+            if self.margins.right_bars != right_margin_bars(chart) && !saved_unedited {
+                chart.set_right_margin(self.margins.right_bars);
+            }
         }
         let mode = if self.scales_and_lines.log_scale {
             PriceScaleMode::Logarithmic
@@ -1312,7 +1338,7 @@ mod tests {
     /// The state read from a chart applies back without changing its configuration, so pressing
     /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
     /// left as shown while the one it fell back to changes keeps what it showed. A size resolved
-    /// from history keeps its value until its method is edited.
+    /// from history keeps its value until its method is edited, also through undo and redo.
     #[test]
     fn unedited_settings_apply_records_no_undo() {
         let bars = || {
@@ -1379,26 +1405,34 @@ mod tests {
         });
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
         assert!(!chart.can_undo());
-        // An edited candle style and an unedited series settings apply keep it too.
+        // An edited candle style, its undo and redo, and an unedited series settings apply keep
+        // it too.
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings.candle_colors.show_wick = !settings.candle_colors.show_wick;
-        settings.apply_to_chart(&mut chart).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        assert!(chart.undo());
+        assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        assert!(chart.redo());
         let series = chart.series_settings();
         chart.apply_series_settings(&series);
         assert!((chart.chart_type_params().kagi_reversal - 2.0).abs() < 1e-12);
+        // Undoing the edited period gives ATR(14) a size from the 15 bars loaded now.
         let mut settings = ChartSettingsState::from_chart(&chart);
         settings
             .chart_type_params
             .as_mut()
             .unwrap()
             .kagi_size_method = atr(15);
-        settings.apply_to_chart(&mut chart).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
         assert!((chart.chart_type_params().kagi_reversal - 44.0 / 15.0).abs() < 1e-12);
+        assert!(chart.undo());
+        assert!((chart.chart_type_params().kagi_reversal - 3.0).abs() < 1e-12);
     }
 
     /// A size that waits for more history than is loaded is not invalid: the chart names the
     /// bars it waits for and other settings apply. A fixed size of 0 is still rejected. Whitespace
-    /// bars do not count, so the size resolves once 14 bars with prices are loaded.
+    /// bars do not count, so the size resolves once 14 bars with prices are loaded. A changed
+    /// method resolves again at once, also while the size waits.
     #[test]
     fn settings_apply_while_a_history_derived_size_waits() {
         use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
@@ -1448,6 +1482,17 @@ mod tests {
         }
         chart.show_elements();
         assert!((chart.chart_type_params().renko_brick_size - 2.0).abs() < 1e-12);
+        // A changed method reads the loaded bars at once, also while the size waits: ATR(20)
+        // waits for 6 more bars, and ATR(5) of true ranges of 2 is 2.
+        for (period, size) in [(20, 0.0), (5, 2.0)] {
+            let params = settings.chart_type_params.as_mut().unwrap();
+            params.renko_size_method = BoxSizeMethod::Atr {
+                period,
+                multiplier: 1.0,
+            };
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert!((chart.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the
@@ -2821,9 +2866,10 @@ mod tests {
             saved.apply_to_chart(&mut chart).unwrap();
             assert_eq!(chart.chart_options().time_scale, kept, "saved, {pixels:?}");
 
-            // An edit, also to the whole bars of the bar margin.
+            // An edit, also to the whole bars of the bar margin, is in bars, as the dialog makes it.
             for bars in [2.0, 7.5] {
                 settings.margins.right_bars = bars;
+                settings.margins.right_pixels = None;
                 settings.apply_to_chart(&mut chart).unwrap();
                 let time_scale = &chart.chart_options().time_scale;
                 assert_eq!(
@@ -2833,6 +2879,12 @@ mod tests {
                 );
             }
             settings.margins.right_bars = -1.0;
+            assert_eq!(
+                settings.apply_to_chart(&mut chart),
+                Err(ChartSettingsError::RightMargin(-1.0))
+            );
+            settings.margins.right_bars = 0.0;
+            settings.margins.right_pixels = Some(-1.0);
             assert_eq!(
                 settings.apply_to_chart(&mut chart),
                 Err(ChartSettingsError::RightMargin(-1.0))

@@ -98,6 +98,37 @@ pub struct ScreenerPanel {
     request: u64,
 }
 
+impl std::fmt::Debug for ScreenerPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScreenerPanel")
+            .field("sets", &self.sets)
+            .field("set", &self.set)
+            .field("universes", &self.universes)
+            .field("universe", &self.universe)
+            .field("text_query", &self.text_query)
+            .field("description", &self.description)
+            .field("text", &self.text)
+            .field("explanation", &self.explanation)
+            .field("saved", &self.saved)
+            .field("stored", &self.stored)
+            .field("current", &self.current)
+            .field("name", &self.name)
+            .field("renaming", &self.renaming)
+            .field("more", &self.more)
+            .field("appending", &self.appending)
+            .field("filters", &self.filters)
+            .field("sort_by", &self.sort_by)
+            .field("descending", &self.descending)
+            .field("draft", &self.draft)
+            .field("rows", &self.rows)
+            .field("answered", &self.answered)
+            .field("error", &self.error)
+            .field("loading", &self.loading)
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ScreenerPanel {
     /// A screener of `sets`, showing the first, without a feed.
     pub fn new(sets: Vec<ScreenerColumnSet>) -> Self {

@@ -16,6 +16,7 @@ use crate::ui_kit::modal::Modal;
 use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
 
 /// Series settings dialog with sidebar layout
+#[derive(Debug)]
 pub struct SeriesSettingsDialog {
     /// Display and layout options for this component.
     pub config: SeriesSettingsConfig,

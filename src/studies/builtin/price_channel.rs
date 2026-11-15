@@ -8,7 +8,7 @@ use egui::Color32;
 /// Price Channel
 /// Simple highest high and lowest low channel
 /// Also known as "N-bar high/low"
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PriceChannel {
     /// Lookback period
     period: usize,
