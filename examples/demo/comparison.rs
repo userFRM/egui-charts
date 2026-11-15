@@ -47,16 +47,17 @@ impl ComparisonSettings {
                 let mut custom = options.area_style.is_some();
                 if ui.checkbox(&mut custom, "Independent area style").changed() {
                     let color = options.color;
-                    options.area_style = custom.then(|| AreaStyle {
-                        line: options.line_style.clone().unwrap_or(own_line),
-                        top_fill: egui::Color32::from_rgba_unmultiplied(
+                    options.area_style = custom.then(|| {
+                        let mut area = AreaStyle::default();
+                        area.line = options.line_style.clone().unwrap_or(own_line);
+                        area.top_fill = egui::Color32::from_rgba_unmultiplied(
                             color.r(),
                             color.g(),
                             color.b(),
                             115,
-                        ),
-                        bottom_fill: egui::Color32::TRANSPARENT,
-                        ..Default::default()
+                        );
+                        area.bottom_fill = egui::Color32::TRANSPARENT;
+                        area
                     });
                 }
             }
@@ -102,6 +103,7 @@ impl ComparisonSettings {
                                 LastPriceAnimation::Disabled => "Off".into(),
                                 LastPriceAnimation::Continuous => "Continuous".into(),
                                 LastPriceAnimation::OnDataUpdate => "On each update".into(),
+                                _ => format!("{animation:?}"),
                             },
                         );
                     });
@@ -232,13 +234,13 @@ impl ComparisonSettings {
                                             30,
                                         )
                                     };
-                                    egui_charts::model::BaselineStyle {
-                                        above: series_line(&self.options, self.options.up_color),
-                                        below: series_line(&self.options, self.options.down_color),
-                                        above_fill: fill(self.options.up_color),
-                                        below_fill: fill(self.options.down_color),
-                                        ..Default::default()
-                                    }
+                                    let mut style = egui_charts::model::BaselineStyle::default();
+                                    style.above = series_line(&self.options, self.options.up_color);
+                                    style.below =
+                                        series_line(&self.options, self.options.down_color);
+                                    style.above_fill = fill(self.options.up_color);
+                                    style.below_fill = fill(self.options.down_color);
+                                    style
                                 });
                             }
                             if let Some(style) = &mut self.options.baseline_style {
@@ -392,6 +394,7 @@ impl ComparisonSettings {
                                         SeriesScale::Left => "Left".into(),
                                         SeriesScale::Separate(_) => "New price scale".into(),
                                         SeriesScale::Overlay(_) => "No axis labels".into(),
+                                        _ => format!("{v:?}"),
                                     },
                                 ) {
                                     self.scale = chart
@@ -447,11 +450,10 @@ impl ComparisonSettings {
 }
 
 fn series_line(options: &SeriesOptions, color: egui::Color32) -> LinePlotStyle {
-    LinePlotStyle {
-        color,
-        width: options.width,
-        ..Default::default()
-    }
+    let mut line = LinePlotStyle::default();
+    line.color = color;
+    line.width = options.width;
+    line
 }
 
 /// The colour, width, pattern and, where the chart type draws one, the curve of a series line.
@@ -486,6 +488,7 @@ fn line_style_rows(ui: &mut egui::Ui, style: &mut LinePlotStyle, curves: bool) {
                 |shape| match shape {
                     LineType::Simple => "Straight".into(),
                     LineType::Curved => "Curved".into(),
+                    _ => format!("{shape:?}"),
                 },
             );
         });
@@ -597,53 +600,11 @@ struct SavedOptions {
     crosshair_marker_border_width: f32,
     scale: SeriesScale,
     columns_base: Option<f64>,
-    #[serde(with = "SavedStyle")]
     style: egui_charts::model::SeriesStyle,
 }
 
 fn default_crosshair_marker_border_width() -> f32 {
     SeriesOptions::default().crosshair_marker_border_width
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(remote = "egui_charts::model::SeriesStyle")]
-struct SavedStyle {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    display_format: Option<egui_charts::model::SeriesDisplayFormat>,
-    last_value_visible: bool,
-    price_line_visible: bool,
-    #[serde(with = "SavedPriceLineSource")]
-    price_line_source: egui_charts::model::PriceLineSource,
-    price_line_color: Option<egui::Color32>,
-    price_line_width: f32,
-    price_line_style: egui_charts::model::LineStyle,
-    base_line_visible: bool,
-    #[serde(default = "default_base_line_color")]
-    base_line_color: egui::Color32,
-    #[serde(default = "default_base_line_width")]
-    base_line_width: f32,
-    #[serde(default)]
-    base_line_style: egui_charts::model::LineStyle,
-    #[serde(skip)]
-    autoscale: Option<egui_charts::model::AutoscaleProvider>,
-    hit_tolerance: f32,
-    #[serde(default)]
-    alerts: egui_charts::model::SeriesAlerts,
-}
-
-fn default_base_line_color() -> egui::Color32 {
-    egui_charts::model::SeriesStyle::default().base_line_color
-}
-
-fn default_base_line_width() -> f32 {
-    egui_charts::model::SeriesStyle::default().base_line_width
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(remote = "egui_charts::model::PriceLineSource")]
-enum SavedPriceLineSource {
-    LastBar,
-    LastVisible,
 }
 
 pub(super) fn capture(
@@ -1158,19 +1119,18 @@ mod tests {
         use super::super::tests::{ui_click, ui_frame};
         use egui_charts::model::{AreaStyle, BarsStyle};
         let color = egui::Color32::from_rgb(10, 20, 30);
-        let own_line = LinePlotStyle {
-            color,
-            width: 3.0,
-            ..Default::default()
-        };
-        let own_area = AreaStyle {
-            line: own_line.clone(),
-            top_fill: egui::Color32::from_rgba_unmultiplied(10, 20, 30, 115),
-            bottom_fill: egui::Color32::TRANSPARENT,
-            relative_gradient: false,
-            invert_filled_area: true,
-            ..Default::default()
-        };
+        let mut own_line = LinePlotStyle::default();
+        own_line.color = color;
+        own_line.width = 3.0;
+        let mut own_area = AreaStyle::default();
+        own_area.line = own_line.clone();
+        own_area.top_fill = egui::Color32::from_rgba_unmultiplied(10, 20, 30, 115);
+        own_area.bottom_fill = egui::Color32::TRANSPARENT;
+        own_area.relative_gradient = false;
+        own_area.invert_filled_area = true;
+        let mut clicked_bars = BarsStyle::default();
+        clicked_bars.open_visible = false;
+        clicked_bars.thin_bars = false;
         for (chart_type, clicks, expected_line, expected_bars, expected_area) in [
             (
                 ChartType::Line,
@@ -1183,11 +1143,7 @@ mod tests {
                 ChartType::Bars,
                 vec!["Show open", "Thin bars"],
                 None,
-                BarsStyle {
-                    open_visible: false,
-                    thin_bars: false,
-                    ..Default::default()
-                },
+                clicked_bars,
                 None,
             ),
             (
@@ -1320,24 +1276,18 @@ mod tests {
                     .find(|(series, _)| *series == id)
                     .unwrap()
                     .1;
-                assert_eq!(
-                    options.baseline_style,
-                    Some(BaselineStyle {
-                        above: LinePlotStyle {
-                            color: egui::Color32::from_rgb(200, 10, 10),
-                            width: 3.0,
-                            ..Default::default()
-                        },
-                        below: LinePlotStyle {
-                            color: egui::Color32::from_rgb(10, 10, 200),
-                            width: 3.0,
-                            ..Default::default()
-                        },
-                        above_fill: egui::Color32::from_rgba_unmultiplied(200, 10, 10, 30),
-                        below_fill: egui::Color32::from_rgba_unmultiplied(10, 10, 200, 30),
-                        ..Default::default()
-                    })
-                );
+                let line_of = |color| {
+                    let mut line = LinePlotStyle::default();
+                    line.color = color;
+                    line.width = 3.0;
+                    line
+                };
+                let mut expected = BaselineStyle::default();
+                expected.above = line_of(egui::Color32::from_rgb(200, 10, 10));
+                expected.below = line_of(egui::Color32::from_rgb(10, 10, 200));
+                expected.above_fill = egui::Color32::from_rgba_unmultiplied(200, 10, 10, 30);
+                expected.below_fill = egui::Color32::from_rgba_unmultiplied(10, 10, 200, 30);
+                assert_eq!(options.baseline_style, Some(expected));
             }
         }
     }

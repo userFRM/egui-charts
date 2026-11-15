@@ -17,6 +17,7 @@ use chrono::Datelike;
 
 /// Display time and chart locale for one time-axis tick.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct TickMarkContext<'a> {
     /// Wall-clock fields in the chart's display zone, carried in a UTC value; behind UTC, bars of
     /// a day or longer given to a chart without a feed read in UTC unless they sit at the display
@@ -27,6 +28,26 @@ pub struct TickMarkContext<'a> {
     /// Active chart locale, such as `"de-DE"`; `None` uses English names.
     /// Unknown identifiers and builds without `locales` also use English names.
     pub locale: Option<&'a str>,
+}
+
+impl<'a> TickMarkContext<'a> {
+    /// A tick at `time` of `mark_type` precision with English names: assign
+    /// [`locale`](Self::locale) for another language.
+    ///
+    /// ```
+    /// use chrono::{DateTime, Utc};
+    /// use egui_charts::scales::{TickMarkContext, TickMarkType};
+    ///
+    /// let context = TickMarkContext::new(DateTime::<Utc>::UNIX_EPOCH, TickMarkType::Year);
+    /// assert_eq!(context.locale, None);
+    /// ```
+    pub fn new(time: DateTime<Utc>, mark_type: TickMarkType) -> Self {
+        Self {
+            time,
+            mark_type,
+            locale: None,
+        }
+    }
 }
 
 /// Trait for custom time formatting

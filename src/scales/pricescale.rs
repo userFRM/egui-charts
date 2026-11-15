@@ -185,7 +185,15 @@ pub struct PriceScaleOptions {
 ///
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
+///
+/// ```
+/// use egui_charts::scales::PriceTransform;
+///
+/// let mut transform = PriceTransform::default();
+/// transform.base = 100.0;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct PriceTransform {
     /// Scale mode
     pub mode: PriceScaleMode,
@@ -287,6 +295,14 @@ pub struct PriceScale {
 
 impl PriceScale {
     /// Creates an auto-scaled price scale.
+    ///
+    /// ```
+    /// use egui_charts::scales::{PriceScale, PriceScaleMode, PriceScaleOptions};
+    ///
+    /// let mut options = PriceScaleOptions::default();
+    /// options.mode = PriceScaleMode::Percentage;
+    /// let scale = PriceScale::new(options);
+    /// ```
     pub fn new(options: PriceScaleOptions) -> Self {
         Self {
             options,

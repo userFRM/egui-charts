@@ -127,6 +127,14 @@ impl KagiConfig {
 ///
 /// # Safety Limits
 /// - At most the newest 10,000 lines
+///
+/// ```
+/// use egui_charts::model::{Bar, KagiConfig, to_kagi_lines};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let lines = to_kagi_lines(&bars, &KagiConfig::new(2.0));
+/// assert!(lines.is_empty());
+/// ```
 pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
     let reversal = config.reversal_amount;
     if bars.is_empty() || !(reversal > 0.0 && reversal.is_finite()) {
