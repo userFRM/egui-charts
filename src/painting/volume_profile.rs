@@ -500,7 +500,7 @@ fn draw_volume_profile_lines(
         painter.text(
             Pos2::new(rect.max.x - 25.0, y),
             egui::Align2::CENTER_CENTER,
-            label,
+            crate::localization::text(painter.ctx(), label),
             font.clone(),
             va_color,
         );
