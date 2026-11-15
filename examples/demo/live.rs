@@ -523,16 +523,15 @@ impl LiveFeed {
         let (_, prev_close) = newest(midnight, false)?;
         let extended = newest(latest, true)
             .filter(|&(t, _)| t > time)
-            .map(|(time, last)| ExtendedHoursQuote {
-                session: if time.with_timezone(&us_equity_zone()).time()
+            .map(|(time, last)| {
+                let session = if time.with_timezone(&us_equity_zone()).time()
                     < us_equity_session().windows[0].open
                 {
                     ExtendedSession::PreMarket
                 } else {
                     ExtendedSession::PostMarket
-                },
-                last,
-                time,
+                };
+                ExtendedHoursQuote::new(session, last, time)
             });
         Some((time, last, prev_close, extended))
     }
@@ -1064,11 +1063,11 @@ impl Simulation {
             .map(|offset| {
                 let weight = (13 - i32::abs(offset)) as f64;
                 let live = (self.id % 100) as f64;
-                OptionsVolume {
-                    strike: (center + offset as f64) * step,
-                    calls: expiries * (weight * (30 + offset) as f64 + live),
-                    puts: expiries * (weight * (30 - offset) as f64 + live / 2.0),
-                }
+                OptionsVolume::new(
+                    (center + offset as f64) * step,
+                    expiries * (weight * (30 + offset) as f64 + live),
+                    expiries * (weight * (30 - offset) as f64 + live / 2.0),
+                )
             })
             .collect()
     }
@@ -1499,10 +1498,10 @@ fn metric_points(sim: &Simulation) -> Vec<MetricPoint> {
 
 fn open_interest(time: DateTime<Utc>) -> MetricPoint {
     let slot = time.timestamp().div_euclid(300) * 300;
-    MetricPoint {
-        time: DateTime::from_timestamp(slot, 0).unwrap(),
-        value: 100_000.0 + (slot as f64 / 3600.0).sin() * 8_000.0,
-    }
+    MetricPoint::new(
+        DateTime::from_timestamp(slot, 0).unwrap(),
+        100_000.0 + (slot as f64 / 3600.0).sin() * 8_000.0,
+    )
 }
 
 impl Datafeed for LiveFeed {
@@ -1514,12 +1513,13 @@ impl Datafeed for LiveFeed {
 
     fn metrics(&self, symbol: &str, reply: Reply<Vec<MetricSeries>>) {
         let metrics = if symbol == self.state().symbol {
-            vec![MetricSeries {
-                id: "open_interest".into(),
-                name: "Open interest".into(),
-                unit: "contracts".into(),
-                format: egui_charts::scales::StudyFormat::Volume,
-            }]
+            let mut series = MetricSeries::new(
+                "open_interest",
+                "Open interest",
+                egui_charts::scales::StudyFormat::Volume,
+            );
+            series.unit = "contracts".into();
+            vec![series]
         } else {
             Vec::new()
         };
@@ -1537,10 +1537,7 @@ impl Datafeed for LiveFeed {
             .filter(|point| request.before.is_none_or(|before| point.time < before))
             .collect();
         let start = points.len().saturating_sub(request.count);
-        reply.send(Ok(MetricPage {
-            points: points.split_off(start),
-            end_of_history: start == 0,
-        }));
+        reply.send(Ok(MetricPage::new(points.split_off(start), start == 0)));
     }
 
     fn subscribe_metric(&self, subscription: MetricSubscription) {
@@ -1561,14 +1558,14 @@ impl Datafeed for LiveFeed {
         let sim = self.state();
         let close = sim.price_ticks as f64 * sim.tick_size;
         let published = sim.now.date_naive();
-        reply.send(Ok(egui_charts::data::PriceTargets {
-            high: close * 1.20,
-            average: close * 1.08,
-            low: close * 0.85,
-            analysts: 24,
+        reply.send(Ok(egui_charts::data::PriceTargets::new(
+            close * 1.20,
+            close * 1.08,
+            close * 0.85,
+            24,
             published,
-            horizon: published + TimeDelta::days(365),
-        }));
+            published + TimeDelta::days(365),
+        )));
     }
 
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
@@ -2280,10 +2277,7 @@ mod tests {
         let expiry = now.date_naive() + TimeDelta::days(30);
         let study = OptionsVolumeProfile::new(
             &feed,
-            OptionsVolumeQuery {
-                symbol: "SAMPLE".into(),
-                expiries: expiry..=expiry,
-            },
+            OptionsVolumeQuery::new("SAMPLE", expiry..=expiry),
             1.0,
             || {},
         )
@@ -2624,16 +2618,11 @@ mod tests {
                     .any(|&s| (tiers.notable..tiers.large).contains(&s)),
                 "notable: {sizes:?}"
             );
-            for filter in [
-                OrderFilter {
-                    max_age: Some(TimeDelta::seconds(10)),
-                    ..Default::default()
-                },
-                OrderFilter {
-                    min_age: Some(TimeDelta::seconds(60)),
-                    ..Default::default()
-                },
-            ] {
+            let mut recent = OrderFilter::default();
+            recent.max_age = Some(TimeDelta::seconds(10));
+            let mut older = OrderFilter::default();
+            older.min_age = Some(TimeDelta::seconds(60));
+            for filter in [recent, older] {
                 let book = queue.filtered("", &filter).unwrap();
                 assert!(!book.bids.is_empty() && !book.asks.is_empty(), "{filter:?}");
             }

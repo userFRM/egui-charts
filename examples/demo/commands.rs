@@ -484,10 +484,10 @@ impl DemoApp {
             }
             "options-volume" => {
                 let expiry = chrono::Utc::now().date_naive() + chrono::TimeDelta::days(30);
-                let query = egui_charts::data::OptionsVolumeQuery {
-                    symbol: self.chart.symbol().into(),
-                    expiries: expiry..=expiry,
-                };
+                let query = egui_charts::data::OptionsVolumeQuery::new(
+                    self.chart.symbol(),
+                    expiry..=expiry,
+                );
                 let price = self
                     .chart
                     .state()

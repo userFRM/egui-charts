@@ -520,6 +520,8 @@ pub(super) fn screen(
                 value(spec, &filter.column).is_some_and(|v| match filter.op {
                     ScreenerOp::Above => v > filter.value,
                     ScreenerOp::Below => v < filter.value,
+                    // A comparison added later matches no row.
+                    _ => false,
                 })
             })
         })
@@ -741,17 +743,17 @@ pub(super) fn heatmap_universes() -> Vec<egui_charts::ui::widget_bar::MarketHeat
             .filter(|spec| {
                 !stocks_only || !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic")
             })
-            .map(|spec| MarketHeatmapEntry {
-                symbol: spec.symbol.into(),
-                group: match spec.symbol {
+            .map(|spec| {
+                let group = match spec.symbol {
                     "AAPL" | "MSFT" | "NVDA" => "Technology",
                     "TSLA" => "Consumer",
                     _ => spec.exchange,
-                }
-                .into(),
-                values: [("weight", (spec.seed % 4 + 1) as f64)]
-                    .map(|(id, value)| (id.to_owned(), value))
-                    .into(),
+                };
+                let mut entry = MarketHeatmapEntry::new(spec.symbol, group);
+                entry
+                    .values
+                    .insert("weight".to_owned(), (spec.seed % 4 + 1) as f64);
+                entry
             })
             .collect()
     };
@@ -1120,12 +1122,15 @@ mod tests {
     fn evicted_news_stays_quiet_when_history_is_reloaded_or_replayed() {
         use egui_charts::model::{EventKind, TimeScaleEvent};
         let notifications = DemoNotifications::default();
-        let event = |minute| TimeScaleEvent {
-            id: format!("sample-{minute}"),
-            time: DateTime::UNIX_EPOCH + TimeDelta::minutes(minute),
-            kind: EventKind::News,
-            title: format!("Headline {minute}"),
-            details: "Synthetic news".into(),
+        let event = |minute| {
+            let mut event = TimeScaleEvent::new(
+                format!("sample-{minute}"),
+                DateTime::UNIX_EPOCH + TimeDelta::minutes(minute),
+                EventKind::News,
+                format!("Headline {minute}"),
+            );
+            event.details = "Synthetic news".into();
+            event
         };
         for minute in 0..120 {
             notifications.notify_event("SAMPLE", &event(minute));

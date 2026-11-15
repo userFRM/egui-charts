@@ -112,7 +112,7 @@ mod primitives;
 #[cfg(feature = "png-export")]
 mod raster;
 mod readout;
-mod replay;
+pub(crate) mod replay;
 mod selection;
 mod series;
 pub mod settings;
@@ -966,6 +966,7 @@ impl Chart {
     /// let mut options = chart.chart_options().clone();
     /// options.crosshair.mode = egui_charts::config::CrosshairMode::Magnet;
     /// options.time_scale.min_bar_spacing = 0.1;
+    /// options.kinetic_scroll.damping_coeff = 0.9;
     /// chart.set_chart_options(options);
     /// # }
     /// ```

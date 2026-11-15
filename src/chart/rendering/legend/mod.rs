@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 /// A host-supplied status mark. Its text and colours carry no built-in market meaning.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct LegendStatus<'a> {
     /// Short text shown beside the instrument title.
     pub text: &'a str,
@@ -30,8 +31,28 @@ pub struct LegendStatus<'a> {
     pub background: Color32,
 }
 
+impl<'a> LegendStatus<'a> {
+    /// A mark showing `text` in `color` on `background`.
+    ///
+    /// ```
+    /// use egui::Color32;
+    /// use egui_charts::widget::LegendStatus;
+    ///
+    /// let status = LegendStatus::new("Halted", Color32::WHITE, Color32::DARK_RED);
+    /// assert_eq!(status.text, "Halted");
+    /// ```
+    pub fn new(text: &'a str, color: Color32, background: Color32) -> Self {
+        Self {
+            text,
+            color,
+            background,
+        }
+    }
+}
+
 /// The quote control clicked by the user. The host decides how to handle the intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum QuoteSide {
     /// Sell at the displayed bid.
     Sell,

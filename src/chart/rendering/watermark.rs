@@ -6,6 +6,7 @@ use egui::{Align2, Color32, FontFamily, FontId, Painter, Rect, Shape, Ui, Vec2};
 
 /// One line of text of a [`Watermark`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WatermarkLine {
     /// Text, on one line.
     pub text: String,
@@ -50,6 +51,7 @@ impl WatermarkLine {
 /// An image and lines of text painted behind the series, stacked in that order and aligned
 /// together in a pane; see [`Chart::set_pane_watermark`](crate::Chart::set_pane_watermark).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Watermark {
     /// Lines of text, top to bottom.
     pub lines: Vec<WatermarkLine>,

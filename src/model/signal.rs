@@ -87,7 +87,8 @@ pub enum SignalShape {
     },
 }
 
-/// Whether a signal is bullish, bearish or neither, which picks its colour.
+/// Whether a signal is bullish, bearish or neither, which picks its colour. The set is closed: a
+/// signal has no other direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
     /// Bullish: drawn in the theme's up colour.

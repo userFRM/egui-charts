@@ -42,11 +42,22 @@ pub struct Revision(
 
 /// A stored document with the revision it was read at.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Versioned {
     /// The document as stored.
     pub document: String,
     /// Its revision.
     pub revision: Revision,
+}
+
+impl Versioned {
+    /// `document` as stored at `revision`.
+    pub fn new(document: impl Into<String>, revision: Revision) -> Self {
+        Self {
+            document: document.into(),
+            revision,
+        }
+    }
 }
 
 /// The host's answer to [`Storage::save_versioned`].

@@ -137,11 +137,8 @@ impl Default for State {
             .collect();
         widget_bar
             .widgets
-            .extend(WIDGETS.map(|(_, id, icon, tooltip)| WidgetBarWidget {
-                id,
-                icon: *icon,
-                tooltip: tooltip.into(),
-                section: WidgetBarSection::Bottom,
+            .extend(WIDGETS.map(|(_, id, icon, tooltip)| {
+                WidgetBarWidget::new(id, *icon, tooltip, WidgetBarSection::Bottom)
             }));
         Self {
             widget_bar,
@@ -1229,11 +1226,7 @@ mod tests {
             .push(MarketHeatmapUniverse::new(
                 "test",
                 "Test",
-                vec![MarketHeatmapEntry {
-                    symbol: "OUTSIDE".into(),
-                    group: "Test".into(),
-                    values: BTreeMap::new(),
-                }],
+                vec![MarketHeatmapEntry::new("OUTSIDE", "Test")],
             ));
         frame(&mut terminal, SIZE, vec![]);
         frame(&mut terminal, SIZE, vec![]);

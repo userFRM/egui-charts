@@ -40,7 +40,7 @@ pub fn volatility_smile() -> egui_charts::Chart {
     chart.set_chart_type(ChartType::Line);
     // Three more bars than strikes leave room for the right offset.
     chart.set_visible_bars(strikes + 3);
-    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale { precision: 0 })));
+    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::new(0))));
     chart.set_symbol("30-day IV, %");
     chart.config_mut().show_volume = false;
     let later = chart.add_series(SeriesOptions {

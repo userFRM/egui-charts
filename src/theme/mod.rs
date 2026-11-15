@@ -63,8 +63,24 @@ impl Default for Theme {
 }
 
 /// Colours of the UI chrome.
+///
+/// ```
+/// use egui_charts::theme::{ChartColors, Radii, Spacing, TextSizes, UiColors};
+///
+/// let mut ui = UiColors::default();
+/// ui.text = egui::Color32::WHITE;
+/// let mut chart = ChartColors::default();
+/// chart.grid_line = egui::Color32::DARK_GRAY;
+/// let mut text = TextSizes::default();
+/// text.body = 14.0;
+/// let mut spacing = Spacing::default();
+/// spacing.md = 10.0;
+/// let mut radii = Radii::default();
+/// radii.sm = 3.0;
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct UiColors {
     /// Panels, toolbars and inputs.
     pub panel_bg: Color32,
@@ -155,6 +171,7 @@ impl Default for UiColors {
 /// Colours of the chart surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct ChartColors {
     /// Plot background.
     pub bg: Color32,
@@ -213,13 +230,14 @@ impl ChartColors {
 /// Font sizes, in points.
 ///
 /// Components choose a role; the built-in egui text styles use the same scale.
-/// Use `..Default::default()` in struct literals to keep defaults for the other roles.
+/// Assign the roles to change on a theme's `text` or on `TextSizes::default()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
+#[non_exhaustive]
 pub struct TextSizes {
     /// Small badges.
     pub micro: f32,
@@ -305,6 +323,7 @@ impl TextSizes {
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
+#[non_exhaustive]
 pub struct Spacing {
     /// Extra small, in egui logical points.
     pub xs: f32,
@@ -343,6 +362,7 @@ impl Default for Spacing {
     derive(serde::Serialize, serde::Deserialize),
     serde(default)
 )]
+#[non_exhaustive]
 pub struct Radii {
     /// Extra small, in egui logical points.
     pub xs: f32,
