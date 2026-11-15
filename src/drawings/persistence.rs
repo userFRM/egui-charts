@@ -2356,6 +2356,7 @@ mod tests {
                         finer: &[],
                         revision: 0,
                         bar_to_x: &bar_to_x,
+                        bar_spacing: 8.0,
                         price_to_y: &price_to_y,
                         y_to_price: &|y| (500.0 - f64::from(y)) / 2.0,
                         time_axis: false,

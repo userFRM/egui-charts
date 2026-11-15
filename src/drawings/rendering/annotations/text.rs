@@ -21,7 +21,7 @@ impl Drawing {
         let mut galley = self.annotation_galley(painter, text, colors.text);
         // The font stays within the sizes text is laid out at, and the box keeps its proportions.
         let set = self.annotation_font().size;
-        let font = font_size(set * self.text_zoom(view.bar_to_x, pos.x));
+        let font = font_size(set * self.text_zoom(view.bar_spacing));
         let scale = font / set;
         if self.text_wrap || scale != 1.0 {
             let mut job = (*galley.job).clone();

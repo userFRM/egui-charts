@@ -13,6 +13,16 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
 }
 
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
+///
+/// # Layout
+///
+/// `repr(C, align(8))` fixes the field order below, with a size of 56 bytes and an alignment of
+/// 8 bytes on every target.
+/// Changing this order, size or alignment is a breaking change and requires a changelog note.
+/// Hosts borrowing rows from encoded buffers must check byte order, alignment, bounds and field
+/// representation before creating a slice. Byte conversion belongs to the host; the chart's
+/// numerical validation is still required.
+#[repr(C, align(8))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
@@ -30,6 +40,19 @@ pub struct FootprintLevel {
     /// Number of executions whose aggressor is unknown.
     pub unknown_trades: u64,
 }
+
+const _: () = {
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<FootprintLevel>() == 56);
+    assert!(align_of::<FootprintLevel>() == 8);
+    assert!(offset_of!(FootprintLevel, level) == 0);
+    assert!(offset_of!(FootprintLevel, bid) == 8);
+    assert!(offset_of!(FootprintLevel, ask) == 16);
+    assert!(offset_of!(FootprintLevel, unknown) == 24);
+    assert!(offset_of!(FootprintLevel, bid_trades) == 32);
+    assert!(offset_of!(FootprintLevel, ask_trades) == 40);
+    assert!(offset_of!(FootprintLevel, unknown_trades) == 48);
+};
 
 impl FootprintLevel {
     pub(crate) fn absorb(&mut self, next: &Self) {
@@ -92,7 +115,29 @@ pub struct FootprintBar {
 
 impl FootprintBar {
     /// A bar with no executions, opening at `time`.
-    pub(crate) fn empty(time: DateTime<Utc>) -> Self {
+    /// Fill its rows, side totals and delta extrema from the prepared data, then validate the
+    /// aggregate through [`Footprint::from_bars`].
+    ///
+    /// ```
+    /// use egui_charts::{
+    ///     data::{Footprint, FootprintBar, FootprintLevel},
+    ///     model::{BarClock, Timeframe},
+    /// };
+    ///
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// let mut row = FootprintLevel::default();
+    /// row.level = 400;
+    /// row.ask = 2.0;
+    /// row.ask_trades = 1;
+    /// bar.levels.insert(row.level, row);
+    /// bar.ask = 2.0;
+    /// bar.max_delta = 2.0;
+    /// let footprint = Footprint::from_bars(BarClock::new(Timeframe::Min1), 0.25, 1, [bar])?;
+    /// assert_eq!(footprint.bar_at(time).unwrap().volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn empty(time: DateTime<Utc>) -> Self {
         Self {
             time,
             levels: BTreeMap::new(),
