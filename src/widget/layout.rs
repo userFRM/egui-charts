@@ -1218,7 +1218,7 @@ impl ChartLayout {
     }
 
     fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
-        let mut stepped = false;
+        let mut stepped = [false; 16];
         loop {
             let step = {
                 let mut steps = self.edits.steps.lock().unwrap();
@@ -1238,13 +1238,23 @@ impl ChartLayout {
                 at.map(|at| steps.remove(at))
             };
             let Some((id, redo)) = step else {
-                return stepped;
+                break;
             };
-            stepped = true;
-            for chart in charts.iter_mut() {
+            for (index, chart) in charts.iter_mut().enumerate() {
+                stepped[index] |= chart.history.holds_layout_edit(id);
                 chart.step_layout_edit(id, redo);
             }
         }
+        let any = stepped.contains(&true);
+        // A symbol or interval an edit's step restored reaches the linked charts, as after an
+        // undo on the active chart; the active chart's goes first, then the lowest slot.
+        let count = charts.len();
+        for index in std::iter::once(self.active).chain(0..count) {
+            if std::mem::take(&mut stepped[index]) {
+                self.send_state(charts, count, index);
+            }
+        }
+        any
     }
 
     /// Active chart slot, clamped to supplied charts by [`Self::show`].
@@ -2036,8 +2046,14 @@ impl ChartLayout {
     }
 
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
-        let source = &charts[self.active];
-        let Some(previous) = &self.previous[self.active] else {
+        self.send_state(charts, count, self.active);
+    }
+
+    /// Sends the symbol and interval of chart `from`, where they differ from its recorded state,
+    /// to the charts linked to it.
+    fn send_state(&mut self, charts: &mut [&mut Chart], count: usize, from: usize) {
+        let source = &charts[from];
+        let Some(previous) = &self.previous[from] else {
             return;
         };
         let symbol_changed = previous.0 != source.symbol();
@@ -2048,13 +2064,13 @@ impl ChartLayout {
         let symbol = source.symbol().to_owned();
         let timeframe = source.timeframe();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            if index == self.active {
+            if index == from {
                 continue;
             }
-            if self.linked(index, self.active, false) && symbol_changed {
+            if self.linked(index, from, false) && symbol_changed {
                 chart.set_symbol(&symbol);
             }
-            if self.linked(index, self.active, true)
+            if self.linked(index, from, true)
                 && timeframe_changed
                 && let Some(tf) = timeframe
             {
