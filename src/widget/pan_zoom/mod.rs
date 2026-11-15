@@ -2027,6 +2027,57 @@ mod tests {
         }
     }
 
+    /// A bar appended while a drag on the time axis or on the plot is held leaves a view
+    /// scrolled back on its bars: one bar less of right offset than the same drag without it.
+    #[test]
+    fn bar_appended_during_a_drag_keeps_a_scrolled_back_view_on_its_bars() {
+        use chrono::TimeZone as _;
+        let mut moved = Vec::new();
+        for time_axis in [true, false] {
+            let mut offsets = Vec::new();
+            for append in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.state.time_scale_mut().set_right_offset(-30.0);
+                let rect = chart.last_rendered_price_rect;
+                let start = Pos2::new(
+                    rect.left() + rect.width() * 0.25,
+                    if time_axis {
+                        rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0
+                    } else {
+                        rect.center().y
+                    },
+                );
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let moved = |dx| vec![Event::PointerMoved(start + egui::vec2(dx, 0.0))];
+                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                frame(&ctx, &mut chart, 0.06, moved(50.0));
+                if append {
+                    // Bar 100 opens a day after the last of the 100 daily bars.
+                    let open = chrono::Utc
+                        .timestamp_opt(1_700_000_000 + 100 * 86_400, 0)
+                        .unwrap();
+                    let bar = crate::model::Bar::new(open, 95.0, 105.0, 95.0, 105.0, 1.0);
+                    assert!(chart.update(crate::widget::SeriesId::MAIN, bar));
+                }
+                frame(&ctx, &mut chart, 0.08, moved(60.0));
+                offsets.push(chart.state.time_scale().right_offset_precise());
+            }
+            moved.push((time_axis, offsets[1] - offsets[0]));
+        }
+        assert!(
+            moved.iter().all(|(_, by)| (by + 1.0).abs() < 1e-9),
+            "right offset moved by the bar, on the time axis and on the plot: {moved:?}"
+        );
+    }
+
     /// A drag on the time axis scales the bar spacing by e per 1000 points of its whole movement
     /// around the bar that was pressed, however many frames it spans, and returning restores the view.
     #[test]

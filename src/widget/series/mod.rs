@@ -972,7 +972,9 @@ impl Chart {
         if appended && self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();
         } else if in_place {
+            let offset = right_edge.offset;
             self.stop_at_oldest_bar(right_edge);
+            self.move_drag_start(offset);
         } else {
             self.keep_bars_in_view(&self.clock(), right_edge);
         }
@@ -1007,7 +1009,18 @@ impl Chart {
                 .time_scale_mut()
                 .set_right_offset(right_edge.offset - moved);
         }
+        let offset = right_edge.offset;
         self.stop_at_oldest_bar(right_edge);
+        self.move_drag_start(offset);
+    }
+
+    /// Moves the right offset a drag on the time axis or the plot started with by as much as the
+    /// bars moved the view from `offset`, since the drag sets the view from its start on every
+    /// frame and would undo the move.
+    fn move_drag_start(&mut self, offset: f64) {
+        if let Some(start) = &mut self.scroll_start_offset {
+            *start += self.state.time_scale().right_offset_precise() - offset;
+        }
     }
 
     /// Retain the view's right edge, oldest key and the slot it keeps in place across data
