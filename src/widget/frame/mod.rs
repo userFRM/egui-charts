@@ -1700,9 +1700,11 @@ impl Chart {
                 (merge(line), volume)
             });
         let merged_x = |merged: &super::merge::Merged, index: usize, min_x: f32| {
-            self.state
-                .time_scale()
-                .idx_to_coord_precise(merged.index[index], min_x, chart_rect_width)
+            self.state.time_scale().idx_to_coord_precise(
+                merged.index[index],
+                min_x,
+                chart_rect_width,
+            )
         };
         let merged_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width * factor as f32, self.config.wick_width),
