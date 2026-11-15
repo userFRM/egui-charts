@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- `OrderFlowInput::footprint_snapshot` captures a read snapshot that shares completed bars and copies mutable rows. Volume profile studies use it to calculate after releasing the source lock; `footprints_from` keeps its copying interface. `FootprintBar` also implements `FootprintSource` for a single shared bar. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
+- `OrderFlowInput::footprint_snapshot` captures a read snapshot that shares completed bars and copies mutable rows. Volume profile studies use it to calculate after releasing the source lock; `footprints_from` keeps its copying interface. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `Datafeed::footprints` accepts validated prepared history through `FootprintRequest` and `FootprintPage` for time-based volume footprint charts. An exclusive execution cutoff joins held and live trades without counting prepared trades twice, and saved rows survive raw-tape eviction. Complete bars on either side of a missing join draw cells; uncertain annotation outcomes and cross-gap cumulative totals stay unavailable until the join is filled. Existing feeds default to the trade path. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 

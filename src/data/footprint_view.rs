@@ -30,16 +30,6 @@ impl FootprintSource for Vec<FootprintBar> {
     }
 }
 
-impl FootprintSource for FootprintBar {
-    fn len(&self) -> usize {
-        1
-    }
-    fn bar(&self, index: usize) -> FootprintBarView<'_> {
-        assert_eq!(index, 0, "a footprint bar has one entry");
-        self.into()
-    }
-}
-
 /// Price rows in strictly ascending order. Slice rows use their own `level` as the key.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]

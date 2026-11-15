@@ -196,7 +196,7 @@ pub struct OrderFlowFootprints {
 }
 
 impl OrderFlowFootprints {
-    /// The clock used to group these executions, or `None` for an empty source.
+    /// The clock used to group these executions, or `None` before a footprint is initialized.
     pub fn clock(&self) -> Option<&BarClock> {
         self.flow.as_ref().map(|flow| flow.view().clock())
     }

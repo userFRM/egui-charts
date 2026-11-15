@@ -64,10 +64,15 @@ impl PreparedPage {
 pub struct FootprintView<'a> {
     pub(super) flow: &'a Footprint,
     pages: &'a [PreparedPage],
+    closed: &'a [Arc<FootprintBar>],
 }
 impl<'a> From<&'a Footprint> for FootprintView<'a> {
     fn from(flow: &'a Footprint) -> Self {
-        Self { flow, pages: &[] }
+        Self {
+            flow,
+            pages: &[],
+            closed: &[],
+        }
     }
 }
 impl<'a> FootprintView<'a> {
@@ -94,12 +99,16 @@ impl<'a> FootprintView<'a> {
         self.pages
             .first()
             .map(|page| page.first)
+            .or_else(|| self.closed.first().map(|bar| bar.time))
             .or_else(|| self.flow.bars.first_key_value().map(|(time, _)| *time))
     }
     pub(crate) fn bar_at(self, time: DateTime<Utc>) -> Option<FootprintBarView<'a>> {
         let time = self.flow.clock.bar_open(time);
         if let Some(bar) = self.flow.bars.get(&time) {
             return Some(bar.into());
+        }
+        if let Ok(index) = self.closed.binary_search_by_key(&time, |bar| bar.time) {
+            return Some(self.closed[index].as_ref().into());
         }
         let page = self.pages.get(
             self.pages
@@ -134,14 +143,29 @@ impl<'a> FootprintView<'a> {
                 page.range(start, end)
                     .map(move |index| page.source.bar(index))
             });
-        shared.chain(
-            self.flow
-                .bars
-                .range((start, end))
-                .map(|(_, bar)| bar.into()),
-        )
+        let first = self.closed.partition_point(|bar| match start {
+            Bound::Unbounded => false,
+            Bound::Included(time) => bar.time < time,
+            Bound::Excluded(time) => bar.time <= time,
+        });
+        let last = self.closed.partition_point(|bar| match end {
+            Bound::Unbounded => true,
+            Bound::Included(time) => bar.time <= time,
+            Bound::Excluded(time) => bar.time < time,
+        });
+        shared
+            .chain(
+                self.closed[first.min(last)..last]
+                    .iter()
+                    .map(|bar| bar.as_ref().into()),
+            )
+            .chain(
+                self.flow
+                    .bars
+                    .range((start, end))
+                    .map(|(_, bar)| bar.into()),
+            )
     }
-
     /// Match aligned opens directly; use the clock for other timestamps and seek across gaps.
     #[cfg(feature = "widget")]
     pub(crate) fn matching(
@@ -247,79 +271,72 @@ impl<'a> FootprintView<'a> {
 pub(crate) struct FootprintState {
     pub(crate) live: Footprint,
     pages: Vec<PreparedPage>,
-    raw_pages: usize,
-    raw_rows: usize,
+    closed: Vec<Arc<FootprintBar>>,
+    closed_rows: usize,
 }
 impl FootprintState {
     pub(crate) fn new(live: Footprint) -> Self {
         Self {
             live,
             pages: Vec::new(),
-            raw_pages: 0,
-            raw_rows: 0,
+            closed: Vec::new(),
+            closed_rows: 0,
         }
     }
     pub(crate) fn view(&self) -> FootprintView<'_> {
         FootprintView {
             flow: &self.live,
             pages: &self.pages,
+            closed: &self.closed,
         }
     }
 
-    /// Finished source bars use the same owners and reader as prepared pages.
+    /// Move finished source bars without copying price rows; only the newest can change.
     pub(crate) fn seal(&mut self) {
         while self.live.bars.len() > 1 {
             let (_, bar) = self.live.bars.pop_first().unwrap();
             self.live.rows -= bar.levels.len();
-            self.raw_rows += bar.levels.len();
-            self.raw_pages += 1;
-            self.pages.push(PreparedPage {
-                first: bar.time,
-                start: 0,
-                end: 1,
-                source: Arc::new(bar),
-            });
+            self.closed_rows += bar.levels.len();
+            self.closed.push(Arc::new(bar));
         }
     }
 
     pub(crate) fn over_budget(&self, bars: usize, rows: usize) -> bool {
-        self.raw_pages + self.live.bars.len() > bars || self.raw_rows + self.live.rows > rows
+        self.closed.len() + self.live.bars.len() > bars || self.closed_rows + self.live.rows > rows
     }
 
     /// The mutable source has the same retention as before; prepared owners are independent.
     pub(crate) fn retain(&mut self, bars: usize, rows: usize) -> bool {
-        let first = self.pages.len() - self.raw_pages;
         let mut count = 0;
-        while count < self.raw_pages
-            && (self.raw_pages - count + self.live.bars.len() > bars
-                || self.raw_rows + self.live.rows > rows)
+        while count < self.closed.len()
+            && (self.closed.len() - count + self.live.bars.len() > bars
+                || self.closed_rows + self.live.rows > rows)
         {
-            let page = &self.pages[first + count];
-            self.raw_rows -= page.source.bar(0).levels.len();
-            self.live.trade_starts.remove(&page.first);
+            let bar = &self.closed[count];
+            self.closed_rows -= bar.levels.len();
+            self.live.trade_starts.remove(&bar.time);
             #[cfg(feature = "widget")]
             if let Some(before) = self.live.prepared_before() {
                 let end = self
                     .live
                     .clock
-                    .next_open(page.first)
+                    .next_open(bar.time)
                     .unwrap_or(DateTime::<Utc>::MAX_UTC);
                 self.live.add_missing(before, end);
             } else {
-                self.live.incomplete_through = self.live.incomplete_through.max(Some(page.first));
+                self.live.incomplete_through = self.live.incomplete_through.max(Some(bar.time));
             }
             #[cfg(not(feature = "widget"))]
             {
-                self.live.incomplete_through = self.live.incomplete_through.max(Some(page.first));
+                self.live.incomplete_through = self.live.incomplete_through.max(Some(bar.time));
             }
             count += 1;
         }
-        self.pages.drain(first..first + count);
-        self.raw_pages -= count;
+        self.closed.drain(..count);
         count > 0
     }
 
-    /// Capture selected owners and mutable rows, without the accumulator's trade-start index.
+    /// Capture rows without copying history or the mutable accumulator's trade-start index.
     pub(crate) fn snapshot(&self, from: DateTime<Utc>, before: Option<DateTime<Utc>>) -> Self {
         let mut live = Footprint {
             clock: self.live.clock.clone(),
@@ -338,59 +355,31 @@ impl FootprintState {
             ..self.live
         };
         live.rows = live.bars.values().map(|bar| bar.levels.len()).sum();
-        let mut first = self
+        let pages = self
             .pages
-            .partition_point(|page| page.first <= from)
-            .saturating_sub(1);
-        if self
-            .pages
-            .get(first)
-            .is_some_and(|page| page.source.bar(page.end - 1).time < from)
-        {
-            first += 1;
-        }
-        let end = before.map_or(self.pages.len(), |end| {
-            self.pages.partition_point(|page| page.first < end)
+            .iter()
+            .filter_map(|page| {
+                let end = before.map_or(page.end, |end| page.partition(|at| at < end));
+                let start = page.partition(|at| at < from).min(end);
+                (start < end).then(|| PreparedPage {
+                    start,
+                    end,
+                    first: page.source.bar(start).time,
+                    ..page.clone()
+                })
+            })
+            .collect();
+        let first = self.closed.partition_point(|bar| bar.time < from);
+        let end = before.map_or(self.closed.len(), |end| {
+            self.closed.partition_point(|bar| bar.time < end)
         });
-        let mut pages = self.pages[first.min(end)..end].to_vec();
-        if let Some(page) = pages.last_mut()
-            && let Some(before) = before
-        {
-            page.end = page.partition(|at| at < before);
-        }
-        if let Some(page) = pages.first_mut() {
-            page.start = page.partition(|at| at < from);
-        }
-        if pages.last().is_some_and(|page| page.start == page.end) {
-            pages.pop();
-        }
-        if pages.first().is_some_and(|page| page.start == page.end) {
-            pages.remove(0);
-        }
-        if let Some(page) = pages.first_mut() {
-            page.first = page.source.bar(page.start).time;
-        }
-        let raw_start = self
-            .pages
-            .get(self.pages.len() - self.raw_pages)
-            .map(|page| page.first);
-        let raw_first = raw_start.map_or(pages.len(), |first| {
-            pages.partition_point(|page| page.first < first)
-        });
-        let raw_pages = pages.len() - raw_first;
-        let raw_rows = if raw_pages == self.raw_pages {
-            self.raw_rows
-        } else {
-            pages[raw_first..]
-                .iter()
-                .map(|page| page.source.bar(0).levels.len())
-                .sum()
-        };
+        let closed = self.closed[first.min(end)..end].to_vec();
+        let closed_rows = closed.iter().map(|bar| bar.levels.len()).sum();
         Self {
             live,
             pages,
-            raw_pages,
-            raw_rows,
+            closed,
+            closed_rows,
         }
     }
 
@@ -408,19 +397,17 @@ impl FootprintState {
         // The existing accumulator owns the exchange-time index even for sealed bars.
         self.live.drop_through(through, held);
         if let Some(cut) = self.live.incomplete_through {
-            let first = self.pages.len() - self.raw_pages;
-            let count = self.pages[first..].partition_point(|page| page.first <= cut);
-            for page in self.pages.drain(first..first + count) {
-                self.raw_rows -= page.source.bar(0).levels.len();
+            let end = self.closed.partition_point(|bar| bar.time <= cut);
+            for bar in self.closed.drain(..end) {
+                self.closed_rows -= bar.levels.len();
             }
-            self.raw_pages -= count;
         }
     }
 
     /// The original tree API is available only when it describes the entire input.
     #[cfg(feature = "widget")]
     pub(crate) fn owned(&self) -> Option<&Footprint> {
-        self.pages.is_empty().then_some(&self.live)
+        (self.pages.is_empty() && self.closed.is_empty()).then_some(&self.live)
     }
 
     #[cfg(feature = "widget")]
@@ -475,8 +462,8 @@ impl FootprintState {
         Ok(Self {
             live,
             pages: vec![page],
-            raw_pages: 0,
-            raw_rows: 0,
+            closed: Vec::new(),
+            closed_rows: 0,
         })
     }
 
