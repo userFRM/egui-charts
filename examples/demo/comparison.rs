@@ -669,6 +669,14 @@ pub(super) fn validate(saved: &[SavedComparison], panes: usize) -> Result<(), St
     Ok(())
 }
 
+/// Points comparisons saved before the instruments were renamed at the current ones.
+pub(super) fn rename_former(saved: &mut [SavedComparison]) {
+    for entry in saved {
+        entry.symbol = DemoSymbol::current(&entry.symbol);
+        entry.options.name = DemoSymbol::current(&entry.options.name);
+    }
+}
+
 pub(super) fn restore(
     chart: &mut Chart,
     comparisons: &mut Vec<(String, SeriesId, Arc<LiveFeed>)>,
@@ -877,7 +885,7 @@ impl DemoApp {
         );
     }
 
-    /// Charts a spread picked in symbol search, such as `AAPL-MSFT`, as candles in a pane of its
+    /// Charts a spread picked in symbol search, such as `STOCKA-STOCKB`, as candles in a pane of its
     /// own, from feeds of its symbols.
     pub(super) fn add_spread(&mut self, symbol: &str) {
         if self.synthetic_only("Compare") {
@@ -1157,7 +1165,7 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.handle_comparison(CompareAction::AddSymbol(
-                "MSFT".into(),
+                "STOCKB".into(),
                 ComparePlacement::NewPriceScale,
             ));
             let id = app.comparisons[0].1;
@@ -1213,7 +1221,7 @@ mod tests {
                 app.theme = theme.clone();
                 app.chart.set_theme(&ctx, &theme);
                 app.handle_comparison(CompareAction::AddSymbol(
-                    "MSFT".into(),
+                    "STOCKB".into(),
                     ComparePlacement::NewPriceScale,
                 ));
                 let id = app.comparisons[0].1;
@@ -1303,7 +1311,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.handle_comparison(CompareAction::AddSymbol(
-            "MSFT".into(),
+            "STOCKB".into(),
             ComparePlacement::NewPriceScale,
         ));
         let id = app.comparisons[0].1;
@@ -1414,7 +1422,7 @@ mod tests {
         let (restored, options) = app
             .chart
             .series()
-            .find(|(_, options)| options.name == "MSFT")
+            .find(|(_, options)| options.name == "STOCKB")
             .unwrap();
         assert_eq!(options, &edited);
         assert!(
@@ -1497,11 +1505,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.handle_comparison(CompareAction::AddSymbol(
-            "MSFT".into(),
+            "STOCKB".into(),
             ComparePlacement::NewPriceScale,
         ));
         app.add_series_pane();
-        app.add_spread("AAPL-MSFT");
+        app.add_spread("STOCKA-STOCKB");
         super::super::tests::settle(&mut app, &ctx);
         let ids: Vec<_> = app.chart.series().map(|(id, _)| id).collect();
         assert_eq!(ids.len(), 3);
@@ -1604,8 +1612,8 @@ mod tests {
             chart.set_timeframe(Timeframe::Min1);
             let feeds: Vec<_> = (0..count)
                 .map(|_| {
-                    let id = chart.add_comparison("EURUSD", egui::Color32::BLUE);
-                    let feed = LiveFeed::new("EURUSD", now);
+                    let id = chart.add_comparison("FOREXA", egui::Color32::BLUE);
+                    let feed = LiveFeed::new("FOREXA", now);
                     super::super::tests::finish_feed(&feed);
                     refresh(&mut chart, id, &feed);
                     assert!(!chart.bars(id).is_empty());
@@ -1687,12 +1695,12 @@ mod tests {
 
         let mut chart = Chart::new(BarData::new());
         chart.set_timeframe(Timeframe::Min1);
-        let id = chart.add_comparison("AAPL-MSFT", egui::Color32::BLUE);
+        let id = chart.add_comparison("STOCKA-STOCKB", egui::Color32::BLUE);
         let now = "2026-10-23T14:30:00Z".parse().unwrap();
         let mut spreads = vec![Spread {
-            expression: SymbolExpression::parse("AAPL-MSFT").unwrap(),
+            expression: SymbolExpression::parse("STOCKA-STOCKB").unwrap(),
             id,
-            feeds: ["AAPL", "MSFT"]
+            feeds: ["STOCKA", "STOCKB"]
                 .into_iter()
                 .map(|symbol| Arc::new(LiveFeed::new(symbol, now)))
                 .collect(),
@@ -1736,7 +1744,7 @@ mod tests {
                         .collect();
                     let expected = spreads[0]
                         .expression
-                        .bars(|symbol| Some(&histories[usize::from(symbol == "MSFT")][..]))
+                        .bars(|symbol| Some(&histories[usize::from(symbol == "STOCKB")][..]))
                         .unwrap();
                     assert_eq!(chart.bars(id), expected);
                     if sessions {
@@ -1887,7 +1895,10 @@ mod tests {
     fn undo_brings_back_a_removed_comparison_with_its_feed() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        app.handle_comparison(CompareAction::AddSymbol(
+            "STOCKA".into(),
+            Default::default(),
+        ));
         super::super::tests::finish_feed(&app.comparisons[0].2);
         let id = app.comparisons[0].1;
         let colour = |app: &DemoApp, id| {
@@ -1899,24 +1910,27 @@ mod tests {
                 .color
         };
         let first = colour(&app, id);
-        app.handle_comparison(CompareAction::RemoveSymbol("AAPL".into()));
+        app.handle_comparison(CompareAction::RemoveSymbol("STOCKA".into()));
         assert!(listed(&app).is_empty());
 
         assert!(app.chart.undo());
         app.chart.set_data(id, Vec::new());
         app.sync_comparisons();
-        assert_eq!(listed(&app), ["AAPL"]);
+        assert_eq!(listed(&app), ["STOCKA"]);
         assert!(!app.chart.bars(id).is_empty());
 
         assert!(app.chart.redo());
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
-        assert_eq!(listed(&app), ["AAPL"]);
+        app.handle_comparison(CompareAction::AddSymbol(
+            "STOCKA".into(),
+            Default::default(),
+        ));
+        assert_eq!(listed(&app), ["STOCKA"]);
         let again = app.comparisons.last().unwrap().1;
         assert_ne!(again, id);
         assert_eq!(colour(&app, again), first);
-        app.handle_comparison(CompareAction::ToggleVisibility("AAPL".into()));
+        app.handle_comparison(CompareAction::ToggleVisibility("STOCKA".into()));
         assert!(!app.chart.is_series_visible(again));
-        app.handle_comparison(CompareAction::RemoveSymbol("AAPL".into()));
+        app.handle_comparison(CompareAction::RemoveSymbol("STOCKA".into()));
         assert!(listed(&app).is_empty());
     }
 }

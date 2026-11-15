@@ -786,10 +786,13 @@ impl DemoApp {
                 panel
             },
             alert_host: {
-                let alerts = cc
+                let mut alerts: Vec<Alert> = cc
                     .storage
                     .and_then(|storage| eframe::get_value(storage, "alerts"))
                     .unwrap_or_default();
+                for alert in &mut alerts {
+                    alert.symbol = DemoSymbol::current(&alert.symbol);
+                }
                 let notifications = notification_host.clone();
                 Arc::new(crate::panel_alerts::DemoAlerts::new(
                     alerts,
@@ -815,11 +818,19 @@ impl DemoApp {
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
+                    .map(|mut lists: Vec<Watchlist>| {
+                        for item in lists.iter_mut().flat_map(|list| &mut list.items) {
+                            if let egui_charts::model::WatchlistItem::Symbol { symbol, .. } = item {
+                                *symbol = DemoSymbol::current(symbol);
+                            }
+                        }
+                        lists
+                    })
                     .unwrap_or_else(|| {
                         vec![Watchlist::from_text(
                             "Watchlist",
-                            "###Crypto,BTCUSD,ETHUSD,###Stocks,AAPL,MSFT,NVDA,TSLA,\
-                             ###Indices and forex,SPX,EURUSD,SAMPLE",
+                            "###Crypto,TOKENA,TOKENB,###Stocks,STOCKA,STOCKB,STOCKC,STOCKD,\
+                             ###Indices and forex,INDEXA,FOREXA,SAMPLE",
                         )]
                     }),
             ),
@@ -884,7 +895,11 @@ impl DemoApp {
             replay_session: cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, "replay_session"))
-                .flatten(),
+                .flatten()
+                .map(|(mut session, interval): (ReplaySession, Timeframe)| {
+                    session.symbol = DemoSymbol::current(&session.symbol);
+                    (session, interval)
+                }),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -4967,7 +4982,7 @@ mod tests {
                 .orders
                 .is_some()
         );
-        app.switch_symbol("AAPL");
+        app.switch_symbol("STOCKA");
         assert!(
             app.chart
                 .depth_history(SeriesId::MAIN)
@@ -5175,7 +5190,7 @@ mod tests {
         assert!(frame(
             &mut app,
             &ctx,
-            vec![egui::Event::Text("MSFT".into())]
+            vec![egui::Event::Text("STOCKB".into())]
         ));
         assert!(
             app.symbol_search.is_open(),
@@ -5218,7 +5233,7 @@ mod tests {
             "2026-10-27T19:29:50Z".parse().unwrap(),
             true,
         );
-        app.switch_symbol("AAPL");
+        app.switch_symbol("STOCKA");
         settle(&mut app, &ctx);
         let original_symbol = app.state.symbol.clone();
         let original_type = app.chart.chart_type();
@@ -5226,7 +5241,7 @@ mod tests {
         app.chart.apply_synced_time_scale(8.0, -30.0);
         let original_view = app.chart.get_time_scale_state();
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
-        app.switch_symbol("BTCUSD");
+        app.switch_symbol("TOKENA");
         settle(&mut app, &ctx);
         let new_bars = app.chart.bars(SeriesId::MAIN).to_vec();
         assert_ne!(original_bars, new_bars);
@@ -5254,7 +5269,7 @@ mod tests {
             ),
             (
                 TopToolbarAction::Redo,
-                "BTCUSD",
+                "TOKENA",
                 ChartType::Line,
                 SessionType::Full24x7,
             ),
@@ -5265,7 +5280,7 @@ mod tests {
             assert_eq!(app.live.instrument().symbol, symbol);
             assert_eq!(app.state.chart_type, kind);
             assert_eq!(app.timeframe_toolbar.state.session_type, session);
-            let bars = if symbol == "BTCUSD" {
+            let bars = if symbol == "TOKENA" {
                 &new_bars
             } else {
                 &original_bars
@@ -5374,11 +5389,11 @@ mod tests {
         use egui_charts::model::PostLink;
         for (link, content, opens) in [
             (
-                "https://example.com/news/AAPL-0",
+                "https://example.com/news/STOCKA-0",
                 Some((
-                    "Apple Inc. extends gains as buyers return",
+                    "Sample stock A extends gains as buyers return",
                     "Demo Wire",
-                    "AAPL rose through the morning on steady volume, recovering the losses of the \
+                    "STOCKA rose through the morning on steady volume, recovering the losses of the \
                      previous session. Buyers held the price above the opening range into the \
                      afternoon.",
                 )),
@@ -5787,7 +5802,7 @@ mod tests {
             message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
             "{message}"
         );
-        app.switch_symbol("AAPL");
+        app.switch_symbol("STOCKA");
         frame(&mut app, vec![]);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
         assert_eq!(
@@ -5913,7 +5928,7 @@ mod tests {
         let defaults = &restored.chart.drawings().tool_defaults[&DrawingToolType::TrendLine];
         assert_eq!(defaults.settings.stroke_width, 4.0);
         assert!(defaults.settings.chart_points.is_empty());
-        restored.switch_symbol("AAPL");
+        restored.switch_symbol("STOCKA");
         assert_eq!(
             restored.chart.drawings().tool_defaults[&DrawingToolType::TrendLine]
                 .settings
@@ -6491,7 +6506,7 @@ mod tests {
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
                 if legacy_document.is_some() {
-                    assert_eq!(app.state.symbol, "AAPL");
+                    assert_eq!(app.state.symbol, "STOCKA");
                     assert_eq!(app.state.timeframe, Timeframe::Min5);
                     assert_eq!(
                         app.drawing_toolbar.state.favorites,
@@ -6925,14 +6940,14 @@ mod tests {
         use egui_charts::drawings::{Drawing, DrawingToolType};
         for (typed, suffix, expected) in [
             ("SAMX", "PLE", "SAMPLE"),
-            ("ESZ202X", "6", "ESZ2026"),
-            ("ESH202X", "7", "ESH2027"),
-            ("AAPLX", "", "AAPL"),
+            ("INDEXFZ202X", "6", "INDEXFZ2026"),
+            ("INDEXFH202X", "7", "INDEXFH2027"),
+            ("STOCKAX", "", "STOCKA"),
         ] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            let table_study = (expected == "AAPL").then(|| {
+            let table_study = (expected == "STOCKA").then(|| {
                 app.data_table.open();
                 app.chart
                     .add_indicator(Box::new(egui_charts::studies::SMA::new(7)))
@@ -6985,11 +7000,11 @@ mod tests {
             if let Some(study) = table_study {
                 assert!(app.chart.indicators().any(|(id, _)| id == study));
             }
-            assert_eq!(app.data_table.is_open, expected == "AAPL");
-            if expected.starts_with("ES") {
+            assert_eq!(app.data_table.is_open, expected == "STOCKA");
+            if expected.starts_with("INDEXF") {
                 assert_eq!(
                     app.chart.instrument().unwrap().exchange.as_deref(),
-                    Some("CME")
+                    Some("Futures")
                 );
             }
             assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
@@ -7462,8 +7477,8 @@ mod tests {
             ("SAMPLE", SessionType::Full24x7, SessionType::RTH),
             ("SAMPLE", SessionType::RTH, SessionType::ETH),
             ("SAMPLE", SessionType::ETH, SessionType::RTH),
-            ("AAPL", SessionType::RTH, SessionType::ETH),
-            ("BTCUSD", SessionType::Full24x7, SessionType::Full24x7),
+            ("STOCKA", SessionType::RTH, SessionType::ETH),
+            ("TOKENA", SessionType::Full24x7, SessionType::Full24x7),
         ] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -7781,7 +7796,10 @@ mod tests {
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        app.handle_comparison(CompareAction::AddSymbol(
+            "STOCKA".into(),
+            Default::default(),
+        ));
         app.add_series_pane();
         let rsi = app
             .chart
@@ -7805,7 +7823,7 @@ mod tests {
             .series_price_scale_mut(id)
             .unwrap()
             .set_range(100.0, 200.0);
-        app.add_spread("AAPL-MSFT");
+        app.add_spread("STOCKA-STOCKB");
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         app.layout.set_sync_group(0, Some("A".into()));
         app.layout.set_sync_group(1, Some("B".into()));
@@ -7869,7 +7887,7 @@ mod tests {
             for chart in [&app.chart, &app.extra_charts[0].chart] {
                 let spreads: Vec<_> = chart
                     .series()
-                    .filter(|(_, options)| options.name == "AAPL-MSFT")
+                    .filter(|(_, options)| options.name == "STOCKA-STOCKB")
                     .collect();
                 assert_eq!(spreads.len(), 1, "restore each spread exactly once");
                 let id = spreads[0].0;
@@ -7885,7 +7903,7 @@ mod tests {
             let id = app
                 .comparisons
                 .iter()
-                .find(|(symbol, _, _)| symbol == "AAPL")
+                .find(|(symbol, _, _)| symbol == "STOCKA")
                 .unwrap()
                 .1;
             let options = app.chart.series().find(|(key, _)| *key == id).unwrap().1;
@@ -8024,7 +8042,7 @@ mod tests {
             (
                 ComparePlacement::SamePercentScale,
                 SeriesScale::Right,
-                "AAPL",
+                "STOCKA",
             ),
             (
                 ComparePlacement::NewPriceScale,
@@ -8044,7 +8062,7 @@ mod tests {
             let main_bars = app.chart.bars(SeriesId::MAIN).to_vec();
             app.handle_top_toolbar(&ctx, TopToolbarAction::OpenCompare);
             for (label, count, visible) in [
-                ("AAPL", 1, true),
+                ("STOCKA", 1, true),
                 ("Hide", 1, false),
                 ("Show", 1, true),
                 ("X", 0, false),
@@ -8074,7 +8092,7 @@ mod tests {
                 let mut pos = frame(vec![], label)
                     .unwrap_or_else(|| panic!("comparison action {label} is visible"));
                 frame(vec![egui::Event::PointerMoved(pos)], label);
-                if label == "AAPL" {
+                if label == "STOCKA" {
                     pos = frame(vec![], add_label).expect("placement choice is visible");
                     frame(vec![egui::Event::PointerMoved(pos)], add_label);
                 }
@@ -8096,7 +8114,7 @@ mod tests {
                 let comparisons: Vec<_> = app
                     .chart
                     .series()
-                    .filter(|(_, series)| series.name == "AAPL")
+                    .filter(|(_, series)| series.name == "STOCKA")
                     .collect();
                 assert_eq!(
                     comparisons.len(),
@@ -8132,7 +8150,7 @@ mod tests {
                         _ => unreachable!(),
                     }
                 }
-                if label == "AAPL" {
+                if label == "STOCKA" {
                     let colour = comparisons[0].1.color;
                     let mut painted = false;
                     for _ in 0..3 {
@@ -8153,7 +8171,11 @@ mod tests {
                         ["Volume"]
                     );
                     app.load_study_template(&template);
-                    assert!(app.chart.series().any(|(_, series)| series.name == "AAPL"));
+                    assert!(
+                        app.chart
+                            .series()
+                            .any(|(_, series)| series.name == "STOCKA")
+                    );
                 }
                 assert_eq!(app.compare_dialog.compared_symbols.len(), count);
                 assert_eq!(app.chart.symbol(), main_symbol);
@@ -9748,7 +9770,7 @@ mod tests {
         app.apply_chart_settings(settings);
         assert_eq!(app.chart.chart_type_params().kagi_reversal, 12.5);
         let sample_brick = app.chart.chart_type_params().renko_brick_size;
-        for change in ["Point and Figure", "Kagi", "one hour", "BTCUSD"] {
+        for change in ["Point and Figure", "Kagi", "one hour", "TOKENA"] {
             match change {
                 "Point and Figure" => app.handle_top_toolbar(
                     &ctx,
@@ -9767,7 +9789,7 @@ mod tests {
             assert_eq!(params.kagi_size_method, BoxSizeMethod::Fixed, "{change}");
             assert_eq!(params.kagi_reversal, 12.5, "{change}");
         }
-        // Bitcoin trades far above the sample symbol, and its bricks are sized to match.
+        // TOKENA trades far above the sample symbol, and its bricks are sized to match.
         let close = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
         let brick = app.chart.chart_type_params().renko_brick_size;
         assert!(
@@ -9794,9 +9816,9 @@ mod tests {
             let times = bars.first().zip(bars.last()).map(|(a, b)| (a.time, b.time));
             (chart.symbol().to_owned(), bars.len(), times)
         };
-        for step in ["MSFT", "one hour"] {
-            if step == "MSFT" {
-                app.switch_symbol("MSFT");
+        for step in ["STOCKB", "one hour"] {
+            if step == "STOCKB" {
+                app.switch_symbol("STOCKB");
             } else {
                 app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Hour1));
             }
@@ -9993,7 +10015,7 @@ mod tests {
             "2026-11-10T19:29:50Z".parse().unwrap(),
             true,
         );
-        app.switch_symbol("AAPL");
+        app.switch_symbol("STOCKA");
         let frame = |app: &mut DemoApp, events| {
             let output = ctx.run_ui(
                 egui::RawInput {
@@ -10080,7 +10102,7 @@ mod tests {
         settle(&mut app, &ctx);
         app.live.set_paused(true);
         app.handle_comparison(CompareAction::AddSymbol(
-            "EURUSD".into(),
+            "FOREXA".into(),
             Default::default(),
         ));
         settle(&mut app, &ctx);
@@ -10161,9 +10183,9 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         for (symbol, price, expected) in [
-            ("AAPL", 123.45678, "123.46"),
-            ("AAPL", -0.001, "0.00"),
-            ("EURUSD", 1.12345678, "1.1235"),
+            ("STOCKA", 123.45678, "123.46"),
+            ("STOCKA", -0.001, "0.00"),
+            ("FOREXA", 1.12345678, "1.1235"),
         ] {
             app.switch_symbol(symbol);
             let output = ctx.run_ui(Default::default(), |ui| {
@@ -10266,13 +10288,13 @@ mod tests {
                 let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                 settle(&mut app, &ctx);
                 app.live.set_paused(true);
-                app.switch_symbol("AAPL");
+                app.switch_symbol("STOCKA");
                 app.switch_timeframe(Timeframe::Hour1);
                 let mut list = Watchlist::new("Test list");
-                list.add_symbol("AAPL");
-                list.add_symbol("BTCUSD");
+                list.add_symbol("STOCKA");
+                list.add_symbol("TOKENA");
                 app.watchlist = WatchlistPanel::new(vec![list]);
-                let mut alert = Alert::new("AAPL", AlertCondition::Above(0.0));
+                let mut alert = Alert::new("STOCKA", AlertCondition::Above(0.0));
                 if watchlist {
                     alert.watchlist = Some("Test list".into());
                     if !replay {
@@ -10282,7 +10304,7 @@ mod tests {
                 app.chart.prepare_alert(&mut alert);
                 app.alerts.save(alert);
                 app.alerts.poll(&ctx, &mut app.toasts);
-                app.switch_symbol("EURUSD");
+                app.switch_symbol("FOREXA");
                 if replay {
                     app.start_replay();
                 }
@@ -10303,14 +10325,14 @@ mod tests {
                 assert_eq!(
                     symbols,
                     if watchlist {
-                        vec!["AAPL", "BTCUSD"]
+                        vec!["STOCKA", "TOKENA"]
                     } else {
-                        vec!["AAPL"]
+                        vec!["STOCKA"]
                     },
                     "watchlist={watchlist}, replay={replay}"
                 );
                 app.switch_timeframe(Timeframe::Min1);
-                app.watchlist.add_symbol("MSFT");
+                app.watchlist.add_symbol("STOCKB");
                 for _ in 0..2 {
                     ctx.run_ui(Default::default(), |ui| {
                         app.ui(ui, &mut eframe::Frame::_new_kittest())
@@ -10320,7 +10342,7 @@ mod tests {
                 settle(&mut app, &ctx);
                 assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
                 if watchlist && !replay {
-                    let feed = LiveFeed::new("MSFT", app.live.now());
+                    let feed = LiveFeed::new("STOCKB", app.live.now());
                     finish_feed(&feed);
                     feed.set_view(SessionType::RTH, false);
                     let bars = feed.snapshot(
@@ -10336,7 +10358,7 @@ mod tests {
                         .alerts
                         .log()
                         .iter()
-                        .find(|trigger| trigger.symbol == "MSFT")
+                        .find(|trigger| trigger.symbol == "STOCKB")
                         .unwrap();
                     assert_eq!(
                         trigger.price,
@@ -10363,7 +10385,7 @@ mod tests {
                     )
                     .unwrap();
                 app.chart.remove_series(parent);
-                let mut missing = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                let mut missing = Alert::new("FOREXA", AlertCondition::Above(0.0));
                 missing.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
                 missing.source = egui_charts::model::AlertSource::Study {
                     id: child.0.to_string(),
@@ -10402,7 +10424,7 @@ mod tests {
                     if watchlist { 4 } else { 2 },
                     "an edited alert must use its newly selected study"
                 );
-                let reference = LiveFeed::new("EURUSD", app.live.now());
+                let reference = LiveFeed::new("FOREXA", app.live.now());
                 finish_feed(&reference);
                 let bars = reference.snapshot(
                     Timeframe::Hour1,
@@ -10415,7 +10437,7 @@ mod tests {
                     "editing a source must retain the alert's original interval"
                 );
                 app.watchlist = WatchlistPanel::new(vec![Watchlist::new("Empty")]);
-                let mut expired = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                let mut expired = Alert::new("FOREXA", AlertCondition::Above(0.0));
                 expired.watchlist = Some("Empty".into());
                 expired.expires = Some(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
                 app.alerts.save(expired);
@@ -10553,10 +10575,10 @@ mod tests {
         app.start_replay_at(before.len() / 2);
         app.switch_symbol(&symbol);
         assert!(app.replay.is_some(), "the replay of the shown symbol stops");
-        app.switch_symbol("BTCUSD");
+        app.switch_symbol("TOKENA");
         assert!(app.replay.is_none(), "another symbol stops the replay");
         settle(&mut app, &ctx);
-        assert_eq!(app.chart.symbol(), "BTCUSD");
+        assert_eq!(app.chart.symbol(), "TOKENA");
         assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
     }
 
