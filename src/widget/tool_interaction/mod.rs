@@ -322,6 +322,22 @@ impl Chart {
                         }
                     }
                 }
+                // Without studies the chart paints the volume itself, on the map the frame keeps.
+                #[cfg(not(feature = "studies"))]
+                if pane.is_none()
+                    && self.main_series_visible
+                    && let Some(map) = self.host_events.volume_map
+                {
+                    for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
+                        let point = Pos2::new(bar_to_x(i as f32), map.price_to_y(bar.volume));
+                        if bar.volume.is_finite()
+                            && point.is_finite()
+                            && (strong || price_rect.contains(point))
+                        {
+                            drawing_manager.snap_targets.push(point);
+                        }
+                    }
+                }
             }
         }
 
