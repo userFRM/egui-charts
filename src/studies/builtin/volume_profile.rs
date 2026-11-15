@@ -1560,6 +1560,11 @@ macro_rules! profile_study {
             fn clone_box(&self) -> Box<dyn Indicator> {
                 Box::new(self.clone())
             }
+            fn clone_for_export(&self) -> Box<dyn Indicator> {
+                let mut frozen = self.clone();
+                frozen.profile.flow = self.profile.flow.frozen();
+                Box::new(frozen)
+            }
         }
     };
 }
@@ -3110,6 +3115,96 @@ mod rendering_tests {
     use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::{model::Bar, studies::Indicator};
+
+    #[test]
+    fn frozen_profiles_keep_deferred_rows_levels_and_autoscale() {
+        use crate::chart::rendering::fit_study_mapping;
+        use crate::studies::ConfiguredStudy;
+        let bars = super::tests::level_bars();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 400.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(90.0, 110.0),
+            0.0,
+            400.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 100.0, 0, 1, 0.0, price);
+        let profiles = |study: &dyn Indicator| {
+            study
+                .volume_profiles(0..7)
+                .into_iter()
+                .map(|plot| {
+                    (
+                        plot.profile.source(),
+                        plot.profile.low(),
+                        plot.profile.high(),
+                        plot.profile.volume().to_vec(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let levels = |study: &dyn Indicator| {
+            study
+                .profile_levels(0..7)
+                .into_iter()
+                .map(|level| (level.kind, level.price, level.bars))
+                .collect::<Vec<_>>()
+        };
+        for first_read in 0..3 {
+            let mut study = ConfiguredStudy::new(Box::new(VolProfileSession::new(24)));
+            study.set_timeframe(Timeframe::Hour1);
+            study
+                .set_input("row_size", InputValue::Number(2.0))
+                .unwrap();
+            study
+                .set_input("extend_poc", InputValue::Toggle(true))
+                .unwrap();
+            let input = study.order_flow_inputs()[0].clone();
+            input.set_tick_size(Some(1.0));
+            let clock = BarClock::new(Timeframe::Hour1);
+            for bar in &bars {
+                input.push_trade(
+                    &clock,
+                    &crate::model::Tick::new(bar.time, bar.close, bar.volume, None),
+                );
+            }
+            study.calculate(&bars);
+            let expected_profiles = profiles(&study);
+            let expected_levels = levels(&study);
+            assert!(!expected_levels.is_empty());
+            let expected_scale = fit_study_mapping(&study, &coords, None).price.range();
+            let mut frozen = study.clone_for_export();
+            frozen.calculate(&bars);
+            input.clear();
+            study.calculate(&bars);
+            assert_ne!(profiles(&study), expected_profiles);
+            match first_read {
+                0 => {
+                    assert_eq!(profiles(frozen.as_ref()), expected_profiles);
+                }
+                1 => {
+                    assert_eq!(levels(frozen.as_ref()), expected_levels);
+                }
+                _ => {
+                    assert_eq!(
+                        fit_study_mapping(frozen.as_ref(), &coords, None)
+                            .price
+                            .range(),
+                        expected_scale
+                    );
+                }
+            }
+            assert_eq!(profiles(frozen.as_ref()), expected_profiles);
+            assert_eq!(levels(frozen.as_ref()), expected_levels);
+            assert_eq!(
+                fit_study_mapping(frozen.as_ref(), &coords, None)
+                    .price
+                    .range(),
+                expected_scale
+            );
+        }
+    }
 
     /// Hidden value area boundaries leave clicks to the plot beneath, while rows and the point
     /// of control still select the study.

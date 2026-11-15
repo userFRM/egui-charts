@@ -251,6 +251,7 @@ enum Source {
 /// A chart replay cutoff and the bar containing it, with what is known of that bar before it.
 /// Options rather than an enum: only the chart builds one, and without `widget` an enum's
 /// variants would never be constructed (`dead_code`).
+#[derive(Clone)]
 struct Replay {
     cutoff: DateTime<Utc>,
     open: DateTime<Utc>,
@@ -270,7 +271,7 @@ fn time_based(clock: &BarClock) -> bool {
         .is_some_and(|timeframe| !timeframe.is_trade_based())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Window {
     events: VecDeque<(DateTime<Utc>, [f64; 2])>,
     sum: [f64; 2],
@@ -322,7 +323,7 @@ impl Window {
 }
 
 /// Distinct keys with an event inside a window, for counts that must not repeat a key.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Distinct {
     events: VecDeque<(DateTime<Utc>, u64)>,
     counts: HashMap<u64, usize>,
@@ -383,6 +384,7 @@ impl Distinct {
     }
 }
 
+#[derive(Clone)]
 struct State {
     source: Source,
     trade_bars: super::inbox::TradeBars,
@@ -474,6 +476,16 @@ impl OrderFlowInput {
 
     fn of(source: Source) -> Self {
         Self(Arc::new(Mutex::new(State::new(source))))
+    }
+
+    /// An independent input holding this moment's data, configuration and replay cutoff.
+    /// Completed footprint owners are shared; mutable state is copied under the source lock.
+    /// Unlike [`Clone`], updates or clears through either input cannot change the other.
+    ///
+    /// This creates no feed subscription. For a frozen export, keep the returned input and
+    /// its clones disconnected from live updates.
+    pub fn frozen(&self) -> Self {
+        Self(Arc::new(Mutex::new(self.state().clone())))
     }
 
     /// The same source, with book size summed over the individual orders `filter` accepts. The
@@ -1713,6 +1725,52 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::{OrderBook, OrderBookLevel, Timeframe};
+
+    #[test]
+    fn frozen_input_shares_completed_rows_and_detaches_mutable_state() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let clock = BarClock::new(Timeframe::Min1);
+        let input = OrderFlowInput::footprint();
+        input.set_tick_size(Some(0.25));
+        for minute in 0..2 {
+            input.push_trade(
+                &clock,
+                &Tick::new(start + TimeDelta::minutes(minute), 100.0, 2.0, None),
+            );
+        }
+        let shared = input.clone();
+        let frozen = input.frozen();
+        assert!(Arc::ptr_eq(&input.0, &shared.0));
+        assert!(!Arc::ptr_eq(&input.0, &frozen.0));
+        let original = input.footprint_snapshot(start);
+        let saved = frozen.footprint_snapshot(start);
+        let row = |read: &OrderFlowFootprints| {
+            read.bars(..)
+                .next()
+                .unwrap()
+                .levels
+                .values()
+                .next()
+                .unwrap() as *const _
+        };
+        assert_eq!(row(&original), row(&saved));
+        let volume = |input: &OrderFlowInput| {
+            input
+                .footprint_snapshot(start)
+                .bars(..)
+                .map(|bar| bar.volume())
+                .sum::<f64>()
+        };
+        let time = start + TimeDelta::minutes(1);
+        input.push_trade(&clock, &Tick::new(time, 100.0, 3.0, None));
+        assert_eq!(volume(&shared), 7.0);
+        assert_eq!(volume(&frozen), 4.0);
+        frozen.push_trade(&clock, &Tick::new(time, 100.0, 5.0, None));
+        assert_eq!(volume(&frozen), 9.0);
+        assert_eq!(volume(&input), 7.0);
+        input.clear();
+        assert_eq!(volume(&frozen), 9.0);
+    }
 
     #[test]
     fn snapshot_coverage_keeps_quiet_slots_without_copying_earlier_bars() {

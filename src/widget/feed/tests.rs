@@ -7218,6 +7218,32 @@ fn volume_profile_studies_read_the_chart_executions() {
     assert_eq!(profile.volume(), [2.0, 1.0, 3.0]);
     assert_eq!(profile.up(), [2.0, 0.0, 0.0]);
     assert_eq!(profile.down(), [0.0, 1.0, 0.0]);
+
+    let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+    sink.push_tick(Tick::new(at(81), 100.5, 11.0, None));
+    frames.run(&mut chart);
+    let (_, live_study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+    assert_eq!(
+        live_study.order_flow_inputs()[0]
+            .footprints_from(start)
+            .bars
+            .values()
+            .map(|bar| bar.volume())
+            .sum::<f64>(),
+        17.0
+    );
+    let (_, study) = frozen.indicators().find(|(seen, _)| *seen == id).unwrap();
+    assert_eq!(
+        study.volume_profiles(0..2)[0].profile.volume(),
+        [2.0, 1.0, 3.0],
+        "a deferred export query must not see later live executions"
+    );
+    feed.calls();
+    frames.run(&mut frozen);
+    assert!(
+        feed.calls().is_empty(),
+        "export must not subscribe or request history"
+    );
 }
 
 /// Leaving replay keeps the bars and the book history the chart showed before it and rebuilds

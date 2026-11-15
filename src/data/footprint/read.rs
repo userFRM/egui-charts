@@ -80,10 +80,12 @@ impl<'a> FootprintView<'a> {
         self.flow.clock()
     }
     /// Instrument tick size used by the price-level keys.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub fn tick_size(self) -> f64 {
         self.flow.tick_size()
     }
     /// Price width of one grouped row.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub fn price_step(self) -> f64 {
         self.flow.price_step()
     }
@@ -228,6 +230,7 @@ impl<'a> FootprintView<'a> {
     }
     /// Whether all executions are known in the bars containing `first` through `last`, inclusive.
     /// Quiet slots are complete; a missing join or a span before held history is not.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub fn span_is_complete(self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
         self.span_is_complete_from(self.first_time(), first, last)
     }
@@ -251,6 +254,7 @@ impl<'a> FootprintView<'a> {
     /// Sum complete bars containing `first` through `last`, inclusive, into an owned profile.
     /// As in [`Footprint::profile`], incomplete bars are omitted and reversed bounds give an
     /// empty profile. This allocates the summed price rows, without copying the input history.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub fn profile(self, first: DateTime<Utc>, last: DateTime<Utc>) -> super::FootprintBar {
         let (first, last) = (
             self.flow.clock.bar_open(first),
