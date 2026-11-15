@@ -137,7 +137,7 @@ impl<'a> FootprintView<'a> {
                 .map(|(_, bar)| bar.into()),
         )
     }
-    /// Walk ordered chart bars once; restart the range for a gap or a reordered selection.
+    /// Match aligned opens directly; use the clock for other timestamps and seek across gaps.
     #[cfg(feature = "widget")]
     pub(crate) fn matching(
         self,
@@ -145,19 +145,28 @@ impl<'a> FootprintView<'a> {
     ) -> impl Iterator<Item = Option<FootprintBarView<'a>>> {
         let mut rows = self.bars((Bound::Unbounded, Bound::Unbounded)).peekable();
         let mut previous = None;
+        let mut matched: Option<FootprintBarView<'a>> = None;
         bars.iter().map(move |bar| {
-            let open = self.flow.clock.bar_open(bar.time);
-            let restart = previous.is_none_or(|last| open < last);
-            if !restart && rows.peek().is_some_and(|row| row.time < open) {
-                rows.next();
+            let open = if matched.is_some_and(|row| row.time == bar.time)
+                || rows.peek().is_some_and(|row| row.time == bar.time)
+            {
+                bar.time
+            } else {
+                self.flow.clock.bar_open(bar.time)
+            };
+            if previous == Some(open) {
+                return matched;
             }
-            if restart || rows.peek().is_some_and(|row| row.time < open) {
+            if previous.is_some_and(|last| open < last)
+                || rows.peek().is_some_and(|row| row.time < open)
+            {
                 rows = self
                     .bars((Bound::Included(open), Bound::Unbounded))
                     .peekable();
             }
             previous = Some(open);
-            rows.peek().filter(|row| row.time == open).copied()
+            matched = rows.next_if(|row| row.time == open);
+            matched
         })
     }
     #[cfg(feature = "widget")]
@@ -475,6 +484,29 @@ mod tests {
                 None
             ]
         );
+        let owned = Footprint::from_bars(request().clock, 1.0, 1, bars(-1..5)).unwrap();
+        let times: Vec<_> = (-2..7)
+            .flat_map(|minute| [at(minute), at(minute) + TimeDelta::seconds(30)])
+            .collect();
+        // Repeated, reordered and non-opening timestamps must agree with independent lookups.
+        let selection: Vec<_> = times
+            .iter()
+            .flat_map(|&first| {
+                times
+                    .iter()
+                    .flat_map(move |&second| [first, first, second, first])
+            })
+            .map(|time| crate::model::Bar::new(time, 100.0, 100.0, 100.0, 100.0, 0.0))
+            .collect();
+        for view in [view, (&owned).into()] {
+            assert_eq!(
+                view.matching(&selection).collect::<Vec<_>>(),
+                selection
+                    .iter()
+                    .map(|bar| view.bar_at(bar.time))
+                    .collect::<Vec<_>>()
+            );
+        }
 
         #[cfg(feature = "studies")]
         {
