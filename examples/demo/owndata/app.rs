@@ -342,4 +342,33 @@ mod tests {
         assert_eq!((app.extra_charts.len(), app.comparisons.len()), (1, 1));
         assert_eq!(app.state.symbol, symbol);
     }
+
+    /// On own data, time and sales writes a price at the decimals of the profile's price step,
+    /// as the chart's price scale does, and so does the notice of a size filter that matches.
+    #[test]
+    fn time_and_sales_writes_own_data_prices_at_the_price_step() {
+        use egui_charts::ui::widget_bar::TradeSizeFilter;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let server = Server::start(pages(vec!["[]".to_owned()]));
+        let mut own = profile(&server.origin);
+        own.tick_size = Some(0.001);
+        app.connect_own_data(own, Secrets::new());
+        let step = |chart: &Chart| chart.instrument().and_then(|i| i.tick_size);
+        until(&ctx, &mut app.chart, "the price step", |chart| {
+            step(chart) == Some(0.001)
+        });
+        app.time_and_sales.filters.push(TradeSizeFilter {
+            min_size: 1.0,
+            sound: true,
+        });
+        let trade = egui_charts::model::Tick::new(chrono::Utc::now(), 12.347, 5.0, None);
+        app.feed_time_and_sales(vec![trade]);
+        // The step 0.001 has three decimals: the list and the notice write 12.347, not 12.35.
+        assert_eq!(app.time_and_sales.config.price_decimals, Some(3));
+        assert_eq!(
+            app.toasts.toasts().last().unwrap().message,
+            "Size filter matched on fill: 5 at 12.347"
+        );
+    }
 }

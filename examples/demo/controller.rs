@@ -3113,6 +3113,8 @@ impl DemoApp {
     /// instrument and the chosen zone.
     fn feed_time_and_sales(&mut self, tape: Vec<Tick>) {
         let instrument = self.chart.instrument();
+        // As the price scale writes it: the instrument's decimals, else those of its tick size.
+        let decimals = instrument.and_then(egui_charts::scales::instrument_price_precision);
         let mut alert = None;
         for trade in tape {
             if self.time_and_sales.push(trade.clone()).is_some() {
@@ -3120,16 +3122,15 @@ impl DemoApp {
             }
         }
         if let Some(trade) = alert {
-            let decimals = instrument.and_then(|i| i.price_decimals).unwrap_or(2);
             self.toasts.info(format!(
                 "Size filter matched on fill: {} at {:.*}",
                 trade.size,
-                usize::from(decimals),
+                usize::from(decimals.unwrap_or(2)),
                 trade.price
             ));
         }
         let config = &mut self.time_and_sales.config;
-        config.price_decimals = instrument.and_then(|instrument| instrument.price_decimals);
+        config.price_decimals = decimals;
         config.size_decimals = instrument.and_then(|instrument| instrument.volume_decimals);
         config.timezone = self
             .timeframe_toolbar
