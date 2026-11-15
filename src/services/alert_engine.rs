@@ -148,6 +148,8 @@ struct Run {
     last_sequence: u64,
     /// The detector signals that fired, with their anchor times.
     signals: Vec<(crate::model::SignalId, DateTime<Utc>)>,
+    /// The latest time before which detector signals are history.
+    history: Option<DateTime<Utc>>,
 }
 
 /// One firing of an alert on host events: the event's time and price, and the message a trigger
@@ -524,11 +526,12 @@ impl AlertEngine {
     /// [`DetectorSignals`](AlertCondition::DetectorSignals) alerts naming its category. A signal
     /// fires once per alert and symbol, at its anchor time and price: a marker's time and price,
     /// a level's start and price, a price zone's start and price, a zone's start without a
-    /// price. A signal anchored before `from` is history and never fires, nor does a level
-    /// without a start. `AlertEvaluator` passes the open of the bar before the newest, so a
-    /// formation confirmed as its bar closes still fires. Empty messages are the detector's name
-    /// and the signal's tooltip or label; custom messages expand as for
-    /// [`strategy_fills`](Self::strategy_fills).
+    /// price. A signal anchored before `from`, or before the `from` of an earlier call for the
+    /// same alert and symbol, is history and never fires, nor does a level without a start.
+    /// `AlertEvaluator` passes the open of the bar before the newest of each chart it is lent, so
+    /// a formation confirmed as its bar closes still fires, while one reported later counts as
+    /// history. Empty messages are the detector's name and the signal's tooltip or label; custom
+    /// messages expand as for [`strategy_fills`](Self::strategy_fills).
     pub fn detector_signals<'a>(
         &self,
         symbol: &str,
@@ -554,6 +557,10 @@ impl AlertEngine {
                 let AlertCondition::DetectorSignals(detector) = condition else {
                     return Vec::new();
                 };
+                // History never moves back, or another chart's older bars would fire again the
+                // signals whose ids were dropped.
+                let from = seen.history.map_or(from, |history| history.max(from));
+                seen.history = Some(from);
                 // Signals anchored before `from` can no longer fire, so their ids are not kept.
                 seen.signals.retain(|(_, time)| *time >= from);
                 signals
@@ -2487,7 +2494,8 @@ mod tests {
     }
 
     /// A detector alert fires once for each new formation or target of its detector on its
-    /// symbol, at the signal's anchor; history, other detectors and other symbols never fire it.
+    /// symbol, at the signal's anchor; history, other detectors, other symbols and a second chart
+    /// whose bars end earlier never fire it.
     #[test]
     fn detector_alerts_fire_once_per_new_signal_of_their_detector() {
         use crate::model::{Direction, Signal, SignalId, SignalShape};
@@ -2515,19 +2523,23 @@ mod tests {
             level("target", Some(time(125))),
             level("anywhere", None),
         ];
-        let deliver = |symbol, now| {
+        let deliver = |symbol, from, now| {
             host.engine.detector_signals(
                 symbol,
                 None,
                 Timeframe::Min1,
                 &signals,
-                time(60),
+                time(from),
                 time(now),
             )
         };
-        deliver("SYM", 200);
-        deliver("OTHER", 201);
-        deliver("SYM", 202);
+        deliver("SYM", 60, 200);
+        deliver("OTHER", 60, 201);
+        deliver("SYM", 60, 202);
+        // A chart with a newer bar, then one whose bars end earlier, such as a chart of the
+        // regular session beside one of the extended session.
+        deliver("SYM", 150, 203);
+        deliver("SYM", 60, 204);
         let at = |seconds, price, message: &str| {
             ("SYM".to_owned(), time(seconds), price, message.to_owned())
         };

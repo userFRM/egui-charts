@@ -7,6 +7,9 @@ use egui_charts::model::{
 use egui_charts::services::DetectionKind;
 use egui_charts::strategies::{Backtest, Strategy, StrategyContext};
 
+/// The start of every live run's id, which the ids of its alerts share.
+const RUN: &str = "Live momentum";
+
 /// The custom event source of the live run's alert calls.
 const TURNS: &str = "Live momentum turns";
 
@@ -35,7 +38,7 @@ impl DemoApp {
         let Some(first) = bars.get(bars.len().saturating_sub(121)) else {
             return;
         };
-        let id = format!("Live momentum {}", chrono::Utc::now().to_rfc3339());
+        let id = format!("{RUN} {}", chrono::Utc::now().to_rfc3339());
         let mut run = Backtest::new(
             "Live momentum (synthetic data)",
             self.chart.symbol(),
@@ -84,19 +87,11 @@ impl DemoApp {
     }
 
     pub(super) fn stop_live_strategy(&mut self) {
-        let Some((_, id)) = self.live_strategy.take() else {
-            return;
-        };
-        let ids = [
-            id.clone(),
-            format!("{id}: turns"),
-            format!("{id}: big trades"),
-        ];
+        self.live_strategy = None;
+        // Every live run's alerts, including those of a session that closed during its run.
         for mut alert in self.alert_host.engine().alerts() {
-            if alert
-                .id
-                .as_ref()
-                .is_some_and(|alert| ids.contains(&alert.0))
+            if alert.status == AlertStatus::Active
+                && alert.id.as_ref().is_some_and(|id| id.0.starts_with(RUN))
             {
                 alert.status = AlertStatus::Disabled;
                 self.alerts.save(alert);

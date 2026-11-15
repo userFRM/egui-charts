@@ -1594,6 +1594,16 @@ mod tests {
                 status: AlertStatus::Active,
             }
         );
+        // A stored alert on a strategy run's fills loads as saved and stays armed.
+        let fills: Alert = serde_json::from_str(
+            r#"{"symbol":"AAPL","condition":{"StrategyFills":"run-1"},"frequency":"EveryTime"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            fills.condition,
+            AlertCondition::StrategyFills("run-1".into())
+        );
+        assert!(fills.is_valid());
     }
 
     #[cfg(feature = "timezones")]
