@@ -322,6 +322,22 @@ impl Chart {
                         }
                     }
                 }
+                // Without studies the chart paints the volume itself, on the map the frame keeps.
+                #[cfg(not(feature = "studies"))]
+                if pane.is_none()
+                    && self.main_series_visible
+                    && let Some(map) = self.host_events.volume_map
+                {
+                    for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
+                        let point = Pos2::new(bar_to_x(i as f32), map.price_to_y(bar.volume));
+                        if bar.volume.is_finite()
+                            && point.is_finite()
+                            && (strong || price_rect.contains(point))
+                        {
+                            drawing_manager.snap_targets.push(point);
+                        }
+                    }
+                }
             }
         }
 
@@ -1497,24 +1513,33 @@ mod tests {
     }
 
     /// Hiding the main series hides its volume, so neither its bars nor its volume columns are
-    /// magnet targets while it is hidden.
+    /// magnet targets while it is hidden. Shown, the magnet snaps to the painted column tops, also
+    /// when every visible volume is below 1.
     #[test]
     fn magnet_ignores_hidden_main_series_bars_and_volume() {
+        use crate::model::Bar;
+        use crate::widget::SeriesId;
         use egui::Pos2;
 
         let mut observed = Vec::new();
-        for (visible, strong, target) in [
-            (true, false, "volume"),
-            (true, true, "volume"),
-            (true, false, "high"),
-            (true, true, "high"),
-            (false, false, "volume"),
-            (false, true, "volume"),
-            (false, false, "high"),
-            (false, true, "high"),
+        for (visible, strong, target, volume) in [
+            (true, false, "volume", 1.0),
+            (true, true, "volume", 1.0),
+            (true, false, "volume", 0.25),
+            (true, false, "high", 1.0),
+            (true, true, "high", 1.0),
+            (false, false, "volume", 1.0),
+            (false, true, "volume", 1.0),
+            (false, false, "high", 1.0),
+            (false, true, "high", 1.0),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
+            let bars = chart.bars(SeriesId::MAIN).iter().map(|bar| Bar {
+                volume,
+                ..bar.clone()
+            });
+            assert!(chart.set_data(SeriesId::MAIN, bars.collect()));
             chart.config_mut().show_volume = true;
             chart.drawings_mut().options.magnet_mode = true;
             chart.drawings_mut().options.strong_magnet = strong;
@@ -1523,7 +1548,7 @@ mod tests {
             chart.set_main_series_visible(visible);
             frame(&ctx, &mut chart, 0.2, vec![]);
             let map = chart.get_chart_mapping();
-            // Every bar has volume 1, the visible maximum, so each column reaches the top of the
+            // Every bar has the visible maximum volume, so each column reaches the top of the
             // overlay: 12% of the plot above its 12 point baseline inset.
             let bottom = map.rect.bottom() - 12.0;
             let y = if target == "volume" {
@@ -1546,23 +1571,25 @@ mod tests {
                 visible,
                 strong,
                 target,
+                volume,
                 ((anchor - y) * 100.0).round() / 100.0,
             ));
         }
         // Shown, the anchor lands on the value; hidden, it stays 1 point from where it was clicked.
         let expected = [
-            (true, false, "volume", 0.0),
-            (true, true, "volume", 0.0),
-            (true, false, "high", 0.0),
-            (true, true, "high", 0.0),
-            (false, false, "volume", -1.0),
-            (false, true, "volume", -1.0),
-            (false, false, "high", 1.0),
-            (false, true, "high", 1.0),
+            (true, false, "volume", 1.0, 0.0),
+            (true, true, "volume", 1.0, 0.0),
+            (true, false, "volume", 0.25, 0.0),
+            (true, false, "high", 1.0, 0.0),
+            (true, true, "high", 1.0, 0.0),
+            (false, false, "volume", 1.0, -1.0),
+            (false, true, "volume", 1.0, -1.0),
+            (false, false, "high", 1.0, 1.0),
+            (false, true, "high", 1.0, 1.0),
         ];
         assert!(
             observed == expected,
-            "(main series visible, strong magnet, target, first anchor below the target) \
+            "(main series visible, strong magnet, target, volume, first anchor below the target) \
              observed {observed:?} expected {expected:?}"
         );
     }

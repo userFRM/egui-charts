@@ -260,6 +260,7 @@ impl IndicatorFactory {
                 UlcerIndex,
                 RelativeVolatilityIndex,
                 Median,
+                VolatilityIndex,
             ],
             "Volume" => [
                 Volume,

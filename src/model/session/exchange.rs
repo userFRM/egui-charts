@@ -29,7 +29,11 @@ impl Hours {
 /// The trading state of an exchange session at one instant, as the legend's market status
 /// shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(feature = "widget", all(test, feature = "timezones")))]
+#[cfg(any(
+    feature = "widget",
+    feature = "studies",
+    all(test, feature = "timezones")
+))]
 pub(crate) enum MarketSession {
     /// Inside regular trading hours.
     Open,
@@ -206,7 +210,11 @@ impl ExchangeSessionProvider {
     }
 
     /// The state of the session at `time`, or `None` without trading hours.
-    #[cfg(any(feature = "widget", all(test, feature = "timezones")))]
+    #[cfg(any(
+        feature = "widget",
+        feature = "studies",
+        all(test, feature = "timezones")
+    ))]
     pub(crate) fn market_session(&self, time: DateTime<Utc>) -> Option<MarketSession> {
         self.session.as_ref()?;
         if self.is_open(time, false) {
