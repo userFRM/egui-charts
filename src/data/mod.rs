@@ -70,7 +70,7 @@ pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
 #[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
-#[cfg(feature = "widget")]
+#[cfg(any(feature = "studies", feature = "widget"))]
 pub(crate) use footprint::side_delta;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 pub use market::{
