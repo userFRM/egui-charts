@@ -346,10 +346,11 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Analyst price targets for `symbol` in `conversion`, the currency or unit the host chose
-    /// with `Chart::set_conversion` (requires `widget`), as
-    /// [`resolve_converted`](Self::resolve_converted) describes the symbol. The library converts
-    /// nothing: the default answers [`FeedError::NotSupported`], which leaves the chart without
-    /// targets rather than drawing them in another currency, and shows no error.
+    /// with `Chart::set_conversion` (requires `widget`), which
+    /// [`resolve_converted`](Self::resolve_converted) also receives. The chart asks this instead
+    /// of [`price_targets`](Self::price_targets) while a conversion is chosen. The library
+    /// converts nothing: the default answers [`FeedError::NotSupported`], which leaves the chart
+    /// without targets rather than drawing them in another currency, and shows no error.
     fn price_targets_converted(
         &self,
         symbol: &str,

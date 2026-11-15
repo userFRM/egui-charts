@@ -23,7 +23,7 @@ pub(super) struct TargetState {
 impl Chart {
     /// Show or hide the host's analyst estimates. Hidden by default; hiding retains the answer.
     /// Leave future whitespace in the visible logical range to see the supplied horizon date.
-    /// A replay draws them only once its time has passed their publication date.
+    /// A replay draws them only once its time has passed their publication date in UTC.
     pub fn set_price_targets_visible(&mut self, visible: bool) {
         self.show_price_targets = visible;
     }
@@ -361,8 +361,8 @@ mod tests {
                 "missing {label}"
             );
         }
-        // A bar replay draws the estimates, published on 2024-02-01, once its cutoff has passed
-        // that day, and then from the replayed close.
+        // A bar replay draws and fits the estimates, published on 2024-02-01, only once its
+        // cutoff has passed that day.
         let at = |day, hour| Utc.with_ymd_and_hms(2024, 2, day, hour, 0, 0).unwrap();
         for (time, cutoff, drawn) in [(0.1003, at(2, 0), true), (0.1006, at(1, 12), false)] {
             chart.set_replay_time(Some(cutoff));
