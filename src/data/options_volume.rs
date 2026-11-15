@@ -53,6 +53,12 @@ pub(super) struct Snapshot<T> {
     wake: Box<dyn Fn() + Send + Sync>,
 }
 
+impl<T> std::fmt::Debug for Snapshot<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Snapshot").finish_non_exhaustive()
+    }
+}
+
 impl<T> Snapshot<T> {
     pub(super) fn new(values: T, wake: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
         Arc::new(Self {
@@ -98,7 +104,7 @@ impl OptionsVolumeSink {
 }
 
 #[cfg(feature = "studies")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct OptionsVolumeSource(Arc<Snapshot<Arc<[OptionsVolume]>>>);
 
 #[cfg(feature = "studies")]

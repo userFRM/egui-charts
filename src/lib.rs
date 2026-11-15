@@ -217,14 +217,10 @@ pub mod guide {}
 
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-// Debug for these types remains follow-up work from #1315.
-#[allow(missing_debug_implementations)]
 pub mod ui_kit;
 
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-// Debug for these types remains follow-up work from #1315.
-#[allow(missing_debug_implementations)]
 pub mod ui;
 
 // ─── Convenience re-exports ──────────────────────────────────────────────────

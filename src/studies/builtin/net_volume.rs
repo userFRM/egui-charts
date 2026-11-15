@@ -6,7 +6,7 @@ use egui::Color32;
 
 /// Volume signed by the close against the previous close: positive, negative or zero.
 /// The first bar has no value.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NetVolume {
     values: IndicatorValues,
     stepper: Stepper<Option<f64>>,

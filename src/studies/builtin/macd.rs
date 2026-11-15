@@ -59,7 +59,7 @@ use egui::Color32;
 ///
 /// A three-line momentum oscillator: MACD line, signal line, and histogram.
 /// Drawn in a separate sub-pane (`is_overlay = false`).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MACD {
     fast_period: usize,
     slow_period: usize,
@@ -74,7 +74,7 @@ pub struct MACD {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     usable: usize,
     /// Bars with a MACD value.

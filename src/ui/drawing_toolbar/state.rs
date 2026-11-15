@@ -37,7 +37,7 @@ pub struct ToolbarPreferences {
 }
 
 /// Drawing toolbar state
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ToolbarState {
     /// Saved toolbar visibility and bulk removal choices.
     pub preferences: ToolbarPreferences,

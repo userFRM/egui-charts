@@ -18,6 +18,7 @@ use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 const LINE_WIDTHS: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
 
 /// Style tab renderer
+#[derive(Debug)]
 pub struct StyleTab;
 
 impl StyleTab {

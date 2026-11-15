@@ -7,7 +7,7 @@ use egui::Color32;
 /// Force Index
 /// Measures the force behind price movements using price change and volume
 /// Developed by Alexander Elder
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ForceIndex {
     /// EMA period for smoothing (typically 13)
     period: usize,

@@ -114,6 +114,7 @@ theme_derived!(RangeSwitcherConfig {
 ///
 /// Displays horizontal row of date range btns (1D, 5D, 1M, etc.)
 /// Returns the selected range when a button is clicked.
+#[derive(Debug)]
 pub struct RangeSwitcher {
     /// Currently selected range
     selected: DateRange,

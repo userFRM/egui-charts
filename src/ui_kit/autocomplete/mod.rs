@@ -32,6 +32,7 @@ use egui::{
 };
 
 /// Result of showing the autocomplete widget
+#[derive(Debug)]
 pub struct AutocompleteResponse {
     /// The underlying text edit response
     pub response: Response,
@@ -42,6 +43,7 @@ pub struct AutocompleteResponse {
 }
 
 /// A text input with autocomplete suggestions
+#[derive(Debug)]
 pub struct AutocompleteEdit<'a> {
     text: &'a mut String,
     suggestions: Vec<String>,

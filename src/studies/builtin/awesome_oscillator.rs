@@ -29,7 +29,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Awesome Oscillator indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AwesomeOscillator {
     fast_period: usize,
     slow_period: usize,

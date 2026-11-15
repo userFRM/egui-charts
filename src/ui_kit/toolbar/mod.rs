@@ -39,6 +39,7 @@ pub enum Orientation {
 ///     });
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct ResponsiveToolbar {
     /// Unique toolbar ID, scoping the contents' egui state so multiple toolbars
     /// in one frame do not collide.

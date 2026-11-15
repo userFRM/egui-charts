@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Stochastic Oscillator indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Stochastic {
     k_period: usize,
     k_smooth: usize,

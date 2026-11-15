@@ -150,7 +150,7 @@ pub(crate) fn other_panes(
 
 /// The study context menu of [`ChartMenus`](crate::ui::context_menu::ChartMenus), with the
 /// study's state taken when it opened.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct StudyContextMenu {
     is_open: bool,
     name: String,

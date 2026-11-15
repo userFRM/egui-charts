@@ -30,7 +30,7 @@ use egui::Color32;
 /// [`VolumeWeightedAvgPrice`](super::VolumeWeightedAvgPrice) counts them, in the time zone and
 /// session of the chart instrument ([`Indicator::set_instrument`]; UTC until then).
 /// Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TimeWeightedAvgPrice {
     anchor: AnchorPeriod,
     source: PriceSource,
@@ -42,7 +42,7 @@ pub struct TimeWeightedAvgPrice {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous_date: Option<chrono::NaiveDate>,
     intraday: bool,

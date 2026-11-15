@@ -19,7 +19,7 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::sync::Arc;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct CachedProfile {
     values: Arc<[OptionsVolume]>,
     profile: Option<Arc<VolumeProfile>>,
@@ -74,13 +74,13 @@ fn waiting_input(id: &str, value: InputValue) -> Option<StudyInput> {
     Some(StudyInput::new(id, label, value, kind).with_default(default))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum ProfileSource {
     Volume(OptionsVolumeSource),
     Chain(OptionChain, Vec<NaiveDate>),
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 enum Expiries {
     #[default]
     Nearest,
@@ -91,7 +91,7 @@ enum Expiries {
 /// Call and put volume, open interest or signed gamma exposure by strike.
 /// Hosts supply complete snapshots through the volume-only constructor or [`Self::from_chain`].
 /// Clones share the subscription; dropping its last clone makes the feed's sink inactive.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OptionsVolumeProfile {
     source: ProfileSource,
     expiries: Expiries,

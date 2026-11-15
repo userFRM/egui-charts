@@ -7,7 +7,7 @@ use egui::Color32;
 use std::ops::Range;
 
 /// Average of the visible bars' closes, recalculated when the chart pans or zooms.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VisibleAveragePrice {
     source: PriceSource,
     range: Range<usize>,

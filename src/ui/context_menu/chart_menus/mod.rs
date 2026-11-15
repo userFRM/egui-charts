@@ -66,6 +66,16 @@ pub struct HostMenuEntry {
     condition: Box<dyn Fn(&HostMenuContext) -> bool>,
 }
 
+impl std::fmt::Debug for HostMenuEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostMenuEntry")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("icon", &self.icon)
+            .finish_non_exhaustive()
+    }
+}
+
 impl HostMenuEntry {
     /// Create a row visible for every chart, series and drawing click.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
@@ -151,7 +161,7 @@ pub enum ChartContextAction {
 ///     .when(|click| matches!(click.target, RightClickTarget::Background { .. })));
 /// // After chart.show(ui), handle ChartContextAction::Host { id, context } from menus.show.
 /// ```
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,

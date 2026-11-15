@@ -10,6 +10,7 @@ use crate::ui::drawing_toolbar::components::draw_tool_button;
 use egui::Ui;
 
 /// Zoom In button component.
+#[derive(Debug)]
 pub struct ZoomInButton;
 
 impl ZoomInButton {
@@ -26,6 +27,7 @@ impl ZoomInButton {
 }
 
 /// Zoom Out button component.
+#[derive(Debug)]
 pub struct ZoomOutButton;
 
 impl ZoomOutButton {

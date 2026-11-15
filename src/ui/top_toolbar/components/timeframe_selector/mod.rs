@@ -207,6 +207,7 @@ pub struct TimeframePreferences {
 }
 
 /// Timeframe selector
+#[derive(Debug)]
 pub struct TimeframeSelector {
     /// Currently selected timeframe
     pub current: Timeframe,

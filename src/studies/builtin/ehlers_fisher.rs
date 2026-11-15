@@ -10,7 +10,7 @@ use egui::Color32;
 ///
 /// Related: [`FisherTransform`](super::FisherTransform) clamps the smoothed
 /// value instead of the normalized price.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EhlersFisher {
     /// Lookback period (typically 10)
     period: usize,

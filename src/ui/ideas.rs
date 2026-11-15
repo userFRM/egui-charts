@@ -155,6 +155,7 @@ enum Publish {
 }
 
 /// The ideas panel.
+#[derive(Debug)]
 pub struct IdeasPanel {
     draft: IdeaDraft,
     publish: Publish,

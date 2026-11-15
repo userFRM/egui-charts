@@ -57,7 +57,7 @@ const RSI_TIE: f64 = 1e-9;
 pub(super) const MARKS: [&str; 4] = ["Bull", "H Bull", "Bear", "H Bear"];
 
 /// RSI Divergence Indicator: the RSI with regular and hidden divergences against price.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RsiDivergence {
     period: usize,
     left: usize,
@@ -77,7 +77,7 @@ pub struct RsiDivergence {
     visible: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Pivot {
     source: usize,
     position: usize,
@@ -86,7 +86,7 @@ struct Pivot {
     low: f64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     rsi: RsiState,
@@ -132,7 +132,7 @@ impl Search {
 
 /// The bars a divergence search still compares and the last pivot low and high. A study keeps
 /// it in its checkpointed state.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Pivots {
     position: usize,
     window: std::collections::VecDeque<Pivot>,
@@ -257,7 +257,7 @@ impl Pivots {
 
 /// What the divergences confirmed on the last bar replaced. A study keeps it beside its values,
 /// so that a correction of that bar can withdraw them.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Confirmed(Vec<(usize, usize, f64)>);
 
 impl Confirmed {

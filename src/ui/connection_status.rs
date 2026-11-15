@@ -11,6 +11,7 @@ use crate::ui::model::ConnectionState;
 use egui::{Color32, Response, RichText, Ui, Vec2, Widget};
 
 /// Connection status indicator widget
+#[derive(Debug)]
 pub struct ConnectionStatusIndicator<'a> {
     /// Current connection state
     state: &'a ConnectionState,

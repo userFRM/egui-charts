@@ -7,6 +7,7 @@ use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Canvas tab renderer
+#[derive(Debug)]
 pub struct CanvasTab;
 
 impl CanvasTab {

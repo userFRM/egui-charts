@@ -10,7 +10,7 @@ use egui::Color32;
 /// `TSI = 100 * EMA(EMA(m, long), short) / EMA(EMA(|m|, long), short)` with `m = close - previous close`,
 /// plus a signal line, the EMA of the TSI. Every EMA starts at its first input, and the price changes start
 /// at the first change, bar 1. Values start on bar `long + short`; earlier bars are `None`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrueStrengthIndex {
     /// Long period (typically 25)
     long_period: usize,

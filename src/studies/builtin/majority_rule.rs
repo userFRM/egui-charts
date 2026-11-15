@@ -26,7 +26,7 @@ impl MajorityMode {
 /// bar has no close before it and counts as not rising, so the first value is at bar
 /// `period - 1`. In percentage mode the pane has a dashed guide at 50, where rising and other
 /// closes are evenly split.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MajorityRule {
     period: usize,
     mode: MajorityMode,

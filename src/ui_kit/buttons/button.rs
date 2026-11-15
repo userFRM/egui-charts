@@ -39,6 +39,7 @@ use crate::tokens::DESIGN_TOKENS;
 ///     .show(ui);
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct Button<'a> {
     text: Option<String>,
     icon: Option<&'a Icon>,
