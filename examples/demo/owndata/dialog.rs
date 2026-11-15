@@ -1948,10 +1948,7 @@ impl DataSourceDialog {
                     }
                     None => {
                         let field = printed(&stream.route_by);
-                        let text = format!("Add route for records without {field}");
-                        if ui.add(Button::new(text).outlined().small()).clicked() {
-                            added = Some(String::new());
-                        }
+                        ui.weak(format!("The record has no field {field}."));
                     }
                 }
             });

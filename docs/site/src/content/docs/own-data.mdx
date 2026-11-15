@@ -312,9 +312,8 @@ The `route by` slot is the field that tells the kinds of message apart. It is lo
 the record and then in the message. Each route has a value of that field and is one of
 *Ignore*, *Bars* or *Trades*. A message that is not JSON, such as a plain `pong`, is routed
 by its own text. A route whose value is empty takes the records that have no such field, such
-as a service's answers to its subscribe and keep-alive messages, and *Test* offers to add it
-for a message without the field. For a stream with one kind of message, *Route every message
-here* makes a route that takes every record.
+as a service's answers to its subscribe and keep-alive messages. For a stream with one kind of
+message, *Route every message here* makes a route that takes every record.
 
 Binary messages that are not text, as a stream that compresses its messages itself sends,
 cannot be mapped.
