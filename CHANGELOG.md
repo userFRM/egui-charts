@@ -497,6 +497,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `FootprintBar::empty` is public, so hosts can populate prepared rows and totals after the type became non-exhaustive. `Footprint::from_bars` still validates the completed aggregate. ([#3059](https://github.com/userFRM/egui-charts/issues/3059))
+
 - Footprint annotations reuse cached studies without comparing every price row on unchanged repaints, and recalculation no longer copies ungrouped rows first. ([#2569](https://github.com/userFRM/egui-charts/issues/2569))
 
 - Time-axis wheel zoom applies the same total change regardless of frame batching, without a smoothed remainder turning into pan or price zoom after the pointer or modifiers change. Pinches and native trackpad zoom follow their reported ratios, so reciprocal pinches restore the starting zoom. Smoothed wheel input no longer cancels pending programmatic scrolling. ([#2567](https://github.com/userFRM/egui-charts/issues/2567))
@@ -1382,6 +1384,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `FootprintLevel` now has a documented `repr(C, align(8))` layout with compile-time checks for its size, alignment and field offsets. Hosts can use this contract when borrowing rows from compatible encoded buffers; byte conversion remains outside the library. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `MAChannel::new` takes the upper and lower lengths, and MA Channel draws the simple average of the highs and of the lows, where it drew a simple average of the closes with percentage bands; the LinReg Channel input `multiplier` is replaced by `upper_multiplier` and `lower_multiplier`. Saved templates and layouts keep loading. Migration: `MAChannel::new(period, offset_percent)` becomes `MAChannel::new(upper_length, lower_length)`, with `with_offsets(upper, lower)` for bar offsets, and the former lines are `Envelopes::new(period, offset_percent, EnvelopeAverage::Simple)`; MA Channel colour lists hold the upper line, the lower line and the fill. Code that sets the `multiplier` input of LinReg Channel sets `upper_multiplier` and `lower_multiplier`. Envelopes colour lists gain the fill as a fourth entry, and LinReg Channel lists gain the upper and lower band fills as a fourth and fifth. Code that relied on `Envelopes::default()` at 2.5% or `LinearRegressionChannel::default()` at 20 bars passes those values to `new`. ([#1492](https://github.com/userFRM/egui-charts/issues/1492))
 

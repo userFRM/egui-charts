@@ -511,6 +511,7 @@ mod tests {
                                 bars: &[],
                                 revision: 0,
                                 bar_to_x: &|x| x,
+                                bar_spacing: 1.0,
                                 price_to_y: &|y| y as f32,
                                 y_to_price: &f64::from,
                                 time_axis: true,
@@ -612,6 +613,7 @@ mod tests {
                             manager.update_pane_screen_coords(
                                 |bar| bar + offset.x,
                                 |price| price as f32 + offset.y,
+                                1.0,
                             );
                         }
                         ctx.run_ui(

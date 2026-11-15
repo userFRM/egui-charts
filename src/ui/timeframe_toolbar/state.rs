@@ -110,6 +110,21 @@ impl TimeframeToolbarState {
         self.timezone = timezone;
     }
 
+    /// Shows the clock in `zone`, the chart's
+    /// [`display_timezone`](crate::widget::Chart::display_timezone): exchange time in the zone
+    /// the chart resolved for it, local time at the system's present offset from UTC, which the
+    /// clock keeps until this is called again.
+    pub fn set_display_timezone(&mut self, zone: &crate::scales::TimezoneMode) {
+        self.timezone = match zone {
+            crate::scales::TimezoneMode::Local => {
+                let offset = chrono::Local::now().offset().local_minus_utc();
+                crate::model::TimezoneId::fixed_offset(offset).unwrap_or_default()
+            }
+            zone => zone.to_tz().unwrap_or_default(),
+        }
+        .to_string();
+    }
+
     /// Toggle timezone menu
     pub fn toggle_timezone_menu(&mut self) {
         self.timezone_menu_open = !self.timezone_menu_open;
