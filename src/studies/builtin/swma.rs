@@ -31,7 +31,7 @@ use egui::Color32;
 ///
 /// A fixed 4-bar weighted average with weights `[1, 2, 2, 1] / 6`.
 /// Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SWMA {
     values: IndicatorValues,
     color: Color32,

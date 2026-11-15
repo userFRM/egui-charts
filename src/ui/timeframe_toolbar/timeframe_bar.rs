@@ -122,6 +122,7 @@ pub enum TimeframeBarAction {
 }
 
 /// Bottom Timeframe Quick-Select Bar
+#[derive(Debug)]
 pub struct TimeframeBar {
     /// Display and layout options for this component.
     pub config: TimeframeBarConfig,

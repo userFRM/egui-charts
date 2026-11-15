@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Stochastic RSI indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StochasticRSI {
     rsi_period: usize,
     stoch_period: usize,
@@ -43,7 +43,7 @@ pub struct StochasticRSI {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<f64>,
     count: usize,

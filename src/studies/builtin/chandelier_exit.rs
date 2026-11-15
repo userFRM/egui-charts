@@ -13,7 +13,7 @@ use egui::Color32;
 ///
 /// The `period` input sets both lengths, as studies saved with a single length expect;
 /// `atr_period`, which follows it in `inputs()`, then sets the ATR length alone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChandelierExit {
     /// Lookback period (typically 22)
     period: usize,

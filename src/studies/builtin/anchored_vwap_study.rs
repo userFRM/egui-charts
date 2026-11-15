@@ -6,7 +6,7 @@ use egui::Color32;
 /// Anchored VWAP - VWAP calculated from a specific anchor bar index forward.
 /// typical_price = (high + low + close) / 3
 /// VWAP = cumsum(volume * typical_price) / cumsum(volume) from anchor_bar onward.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AnchoredVWAP {
     anchor_bar: usize,
     values: IndicatorValues,

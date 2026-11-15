@@ -109,6 +109,7 @@ impl Chart {
             #[cfg(feature = "studies")]
             trade_profiles: Default::default(),
             pending_box_sizes: [false; 4],
+            box_sizes_read: None,
             older_bars_drawn: true,
             tracking_mode_active: false,
             mouse_in_chart: false,
@@ -120,8 +121,9 @@ impl Chart {
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
             readout_revision: crate::model::next_revision(),
-            // Unique also among the charts of other runs, whose snapshots a host may keep.
-            #[cfg(feature = "ui")]
+            // Unique also among the charts of other runs, whose snapshots and drawings documents a
+            // host may keep.
+            #[cfg(feature = "drawings")]
             data_table_identity: std::hash::BuildHasher::hash_one(
                 &std::hash::RandomState::new(),
                 (chrono::Utc::now(), crate::model::next_revision()),
@@ -163,6 +165,8 @@ impl Chart {
             drawing_store: None,
             #[cfg(feature = "drawings")]
             restored_studies: Default::default(),
+            #[cfg(feature = "drawings")]
+            restored_from: None,
             #[cfg(feature = "drawings")]
             study_column_ids: Default::default(),
             history: super::history::ChartHistory::default(),
@@ -490,7 +494,7 @@ impl Chart {
     /// Line Break) and of the baseline.
     ///
     /// Fixed sizes are in price units. ATR and percentage methods resolve from the loaded history
-    /// when this is called, or once enough bars arrive if history is not ready. They then stay
+    /// when this is called, or once the loaded bars give a positive size. They then stay
     /// fixed through ticks, appends, corrections and prepends. Calling this again or replacing
     /// the dataset with [`Chart::set_data`] recalculates them. A size the chart cannot use is
     /// reported on the chart. On price-based types a change
@@ -498,33 +502,30 @@ impl Chart {
     /// A volume candles style read from a document saved before that style existed takes the
     /// defaults; applying the document's chart settings builds it from their body colours.
     pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
-        let pending = params
-            .size_methods()
-            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
-        self.replace_chart_type_params(params, pending);
+        self.replace_chart_type_params(params, [true; 4]);
     }
 
-    /// Sets `params` as settings apply them: a size whose method is unchanged keeps its resolved
-    /// value, or keeps waiting for history, and only a changed method resolves again.
+    /// Sets `params` as settings, undo and redo apply them: a size whose method is unchanged keeps
+    /// its resolved value, or keeps waiting for history, and only a changed method resolves again.
     pub(crate) fn apply_chart_type_params(&mut self, mut params: ChartTypeParams) {
-        let mut pending = self.pending_box_sizes;
-        let methods = params.size_methods().into_iter();
-        let current = self.chart_type_params.size_methods();
-        let sizes = params.sizes_mut().into_iter();
-        let kept = self.chart_type_params.sizes_mut();
-        for (((method, current), (size, kept)), pending) in
-            methods.zip(current).zip(sizes.zip(kept)).zip(&mut pending)
-        {
-            if method != current {
-                *pending = method != crate::model::BoxSizeMethod::Fixed;
-            } else if method != crate::model::BoxSizeMethod::Fixed {
+        let (methods, current) = (params.size_methods(), self.chart_type_params.size_methods());
+        let changed: [bool; 4] = std::array::from_fn(|i| methods[i] != current[i]);
+        let sizes = params
+            .sizes_mut()
+            .into_iter()
+            .zip(self.chart_type_params.sizes_mut());
+        for (((size, kept), method), changed) in sizes.zip(methods).zip(changed) {
+            if !changed && method != crate::model::BoxSizeMethod::Fixed {
                 *size = *kept;
             }
         }
-        self.replace_chart_type_params(params, pending);
+        self.replace_chart_type_params(params, changed);
     }
 
-    fn replace_chart_type_params(&mut self, mut params: ChartTypeParams, pending: [bool; 4]) {
+    /// Sets `params`; the sizes in `armed` resolve again from the loaded bars, the others keep
+    /// their value or keep waiting for history. When a replay session ends, an armed size
+    /// resolves from the restored history instead of taking back its value from before it.
+    fn replace_chart_type_params(&mut self, mut params: ChartTypeParams, armed: [bool; 4]) {
         if params.styles.volume_candles.is_saved_without_style() {
             params.styles.volume_candles = Default::default();
         }
@@ -534,10 +535,40 @@ impl Chart {
             #[cfg(feature = "drawings")]
             self.drawings.deselect();
         }
+        let methods = params.size_methods();
         self.chart_type_params = params;
-        self.pending_box_sizes = pending;
-        self.chart_type_params
-            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
+        let pending = self.pending_box_sizes.iter_mut().zip(methods);
+        for ((pending, method), armed) in pending.zip(armed) {
+            if armed {
+                *pending = method != crate::model::BoxSizeMethod::Fixed;
+            }
+        }
+        if let Some(replay) = self.replay_window_mut() {
+            for (live, armed) in replay.live_sizes.iter_mut().zip(armed) {
+                if armed {
+                    *live = None;
+                }
+            }
+        }
+        // A changed method reads the bars again, also those it was last resolved from.
+        self.box_sizes_read = None;
+        self.resolve_box_sizes();
+    }
+
+    /// Resolves the pending sizes from the main bars. A size they give no positive value stays
+    /// pending, and since an ATR reads the whole history, it is read again only once the bars
+    /// or the pending sizes change.
+    pub(super) fn resolve_box_sizes(&mut self) {
+        let bars = &self.state.data().bars;
+        let last = bars
+            .last()
+            .map(|bar| [bar.high, bar.low, bar.close].map(f64::to_bits));
+        let (revision, len) = (self.state.revision(), bars.len());
+        if self.box_sizes_read != Some((revision, len, last, self.pending_box_sizes)) {
+            self.chart_type_params
+                .resolve_sizes(bars, &mut self.pending_box_sizes);
+            self.box_sizes_read = Some((revision, len, last, self.pending_box_sizes));
+        }
     }
 
     /// Returns the parameters of the price-based chart types and of the baseline.

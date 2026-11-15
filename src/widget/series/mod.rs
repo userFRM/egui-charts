@@ -871,8 +871,7 @@ impl Chart {
     pub(super) fn show_elements(&mut self) {
         #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
-        self.chart_type_params
-            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
+        self.resolve_box_sizes();
         // Range bars come from the held trades, as of the replay cutoff, while there are any,
         // after the approximation of the bars before them.
         let cutoff = self.replay_time();

@@ -8,7 +8,7 @@ use egui::Color32;
 /// the lower line, each over its own length and drawn its own number of bars later (earlier for
 /// a negative offset), with the band between them filled. A window with a non-finite high (low)
 /// has no upper (lower) value.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MAChannel {
     upper_length: usize,
     lower_length: usize,

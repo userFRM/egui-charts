@@ -1284,6 +1284,10 @@ fn replay_source(
 
 fn source_clock(chart: &egui_charts::Chart, interval: Timeframe) -> BarClock {
     use egui_charts::scales::TimezoneMode;
+    // The chart's own bars close where its replay completes them, which the session decides.
+    if chart.timeframe() == Some(interval) {
+        return chart.bar_clock();
+    }
     let clock = BarClock::new(interval);
     match &chart.chart_options().time_scale.timezone {
         TimezoneMode::Local => clock.with_local_timezone(),
@@ -1822,6 +1826,51 @@ mod tests {
             .drop_without_applying_deltas();
         }
         app.chart.bars(SeriesId::MAIN).to_vec()
+    }
+
+    /// With an exchange session, the chart shows the bar the replay is on. Under UTC with
+    /// extended hours, the daily bar of Tuesday 10 November 2026 closes with its post-market at
+    /// 01:00 UTC on Wednesday, an hour after its date ends. With regular hours in New York, the
+    /// hourly bar from 10:30 on Wednesday 11 November closes at 11:30.
+    #[test]
+    fn session_replay_shows_the_bar_at_the_cursor() {
+        for (session, zone, timeframe, time) in [
+            (
+                SessionType::ETH,
+                "UTC",
+                Timeframe::Day1,
+                "2026-11-10T00:00:00Z",
+            ),
+            (
+                SessionType::RTH,
+                "America/New_York",
+                Timeframe::Hour1,
+                "2026-11-11T15:30:00Z",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                "2026-11-12T15:00:00Z".parse().unwrap(),
+                true,
+            );
+            super::super::tests::settle(&mut app, &ctx);
+            app.timeframe_toolbar.set_session(session);
+            app.apply_session();
+            super::super::apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, zone);
+            app.switch_timeframe(timeframe);
+            super::super::tests::settle(&mut app, &ctx);
+            app.start_replay();
+            let time: DateTime<Utc> = time.parse().unwrap();
+            let at = app.bars.iter().position(|bar| bar.time == time).unwrap();
+            app.replay
+                .as_mut()
+                .unwrap()
+                .handle_action(ReplayAction::JumpToBar(at));
+            app.push_replay_window_to_chart();
+            let shown = app.chart.bars(SeriesId::MAIN).last().map(|bar| bar.time);
+            assert_eq!(shown, Some(time), "{session:?} in {zone}");
+        }
     }
 
     /// A click on a bar while a trade-by-trade replay runs restarts it with that bar complete,

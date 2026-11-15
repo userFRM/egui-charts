@@ -30,7 +30,7 @@ impl EnvelopeAverage {
 }
 
 /// Moving Average Envelopes. The band between the upper and lower lines is filled.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Envelopes {
     period: usize,
     percent: f64,
@@ -41,7 +41,7 @@ pub struct Envelopes {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     ema: Smoothing,
     window: std::collections::VecDeque<f64>,

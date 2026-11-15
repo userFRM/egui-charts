@@ -130,7 +130,14 @@ impl Chart {
             && !contacts
             && let Some(origin) = origin
         {
-            gestures.zooms[1] = Some((response.drag_delta().y, origin.y));
+            // The axis also senses clicks, so the movement until the drag is recognised comes
+            // with its first frame.
+            let delta = if response.drag_started() {
+                response.total_drag_delta().unwrap_or_default()
+            } else {
+                response.drag_delta()
+            };
+            gestures.zooms[1] = Some((delta.y, origin.y));
         }
         gestures.reset = options.axis_double_click_reset.price
             && response.double_clicked()
@@ -526,7 +533,12 @@ impl Chart {
                     && !self.in_other_pane(origin)
                 {
                     let map = self.last_price_map;
-                    let dy = response.drag_delta().y;
+                    // The chart also senses clicks, as on the price axis.
+                    let dy = if response.drag_started() {
+                        response.total_drag_delta().unwrap_or_default().y
+                    } else {
+                        response.drag_delta().y
+                    };
                     let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);
                     let range = self.state.price_scale().range();
                     self.state
@@ -1973,23 +1985,24 @@ mod tests {
     }
 
     /// Zoom speed must not depend on how many frames a drag spans, and the price that was
-    /// grabbed stays at its height.
+    /// grabbed stays at its height. In 20 frames of 5 points the first stays within the 6 point
+    /// click distance, so the drag is recognised only on the second.
     #[test]
     fn price_axis_drag_zoom_is_frame_independent() {
         for left in [false, true] {
-            let (one, ten) = (drag_price_axis(1, left), drag_price_axis(10, left));
+            let (one, slow) = (drag_price_axis(1, left), drag_price_axis(20, left));
             let span = one.1 - one.0;
             // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
             assert!(span > 18.0, "1 frame: {one:?}");
             assert!(
-                (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
-                "1 frame: {one:?}, 10 frames: {ten:?}"
+                (one.0 - slow.0).abs() < span * 1e-9 && (one.1 - slow.1).abs() < span * 1e-9,
+                "1 frame: {one:?}, 20 frames: {slow:?}"
             );
         }
         // The axis of an added series showing 90..110, grabbed a quarter of the way down at 105:
         // 100 points down widen the range by e^(100 / height), a quarter of it above 105.
         let key = crate::model::SeriesScale::Separate(1);
-        for steps in [1, 10] {
+        for steps in [1, 20] {
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
             let series = chart.add_series(crate::widget::SeriesOptions {
                 scale: key,
@@ -2074,7 +2087,8 @@ mod tests {
     }
 
     /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the
-    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale.
+    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale. The drag
+    /// takes 20 frames of 5 points, so its first frame stays within the 6 point click distance.
     #[test]
     fn chart_drag_pans_a_manual_price_range() {
         for (invert_scale, sign) in [(false, 1.0), (true, -1.0)] {
@@ -2098,7 +2112,7 @@ mod tests {
                 chart.chart_options.handle_scroll.horz_touch_drag = false;
                 chart.chart_options.kinetic_scroll.enabled = false;
                 chart.state.price_scale_mut().set_range(90.0, 110.0);
-                drag_down(&mut chart, |rect| rect.center(), 10, touch);
+                drag_down(&mut chart, |rect| rect.center(), 20, touch);
                 let enabled = group_enabled && if touch { vertical } else { mouse };
                 let shift = if enabled {
                     sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64

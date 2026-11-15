@@ -15,7 +15,7 @@ use std::borrow::Cow;
 /// line are filled.
 /// Every calculation or update refits the whole channel. A window containing
 /// a non-finite close has no values.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LinearRegressionChannel {
     period: usize,
     upper_multiplier: f64,

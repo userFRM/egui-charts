@@ -49,7 +49,7 @@ use egui::Color32;
 ///
 /// Applies an exponential weighting to closing prices so that recent bars
 /// have a greater influence. This is an overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EMA {
     period: usize,
     values: IndicatorValues,

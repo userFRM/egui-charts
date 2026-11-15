@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Arnaud Legoux Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ALMA {
     period: usize,
     offset: f64,

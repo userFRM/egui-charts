@@ -27,7 +27,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Triple Exponential Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TEMA {
     period: usize,
     values: IndicatorValues,

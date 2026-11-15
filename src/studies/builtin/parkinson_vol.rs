@@ -9,7 +9,7 @@ use egui::Color32;
 ///
 /// `sqrt(mean(ln(high / low)^2) / (4 * ln(2))) * sqrt(252) * 100`.
 /// Annualisation assumes daily bars and 252 trading days per year (see #672).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ParkinsonVol {
     period: usize,
     values: IndicatorValues,

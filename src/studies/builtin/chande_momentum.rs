@@ -7,7 +7,7 @@ use egui::Color32;
 /// Chande Momentum Oscillator (CMO)
 /// Measures momentum on both up and down days
 /// Ranges from -100 to +100
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChandeMomentumOscillator {
     /// Period for calculation (typically 14 or 20)
     period: usize,

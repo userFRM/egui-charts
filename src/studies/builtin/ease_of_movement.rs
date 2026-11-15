@@ -14,7 +14,7 @@ use egui::Color32;
 /// infinite high, low or volume has no value and is left out: the next bar's raw value
 /// compares with the last usable bar. The mean is taken over the bars of the window that have a raw value, and a
 /// window without one has no value.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EaseOfMovement {
     /// SMA smoothing period (typically 14)
     period: usize,
