@@ -1468,7 +1468,12 @@ pub fn render_footprint_statistics_rows(
                                             | FootprintStatistic::AskPercent
                                             | FootprintStatistic::VolumeChange,
                                             Some(value),
-                                        ) => format!("{value:.1}%"),
+                                        ) => match format!("{value:.1}%") {
+                                            // A negative value that rounds to zero has no sign
+                                            // to show.
+                                            text if text == "-0.0%" => "0.0%".to_owned(),
+                                            text => text,
+                                        },
                                         (FootprintStatistic::AskBidRatio, Some(value)) => {
                                             format!("{value:.2}:1")
                                         }
@@ -3057,7 +3062,11 @@ mod tests {
             ),
         );
         let config = FootprintConfig {
-            statistics_rows: vec![FootprintStatistic::Delta, FootprintStatistic::CumulativeDelta],
+            statistics_rows: vec![
+                FootprintStatistic::Delta,
+                FootprintStatistic::CumulativeDelta,
+                FootprintStatistic::VolumeChange,
+            ],
             ..Default::default()
         };
         let mut output = egui::Context::default().run_ui(
@@ -3077,8 +3086,25 @@ mod tests {
             })
             .collect();
         // The sides of the run end at 0.6000000000000001 each, where bar deltas of 0, 0.3 and
-        // -0.3 would sum to 5.55e-17.
-        assert_eq!(texts, ["Delta", "CVD", "0", "0", "0.3", "0.3", "-0.3", "0"]);
+        // -0.3 would sum to 5.55e-17. The volume of 0.3 after 0.30000000000000004 changes by
+        // -1.85e-14%.
+        assert_eq!(
+            texts,
+            [
+                "Delta",
+                "CVD",
+                "Vol change %",
+                "0",
+                "0",
+                "",
+                "0.3",
+                "0.3",
+                "-50.0%",
+                "-0.3",
+                "0",
+                "0.0%"
+            ]
+        );
     }
 
     #[test]
