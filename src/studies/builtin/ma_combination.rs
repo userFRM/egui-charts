@@ -131,7 +131,6 @@ impl std::fmt::Debug for MACombination {
             .field("lines", &self.lines)
             .field("defaults", &self.defaults)
             .field("values", &self.values)
-            .field("sourced", &self.sourced)
             .field("crossing", &self.crossing)
             .field("markers", &self.markers)
             .field("cross", &self.cross)
