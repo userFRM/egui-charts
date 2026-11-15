@@ -1875,7 +1875,8 @@ impl Chart {
                                 && study.is_visible()
                                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                         })
-                        .map_or(max_volume.max(1.0), |study| {
+                        // The painted columns scale by the largest visible volume, also below 1.
+                        .map_or(if max_volume > 0.0 { max_volume } else { 1.0 }, |study| {
                             super::volume::range(
                                 study.as_ref(),
                                 &(start_idx..end_idx),

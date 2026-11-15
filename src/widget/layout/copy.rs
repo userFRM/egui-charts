@@ -361,7 +361,8 @@ impl ChartLayout {
     /// The whole copy is one edit. [`Chart::undo`] on any chart it reached reverses it on all of
     /// them at the next [`Self::show`], and [`Chart::redo`] brings it back; a chart edited since
     /// the copy undoes those later edits with it, which its own redo restores. A chart that was
-    /// edited after the undo has no copy to redo and keeps that edit.
+    /// edited after the undo has no copy to redo and keeps that edit. A symbol or interval such
+    /// an undo or redo restores on a chart reaches the charts linked to it.
     pub fn apply_copy(
         &mut self,
         charts: &mut [&mut Chart],
@@ -625,6 +626,66 @@ mod tests {
             assert_eq!(
                 second.each_ref().map(|chart| chart.indicators().count()),
                 counts
+            );
+        }
+    }
+
+    /// Undoing a copy from one chart also undoes a later symbol or interval change of another
+    /// chart that received it. The chart sharing that chart's group follows the restored value,
+    /// as it follows a keyboard undo of the change.
+    #[test]
+    fn copy_undo_from_another_chart_keeps_a_symbol_group_together() {
+        use crate::widget::{ChartLink, ChartLinkGroups};
+        let state = |chart: &Chart| (chart.symbol().to_owned(), chart.timeframe());
+        let original = ("SAMPLE".to_owned(), Some(Timeframe::Min1));
+        for interval in [false, true] {
+            let mut charts = [chart(50), chart(50), chart(50)];
+            let sma = charts[0].add_indicator(Box::new(SMA::new(7)));
+            let factory = IndicatorFactory::new();
+            let mut layout = layout();
+            let group = ChartLink::Group("1".to_owned());
+            let linked = if interval {
+                ChartLinkGroups {
+                    interval: group,
+                    ..Default::default()
+                }
+            } else {
+                ChartLinkGroups {
+                    symbol: group,
+                    ..Default::default()
+                }
+            };
+            layout.set_link_groups(0, linked.clone(), true);
+            layout.set_link_groups(1, linked, true);
+            show(&mut layout, &mut charts.each_mut());
+            assert_eq!(
+                layout.apply_copy(&mut charts.each_mut(), 0, &LayoutCopy::Study(sma), &factory),
+                []
+            );
+            layout.set_active(1);
+            charts[1].user_action(|chart| {
+                if interval {
+                    chart.set_timeframe(Timeframe::Hour1);
+                } else {
+                    chart.set_symbol("OTHER");
+                }
+            });
+            show(&mut layout, &mut charts.each_mut());
+            assert_ne!(state(&charts[1]), original);
+            assert_eq!(
+                state(&charts[0]),
+                state(&charts[1]),
+                "the group follows the change"
+            );
+            layout.set_active(2);
+            assert!(charts[2].undo());
+            for _ in 0..2 {
+                show(&mut layout, &mut charts.each_mut());
+            }
+            assert_eq!(
+                charts.each_ref().map(state),
+                [original.clone(), original.clone(), original.clone()],
+                "interval {interval}"
             );
         }
     }
