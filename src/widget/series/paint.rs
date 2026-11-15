@@ -203,6 +203,7 @@ impl Chart {
                         .filter(|volume| volume.is_finite())
                         .max_by(f64::total_cmp)
                         .unwrap_or(1.0),
+                    0.0,
                 ),
                 &type_params,
                 rendering::TradingColors::new(options.up_color, options.down_color),

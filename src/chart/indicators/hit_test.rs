@@ -155,7 +155,7 @@ where
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
     {
-        plot.width = bar_spacing * 0.8;
+        plot.width = coords.volume_bar_width();
     }
     // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
     let reach = HIT_TOLERANCE + plot.width + bar_spacing;
