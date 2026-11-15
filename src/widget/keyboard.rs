@@ -11,6 +11,7 @@ use egui::{Context, Event, KeyboardShortcut};
 /// types that key's character, as some layouts need, unless another binding names that exact
 /// combination.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ShortcutMap {
     /// Key combinations and their actions, in precedence order.
     pub bindings: Vec<(KeyboardShortcut, KeyboardAction)>,

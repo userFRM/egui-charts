@@ -302,6 +302,7 @@ impl Default for MarginsSettings {
 
 /// The character that groups the thousands of the built-in price labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ThousandsSeparator {
     /// Plain digits: `42541.77`.
     Off,
@@ -500,6 +501,7 @@ impl Default for TradingSettings {
 
 /// Which trading events raise a notification: the levels of the toasts they use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum TradingNotifications {
     /// Fills, partial fills, rejections and refused orders.
     #[default]
@@ -563,8 +565,16 @@ impl Default for AlertsSettings {
 }
 
 /// Independent order-flow layers and their appearance. Missing saved fields keep layers off.
+///
+/// ```
+/// use egui_charts::widget::settings::OrderFlowSettings;
+///
+/// let mut settings = OrderFlowSettings::default();
+/// settings.show_heatmap = true;
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct OrderFlowSettings {
     /// Draw sampled resting liquidity behind the price series.
     pub show_heatmap: bool,
@@ -581,6 +591,16 @@ pub struct OrderFlowSettings {
 }
 
 /// Serializable display settings shared by the chart and its settings dialog.
+///
+/// ```
+/// use egui_charts::widget::settings::ChartSettingsState;
+///
+/// let mut settings = ChartSettingsState::default();
+/// settings.candle_colors.show_wick = false;
+/// settings.status_line.show_logo = false;
+/// settings.trading.instant_orders = true;
+/// settings.alerts.play_sound = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 // The trait impls below wrap the derived ones.

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// A resumable position in host-supplied history. Store it with the symbol's source interval
 /// and fetch that same source before restoring it. Restoring always pauses playback.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReplaySession {
     /// Source symbol, checked before restoration.
     pub symbol: String,

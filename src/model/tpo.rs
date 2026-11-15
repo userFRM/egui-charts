@@ -416,6 +416,16 @@ pub(crate) fn session_starts(
 ///
 /// # Returns
 /// Vector of TPO profiles, one per session
+///
+/// ```
+/// use egui_charts::model::{Bar, BarClock, TPOConfig, Timeframe, to_tpo_profiles};
+///
+/// let mut config = TPOConfig::default();
+/// config.tick_size = 0.25;
+/// let bars: Vec<Bar> = Vec::new();
+/// let profiles = to_tpo_profiles(&bars, &config, &BarClock::new(Timeframe::Min30));
+/// assert!(profiles.is_empty());
+/// ```
 pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Vec<TPOProfile> {
     if bars.is_empty() {
         return Vec::new();

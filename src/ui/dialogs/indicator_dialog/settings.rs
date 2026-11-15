@@ -20,6 +20,7 @@ enum Tab {
 
 /// A complete edit for the host to apply to the original study id.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StudyEdit {
     /// Stable id of the applied study.
     pub id: SeriesId,
