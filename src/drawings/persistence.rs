@@ -385,6 +385,20 @@ impl DrawingStorage {
     pub const CURRENT_VERSION: u32 = 10;
 
     /// Create new storage for a symbol
+    ///
+    /// ```
+    /// use egui_charts::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
+    /// use egui_charts::drawings::{Drawing, DrawingToolType};
+    ///
+    /// let mut line = StoredDrawing::new("line", Drawing::new(1, DrawingToolType::TrendLine));
+    /// line.add_point(StoredCoord::new(1_700_000_000_000, 101.5));
+    /// line.add_point(StoredCoord::new(1_700_003_600_000, 103.0));
+    /// let mut storage = DrawingStorage::new("AAPL");
+    /// storage.add_drawing(line);
+    /// let (read, skipped) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+    /// assert!(skipped.is_empty());
+    /// assert_eq!((read.drawings().len(), read.saved_by), (1, None));
+    /// ```
     pub fn new(symbol: impl Into<String>) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
