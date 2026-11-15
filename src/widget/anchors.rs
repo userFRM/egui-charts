@@ -167,7 +167,9 @@ impl Chart {
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
     pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, LoadError> {
-        self.load_drawings_remapped(json, false)
+        let skipped = self.load_drawings_remapped(json, false)?;
+        self.drawing_resets += 1;
+        Ok(skipped)
     }
 
     /// [`Self::load_drawings`]; with `remap`, a drawing whose study was replaced when a snapshot

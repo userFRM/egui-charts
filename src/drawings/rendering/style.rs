@@ -681,6 +681,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y: &|p| p as f32,
                         y_to_price: &f64::from,
                         time_axis: true,
@@ -786,7 +787,9 @@ mod tests {
     /// Text boxes take the theme's card, or a solid label in the drawing colour, unless their
     /// text, background and border settings say otherwise; a pin's popup leaves the pin's colour
     /// to the pin. Contrast of white on the red is 1.05 / 0.269 = 3.90 and on the yellow
-    /// 1.05 / 0.860 = 1.22, so black reads on the yellow.
+    /// 1.05 / 0.860 = 1.22, so black reads on the yellow. A pin's popup follows its switch, the
+    /// selection and the pointer on a neutral leader, and a signpost's disc follows its glyph
+    /// switch and colour, taking the plate's place on the pole.
     #[test]
     fn text_boxes_follow_the_theme_and_their_settings() {
         use DrawingToolType::*;
@@ -928,6 +931,117 @@ mod tests {
                     assert_eq!(painted_strokes, strokes, "{name}");
                 }
             }
+
+            let said = |shapes: &[Shape], text: &str| {
+                shapes
+                    .iter()
+                    .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == text))
+            };
+            let mut signpost = pattern(Signpost);
+            signpost.color = red.to_array();
+            signpost.text = Some("Hi".into());
+            type Glyph = (fn(&mut Drawing), Option<Color32>);
+            let glyphs: [Glyph; 3] = [
+                (|_| {}, None),
+                (|d| d.marker.show_glyph = true, Some(red)),
+                (
+                    |d| {
+                        d.marker.show_glyph = true;
+                        d.marker.glyph_color = Some([0, 0, 255, 255]);
+                    },
+                    Some(blue),
+                ),
+            ];
+            for (setup, disc) in glyphs {
+                let mut drawing = signpost.clone();
+                setup(&mut drawing);
+                let shapes = paint_on(&ctx, &drawing, false);
+                // Circles reach these shapes as polygons.
+                let discs: Vec<_> = (shapes.iter())
+                    .filter_map(|s| match s {
+                        Shape::Path(p) if p.closed => {
+                            Some((egui::Rect::from_points(&p.points).center().round(), p.fill))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let name = format!("disc {disc:?}, dark {}", theme.dark);
+                let anchor = Pos2::new(100.0, 100.0);
+                // The bundled fonts lack the default face, so it is drawn in white on the disc:
+                // its outline, its eyes and, below, its smile as a line.
+                let face = |fill| {
+                    let eye = |x| (Pos2::new(x, 98.0), Color32::WHITE);
+                    [
+                        (anchor, fill),
+                        (anchor, Color32::TRANSPARENT),
+                        eye(98.0),
+                        eye(102.0),
+                    ]
+                };
+                assert_eq!(
+                    discs,
+                    Vec::from_iter(disc.into_iter().flat_map(face)),
+                    "{name}"
+                );
+                let smiles = (shapes.iter())
+                    .filter(|s| matches!(s, Shape::Path(p) if !p.closed))
+                    .count();
+                assert_eq!(smiles, usize::from(disc.is_some()), "{name}");
+                assert!(!said(&shapes, "🙂"), "{name}");
+                let plates: Vec<_> = (shapes.iter())
+                    .filter_map(|s| match s {
+                        Shape::Rect(r) => Some(r.rect),
+                        _ => None,
+                    })
+                    .collect();
+                let [plate] = plates[..] else {
+                    panic!("{name}: {} plates", plates.len());
+                };
+                // The plate is centred on the label's anchor, or ends 4 points above a disc of
+                // 14 points radius, and the pole from the bar at (100, 300) stops at either.
+                let (bottom, pole) = if disc.is_some() {
+                    (82.0, 114.0)
+                } else {
+                    (100.0 + plate.height() / 2.0, plate.max.y)
+                };
+                assert!((plate.max.y - bottom).abs() < 0.01, "{name}: {plate:?}");
+                let poles: Vec<_> = (shapes.iter())
+                    .filter_map(|s| match s {
+                        Shape::LineSegment { points, .. } => Some(*points),
+                        _ => None,
+                    })
+                    .collect();
+                let pole = [Pos2::new(100.0, 300.0), Pos2::new(100.0, pole)];
+                assert_eq!(poles, [pole], "{name}");
+            }
+
+            let mut pin = pattern(AnchoredNote);
+            pin.text = Some("Hi".into());
+            pin.marker.show_text = false;
+            assert!(!said(&paint_on(&ctx, &pin, true), "Hi"), "switched off");
+            pin.marker.show_text = true;
+            assert!(!said(&paint_on(&ctx, &pin, false), "Hi"), "pointer away");
+            // The pin's tip is on its anchor, with its head 16 points above.
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::PointerMoved(Pos2::new(100.0, 284.0))],
+                    ..Default::default()
+                },
+                |_| {},
+            );
+            output.drop_without_applying_deltas();
+            let shapes = paint_on(&ctx, &pin, false);
+            assert!(said(&shapes, "Hi"), "pointer on the pin");
+            let leaders: Vec<_> = (shapes.iter())
+                .filter_map(|s| match s {
+                    Shape::LineSegment { stroke, .. } => Some(*stroke),
+                    _ => None,
+                })
+                .collect();
+            let neutral = Stroke::new(1.0, theme.chart.axis_text_secondary);
+            assert_eq!(leaders, [neutral], "dark {}", theme.dark);
+            pin.marker.show_text = false;
+            assert!(!said(&paint_on(&ctx, &pin, false), "Hi"), "switched off");
         }
     }
 
@@ -1507,6 +1621,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| p as f32,
                     y_to_price: &f64::from,
                     time_axis: true,

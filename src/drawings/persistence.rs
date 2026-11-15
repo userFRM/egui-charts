@@ -214,6 +214,9 @@ impl StoredDrawing {
         if !d.position_style.is_valid() {
             return Some("position_style".into());
         }
+        if !d.marker.is_valid() {
+            return Some("marker".into());
+        }
         let sizing = d.position_sizing;
         if [
             sizing.point_value,
@@ -1407,6 +1410,12 @@ mod tests {
             bold: true,
             italic: true,
         });
+        d.marker = crate::drawings::AnnotationMarker {
+            show_text: false,
+            glyph: "🚀".into(),
+            show_glyph: true,
+            glyph_color: Some([21, 22, 23, 24]),
+        };
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1696,6 +1705,13 @@ mod tests {
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
             want.note_text_style = None;
+            // Earlier files show a pin's text and carry no glyph on a signpost.
+            want.marker = crate::drawings::AnnotationMarker {
+                show_text: true,
+                glyph: "🙂".into(),
+                show_glyph: false,
+                glyph_color: None,
+            };
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2368,6 +2384,7 @@ mod tests {
                         finer: &[],
                         revision: 0,
                         bar_to_x: &bar_to_x,
+                        bar_spacing: 8.0,
                         price_to_y: &price_to_y,
                         y_to_price: &|y| (500.0 - f64::from(y)) / 2.0,
                         time_axis: false,
@@ -2679,7 +2696,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 38] = [
+        let cases: [(Spoil, &str); 39] = [
             (
                 |s| {
                     first(s)
@@ -2734,6 +2751,7 @@ mod tests {
                 |s| first(s).drawing.position_style.font_size = f32::NAN,
                 "invalid position_style",
             ),
+            (|s| first(s).drawing.marker.glyph.clear(), "invalid marker"),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
                 "invalid position_sizing",

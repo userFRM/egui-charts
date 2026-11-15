@@ -102,6 +102,8 @@ pub struct LayoutMenu {
     /// A changed edit count with the input time it was first seen.
     changed: Option<(u64, f64)>,
     error: Option<String>,
+    /// The context of the last poll, to translate errors of calls between frames.
+    ctx: Option<egui::Context>,
     share: ShareControls,
 }
 
@@ -133,6 +135,7 @@ impl LayoutMenu {
             observed_layout: None,
             changed: None,
             error: None,
+            ctx: None,
             share: ShareControls::default(),
         }
     }
@@ -200,7 +203,13 @@ impl LayoutMenu {
         self.saved_edits = Some(self.edits);
         match layout.to_json() {
             Ok(document) => self.request(Request::Save(name.to_owned(), document)),
-            Err(error) => self.error = Some(format!("Could not save {name}: {error}")),
+            Err(error) => {
+                self.error = Some(l10n::format_text_or_english(
+                    self.ctx.as_ref(),
+                    "Could not save {name}: {error}",
+                    &[("name", name), ("error", error.to_string().as_str())],
+                ))
+            }
         }
     }
 
@@ -220,7 +229,13 @@ impl LayoutMenu {
         self.saved_edits = Some(self.edits);
         match layout.to_json() {
             Ok(document) => self.request(Request::Rename(old, name.to_owned(), document)),
-            Err(error) => self.error = Some(format!("Could not rename to {name}: {error}")),
+            Err(error) => {
+                self.error = Some(l10n::format_text_or_english(
+                    self.ctx.as_ref(),
+                    "Could not rename to {name}: {error}",
+                    &[("name", name), ("error", error.to_string().as_str())],
+                ))
+            }
         }
     }
 
@@ -233,6 +248,7 @@ impl LayoutMenu {
     /// Returns a layout [`open`](Self::open) read, now the current layout, for the host to
     /// restore before its next [`autosave_due`](Self::autosave_due).
     pub fn poll(&mut self, ctx: &egui::Context) -> Option<(String, SavedLayout)> {
+        self.ctx = Some(ctx.clone());
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         let mut opened = None;

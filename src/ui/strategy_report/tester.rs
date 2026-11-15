@@ -494,7 +494,14 @@ impl StrategyTester {
                 ui.label(l10n::text(ui.ctx(), "Waiting for host history"));
             }
             if self.job.is_some() || self.pending.is_some() {
-                ui.label(format!("{} / {} trials", self.completed.get(), self.total));
+                ui.label(l10n::format_text(
+                    ui.ctx(),
+                    "{done} / {total} trials",
+                    &[
+                        ("done", self.completed.get().to_string()),
+                        ("total", self.total.to_string()),
+                    ],
+                ));
                 if ui.button(l10n::text(ui.ctx(), "Cancel run")).clicked() {
                     self.changed();
                 }
@@ -590,7 +597,11 @@ impl StrategyTester {
                             }
                             match optimisation::grid(&self.ranges) {
                                 Ok((count, _)) => {
-                                    ui.label(format!("{count} trials"));
+                                    ui.label(l10n::format_text(
+                                        ui.ctx(),
+                                        "{count} trials",
+                                        &[("count", count.to_string())],
+                                    ));
                                     optimise = ui
                                         .add_enabled(
                                             self.job.is_none() && self.pending.is_none(),

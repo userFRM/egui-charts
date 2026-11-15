@@ -4,19 +4,11 @@ use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::drawings::persistence::{DrawingStorage, LoadError, StorageError, StoredPane};
-use crate::localization as l10n;
+use crate::localization::format_text_or_english as message;
 use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-
-/// Formats a message for the chart's last context, with English before its first frame.
-fn message(ctx: Option<&egui::Context>, english: &str, values: &[(&str, &str)]) -> String {
-    match ctx {
-        Some(ctx) => l10n::format_text(ctx, english, values),
-        None => l10n::substitute(english, values),
-    }
-}
 
 /// What a chart asked its storage about the kept copies of its symbols' drawings.
 #[derive(Default)]

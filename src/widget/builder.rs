@@ -156,6 +156,8 @@ impl Chart {
             drawings: DrawingManager::new(),
             #[cfg(feature = "drawings")]
             symbol_drawings: Default::default(),
+            #[cfg(feature = "drawings")]
+            drawing_resets: 0,
             #[cfg(not(feature = "drawings"))]
             symbol_markers: Default::default(),
             #[cfg(feature = "drawings")]

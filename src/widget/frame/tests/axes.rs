@@ -1264,3 +1264,52 @@ fn heikin_last_visible_price_line_without_main_bars() {
         );
     }
 }
+
+/// Study value tags read their plot at the last bar in view, in the price pane, in a study pane
+/// and on the volume overlay, and read the newest values again at the latest bars. Bar `i` has
+/// its low at 100 + i, closes 10 above it except on every third bar and trades i + 1 lots; the
+/// SMA(3) and MACD(12, 26, 9) values are worked out by hand from those closes.
+#[cfg(feature = "studies")]
+#[test]
+fn study_value_tags_read_the_last_bar_in_view() {
+    use crate::model::{Bar, BarData};
+    let start = chrono::DateTime::UNIX_EPOCH;
+    let bars = (0..100)
+        .map(|i| {
+            let low = 100.0 + i as f64;
+            let close = if i % 3 == 0 { low } else { low + 10.0 };
+            let time = start + chrono::Duration::days(i);
+            Bar::new(time, low, close, low, close, (i + 1) as f64)
+        })
+        .collect();
+    let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+    chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+    chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    // Scrolled back 40 bars the view ends at bar 59.
+    for (offset, expected) in [
+        (-40.0, ["164.67", "7.22", "60"]),
+        (0.0, ["204.67", "6.69", "100"]),
+    ] {
+        let scale = chart.state.time_scale_mut();
+        scale.set_bar_spacing(12.0);
+        scale.set_right_offset(offset);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+        let plot = chart.last_rendered_price_rect;
+        let labels: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.pos.x >= plot.right() => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for expected in expected {
+            assert!(
+                labels.contains(&expected),
+                "offset {offset}: missing {expected}: {labels:?}"
+            );
+        }
+    }
+}

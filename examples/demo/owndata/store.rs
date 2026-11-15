@@ -68,6 +68,19 @@ pub(crate) fn import(text: &str) -> Result<Profile, String> {
     serde_json::from_value(file).map_err(|error| format!("not a profile: {error}"))
 }
 
+/// The ready profiles, in the order the profile list shows them: public sources that need no key.
+/// They ship with the demo and are never saved, so a later version of the demo updates them.
+pub(crate) fn ready() -> Vec<Profile> {
+    const FILES: [&str; 3] = [
+        include_str!("ready/binance-spot.json"),
+        include_str!("ready/coinbase-exchange.json"),
+        include_str!("ready/kraken.json"),
+    ];
+    // The tests read every shipped file through the feed, so a file that does not read fails
+    // there.
+    FILES.iter().filter_map(|file| import(file).ok()).collect()
+}
+
 /// `name` as the stem of a file name: every character that is not an ASCII letter, a digit,
 /// `-` or `_` becomes `_`, and an empty name becomes `unnamed`. A profile name or a symbol
 /// that was typed or imported can therefore not carry a path to the place a file is written.
