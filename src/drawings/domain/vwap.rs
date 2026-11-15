@@ -62,6 +62,7 @@ impl VwapBand {
 
 /// What a band multiplier counts: the unit of an anchored VWAP band's distance from the VWAP.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VwapBandMode {
     /// Volume-weighted standard deviations of the source price.
     #[default]

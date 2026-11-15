@@ -105,10 +105,8 @@ fn run(name: &str, cadence: TimeDelta, seconds: usize) {
         .with_timeframe(Timeframe::Min1)
         .with_feed(feed.clone())
         .build();
-    let config = DepthHistoryConfig {
-        cadence,
-        ..Default::default()
-    };
+    let mut config = DepthHistoryConfig::default();
+    config.cadence = cadence;
     chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
     let ctx = egui::Context::default();
     let mut now = Utc::now();

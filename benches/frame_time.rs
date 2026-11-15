@@ -564,12 +564,13 @@ fn chart(scenario: &Scenario) -> Chart {
                     times
                         .into_iter()
                         .enumerate()
-                        .map(|(index, time)| TimeScaleEvent {
-                            id: index.to_string(),
-                            time,
-                            kind: EventKind::News,
-                            title: "Headline".into(),
-                            details: String::new(),
+                        .map(|(index, time)| {
+                            TimeScaleEvent::new(
+                                index.to_string(),
+                                time,
+                                EventKind::News,
+                                "Headline",
+                            )
                         })
                         .collect(),
                 );
