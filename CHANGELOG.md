@@ -497,6 +497,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `SettingsStore` saves settings that hold fractional drawing defaults once instead of on every poll, and `flush` returns `true` again: serde_json's `float_roundtrip` feature is now enabled, so numbers read back exactly as written. Cargo enables the feature for every crate in the build that uses serde_json. ([#2953](https://github.com/userFRM/egui-charts/issues/2953))
+
 - `FootprintBar::empty` is public, so hosts can populate prepared rows and totals after the type became non-exhaustive. `Footprint::from_bars` still validates the completed aggregate. ([#3059](https://github.com/userFRM/egui-charts/issues/3059))
 
 - Footprint annotations reuse cached studies without comparing every price row on unchanged repaints, and recalculation no longer copies ungrouped rows first. ([#2569](https://github.com/userFRM/egui-charts/issues/2569))
