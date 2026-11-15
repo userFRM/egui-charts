@@ -3,6 +3,7 @@
 //! Includes: XABCD, Cypher, Head & Shoulders, ABCD, Triangle, and Three Drives patterns.
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::localization as l10n;
 use crate::painting::dashed_line::draw_dotted_segments;
 use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
@@ -33,9 +34,11 @@ impl Drawing {
             self.fill_regions(painter, regions.iter().map(|r| &r[..]));
         }
         self.draw_legs_and_anchors(painter);
+        let [left, head, right] =
+            ["Left Shoulder", "Head", "Right Shoulder"].map(|name| l10n::text(painter.ctx(), name));
         self.draw_point_labels(
             painter,
-            &["", "Left Shoulder", "", "Head", "", "Right Shoulder", ""],
+            &["", &left, "", &head, "", &right, ""],
             self.label_colors(),
         );
         if let Some((neckline, _)) = outline {
@@ -417,8 +420,11 @@ mod tests {
     }
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
+        paint_in(&egui::Context::default(), drawing)
+    }
+
+    fn paint_in(ctx: &egui::Context, drawing: &Drawing) -> Vec<Shape> {
         let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let ctx = egui::Context::default();
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             drawing.render_original(
                 ui.painter(),
@@ -530,6 +536,15 @@ mod tests {
             assert_eq!(painted, expected, "{tool:?}");
             colours(&drawing, Color32::WHITE);
         }
+        // A translator sees the shoulder and head names.
+        let ctx = egui::Context::default();
+        crate::localization::mark_keys(&ctx);
+        let mut marked: Vec<_> = texts(&paint_in(&ctx, &pattern(HeadAndShoulders, cases[3].1)))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        marked.sort();
+        assert_eq!(marked, ["~", "~", "~"]);
         // White reads at 1.22:1 on this yellow, black at 17:1.
         let mut yellow = pattern(XABCDPattern, cases[0].1);
         yellow.color = [255, 235, 59, 255];

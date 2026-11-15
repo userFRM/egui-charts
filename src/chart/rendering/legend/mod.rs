@@ -388,7 +388,7 @@ impl<'a> Legend<'a> {
         if self.show_ohlc {
             if plot.width() < 600.0 {
                 layout.field(
-                    "C ",
+                    &format!("{} ", l10n::text(ui.ctx(), "C")),
                     self.formatters.price.map_or_else(
                         || {
                             crate::scales::group_thousands(
@@ -1155,13 +1155,13 @@ impl<'a> Layout<'a> {
     ) {
         let color = self.bar_color(bar);
         for (label, value) in [
-            ("O ", bar.open),
-            ("H ", bar.high),
-            ("L ", bar.low),
-            ("C ", bar.close),
+            ("O", bar.open),
+            ("H", bar.high),
+            ("L", bar.low),
+            ("C", bar.close),
         ] {
             self.field(
-                label,
+                &format!("{} ", l10n::text(self.painter.ctx(), label)),
                 formatter.map_or_else(
                     || {
                         crate::scales::group_thousands(

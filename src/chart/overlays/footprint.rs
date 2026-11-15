@@ -748,7 +748,7 @@ pub fn render_footprint(
                         Stroke::NONE,
                     ));
                     let galley = painter.layout_no_wrap(
-                        label.to_owned(),
+                        l10n::text(painter.ctx(), label),
                         FontId::monospace(FONT_LIMITS[0]),
                         config.text_color,
                     );
@@ -1175,8 +1175,13 @@ fn render_info_box(
     } else {
         config.text_color
     };
-    let labels = ["Delta", "Total"]
-        .map(|label| painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color));
+    let labels = ["Delta", "Total"].map(|label| {
+        painter.layout_no_wrap(
+            l10n::text(painter.ctx(), label),
+            font.clone(),
+            config.text_color,
+        )
+    });
     let line = labels[0].size().y;
     let labels_width = labels[0].size().x.max(labels[1].size().x) + 6.0;
     let bounds = Rect::from_x_y_ranges(block.x_range(), top + line + 3.0..=top + line * 3.0 + 9.0);
@@ -1330,12 +1335,15 @@ pub fn render_footprint_statistics_rows(
         return;
     }
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
-    let labels: Vec<_> = rows.iter().map(|row| row.label()).collect();
+    let labels: Vec<_> = rows
+        .iter()
+        .map(|row| l10n::text(painter.ctx(), row.label()))
+        .collect();
     let row_height = (mapping.rect.height() / labels.len() as f32).min(12.0);
     let font = FontId::monospace(10.0);
     let labels: Vec<_> = labels
         .into_iter()
-        .map(|label| painter.layout_no_wrap(label.into(), font.clone(), text_color))
+        .map(|label| painter.layout_no_wrap(label, font.clone(), text_color))
         .collect();
     let rows_fit = labels.iter().all(|label| label.size().y <= row_height);
     let label_width = labels
@@ -1441,6 +1449,7 @@ pub fn render_footprint_statistics_rows(
     let mut size = 10.0;
     let mut fitted = Vec::new();
     if mapping.bar_spacing >= 22.0 && rows_fit {
+        let unavailable = l10n::text(painter.ctx(), "n/a");
         'fitting: for abbreviate in [false, true] {
             for font_size in [10.0, FONT_LIMITS[0]] {
                 size = font_size;
@@ -1459,7 +1468,7 @@ pub fn render_footprint_statistics_rows(
                                         (FootprintStatistic::VolumeChange, None) if *first => {
                                             String::new()
                                         }
-                                        (_, None) => "n/a".to_owned(),
+                                        (_, None) => unavailable.clone(),
                                         (
                                             FootprintStatistic::DeltaPercent
                                             | FootprintStatistic::BidPercent
@@ -1507,13 +1516,16 @@ pub fn render_footprint_statistics_rows(
         painter.text(
             mapping.rect.center(),
             Align2::CENTER_CENTER,
-            if !has_data {
-                "Execution statistics unavailable"
-            } else if !rows_fit {
-                "Enlarge chart for per-bar statistics"
-            } else {
-                "Zoom in for per-bar statistics"
-            },
+            l10n::text(
+                painter.ctx(),
+                if !has_data {
+                    "Execution statistics unavailable"
+                } else if !rows_fit {
+                    "Enlarge chart for per-bar statistics"
+                } else {
+                    "Zoom in for per-bar statistics"
+                },
+            ),
             font,
             text_color,
         );
@@ -1817,7 +1829,11 @@ pub fn render_footprint_studies(
             } else {
                 (rect.left_center() - vec2(3.0, 0.0), Align2::RIGHT_CENTER)
             };
-            let galley = painter.layout_no_wrap(label.into(), FontId::monospace(10.0), color);
+            let galley = painter.layout_no_wrap(
+                l10n::text(painter.ctx(), label),
+                FontId::monospace(10.0),
+                color,
+            );
             let bounds = anchor.anchor_size(at, galley.size());
             let bar = occupied.get(&start).copied().unwrap_or(rect);
             let alternatives = [
@@ -2209,6 +2225,17 @@ mod tests {
         inverted: bool,
         config: &FootprintConfig,
     ) -> (Vec<Shape>, f32) {
+        paint_ladder_in(&egui::Context::default(), rows, spacing, inverted, config)
+    }
+
+    /// [`paint_ladder`] on `ctx`.
+    fn paint_ladder_in(
+        ctx: &egui::Context,
+        rows: &[(f64, f64, f64)],
+        spacing: f32,
+        inverted: bool,
+        config: &FootprintConfig,
+    ) -> (Vec<Shape>, f32) {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         // Open and close match so the candle takes the text colour, not a side's.
         let bars = [Bar::new(time, 102.0, 104.0, 100.0, 102.0, 1.0)];
@@ -2234,7 +2261,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let mut output = egui::Context::default().run_ui(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(rect),
                 ..Default::default()
@@ -2372,6 +2399,25 @@ mod tests {
                 .find(|(label, _)| label == total)
                 .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
             assert!(!rect.intersects(below), "{total} over the extreme ratio");
+        }
+        // A translator sees the summary labels; the totals stay numbers.
+        let ctx = egui::Context::default();
+        crate::localization::mark_keys(&ctx);
+        let (shapes, _) = paint_ladder_in(&ctx, &rows, 120.0, false, &config);
+        let text: Vec<_> = painted_text(&shapes)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert_eq!(
+            text.iter().filter(|text| text.as_str() == "~").count(),
+            2,
+            "{text:?}"
+        );
+        for total in ["543.5K", "370.1K"] {
+            assert!(
+                text.iter().any(|text| text == total),
+                "{total} missing from {text:?}"
+            );
         }
         // At 80 points per bar the labelled summary needs 80 points in a block of 73.1.
         let rows = [(106.0, 2_340.0, 2_510.0), (105.0, 3_201.0, 1_200.0)];
@@ -2871,15 +2917,18 @@ mod tests {
         ];
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 136.0));
         let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
-        for (spacing, available, large, height) in [
-            (60.0, true, false, 136.0),
-            (40.0, true, false, 136.0),
-            (3.0, true, false, 136.0),
-            (60.0, false, false, 136.0),
-            (40.0, true, true, 136.0),
-            (60.0, true, false, 90.0),
-            (60.0, true, false, 112.0),
-            (60.0, true, false, 196.0),
+        // Marked rows run with a translator that turns each name and message into "~".
+        for (spacing, available, large, height, marked) in [
+            (60.0, true, false, 136.0, false),
+            (40.0, true, false, 136.0, false),
+            (3.0, true, false, 136.0, false),
+            (60.0, false, false, 136.0, false),
+            (40.0, true, true, 136.0, false),
+            (60.0, true, false, 90.0, false),
+            (60.0, true, false, 112.0, false),
+            (60.0, true, false, 196.0, false),
+            (60.0, true, false, 196.0, true),
+            (60.0, false, false, 196.0, true),
         ] {
             // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
             let count = if height == 112.0 {
@@ -2917,7 +2966,11 @@ mod tests {
                     false,
                 ),
             );
-            let mut output = egui::Context::default().run_ui(
+            let ctx = egui::Context::default();
+            if marked {
+                crate::localization::mark_keys(&ctx);
+            }
+            let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
                     ..Default::default()
@@ -2964,7 +3017,9 @@ mod tests {
                 assert_eq!(texts.len(), 1);
                 assert_eq!(
                     texts[0].galley.text(),
-                    if !available {
+                    if marked {
+                        "~"
+                    } else if !available {
                         "Execution statistics unavailable"
                     } else if height == 90.0 {
                         "Enlarge chart for per-bar statistics"
@@ -2979,13 +3034,17 @@ mod tests {
                 count * 3,
                 "{count} labels and two complete columns at {spacing}"
             );
-            assert_eq!(
-                texts
-                    .iter()
-                    .filter(|t| t.galley.text() == "Delta %")
-                    .count(),
-                1
-            );
+            if marked {
+                assert!(texts[..count].iter().all(|t| t.galley.text() == "~"));
+            } else {
+                assert_eq!(
+                    texts
+                        .iter()
+                        .filter(|t| t.galley.text() == "Delta %")
+                        .count(),
+                    1
+                );
+            }
             for (column, expected) in [
                 [
                     "16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1", "3", "5.333",
