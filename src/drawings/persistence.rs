@@ -374,7 +374,8 @@ impl DrawingStorage {
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
-    /// rendered reach when loaded.
+    /// rendered reach when loaded. A version 1 ray drawn right to left, which ran from its first
+    /// anchor to the right edge, loads with Left instead of Right.
     pub const CURRENT_VERSION: u32 = 10;
 
     /// Create new storage for a symbol
@@ -557,8 +558,19 @@ impl DrawingStorage {
                             // and pitchforks.
                             match tool {
                                 DrawingToolType::Ray => {
-                                    drawing.drawing.extend_left = false;
-                                    drawing.drawing.extend_right = true;
+                                    // Version 1 builds ran a ray from its first anchor to the
+                                    // right edge, which Left alone reaches when the second
+                                    // anchor is earlier, and a vertical one towards its second
+                                    // anchor, as Right does. Version 2 files keep the later
+                                    // reach past the second anchor.
+                                    let right_to_left = match drawing.points.as_slice() {
+                                        [a, b, ..] if version == 1 => {
+                                            (a.ts_ms, a.subms_ns) > (b.ts_ms, b.subms_ns)
+                                        }
+                                        _ => false,
+                                    };
+                                    drawing.drawing.extend_left = right_to_left;
+                                    drawing.drawing.extend_right = !right_to_left;
                                 }
                                 DrawingToolType::ExtendedLine => {
                                     drawing.drawing.extend_left = true;
@@ -1134,8 +1146,9 @@ mod v1 {
             LineMeasurements::default()
         };
         drawing.position_readout.persistent = true;
-        // Rays and extended lines get their former reach from the version 3 step. Arrow and
-        // path heads keep their geometry; the other creation fields are unset or tool-neutral.
+        // Rays and extended lines get their former reach from the version 3 step, where a ray
+        // drawn right to left runs to the right edge as it did. Arrow and path heads keep their
+        // geometry; the other creation fields are unset or tool-neutral.
         drawing.stroke_width = stored.line_width;
         if tool_type == DrawingToolType::Measure
             && let [a, b, ..] = stored.points.as_slice()
@@ -1746,13 +1759,15 @@ mod tests {
             (DrawingToolType::Ray, "Ray"),
             (DrawingToolType::ExtendedLine, "Extended Line"),
         ] {
-            for (fixture, tool_path, tool_name) in [
+            for (version, fixture, tool_path, tool_name) in [
                 (
+                    1,
                     include_str!("fixtures/storage_v1.json"),
                     "/tool_type",
                     name.to_owned(),
                 ),
                 (
+                    2,
                     include_str!("fixtures/storage_v2.json"),
                     "/drawing/tool_type",
                     serde_json::to_value(tool)
@@ -1779,8 +1794,15 @@ mod tests {
                         DrawingStorage::from_json(&saved.to_string()).unwrap();
                     assert!(skipped.is_empty(), "{skipped:?}");
                     let drawing = &mut loaded.drawings[0].drawing;
-                    assert_eq!(drawing.extend_left, tool == DrawingToolType::ExtendedLine);
-                    assert!(drawing.extend_right);
+                    // Version 1 builds ran a ray drawn right to left from its first anchor to the
+                    // right edge, the side Left alone reaches.
+                    let left_only = tool == DrawingToolType::Ray && version == 1 && reversed;
+                    let extended_line = tool == DrawingToolType::ExtendedLine;
+                    assert_eq!(
+                        (drawing.extend_left, drawing.extend_right),
+                        (extended_line || left_only, !left_only),
+                        "{tool:?} v{version} reversed: {reversed}"
+                    );
                     drawing.extend_left = false;
                     drawing.extend_right = false;
                     let (again, skipped) =
@@ -2607,6 +2629,50 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Every build that wrote version 1 ran a ray from its first anchor to the right edge,
+    /// whichever side its second anchor was on, and a vertical one towards its second anchor.
+    /// Anchors at bar 10, price 100 and bar 3, price 110 paint at (180, 300) and (124, 280), so
+    /// that ray ran to x = 1000 at y = 300 + 820 / 56 * 20 = 592.857 and never reached x = 0. No
+    /// Extend setting leaves out the segment between the anchors, so Left alone, from (124, 280)
+    /// to (1000, 592.857), is the nearest. The vertical ray from (140, 300) through (140, 280)
+    /// ran up to (140, 0), as Right paints it.
+    #[test]
+    fn version_1_ray_drawn_right_to_left_keeps_its_released_reach() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 1000.0));
+        let near = |p: egui::Pos2, (x, y): (f32, f32)| (p - egui::pos2(x, y)).length() < 1e-2;
+        for (anchors, painted) in [
+            (
+                [(10.0, 100.0), (3.0, 110.0)],
+                [(124.0, 280.0), (1000.0, 592.857)],
+            ),
+            ([(5.0, 100.0), (5.0, 110.0)], [(140.0, 300.0), (140.0, 0.0)]),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v1.json")).unwrap();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["tool_type"] = DrawingToolType::Ray.to_string().into();
+            let [(bar_a, price_a), (bar_b, price_b)] = anchors;
+            records[0]["points"] = serde_json::json!([
+                {"ts_ms": bar_to_time(bar_a), "price": price_a},
+                {"ts_ms": bar_to_time(bar_b), "price": price_b}
+            ]);
+            let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            for (load, storage) in [(1, &once), (2, &twice)] {
+                let (a, b) = restore(&storage.drawings[0], 1)
+                    .trend_line_ends(rect)
+                    .unwrap();
+                assert!(
+                    near(a, painted[0]) && near(b, painted[1]),
+                    "{anchors:?} load {load}: painted {a:?}..{b:?}"
+                );
+            }
+        }
     }
 
     /// Builds that wrote versions 3 to 6 drew a sloping extended line with one side extended by
