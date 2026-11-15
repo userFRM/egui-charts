@@ -13,6 +13,15 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
 }
 
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
+///
+/// # Layout
+///
+/// `repr(C)` fixes the field order below, with a size of 56 bytes and an alignment of 8 bytes.
+/// Changing this order, size or alignment is a breaking change and requires a changelog note.
+/// Hosts borrowing rows from encoded buffers must check byte order, alignment, bounds and field
+/// representation before creating a slice. Byte conversion belongs to the host; the chart's
+/// numerical validation is still required.
+#[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
@@ -30,6 +39,19 @@ pub struct FootprintLevel {
     /// Number of executions whose aggressor is unknown.
     pub unknown_trades: u64,
 }
+
+const _: () = {
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<FootprintLevel>() == 56);
+    assert!(align_of::<FootprintLevel>() == 8);
+    assert!(offset_of!(FootprintLevel, level) == 0);
+    assert!(offset_of!(FootprintLevel, bid) == 8);
+    assert!(offset_of!(FootprintLevel, ask) == 16);
+    assert!(offset_of!(FootprintLevel, unknown) == 24);
+    assert!(offset_of!(FootprintLevel, bid_trades) == 32);
+    assert!(offset_of!(FootprintLevel, ask_trades) == 40);
+    assert!(offset_of!(FootprintLevel, unknown_trades) == 48);
+};
 
 impl FootprintLevel {
     pub(crate) fn absorb(&mut self, next: &Self) {
