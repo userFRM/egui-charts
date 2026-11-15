@@ -223,7 +223,7 @@ pub fn lunar_phases(from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<LunarPhase> {
 
 /// Lunar phases: a marker at the low of the bar holding each new moon and at the high of the bar
 /// holding each full moon.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LunarPhases {
     values: IndicatorValues,
     new_color: Color32,

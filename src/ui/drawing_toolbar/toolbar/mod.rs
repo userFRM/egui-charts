@@ -83,7 +83,7 @@ use super::{
 };
 
 /// Drawing toolbar - main UI component
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DrawingToolbar {
     /// Built-in availability for the bar, flyouts and shortcuts. Clone the chart manager's
     /// registry here after changing it; hosts use its custom catalogue for their own picker.

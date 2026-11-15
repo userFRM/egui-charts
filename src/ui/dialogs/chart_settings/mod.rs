@@ -38,6 +38,7 @@ const TALLEST_TAB_HEIGHT: f32 = 840.0;
 ///
 /// Edits chart display settings, event category visibility and the host trading and
 /// alert-overlay preferences.
+#[derive(Debug)]
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -74,7 +75,7 @@ pub struct SettingsDialog {
     opened_font_family: Option<egui::FontFamily>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct ColorPickerStates {
     body_up: ColorPickerState,
     body_down: ColorPickerState,

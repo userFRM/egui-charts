@@ -7,7 +7,7 @@ use egui::Color32;
 /// Market Facilitation Index (MFI / BW MFI)
 /// Developed by Bill Williams
 /// Measures price movement per unit of volume
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MarketFacilitationIndex {
     /// Divisor for volume (typically 1 for crypto, 1000000 for stocks)
     divisor: f64,

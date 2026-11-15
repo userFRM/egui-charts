@@ -38,7 +38,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Detrended Price Oscillator, aligned with the current bar or centred on the average.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DetrendedPriceOscillator {
     period: usize,
     centered: bool,

@@ -10,6 +10,7 @@ use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{dialog_frame, title_row};
 
 /// A modal dialog widget
+#[derive(Debug)]
 pub struct Modal {
     id: Id,
     title: String,
@@ -188,6 +189,7 @@ impl Modal {
 }
 
 /// Response from showing a Modal
+#[derive(Debug)]
 pub struct ModalResponse<R> {
     /// The result of the content function
     pub inner: R,
@@ -196,6 +198,7 @@ pub struct ModalResponse<R> {
 }
 
 /// A simple modal that manages its own open state
+#[derive(Debug)]
 pub struct SimpleModal {
     modal: Modal,
     open: bool,

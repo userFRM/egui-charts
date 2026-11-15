@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Aroon indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Aroon {
     period: usize,
     values: IndicatorValues,

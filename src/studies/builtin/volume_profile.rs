@@ -55,7 +55,7 @@ pub struct ProfileInput {
     pub coverage: f64,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     Visible,
     Fixed,
@@ -65,7 +65,7 @@ enum Kind {
     Auto,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ProfileStudy {
     kind: Kind,
     rows: usize,
@@ -122,7 +122,7 @@ struct ProfileStudy {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CachedProfile {
     plot: StudyProfile,
     opening: Option<VolumeProfile>,
@@ -138,7 +138,7 @@ const LEVELS: [ProfileLevelKind; 3] = [
 ];
 
 /// Levels of finished profiles, kept while their bars and row layout hold.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct LevelCache {
     /// The row layout the levels were found with.
     config: Option<VolumeProfileConfig>,
@@ -147,7 +147,7 @@ struct LevelCache {
 }
 
 /// A level of a finished profile while it extends.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Level {
     kind: ProfileLevelKind,
     price: f64,
@@ -189,7 +189,7 @@ const PERIODS: [AnchorPeriod; 7] = [
 ];
 
 /// What the Period input of a periodic profile counts.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PeriodUnit {
     /// Calendar periods of exchange trading days.
     Calendar(AnchorPeriod),
@@ -719,7 +719,8 @@ impl ProfileStudy {
         {
             return None;
         }
-        let lower = before.map_or(Bound::Unbounded, Bound::Excluded);
+        // Rows before the first bar's slot belong to bars the chart has dropped or never held.
+        let lower = before.map_or(Bound::Included(start), Bound::Excluded);
         let held = flow.bars.range((lower, Bound::Included(end)));
         let first = *held.clone().next()?.0;
         // Bars stamped before the first held bar hold none of the executions.
@@ -1349,7 +1350,7 @@ fn grouped(bar: &FootprintBar, ticks: i64) -> FootprintBar {
 macro_rules! profile_study {
     ($ty:ident, $kind:ident, $name:literal, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         pub struct $ty {
             profile: ProfileStudy,
         }
@@ -1837,8 +1838,9 @@ mod tests {
 
     /// Profiles sum the executions held for their bars, in rows of whole ticks within the row
     /// count or of the row height, as a footprint with that many ticks per row sums them. One
-    /// whose executions start inside it is partial; one without them, or whose bars they cannot
-    /// be assigned to exactly, keeps the estimate.
+    /// whose executions start inside it is partial, and rows of bars before the chart's first bar
+    /// are left out; one without them, or whose bars they cannot be assigned to exactly, keeps the
+    /// estimate.
     #[test]
     fn profiles_read_the_executions_of_their_bars() {
         use crate::data::{Footprint, ProfileSource};
@@ -1878,6 +1880,12 @@ mod tests {
             trade("2026-03-07T00:01:20Z", 102.0, 1.0, Some(Buy)),
         ];
         let gap = vec![bars[0].clone(), bars[1].clone(), bars[3].clone()];
+        // A buy of 5 at 100 in the bar at 23:59, which a bar limit has dropped from the chart.
+        let dropped = [
+            vec![trade("2026-03-06T23:59:30Z", 100.0, 5.0, Some(Buy))],
+            trades.clone(),
+        ]
+        .concat();
         let mut shared = bars.clone();
         shared.insert(3, bars[2].clone());
         let fixed = |rows, first: &Bar, last: &Bar| -> Box<dyn Indicator> {
@@ -2015,6 +2023,15 @@ mod tests {
                 BarClock::new(Timeframe::Min5),
                 0..4,
                 vec![(2..4, estimated, None)],
+            ),
+            (
+                "executions of a dropped bar before the first bar",
+                Box::new(VolProfileVisible::new(24)),
+                bars[2..].to_vec(),
+                dropped,
+                minute.clone(),
+                0..2,
+                vec![(0..2, complete, Some(per_tick.clone()))],
             ),
             (
                 "executions of a bar the chart lacks",

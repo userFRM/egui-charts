@@ -26,7 +26,7 @@ use egui::Color32;
 use std::collections::VecDeque;
 
 /// ADX Breakout: closes beyond the range of the last bars after a weak trend.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AdxBreakout {
     period: usize,
     threshold: usize,
@@ -38,7 +38,7 @@ pub struct AdxBreakout {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     previous: Option<f64>,

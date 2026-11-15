@@ -5,6 +5,7 @@ use egui::{Color32, Rect, Response, Ui};
 use super::visuals::ListVisuals;
 
 /// Context provided to ListItemContent implementations when rendering
+#[derive(Debug)]
 pub struct ContentContext<'a> {
     /// The row rect inset by the content padding. Content paints inside it and does not
     /// allocate space of its own: the row is already allocated.
@@ -41,6 +42,7 @@ pub trait ListItemContent {
 }
 
 /// Reference to ListItem configuration (forward declaration)
+#[derive(Debug)]
 pub struct ListItem {
     /// Whether this item is selected
     pub(crate) selected: bool,

@@ -7,7 +7,7 @@ use egui::Color32;
 /// Price Volume Trend (Enhanced) with Signal Line
 /// PVT = prev_PVT + volume * (close - prev_close) / prev_close
 /// Signal = EMA(PVT, signal_period)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PriceVolumeTrendStudy {
     signal_period: usize,
     values: IndicatorValues,

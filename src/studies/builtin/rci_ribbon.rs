@@ -24,7 +24,7 @@ use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
 /// RCI Ribbon: short, middle and long Rank Correlation Index lines in a separate pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RciRibbon {
     lengths: [usize; 3],
     values: IndicatorValues,

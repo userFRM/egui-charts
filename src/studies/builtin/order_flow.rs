@@ -27,7 +27,7 @@ const ANCHORS: [Option<AnchorPeriod>; 8] = [
 /// if it needs values before that change. Reset period, representation and marker settings reuse
 /// the held source. Book size is the last synchronized snapshot in the bar; spread
 /// averages every accepted quote equally. Bars without the relevant stream remain gaps.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OrderFlowStudy {
     kind: OrderFlowKind,
     filter: OrderFilter,

@@ -65,6 +65,7 @@ pub(crate) fn dialog_frame(ctx: &Context) -> Frame {
 ///     });
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct DialogFrame {
     id: String,
     size: Vec2,
@@ -237,6 +238,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
 /// if cancel { /* close */ }
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct DialogFooter {
     primary_label: String,
     secondary_label: Option<String>,

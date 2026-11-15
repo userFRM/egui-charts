@@ -10,7 +10,7 @@ use egui::Color32;
 /// With `r = (high - low) / (high + low)` per bar (0 when `high + low` is 0):
 /// upper = SMA(high * (1 + factor * r), period), middle = SMA(close, period),
 /// lower = SMA(low * (1 - factor * r), period).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AccelerationBands {
     /// Period for calculation
     period: usize,

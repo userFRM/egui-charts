@@ -27,7 +27,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Simple average of the bar range.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AverageDailyRange {
     period: usize,
     values: IndicatorValues,

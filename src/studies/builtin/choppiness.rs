@@ -12,7 +12,7 @@ use egui::Color32;
 /// The pane draws dashed levels at 61.8 and 38.2, with the band between them filled in light blue
 /// at a tenth of full opacity. A true range can reach back past the window to a gap, so a reading
 /// can pass 100.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChoppinessIndex {
     /// Lookback period (typically 14)
     period: usize,
