@@ -67,6 +67,12 @@ pub struct ChartView<'a> {
     pub revision: u64,
     /// Screen x of a (fractional) bar index.
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
+    /// Points per bar of `bar_to_x`; on a numeric horizontal scale, points per spacing unit,
+    /// the mean key gap when the scale was set, as
+    /// [`TimeScale::bar_spacing`](crate::model::TimeScale::bar_spacing) returns. Text that
+    /// follows the zoom is drawn at its ratio to [`Drawing::text_zoom_spacing`]; a value that
+    /// is not a positive number draws such text at its set size.
+    pub bar_spacing: f32,
     /// Screen y of a price.
     pub price_to_y: &'a dyn Fn(f64) -> f32,
     /// Price at a screen y, using the same scale and orientation as `price_to_y`.
@@ -852,6 +858,7 @@ mod tests {
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|b| b * 40.0,
+                        bar_spacing: 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
@@ -1533,6 +1540,7 @@ mod tests {
                 },
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
+                bar_spacing: 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
                 y_to_price: &|y| 500.0 - f64::from(y),
                 time_axis: true,
@@ -1874,6 +1882,7 @@ mod tests {
                 bars: &[],
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|p| p as f32,
                 y_to_price: &f64::from,
                 time_axis: true,

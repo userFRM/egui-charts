@@ -213,9 +213,11 @@ pub struct Drawing {
     /// drawings keep their size.
     #[serde(default)]
     pub text_follows_zoom: bool,
-    /// Bar spacing, in points, at which text that follows the zoom has its set font size. `None`
-    /// adopts the spacing a Text or Anchored text is first displayed at, including for older
-    /// saved drawings.
+    /// Bar spacing, in points per bar or per spacing unit of a numeric horizontal scale, at which
+    /// text that follows the zoom has its set font size. `None` adopts the spacing a Text or
+    /// Anchored text is first displayed at by the chart or
+    /// [`DrawingManager::update_all_screen_coords`](crate::drawings::DrawingManager::update_all_screen_coords),
+    /// including for older saved drawings.
     #[serde(default)]
     pub text_zoom_spacing: Option<f32>,
     /// Colour, size and emphasis of the text typed on a price note. `None` draws it as the price
@@ -323,25 +325,6 @@ fn enabled() -> bool {
 
 fn default_text_wrap_width() -> f32 {
     200.0
-}
-
-/// Points between neighbouring bars around screen `x`, starting the search at `bar`; `None` when
-/// the mapping does not advance. Screen coordinates are single precision, which rounds one bar's
-/// step coarsely far from the view, so the step is averaged over 64 bars and measured again
-/// nearer `x`.
-fn bar_spacing_near(bar_to_x: impl Fn(f32) -> f32, mut bar: f32, x: f32) -> Option<f32> {
-    let mut spacing = None;
-    for _ in 0..3 {
-        bar = bar.round();
-        let at = bar_to_x(bar);
-        let step = (bar_to_x(bar + 64.0) - at) / 64.0;
-        if !(step.is_finite() && step > 0.0) {
-            return None;
-        }
-        spacing = Some(step);
-        bar += (x - at) / step;
-    }
-    spacing
 }
 
 pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
@@ -747,15 +730,6 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
-        if self.text_zoom_spacing.is_none()
-            && matches!(
-                self.tool_type,
-                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
-            )
-            && let (Some(anchor), Some(pos)) = (self.chart_points.first(), self.points.first())
-        {
-            self.text_zoom_spacing = bar_spacing_near(&bar_to_x, anchor.bar_idx, pos.x);
-        }
         self.level_ys = match (self.tool_type, &self.chart_points[..]) {
             // Five of the first units in price, which a logarithmic scale does not keep linear.
             (DrawingToolType::GannFixed, [a, b, ..]) => {
@@ -770,17 +744,33 @@ impl Drawing {
         };
     }
 
-    /// The factor that scales text drawn at screen `x` from its set size: the bar spacing over
-    /// `text_zoom_spacing` for text that follows the zoom, and 1 otherwise.
-    pub(crate) fn text_zoom(&self, bar_to_x: impl Fn(f32) -> f32, x: f32) -> f32 {
-        let (true, Some(reference), Some(anchor)) = (
-            self.text_follows_zoom,
-            self.text_zoom_spacing,
-            self.chart_points.first(),
-        ) else {
-            return 1.0;
-        };
-        bar_spacing_near(bar_to_x, anchor.bar_idx, x).map_or(1.0, |spacing| spacing / reference)
+    /// Records `bar_spacing` as the spacing a Text or Anchored text has its set size at, when it
+    /// has none: the bar spacing it is first displayed at. A spacing that is not a positive
+    /// number is not recorded.
+    pub(crate) fn adopt_text_zoom_spacing(&mut self, bar_spacing: f32) {
+        if self.text_zoom_spacing.is_none()
+            && matches!(
+                self.tool_type,
+                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+            )
+            && !self.chart_points.is_empty()
+            && bar_spacing.is_finite()
+            && bar_spacing > 0.0
+        {
+            self.text_zoom_spacing = Some(bar_spacing);
+        }
+    }
+
+    /// The factor that scales text from its set size: `bar_spacing`, the chart's current bar
+    /// spacing, over `text_zoom_spacing` for text that follows the zoom, and 1 otherwise or
+    /// when `bar_spacing` is not a positive number.
+    pub(crate) fn text_zoom(&self, bar_spacing: f32) -> f32 {
+        match (self.text_follows_zoom, self.text_zoom_spacing) {
+            (true, Some(reference)) if bar_spacing.is_finite() && bar_spacing > 0.0 => {
+                bar_spacing / reference
+            }
+            _ => 1.0,
+        }
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
@@ -1188,31 +1178,30 @@ impl<'de> Deserialize<'de> for Drawing {
 mod tests {
     use super::*;
 
-    /// Text that follows the zoom keeps the bar spacing it is first shown at and is drawn at the
-    /// ratio of the current spacing to it. The widget maps bars in double precision and hands
-    /// out single-precision coordinates, which are rounded to a quarter of a point or more four
-    /// million bars from the view, so the spacing is read near the text.
+    /// Text and Anchored text keep the first positive bar spacing they are shown at and are drawn
+    /// at the ratio of the current spacing to it; other tools record none.
     #[test]
     fn text_scales_by_the_bar_spacing_it_was_sized_at() {
-        let x = |spacing: f64| move |bar: f32| ((f64::from(bar) - 4e6) * spacing) as f32;
         let mut text = Drawing::new(1, DrawingToolType::AnchoredText);
-        text.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
-        text.update_screen_coords(x(0.73), |price| price as f32);
-        let sized_at = text.text_zoom_spacing.unwrap();
-        assert!((sized_at - 0.73).abs() < 1e-5, "{sized_at}");
-        text.update_screen_coords(x(1.46), |price| price as f32);
-        assert_eq!(text.text_zoom_spacing, Some(sized_at));
-        assert_eq!(text.text_zoom(x(1.46), 100.0), 1.0);
+        text.chart_points = vec![ChartPoint::new(10.0, 1.0)];
+        // A spacing that saving would reject is never recorded.
+        for invalid in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            text.adopt_text_zoom_spacing(invalid);
+            assert_eq!(text.text_zoom_spacing, None, "{invalid}");
+        }
+        text.adopt_text_zoom_spacing(3.0);
+        text.adopt_text_zoom_spacing(6.0);
+        assert_eq!(text.text_zoom_spacing, Some(3.0));
+        assert_eq!(text.text_zoom(6.0), 1.0);
 
         text.text_follows_zoom = true;
-        // Anchored text keeps the bar it was placed on, here far left of where it is drawn.
-        text.chart_points[0].bar_idx = 0.0;
-        let zoom = text.text_zoom(x(1.46), 100.0);
-        assert!((zoom - 2.0).abs() < 1e-4, "{zoom}");
+        assert_eq!(text.text_zoom(6.0), 2.0);
+        assert_eq!(text.text_zoom(f32::NAN), 1.0);
+        assert_eq!(text.text_zoom(0.0), 1.0);
 
         let mut line = Drawing::new(2, DrawingToolType::TrendLine);
-        line.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
-        line.update_screen_coords(x(0.73), |price| price as f32);
+        line.chart_points = vec![ChartPoint::new(10.0, 1.0)];
+        line.adopt_text_zoom_spacing(3.0);
         assert_eq!(line.text_zoom_spacing, None);
     }
 
