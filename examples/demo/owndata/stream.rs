@@ -1021,9 +1021,9 @@ pub(crate) mod tests {
 
     /// Every ready profile reads its service's history rows, bar messages and trade messages,
     /// in the form the service documents them, into the chart's bars and trades. The service's
-    /// hosts are swapped for local ones, so nothing leaves the machine. The fixture is
-    /// one-minute bars of 11 November 2026 from 14:33 UTC (second 1,794,407,580); every
-    /// expected bar and request is worked out by hand.
+    /// hosts are swapped for local ones, so nothing leaves the machine. The fixtures are
+    /// one-minute bars of 11 November 2026 from 14:33 UTC (second 1,794,407,580) and daily bars
+    /// of the 9th to the 11th; every expected bar and request is worked out by hand.
     #[test]
     fn ready_profiles_chart_recorded_history_and_stream() {
         use super::super::feed::tests::{Server, Shown, pages, shown, until};
@@ -1087,38 +1087,147 @@ pub(crate) mod tests {
             Some([101250.0, 102000.0, 99750.0, 102000.0, 1.125]),
         );
 
-        let rows = [Ready {
-            name: "Binance spot (public)",
-            symbol: "BTCUSDT",
-            timeframe: Timeframe::Min1,
-            // At or before `endTime`, so the older page holds the row that opens at it. That
-            // row is the symbol's first: the page ends history.
-            pages: vec![format!("[{R3},{R4},{R5}]"), format!("[{R3}]")],
-            script: vec![
-                Step::Hold,
-                Step::Send(KLINE),
-                Step::Hold,
-                Step::Send(SELL),
-                Step::Send(BUY),
-                Step::UntilClosed,
-            ],
-            bars: vec![vec![B3, B4, B5], vec![B3, B4, K5], vec![B3, B4, K5T]],
-            trades: vec![
-                (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
-                (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
-            ],
-            tick_size: 0.01,
-            first: (
-                "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=",
-                "&limit=3",
-            ),
-            // Before the oldest bar held, in milliseconds; the chart asks 600 bars at a time.
-            asked: vec![
-                "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=1794407580000&limit=600",
-            ],
-            target: "/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade",
-            received: vec![],
-        }];
+        // Coinbase Exchange: daily rows of time in seconds, low, high, open, close and volume,
+        // newest first, the 9th to the 11th of November.
+        const C9: &str = "[1794182400,97000,99500,98000,99000,120.5]";
+        const C10: &str = "[1794268800,98500,101000,99000,100500,98.25]";
+        const C11: &str = "[1794355200,99500,101500,100500,101000,75.5]";
+        // The trade before the subscription, already in the history bar.
+        const LAST_MATCH: &str = r#"{"type":"last_match","trade_id":29001,"maker_order_id":"ac928c66-ca53-498f-9c13-a110027a60e8","taker_order_id":"132fb6ae-456b-4654-b4e0-d681ac05cea1","side":"buy","size":"0.50000000","price":"95000.00","product_id":"BTC-USD","sequence":61001,"time":"2026-11-11T14:35:11.000000Z"}"#;
+        // `side` is the side of the resting order: a `sell` match is a buy.
+        const SOLD: &str = r#"{"type":"match","trade_id":29002,"maker_order_id":"5b8e0a3c-1d6f-4f0e-9a7b-2c4d6e8f0a1b","taker_order_id":"7c9e1b4d-2e70-4a1f-8b6c-3d5e7f9a1b2c","side":"sell","size":"0.25000000","price":"102000.00","product_id":"BTC-USD","sequence":61002,"time":"2026-11-11T14:35:12.000000Z"}"#;
+        const BOUGHT: &str = r#"{"type":"match","trade_id":29003,"maker_order_id":"8d0f2c5e-3f81-4b2a-9c7d-4e6f8a0b2c3d","taker_order_id":"9e1a3d6f-4a92-4c3b-8d8e-5f7a9b1c3d4e","side":"buy","size":"0.12500000","price":"100000.00","product_id":"BTC-USD","sequence":61003,"time":"2026-11-11T14:35:13.000000Z"}"#;
+        const D9: Shown = (
+            1794182400,
+            Some([98000.0, 99500.0, 97000.0, 99000.0, 120.5]),
+        );
+        const D10: Shown = (
+            1794268800,
+            Some([99000.0, 101000.0, 98500.0, 100500.0, 98.25]),
+        );
+        const D11: Shown = (
+            1794355200,
+            Some([100500.0, 101500.0, 99500.0, 101000.0, 75.5]),
+        );
+        // The buy at 102000 is the high, the sell at 100000 the close; volume 75.875. The last
+        // match at 95000 would be the low.
+        const D11T: Shown = (
+            1794355200,
+            Some([100500.0, 102000.0, 99500.0, 100000.0, 75.875]),
+        );
+
+        // Kraken: rows under the pair's name, time in seconds, then open, high, low, close,
+        // vwap, volume and count; values as text. `last` beside them is not a row.
+        const OHLC: &str = r#"{"error":[],"result":{"BTC/USD":[[1794407580,"100750.0","103000.0","100500.0","102500.0","101900.0","1.50000000",120],[1794407640,"102500.0","102750.0","101000.0","101250.0","101800.0","0.75000000",64],[1794407700,"101250.0","101500.0","100000.0","100250.0","100700.0","0.50000000",41]],"last":1794407640}}"#;
+        // `side` is the taker's.
+        const TRADES: &str = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"sell","price":100000.0,"qty":0.125,"ord_type":"market","trade_id":4665906,"timestamp":"2026-11-11T14:35:12.000000Z"},{"symbol":"BTC/USD","side":"buy","price":102000.0,"qty":0.25,"ord_type":"limit","trade_id":4665907,"timestamp":"2026-11-11T14:35:13.000000Z"}]}"#;
+        // The trades continue the history bar: the sell at 100000 is the close, the buy at
+        // 102000 the high and the close; volume 0.875.
+        const B5T: Shown = (
+            1794407700,
+            Some([101250.0, 102000.0, 100000.0, 102000.0, 0.875]),
+        );
+
+        let rows = [
+            Ready {
+                name: "Binance spot (public)",
+                symbol: "BTCUSDT",
+                timeframe: Timeframe::Min1,
+                // At or before `endTime`, so the older page holds the row that opens at it. That
+                // row is the symbol's first: the page ends history.
+                pages: vec![format!("[{R3},{R4},{R5}]"), format!("[{R3}]")],
+                script: vec![
+                    Step::Hold,
+                    Step::Send(KLINE),
+                    Step::Hold,
+                    Step::Send(SELL),
+                    Step::Send(BUY),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![B3, B4, B5], vec![B3, B4, K5], vec![B3, B4, K5T]],
+                trades: vec![
+                    (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                    (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                ],
+                tick_size: 0.01,
+                first: (
+                    "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=",
+                    "&limit=3",
+                ),
+                // Before the oldest bar held, in milliseconds; the chart asks 600 bars at a time.
+                asked: vec![
+                    "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=1794407580000&limit=600",
+                ],
+                target: "/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade",
+                received: vec![],
+            },
+            Ready {
+                name: "Coinbase Exchange (public)",
+                symbol: "BTC-USD",
+                // Daily, so that two empty older windows of 299 days reach past a year and end
+                // history.
+                timeframe: Timeframe::Day1,
+                // Newest first. `end` is inclusive, so the older page holds the row that opens at
+                // it; that row is the symbol's first.
+                pages: vec![
+                    format!("[{C11},{C10},{C9}]"),
+                    format!("[{C9}]"),
+                    "[]".to_owned(),
+                ],
+                script: vec![
+                    Step::Receive(1),
+                    Step::Hold,
+                    Step::Send(LAST_MATCH),
+                    Step::Send(SOLD),
+                    Step::Send(BOUGHT),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![D9, D10, D11], vec![D9, D10, D11T]],
+                trades: vec![
+                    (1794407712000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                    (1794407713000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                ],
+                tick_size: 0.01,
+                first: ("GET /products/BTC-USD/candles?granularity=86400&start=", ""),
+                // Windows of 299 days, in seconds: at most 300 candles with both ends counted.
+                asked: vec![
+                    "GET /products/BTC-USD/candles?granularity=86400&start=1768348800&end=1794182400",
+                    "GET /products/BTC-USD/candles?granularity=86400&start=1742515200&end=1768348800",
+                ],
+                target: "/",
+                received: vec![
+                    r#"{"type":"subscribe","product_ids":["BTC-USD"],"channels":["matches"]}"#,
+                ],
+            },
+            Ready {
+                name: "Kraken (public)",
+                symbol: "BTC/USD",
+                timeframe: Timeframe::Min1,
+                // Kraken sends its newest bars and no older ones, so the chart asks once.
+                pages: vec![OHLC.to_owned()],
+                script: vec![
+                    Step::Receive(1),
+                    Step::Hold,
+                    Step::Send(TRADES),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![B3, B4, B5], vec![B3, B4, B5T]],
+                trades: vec![
+                    (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                    (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                ],
+                tick_size: 0.01,
+                first: (
+                    "GET /0/public/OHLC?pair=BTC%2FUSD&interval=1&assetVersion=1",
+                    "",
+                ),
+                asked: vec![],
+                target: "/v2",
+                received: vec![
+                    r#"{"method":"subscribe","params":{"channel":"trade","symbol":["BTC/USD"]}}"#,
+                ],
+            },
+        ];
 
         for row in rows {
             let server = Server::start(pages(row.pages));

@@ -606,6 +606,7 @@ mod tests {
                                     bars: &bars,
                                     revision: 0,
                                     bar_to_x: &|b| 100.0 + b * 100.0,
+                                    bar_spacing: 100.0,
                                     price_to_y: &|p| 500.0 - p as f32 * 10.0,
                                     y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                     time_axis: true,
