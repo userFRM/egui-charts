@@ -45,6 +45,11 @@ impl ChartMapping {
             })
     }
 
+    /// Width of a volume bar, shared by the volume painters and hit tests so they cannot drift.
+    pub(crate) fn volume_bar_width(&self) -> f32 {
+        self.bar_spacing_for_width() * 0.8
+    }
+
     /// Create a new ChartMapping with all parameters.
     ///
     /// ```

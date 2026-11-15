@@ -314,6 +314,7 @@ impl Default for Stream {
 #[serde(default)]
 pub(crate) struct Route {
     /// The value, compared as text: a string as it is, a number or a boolean as JSON prints it.
+    /// An empty value also takes the records that have no routing field.
     pub(crate) value: String,
     pub(crate) kind: RouteKind,
 }
