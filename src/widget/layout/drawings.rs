@@ -609,17 +609,7 @@ impl DrawingLinks {
                         }
                         continue;
                     };
-                    changed = true;
                     if let Some(id) = linked {
-                        unlock(charts[slot], id);
-                        if writes(charts, &writers, key.0, slot, id) {
-                            writers.push(slot);
-                            if pointer_down {
-                                self.unwritten.insert((slot, id));
-                            } else {
-                                charts[slot].history.drawing_edits += 1;
-                            }
-                        }
                         // A copy, as one added below, while the chart of the changed drawing
                         // stores it: an undo on that chart can bring back a stored original that
                         // this chart stores too.
@@ -630,15 +620,41 @@ impl DrawingLinks {
                                 .drawings
                                 .iter()
                                 .any(|d| d.id == key.1 && d.saveable);
-                        charts[slot].drawings_mut().drag_edit_drawing(id, |target| {
-                            copy.id = target.id;
-                            copy.stored_id.clone_from(&target.stored_id);
-                            copy.created_at = target.created_at;
-                            copy.saveable = target.saveable && !copy_only;
-                            *target = copy;
-                        });
+                        let Some(target) =
+                            charts[slot].drawings().drawings.iter().find(|d| d.id == id)
+                        else {
+                            continue;
+                        };
+                        copy.id = target.id;
+                        copy.stored_id.clone_from(&target.stored_id);
+                        copy.created_at = target.created_at;
+                        copy.saveable = target.saveable && !copy_only;
                         seen.insert((slot, id), frame);
+                        // A copy that holds the change already, such as one written while another
+                        // chart waits for its bars, is not written again: each write is an undo
+                        // step, and a storage update where the chart stores the copy.
+                        if serde_json::to_string(target).ok() == serde_json::to_string(&copy).ok()
+                            && timed_points(charts[slot], target)
+                                == timed_points(charts[slot], &copy)
+                            && target.notes == copy.notes
+                        {
+                            continue;
+                        }
+                        changed = true;
+                        unlock(charts[slot], id);
+                        if writes(charts, &writers, key.0, slot, id) {
+                            writers.push(slot);
+                            if pointer_down {
+                                self.unwritten.insert((slot, id));
+                            } else {
+                                charts[slot].history.drawing_edits += 1;
+                            }
+                        }
+                        charts[slot]
+                            .drawings_mut()
+                            .drag_edit_drawing(id, |target| *target = copy);
                     } else {
+                        changed = true;
                         copy.stored_id = None;
                         copy.created_at = None;
                         // Not saved where it is mirrored: the chart it was drawn on keeps it, and
@@ -3480,7 +3496,7 @@ mod tests {
     /// The copies of a mirrored line end every frame equal. Two copies changed in one frame end
     /// with the later chart's version, and a deletion or a confinement wins over a move of the
     /// same frame and takes the copies put aside along. A change waiting for the bars of a chart
-    /// gives way to a newer one.
+    /// gives way to a newer one, and the copies that hold it take it once.
     #[test]
     fn mirrored_copies_end_each_frame_equal() {
         let delete: fn(&mut Chart) = |chart| {
@@ -3521,19 +3537,30 @@ mod tests {
             );
         }
         // The third chart shows the symbol without its bars, as while a feed loads them, so the
-        // copy of a new line waits for them, while the second moves or deletes its copy.
-        for (name, edit, waiting, loaded) in [
+        // copy of a new line waits for them, while the second keeps, moves or deletes its copy.
+        // The second takes the line as one undo step, however long the third waits.
+        let keep: fn(&mut Chart) = |_| {};
+        for (name, edit, waiting, loaded, steps) in [
+            (
+                "kept",
+                keep,
+                [vec![104.0], vec![104.0], vec![]],
+                [vec![104.0], vec![104.0], vec![104.0]],
+                1,
+            ),
             (
                 "moved",
                 lower,
                 [vec![95.0], vec![95.0], vec![]],
                 [vec![95.0], vec![95.0], vec![95.0]],
+                2,
             ),
             (
                 "deleted",
                 delete,
                 [vec![], vec![], vec![]],
                 [vec![], vec![], vec![]],
+                2,
             ),
         ] {
             let mut charts = [bars(60), bars(60), bars(60)];
@@ -3556,6 +3583,11 @@ mod tests {
             charts[2].set_data(SeriesId::MAIN, data);
             frames(&mut layout, &mut charts);
             assert_eq!(prices(&charts), loaded, "{name}, bars in");
+            let mut undone = 0;
+            while charts[1].drawings_mut().undo() {
+                undone += 1;
+            }
+            assert_eq!(undone, steps, "undo steps of the second chart, {name}");
         }
     }
 
