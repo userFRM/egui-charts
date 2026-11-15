@@ -1310,7 +1310,9 @@ pub fn render_footprint_statistics(
 /// clipping rules as [`render_footprint_statistics`]; an undefined value is shown as `n/a`.
 ///
 /// The cumulative delta sums every complete bar. With `sessions` it restarts at the first bar of
-/// each session, so a bar's value no longer depends on how much earlier history is loaded.
+/// each session, so a bar's value no longer depends on how much earlier history is loaded, and
+/// reads `n/a` through a session whose first bar on the chart may be missing executions that were
+/// dropped or never received.
 /// Buy and sell percentages are shares of the bar's total volume, and the volume change is
 /// relative to the previous bar with executions and blank for the first; all percentages have
 /// one decimal. The range is the bar's high minus its low. The point of control is the lowest
@@ -1393,10 +1395,11 @@ pub fn render_footprint_statistics_rows(
             .replace((bar.time, volume))
             .filter(|(time, _)| !flow.span_has_gap(*time, Some(bar.time)))
             .map(|(_, volume)| volume);
-        let cumulative_known = !flow.span_has_gap(
-            cumulative_start.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
-            Some(bar.time),
-        );
+        let cumulative_known = cumulative_start.is_none_or(|start| flow.complete_at(start))
+            && !flow.span_has_gap(
+                cumulative_start.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
+                Some(bar.time),
+            );
         let x = mapping.idx_to_x(i);
         if !mapping.is_x_visible(x) {
             continue;
@@ -3108,21 +3111,22 @@ mod tests {
     }
 
     #[test]
+    /// Buys of 1, 5 and 3 at 23:59, 00:00 and 00:01 UTC: summed over every bar the row reads 1, 6
+    /// and 9, restarted with the day 1, 5 and 8. Once the 00:00 bar is incomplete the day's running
+    /// delta at 00:01 is unknown, while the sum over every bar starts at 00:01. A day that opens
+    /// after the incomplete bars keeps its values, also when its first bar on the chart has no
+    /// executions.
     fn cumulative_delta_restarts_with_the_session_when_given_sessions() {
-        let last: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
-        let first = last + chrono::TimeDelta::minutes(1);
-        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        for (at, size) in [(last, 5.0), (first, 2.0)] {
-            flow.push(&Tick::new(at, 100.0, size, Some(OrderSide::Buy)))
-                .unwrap();
-        }
-        let bars = [last, first].map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let late: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
+        let open = late + chrono::TimeDelta::minutes(1);
+        let times = [late, open, open + chrono::TimeDelta::minutes(1)];
+        let bars = times.map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 16.0));
         let map = ChartMapping::new(
             rect,
             60.0,
             0,
-            1,
+            2,
             0.0,
             PriceMap::new(
                 PriceTransform::default(),
@@ -3138,10 +3142,23 @@ mod tests {
         };
         let days =
             crate::model::ExchangeSessionProvider::new(crate::model::TimezoneId::utc(), None);
-        for (sessions, expected) in [
-            (None, ["CVD", "5", "7"]),
-            (Some(&days as &dyn SessionProvider), ["CVD", "5", "2"]),
+        let days = Some(&days as &dyn SessionProvider);
+        for (sizes, received, sessions, expected) in [
+            ([1.0, 5.0, 3.0], None, None, &["CVD", "1", "6", "9"][..]),
+            ([1.0, 5.0, 3.0], None, days, &["CVD", "1", "5", "8"]),
+            ([1.0, 5.0, 3.0], Some(open), None, &["CVD", "3"]),
+            ([1.0, 5.0, 3.0], Some(open), days, &["CVD", "n/a"]),
+            ([1.0, 5.0, 3.0], Some(late), days, &["CVD", "5", "8"]),
+            ([1.0, 0.0, 3.0], Some(late), days, &["CVD", "3"]),
         ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (at, size) in times.into_iter().zip(sizes).filter(|(_, size)| *size > 0.0) {
+                flow.push(&Tick::new(at, 100.0, size, Some(OrderSide::Buy)))
+                    .unwrap();
+            }
+            if let Some(at) = received {
+                flow.received_from(at);
+            }
             let mut output = egui::Context::default().run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
@@ -3167,7 +3184,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(texts, expected, "restarting: {}", sessions.is_some());
+            assert_eq!(
+                texts,
+                expected,
+                "{sizes:?} from {received:?}, restarting: {}",
+                sessions.is_some()
+            );
         }
     }
 

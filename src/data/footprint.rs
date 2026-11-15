@@ -593,7 +593,8 @@ impl Footprint {
             .map(|(_, bar)| bar)
     }
 
-    fn complete_at(&self, open: DateTime<Utc>) -> bool {
+    /// Whether the bar slot opening at `open` holds all its executions, if it has any.
+    pub(crate) fn complete_at(&self, open: DateTime<Utc>) -> bool {
         self.incomplete_through.is_none_or(|cut| open > cut)
             && self
                 .missing
