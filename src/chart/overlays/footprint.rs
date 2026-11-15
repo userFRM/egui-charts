@@ -3028,8 +3028,6 @@ mod tests {
         }
     }
 
-    /// A delta of 5 in the last bar of a UTC day and 2 in the first bar of the next: summed over
-    /// every bar the row reads 5 and then 7, restarted with the day 5 and then 2.
     #[test]
     fn sums_equal_up_to_rounding_read_as_equal_in_the_statistics() {
         let start: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -3110,12 +3108,12 @@ mod tests {
         );
     }
 
-    #[test]
     /// Buys of 1, 5 and 3 at 23:59, 00:00 and 00:01 UTC: summed over every bar the row reads 1, 6
     /// and 9, restarted with the day 1, 5 and 8. Once the 00:00 bar is incomplete the day's running
     /// delta at 00:01 is unknown, while the sum over every bar starts at 00:01. A day that opens
     /// after the incomplete bars keeps its values, also when its first bar on the chart has no
     /// executions.
+    #[test]
     fn cumulative_delta_restarts_with_the_session_when_given_sessions() {
         let late: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
         let open = late + chrono::TimeDelta::minutes(1);
