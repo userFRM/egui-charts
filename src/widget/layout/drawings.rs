@@ -1899,6 +1899,67 @@ mod tests {
         assert_eq!(host.get("DDD").as_deref(), Some("unreadable"));
     }
 
+    /// Guards #2918: study ids are local to each chart. A chart that restored its own snapshot
+    /// reads the drawings document of another chart, whose RSI has the saved id of the MACD here,
+    /// and shows the line on its RSI. Built again after a restart from a layout that leaves its
+    /// drawings to storage, a chart maps the study ids of the document the layout's chart wrote,
+    /// as written now and as written before documents named their writer, to the studies the
+    /// restore added: an SMA of the RSI in its pane keeps that pane from matching by its studies.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn stored_drawing_of_another_chart_keeps_its_study_pane() {
+        use crate::services::document::tests::Revised;
+        use crate::studies::{MACD, RSI, SMA, StudySource};
+        // The study of the one drawing `chart` shows once it read `document` from its storage.
+        let read = |mut chart: Chart, document: &str| {
+            let host = Arc::new(Revised::default());
+            host.put("AAA", document);
+            chart.set_storage(host);
+            chart.flush_stored_drawings();
+            let drawings = &chart.drawings().drawings;
+            assert_eq!(drawings.len(), 1);
+            let pane = drawings[0].pane;
+            let study = chart.indicators().find(|(id, _)| Some(id.0) == pane);
+            study.map(|(_, study)| study.name().to_owned())
+        };
+        let draw_on = |chart: &mut Chart, study: SeriesId| {
+            let mut drawing = line("On RSI");
+            drawing.pane = Some(study.0);
+            chart.drawings_mut().add_drawing(drawing).unwrap();
+            chart.save_drawings().unwrap().to_json().unwrap()
+        };
+
+        let mut other = bars(60);
+        other.set_symbol("AAA");
+        let rsi = other.add_indicator(Box::new(RSI::new(14)));
+        let document = draw_on(&mut other, rsi);
+        let mut chart = bars(60);
+        chart.set_symbol("AAA");
+        let macd = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+        chart.add_indicator(Box::new(RSI::new(14)));
+        assert_eq!(macd, rsi, "each chart gives its first study the same id");
+        chart.restore(&chart.snapshot().unwrap()).unwrap();
+        assert_eq!(read(chart, &document).as_deref(), Some("RSI"));
+
+        let mut saved = bars(60);
+        saved.set_symbol("AAA");
+        let rsi = saved.add_indicator(Box::new(RSI::new(14)));
+        let mean = saved.add_indicator(Box::new(SMA::new(5)));
+        let source = StudySource::Study { id: rsi.0, plot: 0 };
+        saved.set_indicator_source(mean, source).unwrap();
+        assert!(saved.move_indicator_to_pane(mean, rsi));
+        let written = draw_on(&mut saved, rsi);
+        let mut snapshot = saved.snapshot().unwrap();
+        snapshot.drawings = None;
+        let mut older: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert!(older.as_object_mut().unwrap().remove("saved_by").is_some());
+        for document in [written, older.to_string()] {
+            let mut restarted = bars(60);
+            restarted.restore(&snapshot).unwrap();
+            assert_eq!(read(restarted, &document).as_deref(), Some("RSI"));
+        }
+    }
+
     /// The order by name ignores case and the order by edit time starts at the latest; equal
     /// keys fall back to the stored id, which is the same after a layout is restored. An edit
     /// time comes with the edit alone: live bars, saving and reading leave it, and an undo puts
