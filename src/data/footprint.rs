@@ -802,7 +802,7 @@ impl Footprint {
         if let Some(lost) = trades.lost_until().filter(|lost| *lost >= before) {
             self.add_missing(before, after(lost).max(oldest.unwrap_or(after(lost))));
         }
-        if let Some(left) = trades.left_out_at().filter(|left| *left >= before) {
+        for &left in trades.left_out().range(before..) {
             self.add_missing(left, after(left));
         }
         let tape = trades.retained_until();

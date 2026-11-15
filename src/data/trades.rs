@@ -14,7 +14,7 @@
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 /// Size taken from one resting order, or from an unidentified one, at one price.
 #[derive(Clone, Debug, PartialEq)]
@@ -149,6 +149,15 @@ pub(crate) struct Trades {
     retained_until: Option<DateTime<Utc>>,
     /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
     lost_until: Option<DateTime<Utc>>,
+    /// Instants at which the held trades may lack trades, kept across subscriptions as
+    /// `lost_until` is: a page left trades of the instant out, as ids did not tell them from held
+    /// ones, or the subscription changed before a page reached the first instant of its stream,
+    /// which may lack trades that traded before the stream began. A page whose trades at the
+    /// oldest held instant ids all tell apart completes that instant.
+    left_out: BTreeSet<DateTime<Utc>>,
+    /// Whether a page reached the first held instant since the store began or the subscription
+    /// last changed.
+    front_reached: bool,
     /// Time of the oldest live trades when a page left out its trades at that time, as ids did not
     /// tell them from the live ones: the page may lack trades of that instant.
     left_out_at: Option<DateTime<Utc>>,
@@ -174,6 +183,8 @@ impl Trades {
             paged_without_id_until: None,
             retained_until: None,
             lost_until: None,
+            left_out: BTreeSet::new(),
+            front_reached: false,
             left_out_at: None,
             unheld_live: None,
             revision: next_revision(),
@@ -196,6 +207,17 @@ impl Trades {
     )]
     pub(crate) fn lost_until(&self) -> Option<DateTime<Utc>> {
         self.lost_until
+    }
+
+    /// The instants at which the held trades may lack trades of that instant, whatever
+    /// subscriptions changed since: a page left them out, or no page reached the first instant of
+    /// a stream before its subscription changed.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn left_out(&self) -> &BTreeSet<DateTime<Utc>> {
+        &self.left_out
     }
 
     /// Time of the newest retained trade, until a page fills the time after it: trades from that
@@ -245,6 +267,15 @@ impl Trades {
         expect(dead_code, reason = "only the chart widget consumes a feed")
     )]
     pub(crate) fn reanchor(&mut self) {
+        // No page reached the first instant of the stream, which may lack trades that traded
+        // before the stream began.
+        if self.paged == 0
+            && !self.front_reached
+            && let Some(first) = self.trades.front().map(|trade| trade.ts)
+        {
+            self.leave_out(first);
+        }
+        self.front_reached = false;
         self.paged = self.trades.len();
         self.paged_until = self.trades.iter().map(|trade| trade.ts).max();
         self.paged_without_id_until = self
@@ -390,14 +421,25 @@ impl Trades {
         }
         // Stable, so trades sharing a time keep the feed's order.
         page.sort_by_key(|trade| trade.ts);
+        // A page reaches the first held instant unless its trades start after it or one was
+        // invalid.
+        let front = self.trades.front().map(|trade| trade.ts);
+        let late = (page.first().zip(front)).is_some_and(|(trade, front)| trade.ts > front);
+        self.front_reached |= rejected == 0 && !late;
         self.fill_gap(&mut page, changed);
         if let Some(oldest) = self.trades.iter().map(|trade| trade.ts).min() {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
                 .all(|held| held.id.is_some());
             let kept = |trade: &Tick| trade.id.is_some() && ids_at_oldest;
-            if self.paged == 0 && page.iter().any(|trade| trade.ts == oldest && !kept(trade)) {
-                self.left_out_at = Some(oldest);
+            if page.iter().any(|trade| trade.ts == oldest && !kept(trade)) {
+                if self.paged == 0 {
+                    self.left_out_at = Some(oldest);
+                    self.leave_out(oldest);
+                }
+            } else if rejected == 0 && page.iter().any(|trade| trade.ts == oldest) {
+                // Ids join the page's trades of that instant to the held ones: none is missing.
+                self.left_out.remove(&oldest);
             }
             page.retain(|trade| trade.ts < oldest || (trade.ts == oldest && kept(trade)));
         }
@@ -437,8 +479,7 @@ impl Trades {
     /// them: nothing streamed while the subscription changed. One whose id is held stays out. A
     /// trade at the instant of the newest retained trade or of the oldest live trade follows them
     /// when it and every held trade at that instant carry ids; one that ids do not tell from the
-    /// held ones is left out, and the instant of the oldest live trade recorded. The oldest go
-    /// beyond capacity.
+    /// held ones is left out, and its instant recorded. The oldest go beyond capacity.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
         let Some(until) = self.retained_until.take() else {
             return;
@@ -450,6 +491,9 @@ impl Trades {
                 .all(|held| held.id.is_some())
         };
         let (ids_at_tape, ids_at_live) = (ids_at(Some(until)), ids_at(live_from));
+        // The old stream may have stopped inside the tape's last instant.
+        let tape_left_out =
+            (page.iter()).any(|t| t.ts == until && !(t.id.is_some() && ids_at_tape));
         // The tape's last instant is a boundary of its own while the stream starts after it.
         let after_tape = live_from.is_none_or(|from| until < from);
         let mut left_out = false;
@@ -465,8 +509,12 @@ impl Trades {
             told_apart && unheld
         });
         *page = older;
-        if left_out {
-            self.left_out_at = live_from;
+        if tape_left_out {
+            self.leave_out(until);
+        }
+        if left_out && let Some(at) = live_from {
+            self.left_out_at = Some(at);
+            self.leave_out(at);
         }
         if gap.is_empty() {
             return;
@@ -489,6 +537,17 @@ impl Trades {
                     changed(trade, false);
                 }
             });
+        }
+    }
+
+    /// Records that the held trades may lack trades of `at`, unless the loss reaches it. The
+    /// instants the loss has reached go, as the loss marks them, so the record holds no more
+    /// instants than the store holds trades.
+    fn leave_out(&mut self, at: DateTime<Utc>) {
+        let lost = self.lost_until;
+        self.left_out.retain(|left| Some(*left) > lost);
+        if Some(at) > lost {
+            self.left_out.insert(at);
         }
     }
 }

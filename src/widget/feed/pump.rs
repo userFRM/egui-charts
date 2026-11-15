@@ -883,20 +883,6 @@ impl Chart {
                 until(link.trades.live().next().map(|t| t.ts)),
             ))
         });
-        let ambiguous_retained = link
-            .trades
-            .retained_until()
-            .filter(|at| prepared_before.is_some_and(|before| *at >= before))
-            .filter(|at| {
-                let ids = link
-                    .trades
-                    .iter()
-                    .filter(|t| t.ts == *at)
-                    .all(|t| t.id.is_some());
-                page.trades
-                    .iter()
-                    .any(|t| t.ts == *at && !(ids && t.id.is_some()))
-            });
         let mut tail_changed = false;
         let mut changed = false;
         let fold = &mut |trade: &Tick, added| {
@@ -927,12 +913,6 @@ impl Chart {
                 if let Some(retained) = unproven.1 {
                     flow.cover_missing(from.max(retained), end.min(live.unwrap_or(end)));
                 }
-            }
-            if let Some(at) = ambiguous_retained {
-                let after = at
-                    .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
-                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
-                flow.add_missing(at, after);
             }
             if tail_changed {
                 flow.rebuild_prepared(&link.trades);
