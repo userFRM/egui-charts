@@ -335,7 +335,7 @@ impl WatchlistPanel {
 
     /// Offers copy-link and save-a-copy on the active list, as `sharing` reports them for
     /// [`ShareKind::Watchlist`]. A saved copy is added to the lists under the name the host
-    /// answers. [`poll`](Self::poll) receives the answers.
+    /// answers and, like a duplicate, is not starred. [`poll`](Self::poll) receives the answers.
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
     }
@@ -347,7 +347,7 @@ impl WatchlistPanel {
             && let Some(list) = self.lists.iter().find(|list| list.name == source)
         {
             let mut copy = list.clone();
-            copy.name = name;
+            (copy.name, copy.favorite) = (name, false);
             self.lists.push(copy);
         }
         let Some(service) = &self.service else {
