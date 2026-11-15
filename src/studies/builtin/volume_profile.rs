@@ -2868,9 +2868,9 @@ mod tests {
     /// Weeks and longer group on a calendar fixed in time, minutes and hours as the chart's bar
     /// calendar opens bars of that length, and trading days and bars from the first bar of the
     /// newest profile, so loading older bars leaves every period where it was. A new study
-    /// counts trading days and bars from its first bar. Restarted each year, weeks and longer
-    /// group from the period holding 1 January, and trading days and bars from each year's first
-    /// bar, the oldest year's as before.
+    /// counts trading days and bars from its first bar. Restarted each year in the exchange's time
+    /// zone, weeks and longer group from the period holding 1 January, and trading days and bars
+    /// from each year's first bar, the oldest year's as before.
     #[test]
     fn periodic_counts_keep_their_period_starts_when_older_bars_load() {
         let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
@@ -2892,12 +2892,20 @@ mod tests {
         };
         let west = BarClock::new(Timeframe::Hour1)
             .with_timezone(TimezoneId::fixed_offset(-5 * 3600).unwrap());
-        let periodic = |period, count, restart, timeframe, clock: Option<&BarClock>| {
+        let exchange =
+            Instrument::new("X").with_time_zone(TimezoneId::fixed_offset(-5 * 3600).unwrap());
+        let periodic = |period,
+                        count,
+                        restart,
+                        timeframe,
+                        clock: Option<&BarClock>,
+                        instrument: Option<&Instrument>| {
             let mut study = VolProfilePeriodic::new(24);
             study.set_timeframe(timeframe);
             if let Some(clock) = clock {
                 study.set_bar_clock(clock);
             }
+            study.set_instrument(instrument);
             study
                 .set_input("period", InputValue::Choice(period))
                 .unwrap();
@@ -2911,7 +2919,19 @@ mod tests {
             }
             study
         };
-        for (period, count, restart, bars, timeframe, clock, k, suffix, prepended, fresh) in [
+        for (
+            period,
+            count,
+            restart,
+            bars,
+            timeframe,
+            clock,
+            instrument,
+            k,
+            suffix,
+            prepended,
+            fresh,
+        ) in [
             // Weeks 2922 to 2927 since Monday 5 January 1970 pair as 1461, 1462 and 1463.
             (
                 1,
@@ -2919,6 +2939,7 @@ mod tests {
                 false,
                 weekdays("2026-01-05", 30),
                 Timeframe::Day1,
+                None,
                 None,
                 10,
                 vec![10..20, 20..30],
@@ -2933,6 +2954,7 @@ mod tests {
                 hours.clone(),
                 Timeframe::Hour1,
                 None,
+                None,
                 4,
                 vec![4..6, 6..10, 10..14, 14..16],
                 vec![0..2, 2..6, 6..10, 10..14, 14..16],
@@ -2946,6 +2968,7 @@ mod tests {
                 hours,
                 Timeframe::Hour1,
                 Some(west),
+                None,
                 4,
                 vec![4..7, 7..11, 11..15, 15..16],
                 vec![0..3, 3..7, 7..11, 11..15, 15..16],
@@ -2960,6 +2983,7 @@ mod tests {
                 minutes("2026-03-05T00:00:00Z"),
                 Timeframe::Min1,
                 None,
+                None,
                 130,
                 vec![130..230, 230..250],
                 vec![0..30, 30..130, 130..230, 230..250],
@@ -2972,6 +2996,7 @@ mod tests {
                 false,
                 weekdays("2026-01-05", 10),
                 Timeframe::Day1,
+                None,
                 None,
                 3,
                 vec![3..5, 5..7, 7..9, 9..10],
@@ -2988,20 +3013,23 @@ mod tests {
                 weekdays("2025-12-15", 20),
                 Timeframe::Day1,
                 None,
+                None,
                 7,
                 vec![7..10, 10..13, 13..20],
                 vec![0..10, 10..13, 13..20],
                 vec![0..10, 10..13, 13..20],
             ),
-            // Bars 0 to 119 are the last two hours of 2025, whose profiles keep their starts as
-            // without a restart when older bars load; 2026 counts from its own first bar.
+            // At the exchange, five hours west of UTC, bars 0 to 119 are the last two hours of
+            // 2025, whose profiles keep their starts as without a restart when older bars load;
+            // 2026 counts from its own first bar.
             (
                 7,
                 100,
                 true,
-                minutes("2025-12-31T22:00:00Z"),
+                minutes("2026-01-01T03:00:00Z"),
                 Timeframe::Min1,
                 None,
+                Some(&exchange),
                 30,
                 vec![30..120, 120..220, 220..250],
                 vec![0..30, 30..120, 120..220, 220..250],
@@ -3016,14 +3044,28 @@ mod tests {
                     .collect()
             };
             let case = format!("period {period} count {count} restart {restart}");
-            let mut study = periodic(period, count, restart, timeframe, clock.as_ref());
+            let mut study = periodic(
+                period,
+                count,
+                restart,
+                timeframe,
+                clock.as_ref(),
+                instrument,
+            );
             study.calculate(&bars[k..]);
             assert_eq!(profiles(&study, k), suffix, "{case}");
             // The chart empties a study before it recomputes it with the older bars.
             study.update(&[], 0);
             study.update(&bars, 0);
             assert_eq!(profiles(&study, 0), prepended, "{case}");
-            let mut new = periodic(period, count, restart, timeframe, clock.as_ref());
+            let mut new = periodic(
+                period,
+                count,
+                restart,
+                timeframe,
+                clock.as_ref(),
+                instrument,
+            );
             new.calculate(&bars);
             assert_eq!(profiles(&new, 0), fresh, "{case}");
         }
