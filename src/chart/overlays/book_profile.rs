@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 
 /// What the length of a bar of the book profile shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BookProfile {
     /// The total resting size of the orders at the price.
     #[default]
@@ -27,6 +28,7 @@ pub enum BookProfile {
 /// defaults.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct OrderBookView {
     /// The orders that count. Anything but the default needs a feed that sends order events,
     /// see [`Sink::push_order_event`](crate::data::Sink::push_order_event).

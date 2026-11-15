@@ -20,6 +20,7 @@ pub enum FollowStatus {
 
 /// A request to follow or unfollow, and how it stands.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FollowOperation {
     /// True for a follow request, false for an unfollow request.
     pub follow: bool,

@@ -138,7 +138,8 @@
 //! field is added. The records a custom study returns from `studies::Indicator` methods,
 //! such as `studies::PlotStyle` and `studies::StudyZone`, stay exhaustive so that a study
 //! can build them directly; studies grow through new default trait methods instead.
-//! `widget::MismatchDirection`, `model::PriceLineSource` and `model::LogicalRange` are
+//! `widget::MismatchDirection`, `model::PriceLineSource`, `model::LogicalRange` and the
+//! enums whose documentation says their set is closed, such as `model::AxisSide`, are
 //! complete by meaning.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
