@@ -184,7 +184,7 @@ Chart,Crosshair and interaction,Undo and redo,incomplete,library,src/widget/hist
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,incomplete,library,src/widget/pan_zoom/mod.rs;src/widget/pan_zoom/box_zoom.rs,
 Chart,Keyboard shortcuts,Copy and paste drawings across symbols,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/clipboard.rs;src/widget/pane/mod.rs;src/studies/template.rs;src/model/bar/time.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs;terminal/src/commands.rs,2418;2445;2805;2804
 Chart,Keyboard shortcuts,Ctrl+Left/Right move further,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs,2797
-Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs,
+Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs,
 Chart,Keyboard shortcuts,Digits or comma to change interval,incomplete,library,src/widget/keyboard.rs;src/config/keyboard.rs;terminal/src/time.rs;examples/demo/interval.rs,3023
 Chart,Keyboard shortcuts,Drawing tool hotkeys,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs;src/widget/tool_interaction/mod.rs,
 Chart,Keyboard shortcuts,Go to date,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/time.rs,
