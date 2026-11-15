@@ -16,6 +16,7 @@ impl DemoApp {
             for (id, caption) in captions {
                 app.chart.set_indicator_inputs(id, caption);
             }
+            app.follow_chart_symbol(false);
             Ok::<_, String>(())
         });
         if let Err(error) = applied {
@@ -55,7 +56,10 @@ impl DemoApp {
     }
 
     pub(super) fn show_templates(&mut self, ctx: &egui::Context) {
-        if let Some(studies) = self.study_templates.show(ctx, "Study templates") {
+        if let Some(studies) =
+            self.study_templates
+                .show_for_chart(ctx, "Study templates", &self.chart)
+        {
             self.load_study_template(&studies);
         }
         if let Some(drawing) = self.drawing_templates.show(ctx, "Drawing templates") {

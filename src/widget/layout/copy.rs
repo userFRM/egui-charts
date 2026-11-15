@@ -139,6 +139,7 @@ impl CopiedStudies {
                         } else {
                             vec![vec![0]]
                         },
+                        ..StudyTemplateSet::default()
                     },
                     draws: vec![draws[at]],
                     adding: true,
