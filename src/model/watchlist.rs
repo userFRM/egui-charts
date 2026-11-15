@@ -1,5 +1,8 @@
-//! Watchlists as plain data: named lists of symbols and sections with colour flags and text
-//! import and export. The panel in `ui::widget_bar` shows them and the settings store keeps them.
+//! Watchlists as plain data: named lists of symbols and sections with colour flags, quote
+//! column widths and text import and export. The panel in `ui::widget_bar` shows them and the
+//! settings store keeps them.
+
+use std::collections::BTreeMap;
 
 use egui::Color32;
 use serde::{Deserialize, Serialize};
@@ -50,6 +53,44 @@ impl WatchlistFlag {
     }
 }
 
+/// A sortable watchlist column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum WatchlistColumn {
+    /// Sort by symbol.
+    Symbol,
+    /// Sort by last price.
+    Last,
+    /// Sort by price change.
+    Change,
+    /// Sort by percentage change.
+    ChangePercent,
+    /// Sort by the session's volume.
+    Volume,
+    /// Sort by the last price of the extended-hours session.
+    ExtendedLast,
+    /// Sort by the extended-hours price change from the regular last price.
+    ExtendedChange,
+    /// Sort by the extended-hours percentage change from the regular last price.
+    ExtendedChangePercent,
+}
+
+impl WatchlistColumn {
+    /// The columns after the symbol that the panel shows by default.
+    pub const DEFAULT: [Self; 3] = [Self::Last, Self::Change, Self::ChangePercent];
+
+    /// The columns after the symbol in the wide view: all of them.
+    pub const WIDE: [Self; 7] = [
+        Self::Last,
+        Self::Change,
+        Self::ChangePercent,
+        Self::Volume,
+        Self::ExtendedLast,
+        Self::ExtendedChange,
+        Self::ExtendedChangePercent,
+    ];
+}
+
 /// One row of a watchlist.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -73,6 +114,16 @@ pub struct Watchlist {
     pub name: String,
     /// Symbols and section headings in display order.
     pub items: Vec<WatchlistItem>,
+    /// Whether the user starred the list, which the list menu then shows first.
+    #[serde(default)]
+    pub favorite: bool,
+    /// Whether the rows show each symbol's description under it, where the host supplies one.
+    #[serde(default)]
+    pub show_descriptions: bool,
+    /// The widths, in points, the user dragged quote columns to. The other columns share the
+    /// room left, as they do by default.
+    #[serde(default)]
+    pub column_widths: BTreeMap<WatchlistColumn, f32>,
 }
 
 impl Watchlist {
@@ -81,11 +132,15 @@ impl Watchlist {
         Self {
             name: name.into(),
             items: Vec::new(),
+            favorite: false,
+            show_descriptions: false,
+            column_widths: BTreeMap::new(),
         }
     }
 
     /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
-    /// Sections, symbol order and flags carry over.
+    /// Sections, symbol order, flags, descriptions and column widths carry over; the copy is not
+    /// starred.
     pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
         let taken: Vec<&str> = taken.into_iter().collect();
         let base = format!("{} copy", self.name);
@@ -95,7 +150,8 @@ impl Watchlist {
             .expect("an unused name exists");
         Self {
             name,
-            items: self.items.clone(),
+            favorite: false,
+            ..self.clone()
         }
     }
 
@@ -105,6 +161,30 @@ impl Watchlist {
             WatchlistItem::Symbol { symbol, .. } => Some(symbol.as_str()),
             WatchlistItem::Section(_) => None,
         })
+    }
+
+    /// Moves the section at item `index` with its symbols above the previous section, or below
+    /// the next one with `down`. The symbols before the first section stay first. Returns false,
+    /// leaving the list unchanged, when `index` is not a section or there is no section to pass.
+    pub fn move_section(&mut self, index: usize, down: bool) -> bool {
+        let starts: Vec<usize> = (0..self.items.len())
+            .filter(|&i| matches!(self.items[i], WatchlistItem::Section(_)))
+            .collect();
+        let Some(at) = starts.iter().position(|&start| start == index) else {
+            return false;
+        };
+        // The earlier of the two sections that swap places.
+        let first = match (down, at) {
+            (true, _) => at,
+            (false, 0) => return false,
+            (false, _) => at - 1,
+        };
+        let (Some(&start), Some(&middle)) = (starts.get(first), starts.get(first + 1)) else {
+            return false;
+        };
+        let end = starts.get(first + 2).copied().unwrap_or(self.items.len());
+        self.items[start..end].rotate_left(middle - start);
+        true
     }
 
     /// Appends `symbol`, trimmed. Returns false, leaving the list unchanged, for an empty symbol,
