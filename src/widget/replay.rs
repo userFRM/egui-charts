@@ -196,7 +196,9 @@ impl Chart {
     /// main history was replaced, resolve from the restored history instead. Hosts own source
     /// data and session storage.
     /// With a market driver attached this dispatches a seek; call outside egui context locks,
-    /// as with [`ReplayDriver::seek`].
+    /// as with [`ReplayDriver::seek`]. The rebuilt bars arrive on the next frame, and the view
+    /// follows them as it follows playback: near the live edge it follows the cursor, and a view
+    /// scrolled back keeps the bars it shows in place.
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {
         if let Some(replay) = &self.market_replay {
             if let Some(time) = time {
@@ -1661,5 +1663,84 @@ mod tests {
         crate::widget::test_frames::frame(&ctx, &mut chart, 3.0, vec![]);
         assert_eq!(chart.bars(comparison).len(), 6);
         assert_eq!(changes.load(Ordering::Relaxed), seen + 1);
+    }
+
+    /// A market replay seek leaves the view where playback to the same position does. With
+    /// minutes 0..=69 shown at a right offset of -30, minute 39 is at the right edge; with the
+    /// last bar at minute m it stays there at 39 - m, and a seek that no longer holds it stops
+    /// with the oldest bar in view. A view near the live edge follows the cursor to its default
+    /// margin of 2.5 bars. A candle replay seek agrees.
+    #[test]
+    fn market_replay_seek_keeps_a_scrolled_back_view_on_its_bars() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        use crate::widget::test_frames::frame;
+        let ns = chrono::TimeDelta::nanoseconds(1);
+        let ctx = egui::Context::default();
+        let market = |offset: f32| {
+            let events = (0..100)
+                .map(|minute| {
+                    let fill = Tick::new(time(minute), 10.0, 1.0, None).with_id(minute as u64);
+                    ReplayEvent::new("A", time(minute), minute as u64, MarketEvent::Trade(fill))
+                })
+                .collect();
+            let instrument = Instrument::new("A").with_tick_size(1.0);
+            let driver = Arc::new(ReplayDriver::new(events, vec![instrument]).unwrap());
+            driver.set_speed(0.0).unwrap();
+            driver.seek(time(69));
+            let mut chart = Chart::new(BarData::new());
+            chart.set_symbol("A");
+            chart.set_timeframe(Timeframe::Min1);
+            chart.set_market_replay(Some(driver.clone()));
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(chart.bars(SeriesId::MAIN).len(), 70, "entry");
+            chart.scroll_to_position(offset, false);
+            (chart, driver)
+        };
+        let settle = |chart: &mut Chart| {
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            frame(&ctx, chart, 1.0, vec![]);
+            let last = chart.bars(SeriesId::MAIN).last().unwrap().time;
+            (last, chart.state.time_scale().right_offset())
+        };
+        let mut rows = Vec::new();
+        let (mut chart, driver) = market(-30.0);
+        driver.set_speed(1.0).unwrap();
+        driver.advance(std::time::Duration::from_secs(600)).unwrap();
+        rows.push(("playback to 79", settle(&mut chart)));
+        for (name, offset, minute) in [
+            ("seek to 79", -30.0, 79),
+            ("seek to 59", -30.0, 59),
+            ("seek to 20", -30.0, 20),
+            ("near the live edge, seek to 79", 0.0, 79),
+        ] {
+            let (mut chart, _driver) = market(offset);
+            chart.set_replay_time(Some(time(minute) + ns));
+            rows.push((name, settle(&mut chart)));
+        }
+        let minutes: Vec<_> = (0..100).map(|m| bar(m, [10.0; 5])).collect();
+        let mut chart = Chart::new(BarData::from_bars(minutes));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_replay_time(Some(time(70)));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.scroll_to_position(-30.0, false);
+        chart.set_replay_time(Some(time(80)));
+        rows.push(("candle seek to 79", settle(&mut chart)));
+        assert_eq!(
+            rows,
+            [
+                ("playback to 79", (time(79), -40.0)),
+                ("seek to 79", (time(79), -40.0)),
+                ("seek to 59", (time(59), -20.0)),
+                ("seek to 20", (time(20), 0.0)),
+                ("near the live edge, seek to 79", (time(79), 2.5)),
+                ("candle seek to 79", (time(79), -40.0)),
+            ]
+        );
     }
 }
