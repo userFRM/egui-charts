@@ -383,6 +383,20 @@ impl super::Chart {
             while self.nudge_selected_drawing(ctx) {}
             self.keyboard.map.consume(ctx, true, |_, _| true)
         } {
+            // Drawing edits wait for a drawing drag to end, as undo does: the release records the
+            // drag from the state it started in, which an edit meanwhile would no longer lead to.
+            #[cfg(feature = "drawings")]
+            if self.drawings.drag_in_progress()
+                && matches!(
+                    action,
+                    KeyboardAction::DeleteSelectedDrawing
+                        | KeyboardAction::DrawingTool(_)
+                        | KeyboardAction::PasteDrawing
+                        | KeyboardAction::ToggleDrawings
+                )
+            {
+                continue;
+            }
             if action == KeyboardAction::PasteDrawing
                 && let Event::Paste(text) = event
             {
@@ -475,6 +489,10 @@ impl super::Chart {
         let Some(key) = key else {
             return false;
         };
+        // The key is taken without effect during a drag, which records the drawing on release.
+        if self.drawings.drag_in_progress() {
+            return true;
+        }
         let step = self
             .instrument()
             .and_then(|i| i.tick_size.filter(|s| s.is_finite() && *s > 0.0))

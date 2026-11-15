@@ -1867,22 +1867,21 @@ mod tests {
         }
     }
 
-    /// Undo waits for a drawing drag to end, and the release records the drag as one step: a
-    /// line added at 15.0 and dragged 20 px down with Ctrl+Z pressed before the release goes
-    /// back to 15.0 on the first undo and leaves the chart on the second.
+    /// Undo and the keys that edit drawings wait for a drawing drag to end, and the release
+    /// records the drag as one step: a line added at 15.0 and dragged 20 px down, with a key
+    /// pressed before the release, goes back to 15.0 on the first undo and leaves the chart on
+    /// the second. A tool chosen before the release does not keep the drag open after it.
     #[test]
     #[cfg(feature = "drawings")]
-    fn undo_waits_for_a_drawing_drag_to_end() {
+    fn undo_and_drawing_edits_wait_for_a_drawing_drag_to_end() {
         use crate::widget::test_frames::frame;
-        let ctx = Context::default();
-        let mut chart = chart(&[10.0], &[20.0]);
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        chart.user_action(|chart| {
-            let mut line = host_line();
-            line.chart_points = vec![ChartPoint::new(30.0, 15.0), ChartPoint::new(60.0, 15.0)];
-            chart.drawings_mut().add_synced_drawing(line).unwrap();
-        });
-        frame(&ctx, &mut chart, 0.1, vec![]);
+        let press = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
         let prices = |chart: &Chart| -> Vec<f64> {
             let drawings = &chart.drawings().drawings;
             drawings
@@ -1891,11 +1890,6 @@ mod tests {
                 .map(|point| point.price)
                 .collect()
         };
-        let start = egui::pos2(
-            chart.get_chart_mapping().idx_to_x(45),
-            chart.last_price_map.price_to_y(15.0),
-        );
-        let end = start + egui::vec2(0.0, 20.0);
         let button = |pos, pressed| Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -1903,37 +1897,64 @@ mod tests {
             modifiers: Modifiers::NONE,
         };
         let command = Modifiers::COMMAND | Modifiers::CTRL;
-        for (step, events) in [
-            vec![Event::PointerMoved(start), button(start, true)],
-            vec![Event::PointerMoved(end)],
-            vec![Event::Key {
-                key: Key::Z,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: command,
-            }],
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+        for (during, after) in [
+            (press(Key::Z, command), vec![]),
+            (press(Key::Delete, Modifiers::NONE), vec![]),
+            (press(Key::ArrowDown, Modifiers::NONE), vec![]),
+            (
+                press(Key::T, Modifiers::ALT),
+                vec![press(Key::Escape, Modifiers::NONE)],
+            ),
+        ] {
+            let fed = format!("{during:?}");
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.user_action(|chart| {
+                let mut line = host_line();
+                line.chart_points = vec![ChartPoint::new(30.0, 15.0), ChartPoint::new(60.0, 15.0)];
+                chart.drawings_mut().add_synced_drawing(line).unwrap();
+            });
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let start = egui::pos2(
+                chart.get_chart_mapping().idx_to_x(45),
+                chart.last_price_map.price_to_y(15.0),
+            );
+            let end = start + egui::vec2(0.0, 20.0);
+            for (step, events) in [
+                vec![Event::PointerMoved(start), button(start, true)],
+                vec![Event::PointerMoved(end)],
+                vec![during],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+            }
+            assert!(
+                !chart.undo(),
+                "{fed}: a toolbar button follows the same rule"
+            );
+            frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+            frame(&ctx, &mut chart, 0.6, after);
+            assert!(
+                chart.drawings().dragging_handle().is_none(),
+                "{fed}: the release ended the drag"
+            );
+            let moved = prices(&chart);
+            assert_eq!(moved.len(), 2, "{fed}: the line is still on the chart");
+            assert!(moved.iter().all(|price| *price < 15.0), "{fed}: {moved:?}");
+            assert!(chart.undo(), "{fed}");
+            assert_eq!(prices(&chart), [15.0, 15.0], "{fed}");
+            assert!(chart.undo(), "{fed}");
+            assert!(prices(&chart).is_empty(), "{fed}: {:?}", prices(&chart));
+            assert!(!chart.can_undo(), "{fed}");
+            assert!(chart.redo(), "{fed}");
+            assert_eq!(prices(&chart), [15.0, 15.0], "{fed}");
+            assert!(chart.redo(), "{fed}");
+            assert_eq!(prices(&chart), moved, "{fed}");
+            assert!(!chart.can_redo(), "{fed}");
         }
-        assert!(!chart.undo(), "a toolbar button follows the same rule");
-        frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
-        let moved = prices(&chart);
-        assert_eq!(moved.len(), 2, "the line is still on the chart");
-        assert!(moved.iter().all(|price| *price < 15.0), "{moved:?}");
-        assert!(chart.undo());
-        assert_eq!(prices(&chart), [15.0, 15.0]);
-        assert!(chart.undo());
-        assert!(prices(&chart).is_empty());
-        assert!(!chart.can_undo());
-        assert!(chart.redo());
-        assert_eq!(prices(&chart), [15.0, 15.0]);
-        assert!(chart.redo());
-        assert_eq!(prices(&chart), moved);
-        assert!(!chart.can_redo());
     }
 
     #[test]
