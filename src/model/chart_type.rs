@@ -462,8 +462,16 @@ impl CustomProfileSession {
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
-/// Bars outside the chosen hours still join the session before them, so a host that wants
-/// them left out should not supply them.
+/// Bars outside regular, extended or custom hours still join the session before them, so a host
+/// that wants them left out should not supply them. The pre-market, post-market and segment
+/// choices profile only the bars of their hours, each bar in the hours it opens in.
+///
+/// ```
+/// use egui_charts::model::{ProfileSession, TradeProfileSettings};
+///
+/// let mut settings = TradeProfileSettings::default();
+/// settings.session = ProfileSession::Segments;
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ProfileSession {
@@ -478,6 +486,15 @@ pub enum ProfileSession {
     Extended,
     /// The same hours every day, whatever the instrument trades.
     Custom(CustomProfileSession),
+    /// The instrument's pre-market hours alone, one profile per trading date: its extended hours
+    /// that the date's regular hours follow. The chart's calendar without extended hours.
+    PreMarket,
+    /// The instrument's post-market hours alone, one profile per trading date: its extended hours
+    /// after the date's regular hours. The chart's calendar without extended hours.
+    PostMarket,
+    /// One profile for each of the pre-market, regular and post-market hours of every trading
+    /// date. The chart's calendar without extended hours.
+    Segments,
 }
 
 #[cfg(feature = "studies")]
@@ -485,7 +502,8 @@ impl ProfileSession {
     /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
     /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
-    /// and for regular or extended hours without `hours`.
+    /// for regular or extended hours without `hours`, and for the pre-market, post-market and
+    /// segment choices without extended windows in `hours`.
     pub(crate) fn session_clock(
         &self,
         clock: &super::BarClock,
@@ -502,8 +520,60 @@ impl ProfileSession {
                 (zone, super::Session::new([window]), false)
             }
             Self::Regular | Self::Extended => (zone, hours?.clone(), *self == Self::Extended),
+            Self::PreMarket | Self::PostMarket | Self::Segments => {
+                let hours = hours.filter(|hours| !hours.extended_windows.is_empty())?;
+                (zone, hours.clone(), true)
+            }
         };
         Some(clock.clone().with_session(zone.clone(), session, extended))
+    }
+
+    /// The parts of the bars `range`, one session of `sessions`, that this choice profiles, each a
+    /// profile of its own: the runs of pre-market, of regular and of post-market bars for
+    /// [`Self::Segments`], only the pre-market or post-market runs for [`Self::PreMarket`] and
+    /// [`Self::PostMarket`], and for the other choices the whole range, or with `hours_only` its
+    /// bars from the first inside the hours to the last. A bar belongs to the hours it opens in.
+    /// Bars of no hours are left out before, after and between parts; those inside a part, such
+    /// as bars of a midday break, stay in it.
+    pub(crate) fn profiled(
+        &self,
+        bars: &[super::Bar],
+        range: std::ops::Range<usize>,
+        sessions: &super::ExchangeSessionProvider,
+        hours_only: bool,
+    ) -> Vec<std::ops::Range<usize>> {
+        use super::session::MarketSession;
+        let segments = matches!(self, Self::PreMarket | Self::PostMarket | Self::Segments);
+        if !segments && !hours_only {
+            return vec![range];
+        }
+        let mut parts: Vec<(MarketSession, std::ops::Range<usize>)> = Vec::new();
+        for (i, bar) in range.clone().zip(&bars[range]) {
+            let hours = if segments {
+                sessions
+                    .market_session(bar.time)
+                    .filter(|hours| *hours != MarketSession::Closed)
+            } else {
+                // The clock keeps only the windows this choice selects.
+                sessions
+                    .is_open(bar.time, true)
+                    .then_some(MarketSession::Open)
+            };
+            let Some(hours) = hours else { continue };
+            match parts.last_mut() {
+                Some((last, part)) if *last == hours => part.end = i + 1,
+                _ => parts.push((hours, i..i + 1)),
+            }
+        }
+        parts
+            .into_iter()
+            .filter(|(hours, _)| match self {
+                Self::PreMarket => *hours == MarketSession::PreMarket,
+                Self::PostMarket => *hours == MarketSession::PostMarket,
+                _ => true,
+            })
+            .map(|(_, part)| part)
+            .collect()
     }
 }
 
