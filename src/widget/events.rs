@@ -8,6 +8,7 @@ use egui::{Modifiers, PointerButton, Pos2, Ui};
 
 /// Which study plots are included in cursor and click payloads.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CursorDataPolicy {
     /// Only visible studies and visible plots, matching chart readouts.
     #[default]

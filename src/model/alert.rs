@@ -151,7 +151,16 @@ impl AlertDelivery {
 
 /// The source view and study definitions captured when an alert is created. The alert's
 /// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
+///
+/// ```
+/// use egui_charts::model::{AlertCalendar, AlertInputs, AlertStudy};
+///
+/// let mut inputs = AlertInputs::default();
+/// inputs.calendar = Some(AlertCalendar::new("BTCUSD", None, None));
+/// inputs.studies = vec![AlertStudy::new(0, "RSI", Vec::new())];
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertInputs {
     /// Calendar zone; `None` follows the system's local calendar.
     pub timezone: Option<TimezoneId>,
@@ -215,6 +224,7 @@ impl AlertInputs {
 
 /// The creation symbol's exchange calendar, including an explicitly continuous session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertCalendar {
     /// Symbol whose calendar was captured.
     pub symbol: String,
@@ -224,8 +234,32 @@ pub struct AlertCalendar {
     pub session: Option<super::Session>,
 }
 
+impl AlertCalendar {
+    /// The calendar of `symbol`: its exchange `timezone` and trading `session`, continuous when
+    /// `session` is `None`.
+    ///
+    /// ```
+    /// use egui_charts::model::AlertCalendar;
+    ///
+    /// let calendar = AlertCalendar::new("BTCUSD", None, None);
+    /// assert_eq!(calendar.session, None);
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        timezone: Option<TimezoneId>,
+        session: Option<super::Session>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timezone,
+            session,
+        }
+    }
+}
+
 /// Serializable calculation inputs of a study, without computed values or shared stream state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertStudy {
     /// Identifier used by the alert sources and by dependent studies.
     pub id: usize,
@@ -233,6 +267,28 @@ pub struct AlertStudy {
     pub name: String,
     /// Typed parameters, including auxiliary symbols and intervals.
     pub inputs: Vec<(String, super::InputValue)>,
+}
+
+impl AlertStudy {
+    /// The study `name`, known to the alert sources as `id`, calculated with `inputs`.
+    ///
+    /// ```
+    /// use egui_charts::model::{AlertStudy, InputValue};
+    ///
+    /// let study = AlertStudy::new(0, "RSI", vec![("length".into(), InputValue::Length(14))]);
+    /// assert_eq!(study.name, "RSI");
+    /// ```
+    pub fn new(
+        id: usize,
+        name: impl Into<String>,
+        inputs: Vec<(String, super::InputValue)>,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            inputs,
+        }
+    }
 }
 
 impl Alert {
@@ -560,6 +616,7 @@ pub enum AlertCondition {
 
 /// A host-resolved value on a bar. Identifiers remain meaningful to the host across sessions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertSource {
     /// The symbol's closing or latest price.
     #[default]
@@ -693,6 +750,7 @@ impl Eq for AlertSourceName {}
 
 /// Comparison of two outputs. Crossings require a strict previous side and include equality now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertComparison {
     /// Cross in either direction.
     Crossing,
@@ -708,6 +766,7 @@ pub enum AlertComparison {
 
 /// Relationship of a value to two inclusive, independently resolved boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertChannelComparison {
     /// Previously outside, currently inside.
     Entering,
@@ -732,11 +791,19 @@ impl std::fmt::Display for AlertChannelComparison {
 
 /// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertRule {
     /// The value to test.
     pub source: AlertSource,
     /// The required relationship.
     pub condition: AlertCondition,
+}
+
+impl AlertRule {
+    /// The rule that `source` meets `condition`.
+    pub fn new(source: AlertSource, condition: AlertCondition) -> Self {
+        Self { source, condition }
+    }
 }
 
 impl AlertSource {
@@ -880,6 +947,7 @@ impl Alert {
 /// windows, both read on the clock of `timezone`, so a daylight-saving change moves the windows
 /// with the local clock.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationSchedule {
     /// The zone whose weekday and clock decide.
     pub timezone: TimezoneId,
@@ -894,6 +962,7 @@ pub struct NotificationSchedule {
 /// window whose `end` equals `start` covers the 24 hours from `start`, ending at `start` of the
 /// next day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationWindow {
     /// First clock time inside the window.
     pub start: NaiveTime,
@@ -901,7 +970,36 @@ pub struct NotificationWindow {
     pub end: NaiveTime,
 }
 
+impl NotificationWindow {
+    /// The window from `start` up to but excluding `end`.
+    pub fn new(start: NaiveTime, end: NaiveTime) -> Self {
+        Self { start, end }
+    }
+}
+
 impl NotificationSchedule {
+    /// Delivery on `days` inside `windows`, both read on the clock of `timezone`;
+    /// [`is_valid`](Self::is_valid) asks for at least one of each.
+    ///
+    /// ```
+    /// use chrono::{NaiveTime, Weekday};
+    /// use egui_charts::model::{NotificationSchedule, NotificationWindow, TimezoneId};
+    ///
+    /// let window = NotificationWindow::new(
+    ///     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+    ///     NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+    /// );
+    /// let schedule = NotificationSchedule::new(TimezoneId::utc(), vec![Weekday::Mon], vec![window]);
+    /// assert!(schedule.is_valid());
+    /// ```
+    pub fn new(timezone: TimezoneId, days: Vec<Weekday>, windows: Vec<NotificationWindow>) -> Self {
+        Self {
+            timezone,
+            days,
+            windows,
+        }
+    }
+
     /// Whether at least one weekday and one window are selected.
     pub fn is_valid(&self) -> bool {
         !self.days.is_empty() && !self.windows.is_empty()

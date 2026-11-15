@@ -55,6 +55,7 @@ impl ToastKind {
 
 /// Structured details of an order notification, rendered as symbol and side chips.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct TradingToast {
     /// Instrument identifier.
     pub symbol: String,
@@ -69,6 +70,34 @@ pub struct TradingToast {
     pub price: String,
     /// Executed orders have a check; placements have a side chevron.
     pub executed: bool,
+}
+
+impl TradingToast {
+    /// A placed order without a logo: assign [`executed`](Self::executed) for a fill and
+    /// [`logo`](Self::logo) to show the symbol's logo.
+    ///
+    /// ```
+    /// use egui_charts::model::OrderSide;
+    /// use egui_charts::ui_kit::notifications::TradingToast;
+    ///
+    /// let mut toast = TradingToast::new("AAPL", OrderSide::Buy, 10.0, "189.25");
+    /// toast.executed = true;
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        side: crate::model::OrderSide,
+        quantity: f64,
+        price: impl Into<String>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            logo: None,
+            side,
+            quantity,
+            price: price.into(),
+            executed: false,
+        }
+    }
 }
 
 /// A toast notification

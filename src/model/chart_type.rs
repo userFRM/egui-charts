@@ -352,6 +352,7 @@ impl fmt::Display for ChartType {
 
 /// Numbers shown in a footprint column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintMode {
     /// Sell volume on the left, buy volume on the right.
     BidAsk,
@@ -377,6 +378,7 @@ pub enum FootprintMode {
 
 /// What determines a footprint cell's colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintColor {
     /// Volume relative to the largest row of this bar.
     Volume,
@@ -401,7 +403,15 @@ pub enum FootprintColor {
 ///
 /// The default compares each price row with its immediate neighbours, which is the most
 /// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
+///
+/// ```
+/// use egui_charts::data::NodeSensitivity;
+///
+/// let mut sensitivity = NodeSensitivity::default();
+/// sensitivity.smoothing = 3;
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NodeSensitivity {
     /// Rows on each side of a row that are averaged with it before comparing; zero compares
     /// the rows as traded. Untraded rows count as zero volume.
@@ -417,6 +427,7 @@ pub struct NodeSensitivity {
 /// A window that ends at or before its start spans midnight and belongs to the day it ends on.
 /// Clock changes in `zone` move the window with them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomProfileSession {
     /// Wall-clock time each session opens, in `zone`.
     pub start: chrono::NaiveTime,
@@ -426,12 +437,35 @@ pub struct CustomProfileSession {
     pub zone: Option<super::TimezoneId>,
 }
 
+impl CustomProfileSession {
+    /// Sessions from `start` to `end` on the instrument's exchange clock, or in UTC without one:
+    /// assign [`zone`](Self::zone) to read them in another zone.
+    ///
+    /// ```
+    /// use chrono::NaiveTime;
+    /// use egui_charts::model::CustomProfileSession;
+    ///
+    /// let open = NaiveTime::from_hms_opt(9, 30, 0).unwrap();
+    /// let close = NaiveTime::from_hms_opt(16, 0, 0).unwrap();
+    /// let session = CustomProfileSession::new(open, close);
+    /// assert_eq!(session.zone, None);
+    /// ```
+    pub fn new(start: chrono::NaiveTime, end: chrono::NaiveTime) -> Self {
+        Self {
+            start,
+            end,
+            zone: None,
+        }
+    }
+}
+
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
 /// Bars outside the chosen hours still join the session before them, so a host that wants
 /// them left out should not supply them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileSession {
     /// The chart's own calendar: its instrument's hours, with extended hours as the chart shows
     /// them, or calendar days in the instrument's zone without hours.
@@ -477,6 +511,7 @@ impl ProfileSession {
 ///
 /// Rows are never finer than the feed's own rows, and align to multiples of their height.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileRows {
     /// The rows the feed groups executions into.
     #[default]
@@ -489,8 +524,16 @@ pub enum ProfileRows {
 
 /// Display settings of the chart's execution-based session profiles.
 /// Defaults retain the stacked session histogram, with optional annotations hidden.
+///
+/// ```
+/// use egui_charts::model::TradeProfileSettings;
+///
+/// let mut settings = TradeProfileSettings::default();
+/// settings.developing_poc = true;
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct TradeProfileSettings {
     /// Hours that divide the chart into sessions.
     pub session: ProfileSession,
@@ -541,6 +584,7 @@ impl Default for TradeProfileSettings {
 
 /// A row of the per-bar execution statistics table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintStatistic {
     /// Total executed volume, including unknown sides.
     Volume,
@@ -623,6 +667,7 @@ impl FootprintStatistic {
 
 /// Where the Baseline chart draws its base line.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BaselineLevel {
     /// A price.
     Price(f64),

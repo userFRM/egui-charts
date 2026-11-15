@@ -18,8 +18,16 @@ pub enum MagnetType {
 }
 
 /// Preferences a host saves between sessions, independently of chart history.
+///
+/// ```
+/// use egui_charts::ui::drawing_toolbar::ToolbarPreferences;
+///
+/// let mut preferences = ToolbarPreferences::default();
+/// preferences.hidden = true;
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct ToolbarPreferences {
     /// Whether the left drawing tools are hidden. Defaults to showing them.
     pub hidden: bool,

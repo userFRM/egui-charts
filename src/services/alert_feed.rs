@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 /// Loaded live bars a host can lend to alerts with the same feed view.
 /// Supply only current, unpaused data, never replay bars or incomplete history.
+#[non_exhaustive]
 pub struct AlertData<'a> {
     /// The symbol, interval, calendar, session and conversion of these bars.
     pub request: crate::data::HistoryRequest,
