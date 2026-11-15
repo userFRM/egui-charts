@@ -1870,7 +1870,8 @@ mod tests {
     /// Undo and the keys that edit drawings wait for a drawing drag to end, and the release
     /// records the drag as one step: a line added at 15.0 and dragged 20 px down, with a key
     /// pressed before the release, goes back to 15.0 on the first undo and leaves the chart on
-    /// the second. A tool chosen before the release does not keep the drag open after it.
+    /// the second. A tool chosen before the release, or a release while the chart is not shown,
+    /// does not keep the drag open after it.
     #[test]
     #[cfg(feature = "drawings")]
     fn undo_and_drawing_edits_wait_for_a_drawing_drag_to_end() {
@@ -1897,16 +1898,18 @@ mod tests {
             modifiers: Modifiers::NONE,
         };
         let command = Modifiers::COMMAND | Modifiers::CTRL;
-        for (during, after) in [
-            (press(Key::Z, command), vec![]),
-            (press(Key::Delete, Modifiers::NONE), vec![]),
-            (press(Key::ArrowDown, Modifiers::NONE), vec![]),
+        for (during, shown, after) in [
+            (vec![press(Key::Z, command)], true, vec![]),
+            (vec![press(Key::Delete, Modifiers::NONE)], true, vec![]),
+            (vec![press(Key::ArrowDown, Modifiers::NONE)], true, vec![]),
             (
-                press(Key::T, Modifiers::ALT),
+                vec![press(Key::T, Modifiers::ALT)],
+                true,
                 vec![press(Key::Escape, Modifiers::NONE)],
             ),
+            (vec![], false, vec![]),
         ] {
-            let fed = format!("{during:?}");
+            let fed = format!("{during:?}, release shown: {shown}");
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -1924,7 +1927,7 @@ mod tests {
             for (step, events) in [
                 vec![Event::PointerMoved(start), button(start, true)],
                 vec![Event::PointerMoved(end)],
-                vec![during],
+                during,
             ]
             .into_iter()
             .enumerate()
@@ -1935,7 +1938,23 @@ mod tests {
                 !chart.undo(),
                 "{fed}: a toolbar button follows the same rule"
             );
-            frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+            if shown {
+                frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+            } else {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        time: Some(0.5),
+                        events: vec![button(end, false)],
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+            }
             frame(&ctx, &mut chart, 0.6, after);
             assert!(
                 chart.drawings().dragging_handle().is_none(),

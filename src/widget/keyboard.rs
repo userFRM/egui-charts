@@ -323,6 +323,14 @@ impl super::Chart {
         {
             self.drawings.place_at_pointer = false;
         }
+        // A drawing drag released while the chart was not shown ends once the pointer is up, so
+        // undo and the drawing keys do not wait for a release the chart never sees.
+        #[cfg(feature = "drawings")]
+        if self.drawings.dragging_handle.is_some()
+            && ctx.input(|input| !input.pointer.any_down() && !input.pointer.any_released())
+        {
+            self.user_action(|chart| chart.drawings.end_drag_handle());
+        }
         ctx.data_mut(|data| {
             data.insert_temp(
                 egui::Id::NULL.with("chart_shortcuts"),
