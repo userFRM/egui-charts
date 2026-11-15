@@ -1590,7 +1590,9 @@ fn ambiguous_trade_page_boundary_keeps_prepared_cells_but_not_the_join_bar() {
 /// Hand counts at price 100, on executions without ids and on the same executions with ids made of
 /// their time and size, in seconds from 00:00. A prepared bar is complete only while no instant in
 /// it may lack executions that a trade page holds, or that traded before the stream began; ids
-/// join the page's executions to the held ones and complete it.
+/// join the page's executions to the held ones and complete it. A page fills the time between the
+/// kept executions and the first streamed one at or after them, and an execution the stream stamps
+/// before kept ones joins its bar.
 /// 1. The feed resumes before the first trade page answers. The streams send 130 s (11), 180 s (13)
 ///    and 250 s (17), the page 90 s (2), 130 s (3), 130 s (11), 180 s (13), 245 s (1), 250 s (4)
 ///    and 250 s (17): the 2 min bar holds 11 of the instant's 14, the old stream may have stopped
@@ -1605,6 +1607,13 @@ fn ambiguous_trade_page_boundary_keeps_prepared_cells_but_not_the_join_bar() {
 ///    changes, the stream starting on the 5 min bar's open: the bar may lack executions of 300 s
 ///    until a page holds them, here 3.
 /// 5. A feed without trade history answers each page empty: the 5 min bar is whole.
+/// 6. After an interval change, once the prepared page answered, the stream starts with 1380 s
+///    (5), inside the kept executions, then sends 1680 s (17): the 20 min bar holds 7, 11 and 5.
+///    The page then holds 1560 s (13) and 1620 s (3): the 25 min bar holds 13, 3 and 17, and
+///    without ids the old stream may have stopped inside 1560 s.
+/// 7. After an interval change the stream starts with 1380 s (5), older than every kept execution,
+///    and the page holds 1200 s (1) and 1440 s (4): the 20 min bar holds 1, 5 and 4. In both, the
+///    stream's 1380 s without an id is taken by its time for a repeat and dropped.
 #[test]
 fn prepared_bars_across_resumes_and_interval_changes_complete_with_every_execution() {
     enum Step {
@@ -1651,6 +1660,18 @@ fn prepared_bars_across_resumes_and_interval_changes_complete_with_every_executi
         ("an interval change on a feed without trade history", vec![
             Stream(&[(300, 11.0)]), Trades(&[]), Interval, Stream(&[(660, 17.0)]),
             Prepared(&[(0, 5.0)], 300), Trades(&[]), Bar(300, Some(11.0), Some(11.0)),
+        ]),
+        ("an interval change whose stream starts inside the kept executions", vec![
+            Stream(&[(1260, 11.0)]), Trades(&[(1200, 7.0)]), Stream(&[(1560, 13.0)]), Interval,
+            Stream(&[]), Prepared(&[(600, 1.0)], 1200), Stream(&[(1380, 5.0), (1680, 17.0)]),
+            Bar(1200, Some(18.0), Some(23.0)), Trades(&[(1560, 13.0), (1620, 3.0)]),
+            Bar(1500, None, Some(33.0)),
+        ]),
+        ("an interval change whose stream starts before the kept executions", vec![
+            Stream(&[(1560, 13.0)]), Trades(&[(1500, 7.0)]), Interval,
+            Stream(&[(1380, 5.0), (1680, 17.0)]),
+            Trades(&[(1200, 1.0), (1440, 4.0), (1500, 7.0), (1560, 13.0), (1620, 3.0)]),
+            Prepared(&[(600, 1.0)], 1200), Bar(1200, Some(5.0), Some(10.0)),
         ]),
     ];
     let start = bars(1)[0].time;

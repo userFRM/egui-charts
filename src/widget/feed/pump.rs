@@ -335,6 +335,7 @@ impl Chart {
             let clock = &link.clock;
             let lost_before = link.trades.lost_until();
             let mut evicted = false;
+            let mut unplaced = false;
             let fold = &mut |trade: &Tick, added| {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                 evicted |= !added;
@@ -345,7 +346,7 @@ impl Chart {
                             .prepared_before()
                             .is_none_or(|before| trade.ts >= before)
                     {
-                        let _ = flow.push(trade);
+                        unplaced |= flow.push(trade).is_err();
                     }
                     if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
                         for (input, _) in inputs {
@@ -365,7 +366,12 @@ impl Chart {
             if let Some(flow) = &mut link.footprint
                 && flow.prepared_before().is_some()
             {
-                flow.refresh_prepared_gap(&link.trades);
+                // A streamed trade stamped before held ones joins its bar in time order.
+                if unplaced {
+                    flow.rebuild_prepared(&link.trades);
+                } else {
+                    flow.refresh_prepared_gap(&link.trades);
+                }
             } else if let (Some(first), Some(flow)) =
                 (link.unconfirmed_start(), &mut link.footprint)
             {
@@ -880,7 +886,12 @@ impl Chart {
                     .before
                     .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
                 until(link.trades.iter().next().map(|t| t.ts)),
-                until(link.trades.live().next().map(|t| t.ts)),
+                // A live trade stamped inside the retained tape marks no boundary.
+                until(
+                    (link.trades.live())
+                        .find(|t| unproven.1.is_none_or(|tape| t.ts >= tape))
+                        .map(|t| t.ts),
+                ),
             ))
         });
         let mut tail_changed = false;

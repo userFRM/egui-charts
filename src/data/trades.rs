@@ -1,13 +1,13 @@
 //! The trades of one series, kept for order flow.
 //!
-//! A page adds trades up to the oldest held trade and leaves later ones to the live stream. A trade
+//! A page adds trades up to the first held trade and leaves later ones to the live stream. A trade
 //! whose id is already held is dropped, whatever its time, so history and live trades join exactly
-//! when both carry ids. Otherwise time decides: a page adds a trade at the instant of the oldest
+//! when both carry ids. Otherwise time decides: a page adds a trade at the instant of the first
 //! held trade only if it and every held trade at that instant carry ids, and a live trade is
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice. The first page after a
 //! new subscription on a retained tape also fills the time between the tape and the live stream,
-//! from the instant of the newest retained trade through that of the oldest live trade, each under
+//! from the instant of the newest retained trade through that of the next live trade, each under
 //! the same rule. A page's trades at the stream's first instant may have traded before the
 //! subscription, so the live trades left to a page there are kept apart: they, not the page's, are
 //! what the stream sent at that instant.
@@ -427,7 +427,9 @@ impl Trades {
         let late = (page.first().zip(front)).is_some_and(|(trade, front)| trade.ts > front);
         self.front_reached |= rejected == 0 && !late;
         self.fill_gap(&mut page, changed);
-        if let Some(oldest) = self.trades.iter().map(|trade| trade.ts).min() {
+        // The held trades run without a gap from the first one: a live trade stamped before it
+        // marks no boundary.
+        if let Some(oldest) = self.trades.front().map(|trade| trade.ts) {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
                 .all(|held| held.id.is_some());
@@ -484,7 +486,11 @@ impl Trades {
         let Some(until) = self.retained_until.take() else {
             return;
         };
-        let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
+        // A live trade stamped inside the retained tape marks no boundary.
+        let live_from = (self.trades.iter().skip(self.paged))
+            .map(|t| t.ts)
+            .filter(|ts| *ts >= until)
+            .min();
         let ids_at = |at: Option<DateTime<Utc>>| {
             (self.trades.iter())
                 .filter(|held| Some(held.ts) == at)
@@ -499,8 +505,7 @@ impl Trades {
         let mut left_out = false;
         let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page).into_iter().partition(|t| {
             let unheld = t.id.is_none_or(|id| !self.ids.contains_key(&id));
-            // A live trade stamped inside the retained tape marks no boundary.
-            let at_live = Some(t.ts) == live_from && t.ts >= until;
+            let at_live = Some(t.ts) == live_from;
             if !at_live && (t.ts != until || !after_tape) {
                 return unheld && t.ts > until && live_from.is_none_or(|from| t.ts < from);
             }
