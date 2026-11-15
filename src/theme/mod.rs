@@ -65,12 +65,14 @@ impl Default for Theme {
 /// Colours of the UI chrome.
 ///
 /// ```
-/// use egui_charts::theme::{ChartColors, Radii, Spacing, UiColors};
+/// use egui_charts::theme::{ChartColors, Radii, Spacing, TextSizes, UiColors};
 ///
 /// let mut ui = UiColors::default();
 /// ui.text = egui::Color32::WHITE;
 /// let mut chart = ChartColors::default();
 /// chart.grid_line = egui::Color32::DARK_GRAY;
+/// let mut text = TextSizes::default();
+/// text.body = 14.0;
 /// let mut spacing = Spacing::default();
 /// spacing.md = 10.0;
 /// let mut radii = Radii::default();
@@ -228,7 +230,7 @@ impl ChartColors {
 /// Font sizes, in points.
 ///
 /// Components choose a role; the built-in egui text styles use the same scale.
-/// Use `..Default::default()` in struct literals to keep defaults for the other roles.
+/// Assign the roles to change on a theme's `text` or on `TextSizes::default()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     feature = "serde",
