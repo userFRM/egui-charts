@@ -47,7 +47,7 @@ struct NotesDocument {
 }
 
 /// The notes of one symbol.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Notes {
     text: String,
     /// The text last read from or sent to storage, `None` until it is read. Writes wait for a
@@ -57,6 +57,7 @@ struct Notes {
 }
 
 /// What an inbox answer is for.
+#[derive(Debug)]
 enum Request {
     Details(String),
     Financials(String),
@@ -115,6 +116,26 @@ pub struct SymbolDetailsPanel {
     next: u64,
     financials_requested: bool,
     hide_financials: bool,
+}
+
+impl std::fmt::Debug for SymbolDetailsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SymbolDetailsPanel")
+            .field("instrument", &self.instrument)
+            .field("quote", &self.quote)
+            .field("average_volume", &self.average_volume)
+            .field("timezone", &self.timezone)
+            .field("hidden", &self.hidden)
+            .field("details", &self.details)
+            .field("financials", &self.financials)
+            .field("returns", &self.returns)
+            .field("seasonality", &self.seasonality)
+            .field("error", &self.error)
+            .field("next", &self.next)
+            .field("financials_requested", &self.financials_requested)
+            .field("hide_financials", &self.hide_financials)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SymbolDetailsPanel {

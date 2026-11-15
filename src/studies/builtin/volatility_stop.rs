@@ -34,7 +34,7 @@ use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Volatility Stop: a trailing ATR stop that reverses with the trend.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VolatilityStop {
     length: usize,
     multiplier: f64,
@@ -46,7 +46,7 @@ pub struct VolatilityStop {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     usable: usize,
     previous: f64,

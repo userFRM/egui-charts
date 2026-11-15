@@ -46,7 +46,7 @@ const EMA_LENGTH: usize = 34;
 const RANGE_LENGTH: usize = 30;
 
 /// Chop Zone: unit columns coloured by the angle of the 34-bar EMA.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChopZone {
     values: IndicatorValues,
     stepper: Stepper<State>,
@@ -57,7 +57,7 @@ pub struct ChopZone {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     count: usize,
     prices: std::collections::VecDeque<[f64; 2]>,

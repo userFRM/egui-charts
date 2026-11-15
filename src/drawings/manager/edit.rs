@@ -420,20 +420,24 @@ impl DrawingManager {
     /// Recomputes screen coordinates for all drawings (completed and in-progress)
     /// from their persistent chart coordinates using the current pan/zoom transforms.
     ///
+    /// `bar_spacing` is the points per bar of `bar_to_x`, as in
+    /// [`ChartView::bar_spacing`](crate::drawings::rendering::ChartView::bar_spacing); a Text or
+    /// Anchored text without a [`Drawing::text_zoom_spacing`] adopts it.
+    ///
     /// Must be called each frame before rendering.
-    pub fn update_all_screen_coords<F, G>(&mut self, bar_to_x: F, price_to_y: G)
+    pub fn update_all_screen_coords<F, G>(&mut self, bar_to_x: F, price_to_y: G, bar_spacing: f32)
     where
         F: Fn(f32) -> f32 + Copy,
         G: Fn(f64) -> f32 + Copy,
     {
-        for drawing in &mut self.drawings {
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .chain(&mut self.curr_drawing)
+            .chain(&mut self.measurement)
+        {
             drawing.update_screen_coords(bar_to_x, price_to_y);
-        }
-        if let Some(ref mut drawing) = self.curr_drawing {
-            drawing.update_screen_coords(bar_to_x, price_to_y);
-        }
-        if let Some(drawing) = &mut self.measurement {
-            drawing.update_screen_coords(bar_to_x, price_to_y);
+            drawing.adopt_text_zoom_spacing(bar_spacing);
         }
     }
 
@@ -463,6 +467,7 @@ impl DrawingManager {
         &mut self,
         bar_to_x: impl Fn(f32) -> f32 + Copy,
         price_to_y: impl Fn(f64) -> f32 + Copy,
+        bar_spacing: f32,
     ) {
         for drawing in self
             .drawings
@@ -472,6 +477,7 @@ impl DrawingManager {
         {
             if self.pane_members.contains(&drawing.pane) {
                 drawing.update_screen_coords(bar_to_x, price_to_y);
+                drawing.adopt_text_zoom_spacing(bar_spacing);
                 drawing.update_pane_coords(self.pane_rect);
             } else if drawing.reaches_other_panes()
                 && let Some(anchor) = drawing.chart_points.first()
@@ -919,17 +925,17 @@ mod tests {
         text.chart_points = vec![ChartPoint::new(10.0, 100.0)];
         let id = manager.add_drawing(text).unwrap();
         // First shown at 6 points a bar, then zoomed in to 12.
-        manager.update_all_screen_coords(|bar: f32| bar * 6.0, |price: f64| price as f32);
+        manager.update_all_screen_coords(|bar: f32| bar * 6.0, |price: f64| price as f32, 6.0);
         let at_12 = |bar: f32| bar * 12.0;
-        manager.update_all_screen_coords(at_12, |price: f64| price as f32);
+        manager.update_all_screen_coords(at_12, |price: f64| price as f32, 12.0);
         let zoom = |manager: &DrawingManager| {
             let text = manager.drawings.iter().find(|d| d.id == id).unwrap();
-            text.text_zoom(at_12, at_12(10.0))
+            text.text_zoom(12.0)
         };
         // Sized at 6 points a bar and shown at 12, the text is drawn at 12 / 6 = 2 times its size.
         assert_eq!(zoom(&manager), 2.0, "before the undo");
         assert!(manager.undo() && manager.redo());
-        manager.update_all_screen_coords(at_12, |price: f64| price as f32);
+        manager.update_all_screen_coords(at_12, |price: f64| price as f32, 12.0);
         assert_eq!(zoom(&manager), 2.0, "after the redo");
     }
 }

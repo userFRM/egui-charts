@@ -31,7 +31,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Commodity Channel Index indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CCI {
     period: usize,
     values: IndicatorValues,

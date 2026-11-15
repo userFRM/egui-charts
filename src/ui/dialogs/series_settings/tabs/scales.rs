@@ -9,6 +9,7 @@ use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Scales and lines tab renderer
+#[derive(Debug)]
 pub struct ScalesTab;
 
 impl ScalesTab {

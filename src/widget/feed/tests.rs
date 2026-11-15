@@ -5877,6 +5877,7 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
             bars: chart.state.shown(),
             revision: chart.state.revision(),
             bar_to_x: &|x| x,
+            bar_spacing: 1.0,
             price_to_y: &|price| price as f32,
             y_to_price: &f64::from,
             time_axis: true,

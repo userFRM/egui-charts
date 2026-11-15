@@ -33,7 +33,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Accelerator Oscillator, with Bill Williams' fixed lengths 5, 34 and 5.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AcceleratorOscillator {
     values: IndicatorValues,
     rising_color: Color32,

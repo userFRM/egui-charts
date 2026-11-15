@@ -345,6 +345,7 @@ pub(crate) fn paint_drawings(
         bars: &[],
         revision: 0,
         bar_to_x: &bar_to_x,
+        bar_spacing: coords.bar_spacing,
         price_to_y: &price_to_y,
         y_to_price: &|y| price.y_to_price(y),
         time_axis: false,

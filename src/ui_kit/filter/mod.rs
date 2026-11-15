@@ -31,6 +31,7 @@ use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
 
 /// Response from showing a FilterWidget
+#[derive(Debug)]
 pub struct FilterResponse {
     /// The underlying egui Response
     pub response: Response,
@@ -39,7 +40,7 @@ pub struct FilterResponse {
 }
 
 /// A text input with filtering capabilities
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct FilterWidget {
     query: String,
     placeholder: String,

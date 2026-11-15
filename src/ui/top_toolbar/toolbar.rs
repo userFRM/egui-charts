@@ -193,7 +193,7 @@ impl Slot {
 }
 
 /// A page of the indicator templates menu.
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 enum TemplatesPage {
     #[default]
     Indicators,
@@ -210,6 +210,7 @@ impl TemplatesPage {
 }
 
 /// Top toolbar widget
+#[derive(Debug)]
 pub struct TopToolbar {
     /// Display and layout options for this component.
     pub config: TopToolbarConfig,

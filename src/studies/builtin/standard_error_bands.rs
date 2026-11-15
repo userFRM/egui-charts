@@ -28,7 +28,7 @@ const WITH_LENGTH: [usize; 5] = [1, 2, 3, 4, 5];
 /// lines are undefined while the window or the average lacks bars. A missing close makes them
 /// undefined while it is in the window; an SMA, WMA or VWMA stays undefined until it has left the
 /// average too, where an EMA or SMMA resumes from the value it held before the gap.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StandardErrorBands {
     period: usize,
     multiplier: f64,
@@ -41,7 +41,7 @@ pub struct StandardErrorBands {
 }
 
 /// The latest `period` closes, and the averages of the regression value and its standard error.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Rolling {
     window: VecDeque<f64>,
     middle: Smoothed,

@@ -59,6 +59,7 @@ impl Default for PaneControlsConfig {
 }
 
 /// Pane control buttons (maximize, minimize, close, settings)
+#[derive(Debug)]
 pub struct PaneControls {
     /// Display and layout options for this component.
     pub config: PaneControlsConfig,

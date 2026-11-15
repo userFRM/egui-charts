@@ -63,6 +63,7 @@ pub enum PanelPosition {
 ///     });
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct StyledPanelFrame {
     position: PanelPosition,
     gap_color: Color32,
@@ -279,6 +280,7 @@ impl StyledPanelFrame {
 /// });
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct Card {
     rounding: Option<f32>,
     padding: Option<f32>,

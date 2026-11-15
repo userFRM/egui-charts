@@ -133,6 +133,7 @@ impl SymbolHeaderConfig {
 }
 
 /// Symbol Header Widget
+#[derive(Debug)]
 pub struct SymbolHeader {
     /// Instrument whose quote is shown.
     pub instrument: Instrument,

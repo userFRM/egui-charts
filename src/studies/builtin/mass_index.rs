@@ -8,7 +8,7 @@ use egui::Color32;
 /// Mass Index
 /// Identifies trend reversals based on range expansion
 /// Developed by Donald Dorsey
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MassIndex {
     /// EMA period for range smoothing (typically 9)
     ema_period: usize,
@@ -20,7 +20,7 @@ pub struct MassIndex {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     index: usize,
     count: usize,

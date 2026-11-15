@@ -431,6 +431,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|x| x,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| (1000.0 / p) as f32,
                     y_to_price: &|y| 1000.0 / f64::from(y),
                     time_axis: true,

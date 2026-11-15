@@ -239,6 +239,7 @@ mod tests {
                             bars: &bars,
                             revision: 0,
                             bar_to_x: &|b| b,
+                            bar_spacing: 1.0,
                             price_to_y: &|p| p as f32,
                             y_to_price: &f64::from,
                             time_axis,

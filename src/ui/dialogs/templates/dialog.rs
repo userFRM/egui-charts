@@ -8,6 +8,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 /// Template management opened by a host's study or drawing toolbar intents. The host supplies
 /// the current value, handles the returned loaded value and supplies durable storage if desired.
+#[derive(Debug)]
 pub struct TemplateDialog<T> {
     /// Host-readable catalog and storage connection.
     pub templates: TemplateStore<T>,
