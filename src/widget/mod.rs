@@ -349,6 +349,10 @@ pub struct Chart {
         String,
         (DrawingManager, marks::TimeOrdered<crate::model::Marker>),
     >,
+    /// Counts the times [`Self::forget_symbol`] or [`Self::load_drawings`] dropped or replaced
+    /// the drawings of a symbol at once, which `ChartLayout` tells from a last drawing deleted.
+    #[cfg(feature = "drawings")]
+    drawing_resets: u64,
     #[cfg(not(feature = "drawings"))]
     symbol_markers: std::collections::HashMap<String, marks::TimeOrdered<crate::model::Marker>>,
     /// Where each symbol's drawings are kept; see [`Chart::set_storage`].
