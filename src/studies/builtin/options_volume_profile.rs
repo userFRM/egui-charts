@@ -2397,7 +2397,7 @@ mod tests {
                 assert_eq!(plot.profile.up(), [if missing == 2 { 10.0 } else { 4.0 }]);
                 assert_eq!(plot.profile.down(), [if missing == 2 { 5.0 } else { 2.0 }]);
                 assert_eq!(restored.plot_value(1, 0), (missing == 0).then_some(100.0));
-                #[cfg(all(feature = "widget", feature = "drawings"))]
+                #[cfg(feature = "ui")]
                 if missing != 0 {
                     let mut chart =
                         crate::widget::Chart::new(crate::model::BarData::from_bars(bars.clone()));
