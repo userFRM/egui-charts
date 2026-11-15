@@ -34,4 +34,4 @@ pub use options::{
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;
-pub use vwap::{VwapBand, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};
+pub use vwap::{VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};

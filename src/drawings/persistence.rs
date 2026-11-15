@@ -1383,7 +1383,14 @@ mod tests {
         let mut vwap = VwapConfig::default();
         vwap.bands[0].enabled = false;
         vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
-        vwap.bands[2].color = [21, 22, 23, 24];
+        vwap.bands[2].lower = VwapBandLine::new([21, 22, 23, 24])
+            .with_width(2.5)
+            .and_then(|line| line.with_opacity(0.25))
+            .unwrap();
+        vwap.bands[2].lower.visible = false;
+        vwap.bands[2].lower.line_style = LineStyle::LargeDashed;
+        vwap.bands[2].lower.plot_type = crate::drawings::VwapPlotType::Crosses;
+        vwap.bands[2].lower.track_price = true;
         d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
