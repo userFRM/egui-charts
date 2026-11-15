@@ -17,7 +17,7 @@ pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
-    /// Expires when the divider drag ends or its layout is dropped.
+    /// Expires when the press on a divider or its drag ends, or its layout is dropped.
     pub(super) resizing: std::sync::Weak<()>,
     /// Split size and link membership steps undone or redone since a layout last showed the
     /// chart, for that layout to apply in the order of their process-wide numbers.
