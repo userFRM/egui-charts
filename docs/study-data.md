@@ -57,7 +57,10 @@ close unless the Price source input says otherwise, labelled with [`Instrument::
 The Target currency input converts each candle's amount at the rate in effect at its open; the
 chart then requests the dated rates [`StudyDataRequest::exchange_rate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyDataRequest.html#method.exchange_rate) names, which the host supplies
 like any metric. Without the currency or a rate, or with a non-finite or
-negative value in the window, the quote amount is missing. Supply
+negative value in the window, the quote amount is missing. A study calculated on another
+Interval requests that Interval's bars first and, once they are supplied, the candles and
+exchange rates it reads with them, as on a chart of that interval, so read the request again
+after supplying them. Supply
 the same symbol and session as the chart. Read the request again after a symbol, interval or
 input change:
 

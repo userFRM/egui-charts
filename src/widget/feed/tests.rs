@@ -3079,6 +3079,77 @@ fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
     }
 }
 
+/// Hand counts on 2t at price 100: live buys of 1, 2, 4, 8 and 16 one a second from 0 s into a
+/// trade store that keeps four, so the drain evicts the buy of 1, and the chart's bars are 1 and 2
+/// (delta 3) at 0 s, 4 and 8 (12) at 2 s and 16 at 4 s. The replay cutoff is exclusive. At 3 s it
+/// falls in the 2 s bar, which lost nothing and before which only the buy of 4 came. At 0.5 s it
+/// falls in the 0 s bar, which lost the buy of 1, so that bar has no value. Trade Rate summing
+/// volume has the same bar totals, but its 60 s window at 3 s reaches the lost buy, so it leaves
+/// the 2 s bar empty.
+#[cfg(feature = "studies")]
+#[test]
+fn replay_after_a_trade_store_loss_stops_at_the_cutoff() {
+    use crate::data::OrderFlowKind;
+    use crate::model::OrderSide::Buy;
+    use crate::studies::OrderFlowStudy;
+    let start = bars(1)[0].time;
+    let tape: Vec<_> = (0..)
+        .zip([1.0, 2.0, 4.0, 8.0, 16.0])
+        .map(|(second, size)| {
+            let at = start + TimeDelta::seconds(second);
+            Tick::new(at, 100.0, size, Some(Buy))
+        })
+        .collect();
+    let rate = OrderFlowKind::TradeRate {
+        volume: true,
+        seconds: 60,
+        instant: 1,
+    };
+    let live = [Some(3.0), Some(12.0), Some(16.0)];
+    // The study, the replay cutoff in milliseconds, and its first line during the replay.
+    let rows: [(OrderFlowStudy, i64, &[Option<f64>]); 3] = [
+        (
+            OrderFlowStudy::execution_delta(false),
+            3000,
+            &[Some(3.0), Some(4.0)],
+        ),
+        (OrderFlowStudy::execution_delta(false), 500, &[None]),
+        (OrderFlowStudy::new(rate), 3000, &[Some(3.0), None]),
+    ];
+    for (row, (study, cutoff, replayed)) in rows.into_iter().enumerate() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe("2t".parse().unwrap());
+        chart.add_indicator(Box::new(study));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(4);
+        let sink = feed.sink();
+        tape.iter().for_each(|trade| sink.push_tick(trade.clone()));
+        let mut line = |chart: &mut Chart| {
+            for _ in 0..8 {
+                frames.run(chart);
+            }
+            let values = chart.indicators().next().unwrap().1.values();
+            (0..values.line(0).len())
+                .map(|bar| values.value(0, bar))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(line(&mut chart), live, "row {row}");
+        let lost = chart.feed_link.as_ref().unwrap().trades.lost_until();
+        assert_eq!(lost, Some(start), "row {row}, loss");
+        chart.set_feed_paused(true);
+        chart.set_replay_time(Some(start + TimeDelta::milliseconds(cutoff)));
+        assert_eq!(line(&mut chart), replayed, "row {row}, replay");
+        chart.set_replay_time(None);
+        assert_eq!(line(&mut chart), live, "row {row}, left");
+    }
+}
+
 type PagedCells = Option<Vec<(i64, f64, f64)>>;
 
 /// What the stream sends before the trade page. The history page holds the bars of the tape

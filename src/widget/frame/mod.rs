@@ -107,7 +107,7 @@ impl Chart {
                 rendering::axes::tag_decimals(&mapping.price, y),
                 formatter.as_deref(),
             );
-            text.push_str(&format!("\n{name} {value}"));
+            text.push_str(&format!("\n{} {value}", l10n::text(ui.ctx(), name)));
             if !direction.is_empty() {
                 text.push_str(&format!(" ({})", l10n::text(ui.ctx(), direction)));
             }
@@ -2984,7 +2984,7 @@ impl Chart {
                     let label = if quote {
                         price
                     } else {
-                        format!("{name} {price}")
+                        format!("{} {price}", l10n::text(ui.ctx(), name))
                     };
                     let text_color = rendering::axes::tag_text_color(color);
                     let tag = rendering::axes::render_axis_value(
