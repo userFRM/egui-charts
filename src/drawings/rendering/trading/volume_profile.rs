@@ -156,7 +156,7 @@ impl Drawing {
 
     /// The values at the last of `bars`, the pane's bars at `revision`, of the anchored VWAP's
     /// tracked lines, each with its style: the VWAP while its line shows, in the drawing's
-    /// colour, then the shown band lines of the enabled bands. None for other drawings or before
+    /// colour, then the shown band lines of the enabled bands. Empty for other drawings or before
     /// volume trades.
     pub(crate) fn anchored_vwap_tracked(
         &self,

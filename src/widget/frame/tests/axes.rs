@@ -261,7 +261,7 @@ fn price_labels_and_lines_are_independent_on_either_axis() {
 /// An anchored VWAP tags its latest value only while it tracks it, at its own precision: the
 /// typical prices of bars 98 and 99 are 320 / 3 and 340 / 3, so from bar 98 it is 110 and from
 /// bar 99 it is 113.33. Its tracked upper line of band 1 at 1% tags 111.1, its untracked lower
-/// line nothing.
+/// line nothing, and the tracked but hidden upper line of band 2 at 2%, 112.2, nothing either.
 #[cfg(feature = "drawings")]
 #[test]
 fn line_drawings_tag_their_price_and_time_on_the_axes() {
@@ -300,6 +300,9 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
                     ..Default::default()
                 };
                 config.bands[0].upper.track_price = true;
+                config.bands[1].enabled = true;
+                config.bands[1].upper.track_price = true;
+                config.bands[1].upper.visible = false;
                 drawing.vwap = Some(config);
             }
             _ => {}
@@ -328,6 +331,7 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
         ("110.0000", true),
         ("111.1000", true),
         ("108.9000", false),
+        ("112.2000", false),
         ("113.33", false),
     ] {
         assert_eq!(price_texts.contains(&label), shown, "price {label}");

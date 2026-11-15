@@ -192,8 +192,8 @@ impl Chart {
     }
 
     /// Replace an anchored VWAP's settings (source, bands, their unit and the style of each band
-    /// line, fills, line plot, latest-value tracking and its precision) as one undoable edit. Unknown ids, locked
-    /// drawings, other tools and invalid settings change nothing.
+    /// line, fills, line plot, latest-value tracking and its precision) as one undoable edit.
+    /// Unknown ids, locked drawings, other tools and invalid settings change nothing.
     pub fn set_vwap_config(
         &mut self,
         id: usize,

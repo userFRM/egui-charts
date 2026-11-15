@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 const BAND_COLORS: [[u8; 4]; 3] = [[76, 175, 80, 255], [128, 128, 0, 255], [0, 137, 123, 255]];
 
 /// A line above and a line below an anchored VWAP, a multiple of the
-/// [band unit](VwapBandMode) away from it, each drawn as its own [`VwapBandLine`] sets.
+/// [band unit](VwapBandMode) away from it, each styled by its own [`VwapBandLine`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "VwapBandFields")]
 pub struct VwapBand {
@@ -75,7 +75,7 @@ impl VwapBand {
 /// width, plot and opacity, and whether its latest value is marked.
 ///
 /// ```
-/// use egui_charts::drawings::{VwapBandLine, VwapConfig, VwapPlotType};
+/// use egui_charts::drawings::{VwapBand, VwapBandLine, VwapConfig, VwapPlotType};
 /// use egui_charts::model::LineStyle;
 ///
 /// let mut line = VwapBandLine::new([200, 0, 0, 255])
@@ -85,8 +85,10 @@ impl VwapBand {
 /// line.line_style = LineStyle::Dashed;
 /// line.plot_type = VwapPlotType::StepLine;
 /// line.track_price = true;
+/// let mut band = VwapBand::new(true, 1.5).unwrap();
+/// band.lower = line;
 /// let mut config = VwapConfig::default();
-/// config.bands[0].lower = line;
+/// config.bands[1] = band;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "VwapBandLineFields")]
