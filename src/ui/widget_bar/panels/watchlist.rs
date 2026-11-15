@@ -32,7 +32,8 @@ use crate::ui_kit::{EmptyState, IconButton};
 const LIST_ROW_HEIGHT: f32 = 30.0;
 /// Diameter of a symbol's mark.
 const MARK_SIZE: f32 = 18.0;
-/// The narrowest a dragged quote column gets, and the room it leaves the symbol column.
+/// The narrowest a dragged quote column gets, and the room the quote columns leave the symbol
+/// column.
 const MIN_COLUMN_WIDTH: f32 = 32.0;
 
 pub use crate::model::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
@@ -146,8 +147,8 @@ struct ListEdit {
 /// column header resizes the column and a double click restores its width. Clicking a section
 /// collapses or expands its symbols. Unsorted rows are dragged to reorder, and rows are
 /// right-clicked to flag, rename or remove, and sections to move them with their symbols. The
-/// list menu stars lists, which it then shows first; the more menu clears the active list,
-/// undoes a clear or a section move and shows the descriptions given with
+/// list menu stars lists, which it then shows first, clears the active list and undoes a clear or
+/// a section move; the more menu shows the descriptions given with
 /// [`set_description`](Self::set_description). The host persists [`lists`](Self::lists), with
 /// the stars, descriptions setting and column widths of each, and handles file intents.
 pub struct WatchlistPanel {
@@ -579,25 +580,6 @@ impl WatchlistPanel {
             }
             if ui
                 .add_enabled(
-                    lists.len() > 1,
-                    egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
-                )
-                .clicked()
-            {
-                lists.remove(*active);
-                *active = active.saturating_sub(1);
-                // The recorded edits name lists by position.
-                undo.clear();
-            }
-        });
-        egui::Popup::menu(&more).show(|ui| {
-            if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
-                lists[*active]
-                    .items
-                    .push(WatchlistItem::Section("New section".to_owned()));
-            }
-            if ui
-                .add_enabled(
                     flag_filter.is_none() && !lists[*active].items.is_empty(),
                     egui::Button::new(l10n::text(ui.ctx(), "Clear list")),
                 )
@@ -620,6 +602,25 @@ impl WatchlistPanel {
             {
                 lists[edit.list].items = edit.before;
                 (*active, *flag_filter) = (edit.list, None);
+            }
+            if ui
+                .add_enabled(
+                    lists.len() > 1,
+                    egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
+                )
+                .clicked()
+            {
+                lists.remove(*active);
+                *active = active.saturating_sub(1);
+                // The recorded edits name lists by position.
+                undo.clear();
+            }
+        });
+        egui::Popup::menu(&more).show(|ui| {
+            if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
+                lists[*active]
+                    .items
+                    .push(WatchlistItem::Section("New section".to_owned()));
             }
             ui.checkbox(
                 &mut lists[*active].show_descriptions,
@@ -680,7 +681,8 @@ impl WatchlistPanel {
         let columns = |rect: egui::Rect, widths: &BTreeMap<WatchlistColumn, f32>| {
             let (left, right) = (rect.left() + 10.0, rect.right() - 4.0);
             let number = ((rect.width() - 18.0).max(0.0) * 0.705 / numbers.max(1) as f32).min(96.0);
-            // Left edges of the number columns, laid out from the right.
+            // Left edges of the number columns, laid out from the right. Widths kept from a wider
+            // row leave the symbol column the room a drag leaves it.
             let mut edges: Vec<f32> = shown_columns
                 .iter()
                 .rev()
@@ -689,7 +691,7 @@ impl WatchlistPanel {
                     *edge -= width
                         .filter(|w| w.is_finite() && *w > 0.0)
                         .unwrap_or(number);
-                    Some(edge.max(left))
+                    Some(edge.max(left + MIN_COLUMN_WIDTH))
                 })
                 .collect();
             edges.push(left);
@@ -801,7 +803,15 @@ impl WatchlistPanel {
                     list_id.with(("resize", at)),
                     Sense::click_and_drag(),
                 )
-                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                .on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
+            let name = l10n::format_text(
+                ui.ctx(),
+                "Resize {0}",
+                &[("0", l10n::text(ui.ctx(), column_label(column)))],
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Splitter, response.enabled(), &name)
+            });
             if response.hovered() || response.dragged() {
                 ui.painter().vline(
                     edge - 1.0,
@@ -1517,8 +1527,9 @@ mod tests {
         }
     }
 
-    /// Stars, the descriptions setting and column widths survive the settings document, and a
-    /// list saved before they existed reads without them.
+    /// Stars, the descriptions setting and column widths survive the settings document, a list
+    /// saved before they existed reads without them, and the width of a column a newer release
+    /// added is left out while the rest reads.
     #[test]
     fn list_settings_survive_the_settings_document() {
         use crate::services::UserSettings;
@@ -1538,10 +1549,17 @@ mod tests {
             UserSettings::from_json(older).unwrap().watchlists,
             [Watchlist::from_text("Main", "A,###S")]
         );
+        let newer = r#"{"version":1,"watchlists":[{"name":"Main","items":[],"column_widths":{"Bid":50.0,"Last":70.0}}]}"#;
+        let mut expected = Watchlist::new("Main");
+        expected.column_widths.insert(WatchlistColumn::Last, 70.0);
+        assert_eq!(
+            UserSettings::from_json(newer).unwrap().watchlists,
+            [expected]
+        );
     }
 
     /// Clearing empties only the active list, and undo reverts clears and section moves newest
-    /// first, but never over a later change of the list.
+    /// first, keeps later changes outside the items and never reverts over a later change of them.
     #[test]
     fn clears_and_section_moves_are_undone_until_the_list_changes() {
         use egui_kittest::{Harness, kittest::Queryable};
@@ -1565,8 +1583,9 @@ mod tests {
                 .map(Watchlist::to_text)
                 .collect::<Vec<_>>()
         };
+        // The list name opens the list menu; a section opens its own on a right click.
         let press = |h: &mut Harness<'_, WatchlistPanel>, menu: &str, item: &str| {
-            if menu == "More" {
+            if menu == "Main" {
                 h.get_by_label(menu).click();
             } else {
                 h.get_by_label(menu).click_secondary();
@@ -1577,15 +1596,17 @@ mod tests {
         };
         press(&mut h, "One", "Move section down");
         assert_eq!(texts(&h), ["A,###Two,C,###One,B", "X"]);
-        press(&mut h, "More", "Clear list");
+        press(&mut h, "Main", "Clear list");
         assert_eq!(texts(&h), ["", "X"]);
-        press(&mut h, "More", "Undo");
+        h.state_mut().lists[0].favorite = true;
+        press(&mut h, "Main", "Undo");
         assert_eq!(texts(&h), ["A,###Two,C,###One,B", "X"]);
-        press(&mut h, "More", "Undo");
+        assert!(h.state().lists()[0].favorite, "the later star stays");
+        press(&mut h, "Main", "Undo");
         assert_eq!(texts(&h), ["A,###One,B,###Two,C", "X"]);
         press(&mut h, "Two", "Move section up");
         h.state_mut().add_symbol("D");
-        press(&mut h, "More", "Undo");
+        press(&mut h, "Main", "Undo");
         assert_eq!(texts(&h), ["A,###Two,C,###One,B,D", "X"]);
     }
 
@@ -1798,8 +1819,9 @@ mod tests {
     }
 
     /// Dragging the left edge of a quote column header to the left widens that column by the
-    /// distance dragged and keeps the width in the list; descriptions show only when the list
-    /// asks for them.
+    /// distance dragged and keeps the width in the list, never past the room the symbol column
+    /// keeps, even for a width kept from a wider row; descriptions show only when the list asks
+    /// for them.
     #[test]
     fn header_drags_resize_columns_and_lists_choose_descriptions() {
         let ctx = egui::Context::default();
@@ -1848,17 +1870,32 @@ mod tests {
             pressed,
             modifiers: Modifiers::NONE,
         };
-        let moved = last - vec2(20.0, 0.0);
-        frame(&mut panel, vec![egui::Event::PointerMoved(last)]);
-        frame(&mut panel, vec![button(last, true)]);
-        frame(&mut panel, vec![egui::Event::PointerMoved(moved)]);
-        frame(&mut panel, vec![button(moved, false)]);
+        // A response read after a frame has the previous frame's rect, so a frame without input
+        // follows the release.
+        let drag = |panel: &mut WatchlistPanel, from: egui::Pos2, to: egui::Pos2| {
+            frame(panel, vec![egui::Event::PointerMoved(from)]);
+            frame(panel, vec![button(from, true)]);
+            frame(panel, vec![egui::Event::PointerMoved(to)]);
+            frame(panel, vec![button(to, false)]);
+            frame(panel, vec![]);
+        };
+        drag(&mut panel, last, last - vec2(20.0, 0.0));
         let width = panel.lists()[0].column_widths[&WatchlistColumn::Last];
         assert!(
             (width - (change.x - last.x + 20.0)).abs() < 0.01,
             "{width} from {last:?} {change:?}"
         );
         assert!((edge(2).x - change.x).abs() < 0.01, "the next column stays");
+        // Dragged past the room the symbol column keeps, the edge stops; a width kept from a
+        // wider row stops at the same place instead of covering the symbols.
+        drag(&mut panel, edge(1), pos2(1.0, last.y));
+        let limit = edge(1).x;
+        panel.lists[0]
+            .column_widths
+            .insert(WatchlistColumn::Last, 1000.0);
+        frame(&mut panel, vec![]);
+        frame(&mut panel, vec![]);
+        assert!((edge(1).x - limit).abs() < 0.01, "{} {limit}", edge(1).x);
         panel.lists[0].show_descriptions = true;
         assert!(frame(&mut panel, vec![]).1.contains(&"Alpha Inc".into()));
     }

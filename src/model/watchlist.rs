@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use egui::Color32;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, IntoDeserializer, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A colour flag marking a watchlist symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -121,9 +122,43 @@ pub struct Watchlist {
     #[serde(default)]
     pub show_descriptions: bool,
     /// The widths, in points, the user dragged quote columns to. The other columns share the
-    /// room left, as they do by default.
-    #[serde(default)]
+    /// room left, as they do by default. A column this release does not know is left out when
+    /// reading.
+    #[serde(default, deserialize_with = "known_columns")]
     pub column_widths: BTreeMap<WatchlistColumn, f32>,
+}
+
+/// Reads column widths, leaving out the columns this release does not know, such as one a newer
+/// release added, so the rest of the list still reads.
+fn known_columns<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<WatchlistColumn, f32>, D::Error> {
+    /// A column read by name, `None` for a name this release does not know.
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    struct Known(Option<WatchlistColumn>);
+    impl<'de> Deserialize<'de> for Known {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Name;
+            impl Visitor<'_> for Name {
+                type Value = Known;
+                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    formatter.write_str("a watchlist column")
+                }
+                fn visit_str<E: de::Error>(self, name: &str) -> Result<Known, E> {
+                    let column: Result<WatchlistColumn, E> =
+                        WatchlistColumn::deserialize(name.into_deserializer());
+                    Ok(Known(column.ok()))
+                }
+            }
+            // Read as an identifier: a JSON key reads as one, and so does a variant name in
+            // other formats.
+            deserializer.deserialize_identifier(Name)
+        }
+    }
+    Ok(BTreeMap::<Known, f32>::deserialize(deserializer)?
+        .into_iter()
+        .filter_map(|(Known(column), width)| Some((column?, width)))
+        .collect())
 }
 
 impl Watchlist {
