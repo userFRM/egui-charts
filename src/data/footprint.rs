@@ -523,7 +523,8 @@ impl Footprint {
         self.revision = next_revision();
     }
 
-    /// Replays only the mutable suffix after a trade-page reply, never completed history.
+    /// Replays only the mutable suffix after a trade-page reply, or after a streamed trade stamped
+    /// before held ones, never completed history.
     #[cfg(feature = "widget")]
     pub(crate) fn rebuild_prepared(&mut self, trades: &super::trades::Trades) {
         let Some(before) = self.prepared_before() else {
@@ -534,7 +535,10 @@ impl Footprint {
         self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
         self.restore_boundary();
         self.last = None;
-        for trade in trades.iter().filter(|trade| trade.ts >= before) {
+        // A stream can stamp its first trades before held ones: the bars take them in time order.
+        let mut tail: Vec<_> = trades.iter().filter(|trade| trade.ts >= before).collect();
+        tail.sort_by_key(|trade| trade.ts);
+        for trade in tail {
             let _ = self.push(trade);
         }
         if let Some(lost) = trades.lost_until() {
@@ -566,7 +570,7 @@ impl Footprint {
         if let Some(lost) = trades.lost_until().filter(|lost| *lost >= before) {
             self.add_missing(before, after(lost).max(oldest.unwrap_or(after(lost))));
         }
-        if let Some(left) = trades.left_out_at().filter(|left| *left >= before) {
+        for &left in trades.left_out().range(before..) {
             self.add_missing(left, after(left));
         }
         let tape = trades.retained_until();
