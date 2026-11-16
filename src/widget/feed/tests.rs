@@ -2767,7 +2767,10 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
                 .map(|bar| bar.time)
                 .collect();
             assert_eq!(drawn, opens, "{label}, turned {turned}");
-            let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+            let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref())
+                .unwrap()
+                .owned()
+                .unwrap();
             let complete = flow.complete_from();
             let shown: Vec<_> = (opens.iter())
                 .map(|open| {
