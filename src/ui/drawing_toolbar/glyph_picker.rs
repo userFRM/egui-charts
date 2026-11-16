@@ -7,12 +7,19 @@ use crate::localization as l10n;
 use egui::{Rect, Ui, Vec2};
 
 /// Session state for the drawing glyph picker.
+///
+/// ```
+/// let mut picker = egui_charts::ui::drawing_toolbar::GlyphPicker::default();
+/// picker.sticker_size = 96.0;
+/// ```
 #[derive(Clone, Debug)]
 pub struct GlyphPicker {
     /// Search by glyph name across icons, emoji and stickers.
     pub query: String,
-    /// Size in logical pixels, independent of line width.
+    /// Size in logical pixels of a placed icon or emoji, independent of line width.
     pub size: f32,
+    /// Size in logical pixels of a placed sticker, independent of [`Self::size`].
+    pub sticker_size: f32,
     group: &'static str,
     recent: Vec<&'static str>,
 }
@@ -22,6 +29,7 @@ impl Default for GlyphPicker {
         Self {
             query: String::new(),
             size: 40.0,
+            sticker_size: 110.0,
             group: "All",
             recent: Vec::new(),
         }
@@ -46,13 +54,18 @@ impl GlyphPicker {
                 ui.selectable_value(&mut self.group, group, l10n::text(ui.ctx(), group));
             }
         });
-        ui.horizontal(|ui| {
-            ui.label(l10n::text(ui.ctx(), "Size"));
-            ui.add(
-                egui::DragValue::new(&mut self.size)
-                    .range(8.0..=128.0)
-                    .suffix(l10n::text(ui.ctx(), " px")),
-            );
+        ui.horizontal_wrapped(|ui| {
+            for (label, size) in [
+                ("Size", &mut self.size),
+                ("Sticker size", &mut self.sticker_size),
+            ] {
+                ui.label(l10n::text(ui.ctx(), label));
+                ui.add(
+                    egui::DragValue::new(size)
+                        .range(8.0..=128.0)
+                        .suffix(l10n::text(ui.ctx(), " px")),
+                );
+            }
         });
         ui.separator();
         let query = self.query.trim().to_lowercase();
@@ -102,7 +115,11 @@ impl GlyphPicker {
         self.recent.truncate(12);
         Some(DrawingToolbarAction::InsertGlyph {
             icon_name: glyph,
-            size: self.size,
+            size: if glyph.starts_with("sticker:") {
+                self.sticker_size
+            } else {
+                self.size
+            },
         })
     }
 }

@@ -56,8 +56,11 @@ impl PreparedPage {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct FootprintView<'a> {
+/// Borrowed executions across owned bars and immutable prepared history, without copying rows.
+/// Construct from an owned [`Footprint`] with `(&footprint).into()`. Chart drawing callbacks
+/// receive the same view over their feed's shared history. Available with `widget` or `studies`.
+#[derive(Clone, Copy, Debug)]
+pub struct FootprintView<'a> {
     flow: &'a Footprint,
     pages: &'a [PreparedPage],
 }
@@ -71,10 +74,12 @@ impl<'a> FootprintView<'a> {
     pub(crate) fn clock(self) -> &'a crate::model::BarClock {
         self.flow.clock()
     }
-    pub(crate) fn tick_size(self) -> f64 {
+    /// Instrument tick size used by the price-level keys.
+    pub fn tick_size(self) -> f64 {
         self.flow.tick_size()
     }
-    pub(crate) fn price_step(self) -> f64 {
+    /// Price width of one grouped row.
+    pub fn price_step(self) -> f64 {
         self.flow.price_step()
     }
     #[cfg(feature = "widget")]
@@ -173,7 +178,11 @@ impl<'a> FootprintView<'a> {
     pub(crate) fn complete_at(self, open: DateTime<Utc>) -> bool {
         self.flow.complete_at(open)
     }
-    pub(crate) fn complete_bars(
+    /// Complete bars opening in `range`, including prepared bars before a missing join.
+    /// The range may still contain gaps; check [`span_is_complete`](Self::span_is_complete)
+    /// before treating a calculation over it as complete. Panics for invalid bounds as
+    /// [`std::collections::BTreeMap::range`] does.
+    pub fn complete_bars(
         self,
         range: impl RangeBounds<DateTime<Utc>>,
     ) -> impl DoubleEndedIterator<Item = FootprintBarView<'a>> {
@@ -194,8 +203,9 @@ impl<'a> FootprintView<'a> {
     pub(crate) fn span_has_gap(self, from: DateTime<Utc>, through: Option<DateTime<Utc>>) -> bool {
         self.flow.span_has_gap(from, through)
     }
-    #[cfg(any(feature = "drawings", feature = "studies"))]
-    pub(crate) fn span_is_complete(self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
+    /// Whether all executions are known in the bars containing `first` through `last`, inclusive.
+    /// Quiet slots are complete; a missing join or a span before held history is not.
+    pub fn span_is_complete(self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
         let (first, last) = (
             self.flow.clock.bar_open(first),
             self.flow.clock.bar_open(last),
@@ -205,6 +215,23 @@ impl<'a> FootprintView<'a> {
             && self.flow.complete_at(first)
             && self.flow.complete_at(last)
             && !self.flow.span_has_gap(first, Some(last))
+    }
+
+    /// Sum complete bars containing `first` through `last`, inclusive, into an owned profile.
+    /// As in [`Footprint::profile`], incomplete bars are omitted and reversed bounds give an
+    /// empty profile. This allocates the summed price rows, without copying the input history.
+    pub fn profile(self, first: DateTime<Utc>, last: DateTime<Utc>) -> super::FootprintBar {
+        let (first, last) = (
+            self.flow.clock.bar_open(first),
+            self.flow.clock.bar_open(last),
+        );
+        let mut profile = super::FootprintBar::empty(first);
+        if first <= last {
+            for bar in self.complete_bars(first..=last) {
+                profile.absorb_grouped(bar, 1);
+            }
+        }
+        profile
     }
 }
 

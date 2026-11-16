@@ -1,4 +1,5 @@
 //! Matched raw and prepared history, including admission, steady frames and live updates.
+//! `--profile` also draws a fixed range volume profile over the last 120 bars (needs `drawings`).
 
 #[expect(
     dead_code,
@@ -134,10 +135,13 @@ fn main() {
     let frames: usize =
         std::env::var("FRAME_TIME_FRAMES").map_or(300, |v| v.parse().expect("a frame count"));
     assert!(frames > 0, "at least one measured frame");
-    let filters: Vec<_> = std::env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with("--"))
-        .collect();
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let all = args.iter().any(|arg| arg == "--all-annotations");
+    let delta = args.iter().any(|arg| arg == "--delta-poc");
+    let stacks = args.iter().any(|arg| arg == "--stacks");
+    let annotations = !args.iter().any(|arg| arg == "--no-annotations");
+    let statistics = !args.iter().any(|arg| arg == "--no-statistics");
+    let filters: Vec<_> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
     println!(
         "\n| footprint-feed | load ms | steady p50 ms | steady p95 ms | live p50 ms | live p95 ms | shapes | vertices |"
     );
@@ -149,7 +153,7 @@ fn main() {
         ("shared", true, true, ChartType::VolumeFootprint),
         ("candles", false, false, ChartType::Candles),
     ] {
-        if !filters.is_empty() && !filters.iter().any(|filter| name.contains(filter)) {
+        if !filters.is_empty() && !filters.iter().any(|filter| name.contains(filter.as_str())) {
             continue;
         }
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -216,9 +220,26 @@ fn main() {
             .with_chart_type(kind)
             .build();
         chart.config_mut().show_countdown = false;
+        if std::env::args().any(|arg| arg == "--profile") {
+            #[cfg(feature = "drawings")]
+            {
+                use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+                let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+                drawing.chart_points = vec![
+                    ChartPoint::new((BARS - 120) as f32, 100.0),
+                    ChartPoint::new((BARS - 1) as f32, 103.75),
+                ];
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            #[cfg(not(feature = "drawings"))]
+            panic!("--profile requires the drawings feature");
+        }
         let mut params = chart.chart_type_params().clone();
-        params.footprint_statistics = true;
-        params.footprint_naked_poc = true;
+        params.footprint_statistics = statistics;
+        params.footprint_naked_poc = annotations && (all || (!delta && !stacks));
+        params.footprint_delta_poc = annotations && (all || delta);
+        params.footprint_stacked_imbalances = annotations && (all || stacks);
+        params.footprint_unfinished_auctions = annotations && all;
         chart.set_chart_type_params(params);
         chart.set_server_time(Some(cutoff));
         let ctx = egui::Context::default();
@@ -278,6 +299,7 @@ fn main() {
             chart.trades(SeriesId::MAIN).count(),
             if prepared { 1 } else { BARS * ROWS + 1 } + frame::WARMUP + frames
         );
+        eprintln!("signature {name}: {before:016x} {after:016x}");
         println!(
             "| {name} | {load:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} | {} |",
             milliseconds(&steady, 0.5),
