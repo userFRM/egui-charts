@@ -30,6 +30,12 @@ pub(super) fn label_text_color(fill: Color32) -> Color32 {
     }
 }
 
+/// The chart and panel colours a drawing reads on. A translucent chart, such as the one an image
+/// exported without its background has, shows the panel behind it.
+fn backgrounds(theme: &crate::theme::Theme) -> [Color32; 2] {
+    [theme.ui.panel_bg.blend(theme.chart.bg), theme.ui.panel_bg]
+}
+
 /// The default colours of a tool that need another shade on a theme: slot, colour and shade.
 type Shades = Vec<(ColorSlot, [u8; 4], [u8; 4])>;
 
@@ -83,12 +89,7 @@ impl Drawing {
             return color;
         }
         let theme = ctx.active_theme();
-        crate::theme::readable_color(
-            color,
-            theme.ui.text,
-            &[theme.chart.bg, theme.ui.panel_bg],
-            4.0,
-        )
+        crate::theme::readable_color(color, theme.ui.text, &backgrounds(&theme), 4.0)
     }
 
     /// This drawing with each of its tool's default line, level and text colours in the shade
@@ -100,10 +101,8 @@ impl Drawing {
             return None;
         }
         let theme = ctx.active_theme();
-        let key = (
-            self.tool_type,
-            [theme.ui.text, theme.chart.bg, theme.ui.panel_bg],
-        );
+        let [chart, panel] = backgrounds(&theme);
+        let key = (self.tool_type, [theme.ui.text, chart, panel]);
         // Nothing below reads the context, which `memory_mut` holds locked.
         ctx.memory_mut(|memory| {
             let shades = memory
@@ -1143,13 +1142,17 @@ mod tests {
     /// theme's text (219, 219, 219), step 35, (165, 64, 182), has L = 0.1504 and
     /// 0.2004 / 0.05 = 4.01:1 (step 34, (164, 63, 182), has 3.97:1), and towards white step 27,
     /// (166, 62, 184), has 4.00:1 (step 26, (166, 61, 184), has 3.98:1). Blue (41, 98, 255) has
-    /// 4.90:1 on white and keeps its colour.
+    /// 4.90:1 on white and keeps its colour. A transparent chart, as an image exported without its
+    /// background has, reads as the panel: purple keeps its 6.30:1 on white rather than going
+    /// black, as no step towards black reaches 4:1 on both white and black.
     #[test]
     fn default_colours_keep_their_contrast_on_the_theme() {
         use crate::theme::Theme;
         use DrawingToolType::*;
         let rgb = Color32::from_rgb;
         let (orange, purple) = (rgb(255, 152, 0), rgb(156, 39, 176));
+        let mut transparent = Theme::light();
+        transparent.chart.bg = Color32::TRANSPARENT;
         // A flat top/bottom as saved before the shade existed, in its default style.
         let saved: Drawing = serde_json::from_str(
             r#"{
@@ -1213,6 +1216,13 @@ mod tests {
                 Drawing::new(1, Rect),
                 vec![rgb(166, 62, 184)],
                 None,
+                None,
+            ),
+            (
+                transparent,
+                Drawing::new(1, Rect),
+                vec![purple],
+                Some(Color32::BLACK),
                 None,
             ),
             (
