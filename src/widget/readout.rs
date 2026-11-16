@@ -104,7 +104,7 @@ impl Chart {
     }
 
     /// [`Self::study_values_at`] with the id of each row's study.
-    pub(super) fn study_rows_at(&self, index: usize) -> Vec<(SeriesId, StudyValue)> {
+    pub(crate) fn study_rows_at(&self, index: usize) -> Vec<(SeriesId, StudyValue)> {
         self.study_rows_at_with_policy(index, CursorDataPolicy::Visible)
     }
 

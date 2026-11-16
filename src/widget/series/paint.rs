@@ -411,6 +411,24 @@ impl Chart {
         )
     }
 
+    /// Each visible added series in status line order, with its name, colour and the value its
+    /// status row shows at `time`, or at its last bar without one.
+    pub(crate) fn series_readouts(
+        &self,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> impl Iterator<Item = (&str, egui::Color32, Option<String>)> {
+        self.price_series
+            .iter()
+            .filter(|item| item.visible)
+            .map(move |item| {
+                (
+                    item.options.name.as_str(),
+                    item.options.color,
+                    self.series_status_value(item, time, self.last_rendered_price_rect),
+                )
+            })
+    }
+
     pub(in crate::widget) fn paint_secondary_legend<'a>(
         &self,
         ui: &egui::Ui,

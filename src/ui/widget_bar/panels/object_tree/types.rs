@@ -327,8 +327,10 @@ impl SourceItem {
 
 /// Data Window information (OHLCV at cursor position)
 ///
-/// Displays real-time price data for the bar under the cursor.
+/// Displays real-time price data for the bar under the cursor. Build it with
+/// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct DataWindowInfo {
     /// Symbol name (e.g., "XAUUSD")
     pub symbol: String,
@@ -364,8 +366,35 @@ pub struct DataWindowInfo {
     /// Absolute and percentage change as the chart's status line writes them, set by
     /// [`Self::with_chart_formatters`]; `None` formats it with [`Self::price_decimals`].
     pub formatted_change: Option<String>,
+    /// Visible series added with `Chart::add_series` or `Chart::add_comparison`, in status line
+    /// order, listed between the OHLCV values and the studies.
+    pub series: Vec<DataWindowSeries>,
     /// Visible study plots at the same bar as the OHLCV values.
     pub studies: Vec<crate::chart::rendering::StudyValue>,
+}
+
+/// An added series' row in the data window.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DataWindowSeries {
+    /// Series name, as its status row shows it.
+    pub name: String,
+    /// Series colour, which its value is written in.
+    pub color: Color32,
+    /// The value its status row shows at the inspected time, or `None` when it has no bar then,
+    /// which the panel shows as the empty mark.
+    pub value: Option<String>,
+}
+
+impl DataWindowSeries {
+    /// Creates a row for the series `name` in `color` showing `value`.
+    pub fn new(name: impl Into<String>, color: Color32, value: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            value,
+        }
+    }
 }
 
 impl DataWindowInfo {

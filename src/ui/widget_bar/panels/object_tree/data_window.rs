@@ -12,25 +12,58 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
 use super::super::format_price;
-use super::types::DataWindowInfo;
+use super::types::{DataWindowInfo, DataWindowSeries};
 use crate::ui_kit::ext::UiExt;
 
 impl DataWindowInfo {
     /// Populates the readout from the bar the chart's status line shows: the one under its
     /// crosshair, whether from the pointer, a linked chart or the host, falling back to the
     /// latest bar with a value.
-    /// Uses the chart's time formatter, instrument precision and visible study plots.
+    /// Uses the chart's time formatter, instrument precision, visible added series and visible
+    /// study plots.
     /// Call after [`crate::widget::Chart::show`] so hover and study values describe the current frame.
     pub fn from_chart(chart: &crate::widget::Chart) -> Self {
-        let bars = chart.state().shown();
         let index = chart
             .readout_index
-            .filter(|index| *index < bars.len())
-            .unwrap_or_else(|| {
-                bars.iter()
-                    .rposition(|bar| !bar.is_whitespace())
-                    .unwrap_or(bars.len().saturating_sub(1))
-            });
+            .filter(|index| *index < chart.state().shown().len());
+        Self::at(chart, index, None)
+    }
+
+    /// Populates the readout from the main-series point of a pointer event, with the event's
+    /// study rows, as [`Self::from_chart`] does at the chart's crosshair. A pointer without a
+    /// main-series point, or one the chart no longer shows, reads as [`Self::from_chart`].
+    pub fn from_pointer(
+        chart: &crate::widget::Chart,
+        pointer: &crate::widget::ChartPointer,
+    ) -> Self {
+        let index = usize::try_from(pointer.index).ok().filter(|index| {
+            pointer.bar.as_ref().is_some_and(|bar| {
+                chart
+                    .state()
+                    .shown()
+                    .get(*index)
+                    .is_some_and(|shown| shown.time == bar.time)
+            })
+        });
+        match index {
+            Some(_) => Self::at(chart, index, Some(&pointer.studies)),
+            None => Self::from_chart(chart),
+        }
+    }
+
+    /// The readout at the shown bar `hovered`, or at the latest bar with a value without one,
+    /// with `studies`, or the chart's own study rows at that bar.
+    fn at(
+        chart: &crate::widget::Chart,
+        hovered: Option<usize>,
+        studies: Option<&[(crate::widget::SeriesId, crate::chart::rendering::StudyValue)]>,
+    ) -> Self {
+        let bars = chart.state().shown();
+        let index = hovered.unwrap_or_else(|| {
+            bars.iter()
+                .rposition(|bar| !bar.is_whitespace())
+                .unwrap_or(bars.len().saturating_sub(1))
+        });
         let mut info = Self::new(chart.symbol())
             .with_timeframe(chart.timeframe().map(|tf| tf.as_str()).unwrap_or_default());
         if let Some(instrument) = chart.instrument() {
@@ -41,8 +74,20 @@ impl DataWindowInfo {
                 .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
                 .with_timestamp(chart.format_time(bar.time))
                 .with_prev_close(previous_close.unwrap_or(bar.open));
-            info.studies = chart.study_values_at(index);
+            info.studies = studies
+                .map_or_else(|| chart.study_rows_at(index), <[_]>::to_vec)
+                .into_iter()
+                .map(|(_, row)| row)
+                .collect();
         }
+        // Added series read the hovered time, or their own latest bar, as their status rows do.
+        let time = hovered
+            .and_then(|index| bars.get(index))
+            .map(|bar| bar.time);
+        info.series = chart
+            .series_readouts(time)
+            .map(|(name, color, value)| DataWindowSeries::new(name, color, value))
+            .collect();
         info.with_chart_formatters(chart)
     }
 
@@ -138,6 +183,21 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
 
             // OHLCV grid
             show_ohlcv_grid(ui, data);
+            if !data.series.is_empty() {
+                ui.space_sm();
+                egui::Grid::new("series_values")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for series in &data.series {
+                            ui.hint_label(&series.name);
+                            ui.label(
+                                RichText::new(series.value.as_deref().unwrap_or("∅"))
+                                    .color(series.color),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            }
             if !data.studies.is_empty() {
                 ui.space_sm();
                 egui::Grid::new("study_values")
