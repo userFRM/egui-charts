@@ -371,9 +371,14 @@ mod tests {
         let mut chart = test_frames::chart(&[1.0], &[2.0]);
         chart.add_indicator(Box::new(EMA::new(5)));
         chart.add_indicator(Box::new(CCI::new(20)));
-        let saved = chart.study_template_set();
+        // Every failing set also keeps a symbol and an interval, which the chart must not show.
+        let mut saved = chart.study_template_set();
+        saved.symbol = Some("MSFT".into());
+        saved.interval = Some(crate::model::Timeframe::Hour1);
         let layout = |chart: &Chart| {
             (
+                chart.symbol().to_owned(),
+                chart.timeframe(),
                 chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
                 chart
                     .panes()
