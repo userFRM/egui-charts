@@ -574,7 +574,7 @@ mod tests {
             .build_ui_state(
                 |ui, (chart, menus): &mut (Chart, AxisMenus)| {
                     chart.show(ui);
-                    menus.show(ui.ctx(), chart);
+                    chart.user_action(|chart| menus.show(ui.ctx(), chart));
                 },
                 (chart, AxisMenus::default()),
             );
@@ -596,6 +596,22 @@ mod tests {
         chart.update_config(config);
         harness.run();
         assert_eq!(mode(&harness.state().0), PriceScaleMode::Normal);
+
+        // Undoing a move brings the side back and keeps a mode chosen on the scale.
+        let menus = &mut harness.state_mut().1;
+        menus.open = Some((false, Pos2::new(100.0, 100.0)));
+        menus.target = Some((PaneId::MAIN, main));
+        menus.just_opened = true;
+        harness.run();
+        harness.get_by_label("Place scale on right").click();
+        harness.run();
+        let chart = &mut harness.state_mut().0;
+        assert!(!chart.main_axis_on_left());
+        assert!(chart.undo());
+        harness.run();
+        let chart = &harness.state().0;
+        assert!(chart.main_axis_on_left());
+        assert_eq!(mode(chart), PriceScaleMode::Normal);
     }
 
     /// Choosing the active side again returns the pane to placement by assignment, the only
