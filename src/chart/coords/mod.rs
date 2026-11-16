@@ -45,7 +45,24 @@ impl ChartMapping {
             })
     }
 
+    /// Width of a volume bar, shared by the volume painters and hit tests so they cannot drift.
+    pub(crate) fn volume_bar_width(&self) -> f32 {
+        self.bar_spacing_for_width() * 0.8
+    }
+
     /// Create a new ChartMapping with all parameters.
+    ///
+    /// ```
+    /// use egui_charts::chart::coords::ChartMapping;
+    /// use egui_charts::scales::{PriceMap, PriceRange, PriceTransform};
+    ///
+    /// let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 400.0));
+    /// let range = PriceRange::new(90.0, 110.0);
+    /// let (top, bottom) = (rect.top(), rect.bottom());
+    /// let price = PriceMap::new(PriceTransform::default(), range, top, bottom, false);
+    /// let mapping = ChartMapping::new(rect, 8.0, 0, 99, 0.0, price);
+    /// assert_eq!(mapping.bar_spacing, 8.0);
+    /// ```
     pub fn new(
         rect: Rect,
         bar_spacing: f32,

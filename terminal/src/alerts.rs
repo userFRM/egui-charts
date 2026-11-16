@@ -1460,13 +1460,13 @@ mod tests {
                     ));
                     alert
                         .additional_conditions
-                        .push(egui_charts::model::AlertRule {
-                            source: AlertSource::Study {
+                        .push(egui_charts::model::AlertRule::new(
+                            AlertSource::Study {
                                 id: id.0.to_string(),
                                 output: 0,
                             },
-                            condition: AlertCondition::Above(1.0),
-                        });
+                            AlertCondition::Above(1.0),
+                        ));
                 }
                 terminal.chart_mut().drawings_mut().drawings.push(line);
                 terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(

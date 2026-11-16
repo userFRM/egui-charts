@@ -1,14 +1,13 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{StudyDataRequest, VolumeProfile};
+use crate::data::{FootprintView, StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
-use crate::drawings::domain::{VwapBandMode, VwapConfig, VwapPlotType};
+use crate::drawings::domain::{VwapBandLine, VwapBandMode, VwapConfig, VwapPlotType};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
-use crate::model::{Bar, PriceSource, ProfileResolution, Timeframe};
+use crate::model::{Bar, LineStyle, PriceSource, ProfileResolution, Timeframe};
 use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::painting::volume_profile::ProfileStyle;
-use crate::styles::stroke;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Shape, Stroke};
 use std::cell::RefCell;
@@ -38,8 +37,8 @@ thread_local! {
 impl Drawing {
     /// Renders the anchored VWAP from the anchor bar to the last bar as its
     /// [`VwapConfig`](crate::drawings::VwapConfig) sets: the background, the first band's fill,
-    /// the enabled bands in their colours, the line at the drawing's colour and width, and the
-    /// latest value across the pane.
+    /// the shown lines of the enabled bands as each is styled, the line at the drawing's colour,
+    /// width and line style, and the tracked latest values across the pane.
     pub(crate) fn render_anchored_vwap(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(anchor_at) = self.chart_points.first() else {
             return;
@@ -47,16 +46,16 @@ impl Drawing {
         if let Some((first, bars)) = bars_between(view.bars, anchor_at.bar_idx, f32::INFINITY) {
             self.draw_vwap(painter, view, first, bars);
         }
-        // Drawn whatever bars are in view, at the value the price axis tags.
-        if let Some(vwap) = self.anchored_vwap_last(view.bars, view.revision) {
+        // Drawn whatever bars are in view, at the values the price axis tags.
+        for (price, line) in self.anchored_vwap_tracked(view.bars, view.revision) {
             let clip = painter.clip_rect();
-            let y = (view.price_to_y)(vwap);
+            let y = (view.price_to_y)(price);
             if clip.y_range().contains(y) {
                 crate::painting::dashed_line::draw_dashed_line(
                     painter,
                     Pos2::new(clip.left(), y),
                     Pos2::new(clip.right(), y),
-                    Stroke::new(1.0, self.color32()),
+                    Stroke::new(1.0, painted_color(&line)),
                     1.0,
                     3.0,
                 );
@@ -83,10 +82,10 @@ impl Drawing {
         let checkpoints = cached_checkpoints(config.source, first, bars, view.revision);
         // The VWAP, then the upper and lower line of every enabled band, in band units from it.
         let mut offsets = vec![0.0];
-        let mut colors = Vec::new();
+        let mut band_lines = Vec::new();
         for band in config.bands.iter().filter(|b| b.enabled) {
             offsets.extend([band.multiplier(), -band.multiplier()]);
-            colors.extend([rgba(band.color); 2]);
+            band_lines.extend([band.upper, band.lower]);
         }
         let mut lines = vec![Vec::with_capacity(to - from); offsets.len()];
         for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, &config, from..to)) {
@@ -112,7 +111,12 @@ impl Drawing {
             );
         }
         if config.bands[0].enabled && config.band_fill.visible {
-            let color = config.band_fill.color.map_or(colors[0], rgba);
+            let color = rgba(
+                config
+                    .band_fill
+                    .color
+                    .unwrap_or(config.bands[0].upper.color),
+            );
             super::super::fibonacci::paint_band(
                 painter,
                 &lines[1],
@@ -121,8 +125,20 @@ impl Drawing {
             );
         }
         let vwap_line = lines.remove(0);
-        for (line, color) in lines.into_iter().zip(colors) {
-            painter.add(Shape::line(line, Stroke::new(stroke::HAIRLINE, color)));
+        let zero = (view.price_to_y)(0.0);
+        for (points, line) in lines.into_iter().zip(band_lines) {
+            if line.visible {
+                let stroke = Stroke::new(line.width(), painted_color(&line));
+                paint_vwap_line(
+                    painter,
+                    points,
+                    line.plot_type,
+                    line.line_style,
+                    stroke,
+                    zero,
+                    step,
+                );
+            }
         }
         if !config.show_line {
             return;
@@ -131,27 +147,61 @@ impl Drawing {
             painter,
             vwap_line,
             config.plot_type,
+            self.line_style,
             Stroke::new(self.stroke_width, line_color),
-            (view.price_to_y)(0.0),
+            zero,
             step,
         );
     }
 
-    /// The anchored VWAP at the last of `bars`, the pane's bars at `revision`, when its latest
-    /// value is tracked; `None` for other drawings, before volume trades or with the line hidden.
-    pub(crate) fn anchored_vwap_last(&self, bars: &[Bar], revision: u64) -> Option<f64> {
+    /// The values at the last of `bars`, the pane's bars at `revision`, of the anchored VWAP's
+    /// tracked lines, each with its style: the VWAP while its line shows, in the drawing's
+    /// colour, then the shown band lines of the enabled bands. Empty for other drawings or before
+    /// volume trades.
+    pub(crate) fn anchored_vwap_tracked(
+        &self,
+        bars: &[Bar],
+        revision: u64,
+    ) -> Vec<(f64, VwapBandLine)> {
         if self.tool_type != DrawingToolType::AnchoredVWAP {
-            return None;
+            return Vec::new();
         }
         let config = self.vwap.unwrap_or_default();
-        if !(config.track_price && config.show_line) {
-            return None;
+        let vwap =
+            (config.track_price && config.show_line).then(|| (0.0, VwapBandLine::new(self.color)));
+        let tracked: Vec<_> = vwap
+            .into_iter()
+            .chain(
+                config
+                    .bands
+                    .iter()
+                    .filter(|band| band.enabled)
+                    .flat_map(|band| {
+                        [
+                            (band.multiplier(), band.upper),
+                            (-band.multiplier(), band.lower),
+                        ]
+                    })
+                    .filter(|(_, line)| line.visible && line.track_price),
+            )
+            .collect();
+        if tracked.is_empty() {
+            return tracked;
         }
-        let (first, bars) = bars_between(bars, self.chart_points.first()?.bar_idx, f32::INFINITY)?;
-        let checkpoints = cached_checkpoints(config.source, first, bars, revision);
-        let last = bars.len() - 1;
-        let value = anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()??;
-        Some(value.0)
+        let latest = || {
+            let anchor = self.chart_points.first()?.bar_idx;
+            let (first, bars) = bars_between(bars, anchor, f32::INFINITY)?;
+            let checkpoints = cached_checkpoints(config.source, first, bars, revision);
+            let last = bars.len() - 1;
+            anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()?
+        };
+        let Some((vwap, unit)) = latest() else {
+            return Vec::new();
+        };
+        tracked
+            .into_iter()
+            .map(|(k, line)| (vwap + k * unit, line))
+            .collect()
     }
 
     /// Whether a visible profile drawing reads the chart's executions and finer bars.
@@ -320,7 +370,7 @@ impl Drawing {
     ) -> Rc<Option<VolumeProfile>> {
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
-            let complete = flow.span_is_complete(start.time, end.time);
+            let complete = FootprintView::from(flow).span_is_complete(start.time, end.time);
             if let Some(profile) = VolumeProfile::from_executions(
                 &executed,
                 flow.price_step(),
@@ -430,12 +480,14 @@ fn anchored_vwap<'a>(
     })
 }
 
-/// Draws the VWAP at `points` as `plot` in `stroke`, the plots that start from price zero from
-/// `zero`, at bars `pitch` apart. The area fills in the stroke's colour, as a study's area does.
+/// Draws a line of an anchored VWAP at `points` as `plot` in `stroke`, the line and step line
+/// in `style`, the plots that start from price zero from `zero`, at bars `pitch` apart. The area
+/// fills in the stroke's colour, as a study's area does.
 fn paint_vwap_line(
     painter: &egui::Painter,
     points: Vec<Pos2>,
     plot: VwapPlotType,
+    style: LineStyle,
     stroke: Stroke,
     zero: f32,
     pitch: f32,
@@ -448,10 +500,16 @@ fn paint_vwap_line(
         clip.bottom()
     };
     let color = stroke.color;
-    match plot {
-        VwapPlotType::Line => {
+    let path = |points: Vec<Pos2>| match style.dash_pattern() {
+        Some((dash, gap)) => {
+            crate::painting::dashed_line::draw_dashed_polyline(painter, &points, stroke, dash, gap);
+        }
+        None => {
             painter.add(Shape::line(points, stroke));
         }
+    };
+    match plot {
+        VwapPlotType::Line => path(points),
         VwapPlotType::StepLine => {
             let mut steps = Vec::with_capacity(points.len() * 2);
             for (i, &point) in points.iter().enumerate() {
@@ -460,7 +518,7 @@ fn paint_vwap_line(
                 }
                 steps.push(point);
             }
-            painter.add(Shape::line(steps, stroke));
+            path(steps);
         }
         VwapPlotType::Histogram | VwapPlotType::Columns => {
             let half = if plot == VwapPlotType::Columns {
@@ -501,6 +559,11 @@ fn paint_vwap_line(
 
 fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+/// The colour of a band line at its opacity.
+fn painted_color(line: &VwapBandLine) -> Color32 {
+    rgba(line.color).gamma_multiply(line.opacity())
 }
 
 /// Profile of `bars`, the span that starts at bar `first`, with `rows` rows.
@@ -600,12 +663,13 @@ mod tests {
         assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
     }
 
-    /// The line keeps the drawing's width and only the enabled bands are drawn, band 1 filled.
-    /// The line, its plot, the fill, the background and the latest-value line each follow their
-    /// own setting.
+    /// The line keeps the drawing's width and line style and only the enabled bands are drawn,
+    /// band 1 filled. The line, its plot, the fill, the background, the latest-value line and each
+    /// band line follow their own settings, so styling one band line leaves the other and the VWAP
+    /// alone, and a dashed drawing leaves its solid band lines solid.
     #[test]
     fn anchored_vwap_draws_its_line_and_enabled_bands_only() {
-        use crate::drawings::{VwapBand, VwapConfig, VwapFill};
+        use crate::drawings::{VwapBand, VwapBandLine, VwapConfig, VwapFill};
         // From bar 1: V = 1, 2, 8; PV = 10, 22, 88; P²V = 100, 244, 970.
         // VWAP = 10, 11, 11; deviation = 0, 1, 0.5.
         let bars: Vec<_> = [(50.0, 0.0), (10.0, 1.0), (12.0, 1.0), (11.0, 6.0)]
@@ -624,16 +688,24 @@ mod tests {
         let mut other_bands = VwapConfig::default();
         other_bands.bands[0].enabled = false;
         other_bands.bands[1].enabled = true;
-        let teal_band = other_bands.bands[2].color;
+        let teal_band = other_bands.bands[2];
         other_bands.bands[2] = VwapBand::new(true, 0.5).unwrap();
-        other_bands.bands[2].color = teal_band;
+        other_bands.bands[2].upper = teal_band.upper;
+        other_bands.bands[2].lower = teal_band.lower;
+        let mut styled = VwapConfig::default();
+        styled.bands[0].upper = VwapBandLine::new([200, 0, 0, 255])
+            .with_width(2.0)
+            .and_then(|line| line.with_opacity(0.5))
+            .unwrap();
         let mut no_bands = VwapConfig::default();
         no_bands.bands[0].enabled = false;
-        let render = |anchor, width, config| render_vwap(&bars, anchor, width, config);
-        for (name, anchor, config, width, fill, expected) in [
+        let render =
+            |anchor, width, style, config| render_vwap(&bars, anchor, width, style, config);
+        for (name, anchor, style, config, width, fill, expected) in [
             (
                 "default",
                 0.0,
+                LineStyle::Solid,
                 None,
                 1.0,
                 true,
@@ -646,6 +718,7 @@ mod tests {
             (
                 "bands 2 and 3",
                 0.0,
+                LineStyle::Solid,
                 Some(other_bands),
                 3.0,
                 false,
@@ -658,17 +731,55 @@ mod tests {
                 ],
             ),
             (
+                "styled upper line",
+                0.0,
+                LineStyle::Solid,
+                Some(styled),
+                1.0,
+                true,
+                vec![
+                    (
+                        [100.0, 80.0, 85.0],
+                        Color32::from_rgba_premultiplied(100, 0, 0, 128),
+                        2.0,
+                    ),
+                    ([100.0, 100.0, 95.0], green, 1.0),
+                    (mid, blue, 1.0),
+                ],
+            ),
+            (
                 "no bands",
                 0.0,
+                LineStyle::Solid,
                 Some(no_bands),
                 1.0,
                 false,
                 vec![(mid, blue, 1.0)],
             ),
-            ("past last bar", 4.0, None, 1.0, false, vec![]),
+            // The default band's solid lines at the values above, then the VWAP line in dashes.
+            (
+                "dashed line, solid bands",
+                0.0,
+                LineStyle::Dashed,
+                None,
+                1.0,
+                true,
+                vec![
+                    ([100.0, 80.0, 85.0], green, 1.0),
+                    ([100.0, 100.0, 95.0], green, 1.0),
+                ],
+            ),
+            (
+                "past last bar",
+                4.0,
+                LineStyle::Solid,
+                None,
+                1.0,
+                false,
+                vec![],
+            ),
         ] {
-            let shapes = render(anchor, width, config);
-            assert_eq!(shapes.len(), expected.len() + usize::from(fill), "{name}");
+            let shapes = render(anchor, width, style, config);
             if fill {
                 let Shape::Mesh(mesh) = &shapes[0] else {
                     panic!("{name}: band fill")
@@ -680,7 +791,8 @@ mod tests {
                     "{name}"
                 );
             }
-            for (shape, (ys, color, width)) in shapes[usize::from(fill)..].iter().zip(expected) {
+            let (paths, dashes) = shapes[usize::from(fill)..].split_at(expected.len());
+            for (shape, (ys, color, width)) in paths.iter().zip(expected) {
                 let Shape::Path(line) = shape else {
                     panic!("{name}: unexpected shape")
                 };
@@ -692,12 +804,45 @@ mod tests {
                     .collect();
                 assert_eq!(line.points, points, "{name}");
             }
+            // The VWAP line runs 14.14 px and then 10 px from (110, 100) through (120, 90) to
+            // (130, 90) in its colour and width; dashed 8 px on and 4 px off from its start, it
+            // paints pieces of 8, 8 and 0.14 px.
+            let pieces: Vec<f32> = dashes
+                .iter()
+                .filter_map(|shape| {
+                    let points = match shape {
+                        Shape::Noop => return None,
+                        Shape::LineSegment { points, stroke } => {
+                            assert_eq!(*stroke, Stroke::new(width, blue), "{name}");
+                            points.to_vec()
+                        }
+                        Shape::Path(line) => {
+                            assert_eq!(line.stroke, Stroke::new(width, blue).into(), "{name}");
+                            line.points.clone()
+                        }
+                        other => panic!("{name}: {other:?}"),
+                    };
+                    Some(points.windows(2).map(|p| p[0].distance(p[1])).sum())
+                })
+                .collect();
+            if style == LineStyle::Solid {
+                assert!(pieces.is_empty(), "{name}: {pieces:?}");
+            } else {
+                assert!(
+                    pieces.iter().all(|&piece| piece < 8.001),
+                    "{name}: {pieces:?}"
+                );
+                assert!(
+                    (pieces.iter().sum::<f32>() - 16.14).abs() < 0.01,
+                    "{name}: {pieces:?}"
+                );
+            }
         }
 
         let edited = |edit: fn(&mut VwapConfig)| {
             let mut config = VwapConfig::default();
             edit(&mut config);
-            render(0.0, 1.0, Some(config))
+            render(0.0, 1.0, LineStyle::Solid, Some(config))
         };
         let strokes = |shapes: &[Shape]| -> Vec<Color32> {
             shapes
@@ -716,6 +861,30 @@ mod tests {
         assert!(matches!(shapes[0], Shape::Mesh(_)));
         assert_eq!(strokes(&shapes), [green, green]);
         assert_eq!(shapes.len(), 3);
+        // A hidden band line leaves the other; a dashed one is not a solid path.
+        assert_eq!(
+            strokes(&edited(|c| c.bands[0].lower.visible = false)),
+            [green, blue]
+        );
+        let shapes = edited(|c| c.bands[0].upper.line_style = crate::model::LineStyle::Dashed);
+        assert_eq!(strokes(&shapes), [green, blue]);
+        // Band line plotted as circles of its width at its values.
+        let shapes =
+            edited(|c| c.bands[0].upper.plot_type = crate::drawings::VwapPlotType::Circles);
+        let circles: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Circle(circle) if circle.fill == green => {
+                    Some((circle.center, circle.radius))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            circles,
+            [(110.0, 100.0), (120.0, 80.0), (130.0, 85.0)].map(|(x, y)| (Pos2::new(x, y), 1.0))
+        );
+        assert_eq!(strokes(&shapes), [green, blue]);
         // Columns: one column per value, from price zero up to the VWAP.
         let shapes = edited(|c| c.plot_type = crate::drawings::VwapPlotType::Columns);
         assert_eq!(strokes(&shapes), [green, green]);
@@ -757,7 +926,7 @@ mod tests {
         // Anchored on the last bar: one bar wide, centred on it.
         let mut config = VwapConfig::default();
         config.background.visible = true;
-        let Shape::Rect(wash) = &render(3.0, 1.0, Some(config))[0] else {
+        let Shape::Rect(wash) = &render(3.0, 1.0, LineStyle::Solid, Some(config))[0] else {
             panic!("background on the last bar")
         };
         assert_eq!(
@@ -779,6 +948,21 @@ mod tests {
         let xs = dashes.vertices.iter().map(|v| v.pos.x);
         assert!(xs.clone().fold(f32::MAX, f32::min) < 5.0);
         assert!(xs.fold(f32::MIN, f32::max) > 795.0);
+        // A tracked band line: its latest value, 11 - 0.5 = 10.5 at y = 95, in its colour; the
+        // VWAP's own latest value stays untracked.
+        let mut config = VwapConfig::default();
+        config.bands[0].lower.track_price = true;
+        let shapes = render(0.0, 1.0, LineStyle::Solid, Some(config));
+        let Shape::Mesh(dashes) = &shapes[4] else {
+            panic!("band price line")
+        };
+        assert!(
+            dashes
+                .vertices
+                .iter()
+                .all(|v| (v.pos.y - 95.0).abs() <= 1.0 && v.color == green)
+        );
+        assert_eq!(shapes.len(), 5);
     }
 
     /// A tracked VWAP paints its latest-value line whenever its axis tag shows it, also while the
@@ -800,8 +984,12 @@ mod tests {
         drawing.vwap = Some(config);
         drawing.chart_points = vec![crate::drawings::ChartPoint::new(80.0, 50.0)];
         // The price axis tags this value.
-        assert_eq!(drawing.anchored_vwap_last(&bars, 0), Some(10.0));
-        let shapes = render_vwap(&bars, 80.0, 1.0, Some(config));
+        let tracked = drawing.anchored_vwap_tracked(&bars, 0);
+        assert_eq!(
+            tracked.iter().map(|(price, _)| *price).collect::<Vec<_>>(),
+            [10.0]
+        );
+        let shapes = render_vwap(&bars, 80.0, 1.0, LineStyle::Solid, Some(config));
         let line = shapes.iter().any(|shape| {
             matches!(shape, Shape::Mesh(mesh) if !mesh.vertices.is_empty()
                 && mesh.vertices.iter().all(|v| (v.pos.y - 100.0).abs() <= 1.0)
@@ -811,17 +999,20 @@ mod tests {
         assert!(line, "no latest-value line among {} shapes", shapes.len());
     }
 
-    /// Paints an anchored VWAP of a blue drawing over `bars` from `anchor`, 10 px a bar from
-    /// x = 100 and 10 px a price from 20 at the top of an 800 by 600 pane.
+    /// Paints an anchored VWAP of a blue drawing in `style` over `bars` from `anchor`, as the
+    /// chart paints a drawing, 10 px a bar from x = 100 and 10 px a price from 20 at the top of an
+    /// 800 by 600 pane.
     fn render_vwap(
         bars: &[Bar],
         anchor: f32,
         width: f32,
+        style: LineStyle,
         config: Option<crate::drawings::VwapConfig>,
     ) -> Vec<Shape> {
         let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
         drawing.color = [41, 98, 255, 255];
         drawing.stroke_width = width;
+        drawing.line_style = style;
         drawing.vwap = config;
         drawing.chart_points = vec![crate::drawings::ChartPoint::new(anchor, 50.0)];
         let view = ChartView {
@@ -840,13 +1031,11 @@ mod tests {
             timeframe: None,
             finer: &[],
         };
+        drawing.update_screen_coords(view.bar_to_x, view.price_to_y);
         let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-            let painter = egui::Painter::new(
-                ui.ctx().clone(),
-                egui::LayerId::background(),
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
-            );
-            drawing.render_anchored_vwap(&painter, &view);
+            let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+            let painter = egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), pane);
+            drawing.render(&painter, pane, &view);
         });
         let shapes = std::mem::take(&mut output.shapes);
         output.drop_without_applying_deltas();

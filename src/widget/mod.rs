@@ -112,7 +112,7 @@ mod primitives;
 #[cfg(feature = "png-export")]
 mod raster;
 mod readout;
-mod replay;
+pub(crate) mod replay;
 mod selection;
 mod series;
 pub mod settings;
@@ -168,6 +168,10 @@ pub(crate) mod tool_interaction;
 
 pub use keyboard::{ShortcutMap, ShortcutRequest};
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
+
+/// The main bars' revision, length and last high, low and close, and the pending sizes, that
+/// the sizes derived from history were last resolved from.
+type BoxSizesRead = (u64, usize, Option<[u64; 3]>, [bool; 4]);
 
 /// Interactive financial chart widget for egui.
 ///
@@ -281,6 +285,9 @@ pub struct Chart {
     #[cfg(feature = "studies")]
     trade_profiles: trade_profile::TradeProfiles,
     pending_box_sizes: [bool; 4],
+    /// What the pending sizes were last resolved from: a size those bars could not give is not
+    /// read again until the bars or the pending sizes change.
+    box_sizes_read: Option<BoxSizesRead>,
     /// Whether older source bars can contribute to the shown series.
     pub(crate) older_bars_drawn: bool,
     /// Whether tracking mode is currently active
@@ -959,6 +966,7 @@ impl Chart {
     /// let mut options = chart.chart_options().clone();
     /// options.crosshair.mode = egui_charts::config::CrosshairMode::Magnet;
     /// options.time_scale.min_bar_spacing = 0.1;
+    /// options.kinetic_scroll.damping_coeff = 0.9;
     /// chart.set_chart_options(options);
     /// # }
     /// ```

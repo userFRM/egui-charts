@@ -229,13 +229,14 @@ impl DemoMarks {
                 4 => EventKind::News,
                 _ => EventKind::Idea,
             };
-            page.events.push(TimeScaleEvent {
-                id: format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
+            let mut event = TimeScaleEvent::new(
+                format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
                 time,
                 kind,
-                title: format!("Synthetic {} event", kind.label()),
-                details: "Demonstration data supplied by the host.".into(),
-            });
+                format!("Synthetic {} event", kind.label()),
+            );
+            event.details = "Demonstration data supplied by the host.".into();
+            page.events.push(event);
             if kind == EventKind::News
                 && let Some(notifications) = &self.notifications
             {
@@ -269,12 +270,8 @@ mod tests {
             notifications: None,
             times: Default::default(),
         };
-        let mut request = MarksRequest {
-            symbol: "SAMPLE".into(),
-            timeframe: Timeframe::Min1,
-            from: now - TimeDelta::hours(2),
-            to: now,
-        };
+        let mut request =
+            MarksRequest::new("SAMPLE", Timeframe::Min1, now - TimeDelta::hours(2), now);
         let initial = source.annotations(&request);
         assert!(!initial.events.is_empty());
         request.from = now + TimeDelta::minutes(1);
@@ -306,14 +303,14 @@ mod tests {
         let older = source.annotations(&request);
         assert!(!older.events.is_empty());
         assert_eq!(source.annotations(&request).events, older.events);
-        request.symbol = "BTCUSD".into();
+        request.symbol = "TOKENA".into();
         let other = source.annotations(&request);
         assert!(!other.events.is_empty());
         assert!(
             other
                 .events
                 .iter()
-                .all(|event| event.id.starts_with("demo-event-BTCUSD-"))
+                .all(|event| event.id.starts_with("demo-event-TOKENA-"))
         );
         request.symbol = "SAMPLE".into();
         assert_eq!(source.annotations(&request).events, older.events);

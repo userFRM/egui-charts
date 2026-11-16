@@ -122,6 +122,7 @@ pub struct StoredDrawing {
 
 /// A study pane identified by its studies rather than by a chart's study ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredPane {
     /// The name of each study in the pane, in legend order, with its input ids and their values
     /// as serialized [`InputValue`](crate::studies::InputValue)s.
@@ -1383,7 +1384,14 @@ mod tests {
         let mut vwap = VwapConfig::default();
         vwap.bands[0].enabled = false;
         vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
-        vwap.bands[2].color = [21, 22, 23, 24];
+        vwap.bands[2].lower = VwapBandLine::new([21, 22, 23, 24])
+            .with_width(2.5)
+            .and_then(|line| line.with_opacity(0.25))
+            .unwrap();
+        vwap.bands[2].lower.visible = false;
+        vwap.bands[2].lower.line_style = LineStyle::LargeDashed;
+        vwap.bands[2].lower.plot_type = crate::drawings::VwapPlotType::Crosses;
+        vwap.bands[2].lower.track_price = true;
         d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
@@ -1675,6 +1683,20 @@ mod tests {
             want.visible = tool != DrawingToolType::Arrow;
             assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
         }
+        // A version 1 anchored VWAP stored one point and neither a line style nor bands: it
+        // loads with a solid line and the default bands.
+        let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["tool_type"] = "Anchored VWAP".into();
+        records[0]["points"].as_array_mut().unwrap().truncate(1);
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let drawing = &loaded.drawings[0].drawing;
+        assert_eq!(
+            (drawing.tool_type, drawing.line_style, drawing.vwap),
+            (DrawingToolType::AnchoredVWAP, LineStyle::Solid, None)
+        );
 
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();

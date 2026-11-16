@@ -66,6 +66,7 @@ pub enum MismatchDirection {
 /// [`Chart::bars_in_logical_range`], or the points of a custom series, from
 /// [`Chart::custom_points_in_logical_range`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BarsInRange {
     /// Indices into [`Chart::bars`] or [`Chart::custom_points`] of the items inside the range,
     /// empty when none is.
@@ -82,6 +83,7 @@ pub struct BarsInRange {
 
 /// A valued bar selected by [`Chart::series_last_value`], on its series' price scale.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SeriesLastValue {
     /// The selected bar's close in raw price units.
     pub value: f64,
@@ -437,6 +439,7 @@ impl Chart {
                 }
                 self.scroll_animation = None;
                 self.stop_at_oldest_bar(right_edge);
+                self.move_drag_start(right_edge);
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
@@ -856,7 +859,7 @@ impl Chart {
         self.follow_live_edge(before, clock);
     }
 
-    fn edge(&self) -> Edge {
+    pub(super) fn edge(&self) -> Edge {
         let bars = &self.state.data().bars;
         Edge {
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
@@ -871,8 +874,7 @@ impl Chart {
     pub(super) fn show_elements(&mut self) {
         #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
-        self.chart_type_params
-            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
+        self.resolve_box_sizes();
         // Range bars come from the held trades, as of the replay cutoff, while there are any,
         // after the approximation of the bars before them.
         let cutoff = self.replay_time();
@@ -911,8 +913,15 @@ impl Chart {
             );
         }
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
+        // New elements keep the one at the right edge in place unless the view follows the live
+        // edge, as bars do; a drag in progress keeps it there too.
+        let right_edge = self.right_edge();
+        let follows = follow && self.state.time_scale().is_near_live_edge();
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        if !follows {
+            self.move_drag_start(right_edge);
+        }
         self.refresh_time_scale_content();
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
@@ -921,7 +930,7 @@ impl Chart {
     /// Scrolls to the live edge when the view was near it and a bar was appended, or a
     /// whitespace tail gained a value while the options allow shifting on whitespace
     /// replacement. Any other view stays on its bars.
-    fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
+    pub(super) fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
         // Appended only if the last bar moved to a later slot, whatever the length: a rolling
@@ -974,6 +983,7 @@ impl Chart {
             self.scroll_to_live_edge();
         } else if in_place {
             self.stop_at_oldest_bar(right_edge);
+            self.move_drag_start(right_edge);
         } else {
             self.keep_bars_in_view(&self.clock(), right_edge);
         }
@@ -1009,11 +1019,22 @@ impl Chart {
                 .set_right_offset(right_edge.offset - moved);
         }
         self.stop_at_oldest_bar(right_edge);
+        self.move_drag_start(right_edge);
     }
 
-    /// Retain the view's right edge, oldest key and the slot it keeps in place across data
-    /// updates: the last slot near the live edge, otherwise the slot at the right edge, or the
-    /// first slot while the edge is before it.
+    /// Moves the right offset a drag on the time axis or the plot started with by as much as the
+    /// bars moved the view since `before`, since the drag sets the view from its start on every
+    /// frame and would undo the move. It moves from the start `before` holds, so that a change
+    /// made within another one, such as the eviction after the bars of a replay seek, counts once.
+    fn move_drag_start(&mut self, before: ViewEdge) {
+        if let (Some(start), Some(from)) = (&mut self.scroll_start_offset, before.drag_start) {
+            *start = from + self.state.time_scale().right_offset_precise() - before.offset;
+        }
+    }
+
+    /// Retain the view's right edge, oldest key, drag start and the slot it keeps in place across
+    /// data updates: the last slot near the live edge, otherwise the slot at the right edge, or
+    /// the first slot while the edge is before it.
     pub(super) fn right_edge(&self) -> ViewEdge {
         let scale = self.state.time_scale();
         let shown = self.state.shown();
@@ -1029,6 +1050,7 @@ impl Chart {
             offset: scale.right_offset_precise(),
             first: shown.first().map(|bar| bar.time),
             kept: shown.get(at).map(|bar| (bar.time, last - at)),
+            drag_start: self.scroll_start_offset,
         }
     }
 
@@ -1061,7 +1083,8 @@ impl Chart {
     }
 }
 
-/// The viewport, oldest loaded key and kept slot before bars change.
+/// The viewport, oldest loaded key, kept slot and drag start before bars change.
+#[derive(Clone, Copy)]
 pub(super) struct ViewEdge {
     right: f64,
     offset: f64,
@@ -1069,10 +1092,12 @@ pub(super) struct ViewEdge {
     /// The time of the bar in the slot the view keeps in place and the number of bars after it,
     /// on an ordinal scale; `None` without bars.
     kept: Option<(DateTime<Utc>, usize)>,
+    /// The right offset a drag in progress started with.
+    drag_start: Option<f64>,
 }
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
-struct Edge {
+pub(super) struct Edge {
     near_live: bool,
     right_edge: ViewEdge,
     tail: Option<Bar>,

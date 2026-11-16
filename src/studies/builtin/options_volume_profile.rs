@@ -137,7 +137,7 @@ impl OptionsVolumeProfile {
     /// use egui_charts::data::OptionsVolumeQuery;
     /// use egui_charts::studies::OptionsVolumeProfile;
     /// let expiry = chrono::NaiveDate::from_ymd_opt(2026, 12, 18).unwrap();
-    /// let query = OptionsVolumeQuery { symbol: "SAMPLE".into(), expiries: expiry..=expiry };
+    /// let query = OptionsVolumeQuery::new("SAMPLE", expiry..=expiry);
     /// let profile = OptionsVolumeProfile::new(&Feed, query, 5.0, || {}).unwrap();
     /// ```
     pub fn new(
@@ -2397,7 +2397,7 @@ mod tests {
                 assert_eq!(plot.profile.up(), [if missing == 2 { 10.0 } else { 4.0 }]);
                 assert_eq!(plot.profile.down(), [if missing == 2 { 5.0 } else { 2.0 }]);
                 assert_eq!(restored.plot_value(1, 0), (missing == 0).then_some(100.0));
-                #[cfg(all(feature = "widget", feature = "drawings"))]
+                #[cfg(feature = "ui")]
                 if missing != 0 {
                     let mut chart =
                         crate::widget::Chart::new(crate::model::BarData::from_bars(bars.clone()));

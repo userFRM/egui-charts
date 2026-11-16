@@ -1,21 +1,25 @@
 //! Source, bands, fills and base line of the anchored VWAP drawing.
 
-use crate::model::PriceSource;
+use crate::drawings::validation::MAX_STROKE_WIDTH;
+use crate::model::{LineStyle, PriceSource};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Colours of the three bands: green, olive and teal.
 const BAND_COLORS: [[u8; 4]; 3] = [[76, 175, 80, 255], [128, 128, 0, 255], [0, 137, 123, 255]];
 
 /// A line above and a line below an anchored VWAP, a multiple of the
-/// [band unit](VwapBandMode) away from it.
+/// [band unit](VwapBandMode) away from it, each styled by its own [`VwapBandLine`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "VwapBandFields")]
 pub struct VwapBand {
     /// Whether the band is drawn.
     pub enabled: bool,
     multiplier: f64,
-    /// Colour of the band's lines and, on the first band, of its fill unless the fill has its own.
-    pub color: [u8; 4],
+    /// The line above the VWAP. On the first band its colour is also the fill's, unless the
+    /// fill has its own.
+    pub upper: VwapBandLine,
+    /// The line below the VWAP.
+    pub lower: VwapBandLine,
 }
 
 /// Stored settings of a band, checked by [`VwapBand::new`] on load.
@@ -23,9 +27,12 @@ pub struct VwapBand {
 struct VwapBandFields {
     enabled: bool,
     multiplier: f64,
-    /// Bands saved before they had colours were all green.
+    /// The colour of both lines of a band saved before each line had its own style; bands
+    /// saved before they had colours were all green.
     #[serde(default = "first_band_color")]
     color: [u8; 4],
+    upper: Option<VwapBandLine>,
+    lower: Option<VwapBandLine>,
 }
 
 fn first_band_color() -> [u8; 4] {
@@ -38,19 +45,23 @@ impl TryFrom<VwapBandFields> for VwapBand {
     fn try_from(fields: VwapBandFields) -> Result<Self, Self::Error> {
         let mut band = Self::new(fields.enabled, fields.multiplier)
             .ok_or("anchored VWAP band multiplier out of bounds")?;
-        band.color = fields.color;
+        let saved = VwapBandLine::new(fields.color);
+        band.upper = fields.upper.unwrap_or(saved);
+        band.lower = fields.lower.unwrap_or(saved);
         Ok(band)
     }
 }
 
 impl VwapBand {
-    /// A green band `multiplier` band units either side of the VWAP (above 0, at most 10);
-    /// `None` when out of bounds.
+    /// A band of green lines `multiplier` band units either side of the VWAP (above 0, at
+    /// most 10); `None` when out of bounds.
     pub fn new(enabled: bool, multiplier: f64) -> Option<Self> {
+        let line = VwapBandLine::new(first_band_color());
         (multiplier > 0.0 && multiplier <= 10.0).then_some(Self {
             enabled,
             multiplier,
-            color: first_band_color(),
+            upper: line,
+            lower: line,
         })
     }
 
@@ -60,8 +71,113 @@ impl VwapBand {
     }
 }
 
+/// How one line of an anchored VWAP band is drawn: whether it shows, its colour, pattern,
+/// width, plot and opacity, and whether its latest value is marked.
+///
+/// ```
+/// use egui_charts::drawings::{VwapBand, VwapBandLine, VwapConfig, VwapPlotType};
+/// use egui_charts::model::LineStyle;
+///
+/// let mut line = VwapBandLine::new([200, 0, 0, 255])
+///     .with_width(2.0)
+///     .and_then(|line| line.with_opacity(0.5))
+///     .unwrap();
+/// line.line_style = LineStyle::Dashed;
+/// line.plot_type = VwapPlotType::StepLine;
+/// line.track_price = true;
+/// let mut band = VwapBand::new(true, 1.5).unwrap();
+/// band.lower = line;
+/// let mut config = VwapConfig::default();
+/// config.bands[1] = band;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "VwapBandLineFields")]
+pub struct VwapBandLine {
+    /// Whether the line is drawn while its band is enabled.
+    pub visible: bool,
+    /// Colour, whose alpha the opacity scales.
+    pub color: [u8; 4],
+    /// Pattern of the line and step line plots.
+    pub line_style: LineStyle,
+    width: f32,
+    /// How the line is drawn.
+    pub plot_type: VwapPlotType,
+    /// Whether a dotted line across the pane and a price axis tag mark the line's latest value.
+    pub track_price: bool,
+    opacity: f32,
+}
+
+/// Stored settings of a band line, checked by [`VwapBandLine::with_width`] and
+/// [`VwapBandLine::with_opacity`] on load.
+#[derive(Deserialize)]
+struct VwapBandLineFields {
+    visible: bool,
+    color: [u8; 4],
+    line_style: LineStyle,
+    width: f32,
+    plot_type: VwapPlotType,
+    track_price: bool,
+    opacity: f32,
+}
+
+impl TryFrom<VwapBandLineFields> for VwapBandLine {
+    type Error = &'static str;
+
+    fn try_from(fields: VwapBandLineFields) -> Result<Self, Self::Error> {
+        let line = Self {
+            visible: fields.visible,
+            line_style: fields.line_style,
+            plot_type: fields.plot_type,
+            track_price: fields.track_price,
+            ..Self::new(fields.color)
+        };
+        line.with_width(fields.width)
+            .ok_or("anchored VWAP band line width out of bounds")?
+            .with_opacity(fields.opacity)
+            .ok_or("anchored VWAP band line opacity out of bounds")
+    }
+}
+
+impl VwapBandLine {
+    /// A shown, solid, opaque line of 1 px in `color`, without a latest-value mark.
+    pub fn new(color: [u8; 4]) -> Self {
+        Self {
+            visible: true,
+            color,
+            line_style: LineStyle::Solid,
+            width: 1.0,
+            plot_type: VwapPlotType::Line,
+            track_price: false,
+            opacity: 1.0,
+        }
+    }
+
+    /// The line at `width` px, above 0 and at most 100; `None` when out of bounds.
+    pub fn with_width(self, width: f32) -> Option<Self> {
+        (width > 0.0 && width <= MAX_STROKE_WIDTH).then_some(Self { width, ..self })
+    }
+
+    /// The line at `opacity`, from 0 (clear) through 1 (opaque); `None` when out of bounds.
+    pub fn with_opacity(self, opacity: f32) -> Option<Self> {
+        (0.0..=1.0)
+            .contains(&opacity)
+            .then_some(Self { opacity, ..self })
+    }
+
+    /// Width in px of the line, and the size of its circles, crosses and histogram bars.
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+
+    /// Opacity from 0 (clear) through 1 (opaque), which scales the colour's own alpha.
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+}
+
 /// What a band multiplier counts: the unit of an anchored VWAP band's distance from the VWAP.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VwapBandMode {
     /// Volume-weighted standard deviations of the source price.
     #[default]
@@ -70,7 +186,8 @@ pub enum VwapBandMode {
     Percentage,
 }
 
-/// How the line of an anchored VWAP drawing is drawn, at the drawing's colour and width.
+/// How the line of an anchored VWAP drawing or of one of its bands is drawn, at that line's
+/// colour and width.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum VwapPlotType {
@@ -123,8 +240,8 @@ impl VwapPlotType {
 pub struct VwapFill {
     /// Whether the fill is painted.
     pub visible: bool,
-    /// Colour; `None` follows the first band's colour in the band fill and the line colour in
-    /// the background.
+    /// Colour; `None` follows the colour of the first band's upper line in the band fill and the
+    /// line colour in the background.
     pub color: Option<[u8; 4]>,
     opacity: f32,
 }
@@ -195,7 +312,7 @@ pub struct VwapConfig {
     #[serde(deserialize_with = "precision")]
     pub precision: Option<u8>,
     /// Fill between the first band's lines, drawn while that band is enabled. A drawing saved
-    /// without one fills in the first band's colour, as it was drawn.
+    /// without one fills in the colour of the first band's upper line, as it was drawn.
     #[serde(default = "VwapFill::following_band")]
     pub band_fill: VwapFill,
     /// Wash over the pane's height from the anchor bar to the last bar, under the bands.
@@ -227,7 +344,8 @@ impl Default for VwapConfig {
         let band = |index: usize, enabled| VwapBand {
             enabled,
             multiplier: (index + 1) as f64,
-            color: BAND_COLORS[index],
+            upper: VwapBandLine::new(BAND_COLORS[index]),
+            lower: VwapBandLine::new(BAND_COLORS[index]),
         };
         Self {
             bands: [band(0, true), band(1, false), band(2, false)],
@@ -255,8 +373,8 @@ mod tests {
     use super::*;
 
     /// A drawing saved with bands only restores every later setting at its default, except its
-    /// band fill, which keeps following the first band's colour, so it paints as before;
-    /// out-of-range settings are refused.
+    /// band fill, which keeps following the first band's colour, so it paints as before, and
+    /// each band's colour styles both its lines; out-of-range settings are refused.
     #[test]
     fn saved_settings_restore_and_are_checked() {
         let saved = r#"{"bands":[{"enabled":true,"multiplier":1.0,"color":[76,175,80,255]},{"enabled":false,"multiplier":2.0,"color":[128,128,0,255]},{"enabled":false,"multiplier":3.0,"color":[0,137,123,255]}]}"#;
@@ -270,6 +388,14 @@ mod tests {
             r#"{"background":{"visible":true,"color":null,"opacity":-0.1}}"#,
         ] {
             assert!(serde_json::from_str::<VwapConfig>(bad).is_err(), "{bad}");
+        }
+        for (field, value) in [("width", 0.0), ("width", 101.0), ("opacity", 1.5)] {
+            let mut saved = serde_json::to_value(VwapConfig::default()).unwrap();
+            saved["bands"][1]["lower"][field] = value.into();
+            assert!(
+                serde_json::from_value::<VwapConfig>(saved).is_err(),
+                "{field} {value}"
+            );
         }
     }
 }

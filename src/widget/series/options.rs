@@ -39,6 +39,7 @@ fn fed_symbols(name: &str) -> Vec<String> {
 /// [`Chart::pane_scale`] for the scale behind it.
 /// Shared assignments identify one scale; independently mapped studies identify their own axes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PaneScale {
     /// A shared bar-series or study assignment.
     Named(SeriesScale),
