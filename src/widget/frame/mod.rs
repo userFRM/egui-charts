@@ -213,6 +213,7 @@ impl Chart {
         self.host_events.touch_position = None;
         self.host_events.target = None;
         self.host_events.primitive_hit = None;
+        self.readout_index = None;
         self.cover_annotation_hit();
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
@@ -3311,18 +3312,32 @@ impl Chart {
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
         {
+            // The local pointer takes precedence over a crosshair this chart received from a
+            // linked chart or the host, as drawn below.
+            let crosshair_x = hover_pos.map(|pos| pos.x).or_else(|| {
+                self.synced_crosshair_bar_idx
+                    .filter(|_| !menu_open)
+                    .and_then(|index| {
+                        self.crosshair_position(
+                            Pos2::new(coords.index_to_x(index), price_rect.center().y),
+                            &coords,
+                        )
+                    })
+                    .map(|pos| pos.x)
+                    .filter(|x| coords.is_x_visible(*x))
+            });
             let visible_data = self.state.visible_data();
-            let selected = hover_pos
-                .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
-                .map(|index| start_idx + index)
-                .unwrap_or_else(|| {
-                    // The last bar with a value, before any whitespace bars at the end.
-                    let shown = self.state.shown();
-                    shown
-                        .iter()
-                        .rposition(|bar| !bar.is_whitespace())
-                        .unwrap_or(shown.len().saturating_sub(1))
-                });
+            self.readout_index = crosshair_x
+                .and_then(|x| coords.local_idx_at_x(x, visible_data.len()))
+                .map(|index| start_idx + index);
+            let selected = self.readout_index.unwrap_or_else(|| {
+                // The last bar with a value, before any whitespace bars at the end.
+                let shown = self.state.shown();
+                shown
+                    .iter()
+                    .rposition(|bar| !bar.is_whitespace())
+                    .unwrap_or(shown.len().saturating_sub(1))
+            });
             if let Some(bar) = self.state.shown().get(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]

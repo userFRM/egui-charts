@@ -16,16 +16,15 @@ use super::types::DataWindowInfo;
 use crate::ui_kit::ext::UiExt;
 
 impl DataWindowInfo {
-    /// Populates the readout from the hovered rendered bar, falling back to the latest bar with a
-    /// value.
+    /// Populates the readout from the bar the chart's status line shows: the one under its
+    /// crosshair, whether from the pointer, a linked chart or the host, falling back to the
+    /// latest bar with a value.
     /// Uses the chart's time formatter, instrument precision and visible study plots.
     /// Call after [`crate::widget::Chart::show`] so hover and study values describe the current frame.
     pub fn from_chart(chart: &crate::widget::Chart) -> Self {
         let bars = chart.state().shown();
         let index = chart
-            .get_hover_bar_idx()
-            .filter(|index| index.is_finite() && index.round() >= 0.0)
-            .map(|index| index.round() as usize)
+            .readout_index
             .filter(|index| *index < bars.len())
             .unwrap_or_else(|| {
                 bars.iter()
