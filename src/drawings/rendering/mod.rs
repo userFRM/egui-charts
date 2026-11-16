@@ -84,7 +84,29 @@ pub struct ChartView<'a> {
     /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
     /// then show the executed volume at each price, split by aggressor side, instead of
     /// spreading bar volume over bar ranges; `None` estimates from the bars.
-    pub executions: Option<&'a crate::data::Footprint>,
+    ///
+    /// Hosts with an owned footprint construct the borrowed view without copying:
+    /// ```
+    /// use egui_charts::{
+    ///     data::Footprint, drawings::rendering::ChartView,
+    ///     model::{Bar, BarClock, Tick, Timeframe},
+    /// };
+    /// let time = "2026-01-05T10:00:00Z".parse()?;
+    /// let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1)?;
+    /// flow.push(&Tick::new(time, 100.0, 2.0, None))?;
+    /// let bars = [Bar::new(time, 100.0, 100.0, 100.0, 100.0, 2.0)];
+    /// let view = ChartView {
+    ///     price_formatter: None, time_formatter: None, instrument: None, bar_seconds: 60,
+    ///     bars: &bars, revision: 0, bar_to_x: &|x| x, bar_spacing: 1.0,
+    ///     price_to_y: &|price| price as f32, y_to_price: &f64::from, time_axis: true,
+    ///     executions: Some((&flow).into()), timeframe: Some(Timeframe::Min1), finer: &[],
+    /// };
+    /// let executions = view.executions.unwrap();
+    /// assert!(executions.span_is_complete(time, time));
+    /// assert_eq!(executions.profile(time, time).volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub executions: Option<crate::data::FootprintView<'a>>,
     /// Interval of `bars`, or `None` for price-based chart types, trade-based intervals and
     /// horizontal scales other than time. Volume profiles read finer bars only with an interval.
     pub timeframe: Option<crate::model::Timeframe>,

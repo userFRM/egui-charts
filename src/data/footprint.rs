@@ -11,7 +11,7 @@ mod read;
 #[cfg(feature = "widget")]
 pub(crate) use read::FootprintState;
 #[cfg(any(feature = "widget", feature = "studies"))]
-pub(crate) use read::FootprintView;
+pub use read::FootprintView;
 
 /// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
 /// summed trade by trade, and is far below one lot at any realistic volume.

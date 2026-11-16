@@ -72,7 +72,7 @@ pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
 #[cfg(feature = "widget")]
 pub(crate) use footprint::FootprintState;
 #[cfg(any(feature = "widget", feature = "studies"))]
-pub(crate) use footprint::FootprintView;
+pub use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};

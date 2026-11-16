@@ -6139,6 +6139,196 @@ fn host_studies_read_footprints_and_books_as_of_the_replay_cutoff() {
     assert_eq!(lines(&chart), live, "after replay");
 }
 
+/// A drawing's actual frame view reads shared prepared rows and keeps incomplete joins marked.
+#[cfg(feature = "drawings")]
+#[test]
+fn profile_drawings_read_shared_prepared_rows() {
+    use crate::data::{
+        FootprintBar, FootprintBarView, FootprintLevel, FootprintRows, FootprintSource,
+        ProfileSource, VolumeProfile,
+    };
+    use crate::drawings::rendering::ChartView;
+    use crate::drawings::{
+        ChartPoint, Drawing, DrawingRenderer, DrawingToolType, RegisteredDrawingTool,
+    };
+    use crate::model::OrderSide::{Buy, Sell};
+
+    struct Rows(Vec<(FootprintBar, Vec<FootprintLevel>)>);
+    impl FootprintSource for Rows {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn bar(&self, index: usize) -> FootprintBarView<'_> {
+            let (bar, rows) = &self.0[index];
+            FootprintBarView {
+                levels: FootprintRows::Slice(rows),
+                ..bar.into()
+            }
+        }
+    }
+    struct Capture(Arc<Mutex<Option<VolumeProfile>>>);
+    impl DrawingRenderer for Capture {
+        fn render(&self, drawing: &Drawing, _: &egui::Painter, _: egui::Rect, view: &ChartView) {
+            *self.0.lock().unwrap() = drawing.volume_profile_of(view);
+        }
+        fn hit_test(&self, _: &Drawing, _: egui::Pos2, _: f32) -> bool {
+            false
+        }
+    }
+
+    for shared in [false, true] {
+        for gap in [false, true] {
+            let (feed, mut chart, mut frames) = prepared_chart();
+            let start = bars(1)[0].time;
+            let at = |second| start + TimeDelta::seconds(second);
+            let mut page = prepared_page(
+                &[
+                    Tick::new(at(0), 100.0, 2.0, Some(Buy)),
+                    Tick::new(at(60), 101.0, 3.0, Some(Sell)),
+                    Tick::new(at(120), 102.0, 5.0, None),
+                ],
+                at(150),
+                true,
+            );
+            if shared {
+                let crate::data::FootprintBars::Owned(bars) = page.bars else {
+                    unreachable!()
+                };
+                let rows = bars
+                    .into_iter()
+                    .map(|mut bar| {
+                        let rows = std::mem::take(&mut bar.levels).into_values().collect();
+                        (bar, rows)
+                    })
+                    .collect();
+                page.bars = crate::data::FootprintBars::Shared(Arc::new(Rows(rows)));
+            }
+            feed.footprints.lock().unwrap().remove(0).send(Ok(page));
+            frames.run(&mut chart);
+            let live = Tick::new(
+                at(if gap { 180 } else { 150 }),
+                if gap { 103.0 } else { 102.0 },
+                7.0,
+                Some(Buy),
+            )
+            .with_id(1);
+            feed.sink().push_tick(live.clone());
+            frames.run(&mut chart);
+            // Confirm the first live timestamp; the partial page leaves the earlier join unknown.
+            feed.trades
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(TradePage::new(vec![live], !gap)));
+            frames.run(&mut chart);
+            let captured = Arc::new(Mutex::new(None));
+            chart
+                .drawings_mut()
+                .registry
+                .register(
+                    "capture",
+                    RegisteredDrawingTool {
+                        name: "Capture".into(),
+                        anchors: 2,
+                        implementation: Arc::new(Capture(captured.clone())),
+                    },
+                )
+                .unwrap();
+            let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+            drawing.custom_tool = Some("capture".into());
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 100.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            for kind in [ChartType::VolumeFootprint, ChartType::Candles] {
+                chart.set_chart_type(kind);
+                chart.drawings_mut().drawings[0].tool_type =
+                    DrawingToolType::FixedRangeVolumeProfile;
+                for (first, last, complete, volume, up, down) in [
+                    (
+                        0.0,
+                        1.0,
+                        true,
+                        vec![2.0, 3.0],
+                        vec![2.0, 0.0],
+                        vec![0.0, 3.0],
+                    ),
+                    (
+                        0.0,
+                        3.0,
+                        !gap,
+                        if gap {
+                            vec![2.0, 3.0, 0.0, 7.0]
+                        } else {
+                            vec![2.0, 3.0, 12.0]
+                        },
+                        if gap {
+                            vec![2.0, 0.0, 0.0, 7.0]
+                        } else {
+                            vec![2.0, 0.0, 7.0]
+                        },
+                        if gap {
+                            vec![0.0, 3.0, 0.0, 0.0]
+                        } else {
+                            vec![0.0, 3.0, 0.0]
+                        },
+                    ),
+                    (1.0, 1.0, true, vec![3.0], vec![0.0], vec![3.0]),
+                ] {
+                    chart.drawings_mut().drawings[0].chart_points =
+                        vec![ChartPoint::new(first, 100.0), ChartPoint::new(last, 100.0)];
+                    *captured.lock().unwrap() = None;
+                    frames.run(&mut chart);
+                    let got = captured
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("drawing callback ran");
+                    assert_eq!(
+                        got.source(),
+                        ProfileSource::Executions { complete },
+                        "shared={shared} gap={gap} {kind:?} {first}..={last}"
+                    );
+                    assert_eq!(got.volume(), volume);
+                    assert_eq!(got.up(), up);
+                    assert_eq!(got.down(), down);
+                }
+                let drawing = &mut chart.drawings_mut().drawings[0];
+                drawing.tool_type = DrawingToolType::AnchoredVolumeProfile;
+                drawing.chart_points = vec![ChartPoint::new(1.0, 100.0)];
+                frames.run(&mut chart);
+                let got = captured.lock().unwrap().take().unwrap();
+                assert_eq!(got.source(), ProfileSource::Executions { complete: !gap });
+                assert_eq!(
+                    got.volume(),
+                    if gap {
+                        vec![3.0, 0.0, 7.0]
+                    } else {
+                        vec![3.0, 12.0]
+                    }
+                );
+            }
+            let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+            feed.sink()
+                .push_tick(Tick::new(at(241), 102.0, 8.0, None).with_id(2));
+            frames.run(&mut chart);
+            let live = captured.lock().unwrap().take().unwrap();
+            assert_eq!(
+                live.volume().iter().sum::<f64>(),
+                if gap { 18.0 } else { 23.0 }
+            );
+            frames.run(&mut frozen);
+            let saved = captured.lock().unwrap().take().unwrap();
+            assert_eq!(
+                saved.volume(),
+                if gap {
+                    vec![3.0, 0.0, 7.0]
+                } else {
+                    vec![3.0, 12.0]
+                }
+            );
+        }
+    }
+}
+
 /// Profile drawings use held executions on time-based charts and release them when hidden.
 #[cfg(feature = "drawings")]
 #[test]
@@ -6199,7 +6389,7 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
                 .unwrap()
                 .footprint
                 .as_ref()
-                .and_then(|flow| flow.owned()),
+                .map(|flow| flow.view()),
             timeframe: None,
             finer: &[],
         };

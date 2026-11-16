@@ -1,6 +1,6 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{FootprintView, StudyDataRequest, VolumeProfile};
+use crate::data::{StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::domain::{VwapBandLine, VwapBandMode, VwapConfig, VwapPlotType};
@@ -370,7 +370,7 @@ impl Drawing {
     ) -> Rc<Option<VolumeProfile>> {
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
-            let complete = FootprintView::from(flow).span_is_complete(start.time, end.time);
+            let complete = flow.span_is_complete(start.time, end.time);
             if let Some(profile) = VolumeProfile::from_executions(
                 &executed,
                 flow.price_step(),
@@ -1747,7 +1747,9 @@ mod tests {
         };
 
         select(&mut drawing, 0.0, 2.0);
-        let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
+        let profile = drawing
+            .volume_profile_of(&view(Some((&flow).into())))
+            .unwrap();
         let exact = flow.profile(bars[0].time, bars[2].time);
         assert_eq!(
             profile.source(),
@@ -1768,18 +1770,22 @@ mod tests {
 
         // Moving the first anchor past bar 1 drops its executions and the lower row.
         select(&mut drawing, 2.0, 2.0);
-        let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
+        let profile = drawing
+            .volume_profile_of(&view(Some((&flow).into())))
+            .unwrap();
         assert_eq!((profile.low(), profile.volume()), (11.5, [3.0].as_slice()));
 
         // A span with no executions, and a view without any, fall back to the estimate.
         select(&mut drawing, 4.0, 5.0);
-        for executions in [Some(&flow), None] {
+        for executions in [Some((&flow).into()), None] {
             let profile = drawing.volume_profile_of(&view(executions)).unwrap();
             assert_eq!(profile.source(), ProfileSource::Estimated);
         }
         // Executions held from the span's first bar are complete.
         select(&mut drawing, 1.0, 2.0);
-        let profile = drawing.volume_profile_of(&view(Some(&flow))).unwrap();
+        let profile = drawing
+            .volume_profile_of(&view(Some((&flow).into())))
+            .unwrap();
         assert_eq!(
             profile.source(),
             ProfileSource::Executions { complete: true }
@@ -1788,7 +1794,9 @@ mod tests {
         // and is partial.
         let mut cut = flow.clone();
         cut.drop_through(trades[0].ts, &trades[1..]);
-        let profile = drawing.volume_profile_of(&view(Some(&cut))).unwrap();
+        let profile = drawing
+            .volume_profile_of(&view(Some((&cut).into())))
+            .unwrap();
         assert_eq!(
             profile.source(),
             ProfileSource::Executions { complete: false }
@@ -1798,7 +1806,9 @@ mod tests {
         gap.add_missing(bars[2].time, bars[3].time);
         for (first, last, complete) in [(0.0, 1.0, false), (1.0, 1.0, true), (1.0, 2.0, false)] {
             select(&mut drawing, first, last);
-            let profile = drawing.volume_profile_of(&view(Some(&gap))).unwrap();
+            let profile = drawing
+                .volume_profile_of(&view(Some((&gap).into())))
+                .unwrap();
             assert_eq!(profile.source(), ProfileSource::Executions { complete });
         }
     }
@@ -1932,7 +1942,7 @@ mod tests {
                 price_to_y: &|price| price as f32,
                 y_to_price: &f64::from,
                 time_axis: true,
-                executions: executed.then_some(&flow),
+                executions: executed.then_some((&flow).into()),
                 timeframe: Some(Timeframe::Day1),
                 finer: &history,
             };
