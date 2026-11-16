@@ -48,35 +48,36 @@ impl DataWindowInfo {
         info.with_chart_formatters(chart)
     }
 
-    /// Formats this readout's raw values with the chart's host formatters. Call after
-    /// populating OHLCV and previous close; missing hooks retain instrument formatting.
+    /// Formats this readout's raw values as the chart's status line writes them: with the
+    /// chart's host formatters, else with the instrument's or the status line's decimals and the
+    /// chart's thousands separator. Call after populating OHLCV and previous close.
     pub fn with_chart_formatters(mut self, chart: &crate::widget::Chart) -> Self {
         let price_formatter = chart.series_price_formatter(crate::widget::SeriesId::MAIN);
         let formats = chart.value_formatters(price_formatter.as_deref());
-        self.formatted_prices = formats.price.map(|formatter| {
-            [self.open, self.high, self.low, self.close].map(|value| formatter.format(value))
-        });
+        let decimals = self
+            .price_decimals
+            .map_or_else(|| crate::scales::price_decimals(self.close), usize::from);
+        let separator = chart.config.thousands_sep;
+        let price = |value: f64| match formats.price {
+            Some(formatter) => formatter.format(value),
+            None if value.is_finite() => {
+                crate::scales::group_thousands(format!("{value:.decimals$}"), separator)
+            }
+            None => "\u{2014}".to_owned(),
+        };
+        self.formatted_prices = Some([self.open, self.high, self.low, self.close].map(price));
         self.formatted_volume = formats
             .volume
             .map(|formatter| formatter.format(self.volume));
-        self.formatted_change =
-            (formats.price.is_some() || formats.percentage.is_some()).then(|| {
-                let absolute = formats.price.map_or_else(
-                    || {
-                        format!(
-                            "{:+.*}",
-                            usize::from(self.price_decimals.unwrap_or(2)),
-                            self.change
-                        )
-                    },
-                    |formatter| formatter.format_change(self.change),
-                );
-                let percentage = formats.percentage.map_or_else(
-                    || format!("{:+.2}%", self.change_percent),
-                    |formatter| formatter.format(self.change_percent),
-                );
-                format!("{absolute} ({percentage})")
-            });
+        let absolute = formats.price.map_or_else(
+            || crate::scales::group_thousands(format!("{:+.decimals$}", self.change), separator),
+            |formatter| formatter.format_change(self.change),
+        );
+        let percentage = formats.percentage.map_or_else(
+            || format!("{:+.2}%", self.change_percent),
+            |formatter| formatter.format(self.change_percent),
+        );
+        self.formatted_change = Some(format!("{absolute} ({percentage})"));
         self
     }
 }
@@ -164,6 +165,11 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
 
 /// Render the OHLCV grid
 fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
+    // Without an instrument, prices take the status line's decimals for the close.
+    let decimals = Some(
+        data.price_decimals
+            .unwrap_or_else(|| crate::scales::price_decimals(data.close) as u8),
+    );
     let change_color = if data.is_bullish() {
         ui.active_theme().chart.candle_up
     } else {
@@ -179,7 +185,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             ui.label(l10n::text(
                 ui.ctx(),
                 data.formatted_prices.as_ref().map_or_else(
-                    || format_price(data.open, data.price_decimals),
+                    || format_price(data.open, decimals),
                     |values| values[0].clone(),
                 ),
             ));
@@ -188,7 +194,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             ui.label(l10n::text(
                 ui.ctx(),
                 data.formatted_prices.as_ref().map_or_else(
-                    || format_price(data.high, data.price_decimals),
+                    || format_price(data.high, decimals),
                     |values| values[1].clone(),
                 ),
             ));
@@ -198,7 +204,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             ui.label(l10n::text(
                 ui.ctx(),
                 data.formatted_prices.as_ref().map_or_else(
-                    || format_price(data.low, data.price_decimals),
+                    || format_price(data.low, decimals),
                     |values| values[2].clone(),
                 ),
             ));
@@ -208,7 +214,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
                 RichText::new(l10n::text(
                     ui.ctx(),
                     data.formatted_prices.as_ref().map_or_else(
-                        || format_price(data.close, data.price_decimals),
+                        || format_price(data.close, decimals),
                         |values| values[3].clone(),
                     ),
                 ))
@@ -267,22 +273,58 @@ mod tests {
         use crate::model::{Bar, BarData};
         use crate::scales::CustomPriceFormatter;
         use std::sync::Arc;
-        for custom in [false, true] {
-            let mut instrument = crate::model::Instrument::new("FX").with_volume_decimals(3);
-            instrument.tick_size = Some(0.00001);
-            let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
-            let mut chart = crate::widget::Chart::new(BarData::from_bars(vec![
-                Bar::new(time, 1.23455, 1.23455, 1.23455, 1.23455, 0.0),
-                Bar::new(
-                    time + chrono::TimeDelta::minutes(1),
-                    0.0,
-                    1.23456,
-                    0.0,
-                    1.23456,
-                    1234.0,
-                ),
-            ]));
-            chart.set_instrument(Some(instrument));
+        let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let next = time + chrono::TimeDelta::minutes(1);
+        // 0.00001 / 1.23455 * 100 = 0.000810... percentage points; without an instrument,
+        // 41,639.77 / 1,000 * 100 = 4,163.977 percentage points, written as the status line does.
+        for (instrument, custom, separator, expected) in [
+            (
+                true,
+                false,
+                Some(','),
+                &["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"][..],
+            ),
+            (
+                true,
+                true,
+                Some(','),
+                &[
+                    "p 0.00000",
+                    "p 1.23456",
+                    "p 0.00001 (pct 0.001)",
+                    "1234 units",
+                ],
+            ),
+            (
+                false,
+                false,
+                Some(','),
+                &["1,332.57", "42,639.77", "+41,639.77 (+4163.98%)"],
+            ),
+            (
+                false,
+                false,
+                None,
+                &["1332.57", "42639.77", "+41639.77 (+4163.98%)"],
+            ),
+        ] {
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(if instrument {
+                vec![
+                    Bar::new(time, 1.23455, 1.23455, 1.23455, 1.23455, 0.0),
+                    Bar::new(next, 0.0, 1.23456, 0.0, 1.23456, 1234.0),
+                ]
+            } else {
+                vec![
+                    Bar::from_value(time, 1000.0),
+                    Bar::new(next, 1332.57, 42639.77, 1332.57, 42639.77, 1234.0),
+                ]
+            }));
+            chart.config.thousands_sep = separator;
+            if instrument {
+                let mut instrument = crate::model::Instrument::new("FX").with_volume_decimals(3);
+                instrument.tick_size = Some(0.00001);
+                chart.set_instrument(Some(instrument));
+            }
             if custom {
                 chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|value| {
                     format!("p {value:.5}")
@@ -295,7 +337,7 @@ mod tests {
                 }))));
             }
             let data = DataWindowInfo::from_chart(&chart);
-            assert_eq!(data.price_decimals, Some(5));
+            assert_eq!(data.price_decimals, instrument.then_some(5));
             let ctx = egui::Context::default();
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 show_ohlcv_grid(ui, &data);
@@ -309,17 +351,6 @@ mod tests {
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            // 0.00001 / 1.23455 * 100 = 0.000810... percentage points.
-            let expected = if custom {
-                [
-                    "p 0.00000",
-                    "p 1.23456",
-                    "p 0.00001 (pct 0.001)",
-                    "1234 units",
-                ]
-            } else {
-                ["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"]
-            };
             for expected in expected {
                 assert!(
                     texts.iter().any(|text| text == expected),

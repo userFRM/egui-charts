@@ -356,11 +356,13 @@ pub struct DataWindowInfo {
     pub prev_close: f64,
     /// Instrument price decimals; `None` keeps magnitude-based formatting.
     pub price_decimals: Option<u8>,
-    /// Host-formatted open, high, low and close values, or `None` for instrument formatting.
+    /// Open, high, low and close as the chart's status line writes them, set by
+    /// [`Self::with_chart_formatters`]; `None` formats them with [`Self::price_decimals`].
     pub formatted_prices: Option<[String; 4]>,
     /// Host-formatted volume, or `None` for instrument formatting.
     pub formatted_volume: Option<String>,
-    /// Host-formatted absolute and percentage change, or `None` for instrument formatting.
+    /// Absolute and percentage change as the chart's status line writes them, set by
+    /// [`Self::with_chart_formatters`]; `None` formats it with [`Self::price_decimals`].
     pub formatted_change: Option<String>,
     /// Visible study plots at the same bar as the OHLCV values.
     pub studies: Vec<crate::chart::rendering::StudyValue>,
