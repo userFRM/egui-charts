@@ -878,7 +878,7 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
             .collect::<Vec<_>>(),
         vec![start, start + TimeDelta::minutes(3)]
     );
-    assert!(FootprintView::from(flow).complete_bar_at(cutoff).is_none());
+    assert!(flow.complete_bar_at(cutoff).is_none());
     #[cfg(feature = "studies")]
     {
         let read = input.footprint_snapshot(start);

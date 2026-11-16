@@ -392,7 +392,7 @@ impl Footprint {
     }
 
     /// Revision of aggregated rows and completeness; identical clones share it until changed.
-    #[cfg(any(test, all(feature = "widget", feature = "studies")))]
+    #[cfg(any(test, feature = "widget"))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
