@@ -66,17 +66,27 @@ impl Chart {
                     .instrument()
                     .and_then(crate::scales::instrument_price_precision)
                     .map_or(2, usize::from);
-                text.push_str(&l10n::format_text(
-                    ctx,
-                    ". Open {open}, high {high}, low {low}, close {close}, volume {volume}",
-                    &[
-                        ("open", format!("{:.decimals$}", bar.open)),
-                        ("high", format!("{:.decimals$}", bar.high)),
-                        ("low", format!("{:.decimals$}", bar.low)),
-                        ("close", format!("{:.decimals$}", bar.close)),
-                        ("volume", bar.volume.to_string()),
-                    ],
-                ));
+                let values = [
+                    ("open", format!("{:.decimals$}", bar.open)),
+                    ("high", format!("{:.decimals$}", bar.high)),
+                    ("low", format!("{:.decimals$}", bar.low)),
+                    ("close", format!("{:.decimals$}", bar.close)),
+                    ("volume", bar.volume.to_string()),
+                ];
+                // A chart type that hides volume has no volume to read.
+                text.push_str(&if self.chart_type.supports_volume() {
+                    l10n::format_text(
+                        ctx,
+                        ". Open {open}, high {high}, low {low}, close {close}, volume {volume}",
+                        &values,
+                    )
+                } else {
+                    l10n::format_text(
+                        ctx,
+                        ". Open {open}, high {high}, low {low}, close {close}",
+                        &values[..4],
+                    )
+                });
             } else {
                 text.push_str(&l10n::text(ctx, ". Main series hidden"));
             }

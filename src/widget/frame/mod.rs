@@ -3758,10 +3758,8 @@ impl Chart {
                             .study_rows_at(start_idx + local_idx)
                             .into_iter()
                             .filter(|(id, _)| {
-                                // A chart type that hides volume lists no volume rows.
-                                (self.chart_type.supports_volume()
-                                    && (!tooltip_options.on_long_press
-                                        || tooltip_options.show_volume_details))
+                                !tooltip_options.on_long_press
+                                    || tooltip_options.show_volume_details
                                     || self
                                         .study_ids
                                         .iter()

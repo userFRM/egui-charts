@@ -111,7 +111,8 @@ impl Chart {
     }
 
     /// Values of visible study plots at a rendered bar index, with legend names and precision.
-    /// Gaps remain `None`; price-based charts use studies calculated from element OHLC.
+    /// Gaps remain `None`; price-based charts use studies calculated from element OHLC, and
+    /// those that hide volume list no volume study.
     /// Call after [`Self::show`] to use refreshed studies.
     pub fn study_values_at(&self, index: usize) -> Vec<StudyValue> {
         self.study_rows_at(index)
@@ -140,6 +141,8 @@ impl Chart {
             .iter()
             .zip(self.rendered_studies().indicators())
             .filter(|(_, study)| policy == CursorDataPolicy::IncludeHidden || study.is_visible())
+            // A chart type that hides volume lists no volume rows.
+            .filter(|(_, study)| self.chart_type.supports_volume() || !study.is_volume())
         {
             let names = study.line_names();
             let colors = study.colors();
@@ -214,6 +217,9 @@ mod tests {
             Some("120.00")
         );
         assert_eq!(chart.indicator_value_at(id, 0), None);
+        // Bricks hide volume; a time-based chart lists its study.
+        chart.set_chart_type(ChartType::Candles);
+        frame(&egui::Context::default(), &mut chart, 0.1, vec![]);
         chart.set_volume_formatter(Some(std::sync::Arc::new(
             crate::scales::CustomPriceFormatter::new(|value| format!("{value:.0} lots")),
         )));

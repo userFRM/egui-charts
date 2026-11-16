@@ -69,6 +69,7 @@ impl DataWindowInfo {
         if let Some(instrument) = chart.instrument() {
             info = info.with_instrument(instrument);
         }
+        info.volume_hidden = !chart.chart_type().supports_volume();
         if let Some((bar, previous_close)) = chart.readout_bar_at(index) {
             info = info
                 .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
@@ -282,22 +283,24 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             );
             ui.end_row();
 
-            ui.hint_label("Vol");
-            ui.label(l10n::text(
-                ui.ctx(),
-                data.formatted_volume.clone().unwrap_or_else(|| {
-                    data.volume_precision.map_or_else(
-                        || format_volume(data.volume),
-                        |decimals| {
-                            VolumeFormatter {
-                                precision: usize::from(decimals),
-                            }
-                            .format(data.volume)
-                        },
-                    )
-                }),
-            ));
-            ui.end_row();
+            if !data.volume_hidden {
+                ui.hint_label("Vol");
+                ui.label(l10n::text(
+                    ui.ctx(),
+                    data.formatted_volume.clone().unwrap_or_else(|| {
+                        data.volume_precision.map_or_else(
+                            || format_volume(data.volume),
+                            |decimals| {
+                                VolumeFormatter {
+                                    precision: usize::from(decimals),
+                                }
+                                .format(data.volume)
+                            },
+                        )
+                    }),
+                ));
+                ui.end_row();
+            }
             ui.hint_label("Chg");
             ui.label(
                 RichText::new(data.formatted_change.clone().unwrap_or_else(|| {
@@ -418,6 +421,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The chart types that hide volume list no volume row and no volume study rows in the
+    /// data window, as their tooltip and legend do; a candle chart keeps both.
+    #[test]
+    fn data_window_lists_no_volume_on_charts_that_hide_volume() {
+        use crate::model::ChartType;
+        use crate::widget::test_frames::{chart, frame};
+        let mut failures = Vec::new();
+        for (kind, shown) in [
+            (ChartType::Candles, true),
+            (ChartType::Renko, false),
+            (ChartType::Kagi, false),
+            (ChartType::LineBreak, false),
+            (ChartType::PointAndFigure, false),
+            (ChartType::Range, false),
+        ] {
+            let ctx = egui::Context::default();
+            // Closes of 100, 103, 106 and 109 in turn build elements at the default sizes.
+            let mut chart = chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+            chart.set_chart_type(kind);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            // The average keeps a row beside the volume row, which shows the columns' value.
+            let volume = chart
+                .indicators()
+                .find(|(_, study)| study.is_volume())
+                .unwrap()
+                .0;
+            chart
+                .indicator_mut(volume)
+                .unwrap()
+                .set_input("show_average", crate::studies::InputValue::Toggle(true))
+                .unwrap();
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let data = DataWindowInfo::from_chart(&chart);
+            let rows: Vec<_> = data
+                .studies
+                .iter()
+                .filter(|row| row.study == "Volume")
+                .map(|row| row.label())
+                .collect();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show_ohlcv_grid(ui, &data);
+            });
+            let volume = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Vol")
+            });
+            output.drop_without_applying_deltas();
+            if rows.is_empty() == shown || volume != shown {
+                failures.push(format!(
+                    "{kind:?}: volume row {volume}, study rows {rows:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]

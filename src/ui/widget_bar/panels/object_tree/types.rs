@@ -348,6 +348,9 @@ pub struct DataWindowInfo {
     pub close: f64,
     /// Volume
     pub volume: f64,
+    /// The chart type hides volume, as Renko, Kagi, Line Break, Point and Figure and Range
+    /// charts do, so the panel shows no volume row.
+    pub volume_hidden: bool,
     /// Change from previous close (absolute)
     pub change: f64,
     /// Change from previous close (percentage)
