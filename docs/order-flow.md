@@ -54,6 +54,27 @@ side shaded in four strengths by where its volume falls in that side's range. Th
 dominates under the imbalance settings gets a strip along its outer edge, and two dotted lines mark the value area.
 `text_color` defaults to white, so set the theme's text colour on a light chart.
 
+### Prepared history
+
+The built-in time-based footprint chart can request already aggregated history through
+[`Datafeed::footprints`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.footprints).
+Use [`FootprintPage::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.new)
+for owned bars, or [`FootprintPage::from_shared`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.from_shared)
+for an immutable [`FootprintSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.FootprintSource.html).
+Its bar views borrow sorted native rows; storage and byte conversion stay in the host. The
+constructor docs include examples of both forms. `FootprintPage::bars` is a
+[`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
+its `iter` method reads either form.
+
+A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
+exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
+unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
+The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
+cells, statistics and annotations use the same complete bars,
+including valid history before a missing join. `Footprint::bars()` keeps its existing owned
+store API. Profile drawings use their labelled bar estimate with shared history; replay and
+independent trade-driven studies still require individual executions.
+
 ## Liquidity
 
 Call [`Chart::set_liquidity_heatmap(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_liquidity_heatmap) on a chart with a feed and an instrument tick size.

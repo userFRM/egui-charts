@@ -2,7 +2,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::overlays::{FootprintConfig, FootprintMode};
-use crate::data::Footprint;
+use crate::data::FootprintView;
 use crate::model::Bar;
 use crate::studies::TradeProfile;
 use crate::theme::ThemeExt;
@@ -40,7 +40,7 @@ pub(crate) fn render_session_volume_profiles(
     mapping: &ChartMapping,
     bars: &[Bar],
     profiles: &[TradeProfile],
-    flow: &Footprint,
+    flow: FootprintView<'_>,
     settings: &TradeProfileSettings,
 ) {
     let theme = painter.ctx().active_theme();
@@ -84,7 +84,7 @@ fn render_profiles(
     step: f64,
     tick: f64,
     config: &FootprintConfig,
-    settings: Option<(&TradeProfileSettings, &Footprint)>,
+    settings: Option<(&TradeProfileSettings, FootprintView<'_>)>,
 ) {
     let session = settings.is_some();
     if !step.is_finite() || step <= 0.0 || !tick.is_finite() || tick <= 0.0 || bars.is_empty() {
@@ -359,7 +359,7 @@ fn render_profiles(
             && settings.developing_value_area
             && let Some(share) = settings.value_area
         {
-            let areas = profile.developing_value_area(flow, share);
+            let areas = profile.developing_value_area_read(flow, share);
             for high in [false, true] {
                 render_developing(
                     &painter,
@@ -410,6 +410,7 @@ fn render_developing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Footprint;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
     use crate::studies::{TradeProfileRanges, trade_profiles};
@@ -634,7 +635,7 @@ mod tests {
                 &mapping,
                 &bars,
                 &profiles,
-                &flow,
+                (&flow).into(),
                 &TradeProfileSettings {
                     extend_poc: true,
                     extend_vah: true,
@@ -730,7 +731,7 @@ mod tests {
                 &mapping,
                 &bars,
                 &profiles,
-                &flow,
+                (&flow).into(),
                 &TradeProfileSettings {
                     extend_poc: true,
                     extend_val: true,
@@ -867,7 +868,7 @@ mod tests {
                         &mapping,
                         &bars[..count],
                         &profiles,
-                        flow,
+                        (flow).into(),
                         &settings,
                     );
                 });

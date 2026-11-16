@@ -7,8 +7,9 @@
 mod frame;
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    Datafeed, FeedError, Footprint, FootprintBar, FootprintPage, FootprintRequest, HistoryPage,
-    HistoryRequest, Reply, Sink, Subscription, TradePage, TradeRequest,
+    Datafeed, FeedError, Footprint, FootprintBar, FootprintBarView, FootprintLevel, FootprintPage,
+    FootprintRequest, FootprintRows, FootprintSource, HistoryPage, HistoryRequest, Reply, Sink,
+    Subscription, TradePage, TradeRequest,
 };
 use egui_charts::model::{Bar, BarClock, ChartType, Instrument, OrderSide, Tick, Timeframe};
 use egui_charts::widget::{Chart, ChartBuilder, SeriesId};
@@ -22,8 +23,7 @@ const ROWS: usize = 16;
 struct Feed {
     bars: Vec<Bar>,
     trades: Mutex<Option<Vec<Tick>>>,
-    rows: Mutex<Option<Vec<FootprintBar>>>,
-    cutoff: DateTime<Utc>,
+    rows: Mutex<Option<FootprintPage>>,
     sink: Mutex<Option<Sink>>,
 }
 
@@ -54,9 +54,40 @@ impl Datafeed for Feed {
                 .lock()
                 .unwrap()
                 .take()
-                .map(|rows| FootprintPage::new(rows, self.cutoff, true))
                 .ok_or(FeedError::NotSupported),
         );
+    }
+}
+
+struct NativeRows {
+    bars: Vec<FootprintBar>,
+    rows: Vec<FootprintLevel>,
+    offsets: Vec<usize>,
+}
+impl NativeRows {
+    fn new(mut bars: Vec<FootprintBar>) -> Self {
+        let mut rows = Vec::with_capacity(bars.iter().map(|bar| bar.levels.len()).sum());
+        let mut offsets = Vec::with_capacity(bars.len() + 1);
+        for bar in &mut bars {
+            offsets.push(rows.len());
+            rows.extend(std::mem::take(&mut bar.levels).into_values());
+        }
+        offsets.push(rows.len());
+        Self {
+            bars,
+            rows,
+            offsets,
+        }
+    }
+}
+impl FootprintSource for NativeRows {
+    fn len(&self) -> usize {
+        self.bars.len()
+    }
+    fn bar(&self, index: usize) -> FootprintBarView<'_> {
+        let mut bar = FootprintBarView::from(&self.bars[index]);
+        bar.levels = FootprintRows::Slice(&self.rows[self.offsets[index]..self.offsets[index + 1]]);
+        bar
     }
 }
 
@@ -103,16 +134,24 @@ fn main() {
     let frames: usize =
         std::env::var("FRAME_TIME_FRAMES").map_or(300, |v| v.parse().expect("a frame count"));
     assert!(frames > 0, "at least one measured frame");
+    let filters: Vec<_> = std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with("--"))
+        .collect();
     println!(
         "\n| footprint-feed | load ms | steady p50 ms | steady p95 ms | live p50 ms | live p95 ms | shapes | vertices |"
     );
     println!("|---|---:|---:|---:|---:|---:|---:|---:|");
     let mut reference = None;
-    for (name, prepared, kind) in [
-        ("raw", false, ChartType::VolumeFootprint),
-        ("prepared", true, ChartType::VolumeFootprint),
-        ("candles", false, ChartType::Candles),
+    for (name, prepared, shared, kind) in [
+        ("raw", false, false, ChartType::VolumeFootprint),
+        ("prepared", true, false, ChartType::VolumeFootprint),
+        ("shared", true, true, ChartType::VolumeFootprint),
+        ("candles", false, false, ChartType::Candles),
     ] {
+        if !filters.is_empty() && !filters.iter().any(|filter| name.contains(filter)) {
+            continue;
+        }
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let bars: Vec<_> = (0..BARS)
             .map(|i| {
@@ -157,11 +196,17 @@ fn main() {
             trades.clear();
         }
         trades.push(boundary.clone());
+        let rows = rows.map(|bars| {
+            if shared {
+                FootprintPage::from_shared(Arc::new(NativeRows::new(bars)), cutoff, true)
+            } else {
+                FootprintPage::new(bars, cutoff, true)
+            }
+        });
         let feed = Arc::new(Feed {
             bars,
             trades: Mutex::new(Some(trades)),
             rows: Mutex::new(rows),
-            cutoff,
             sink: Mutex::new(None),
         });
         let mut chart = ChartBuilder::new()
@@ -224,7 +269,7 @@ fn main() {
         let signature = (before, after, last.shapes, last.vertices);
         if kind == ChartType::VolumeFootprint {
             if let Some(reference) = reference {
-                assert_eq!(signature, reference, "raw/prepared output parity");
+                assert_eq!(signature, reference, "raw/prepared/shared output parity");
             } else {
                 reference = Some(signature);
             }
