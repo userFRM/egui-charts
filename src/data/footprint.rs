@@ -509,6 +509,11 @@ impl Footprint {
         self.prepared.as_ref().map(|(before, _)| *before)
     }
 
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepared_boundary(&self) -> Option<&FootprintBar> {
+        self.prepared.as_ref().and_then(|(_, bar)| bar.as_ref())
+    }
+
     /// Saves only the unfinished prepared bar needed to replay a changed raw suffix.
     #[cfg(feature = "widget")]
     pub(crate) fn prepare_history(
@@ -589,27 +594,51 @@ impl Footprint {
     /// Adds actual loss and subscription gaps; a later reconnect never certifies an older gap.
     #[cfg(feature = "widget")]
     pub(crate) fn refresh_prepared_gap(&mut self, trades: &super::trades::Trades) {
-        let Some(before) = self.prepared_before() else {
-            return;
-        };
+        let _ =
+            self.refresh_prepared_coverage(trades, self.prepared_before(), trades.retained_until());
+    }
+
+    /// Inputs retain received trades independently; only their actual losses change coverage.
+    #[cfg(feature = "widget")]
+    pub(crate) fn refresh_prepared_coverage(
+        &mut self,
+        trades: &super::trades::Trades,
+        lost_from: Option<DateTime<Utc>>,
+        retained: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        let before = self.prepared_before()?;
         let after = |at: DateTime<Utc>| {
             at.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
                 .unwrap_or(DateTime::<Utc>::MAX_UTC)
         };
-        let oldest = trades.iter().next().map(|trade| trade.ts);
-        if let Some(lost) = trades.lost_until().filter(|lost| *lost >= before) {
-            self.add_missing(before, after(lost).max(oldest.unwrap_or(after(lost))));
+        let mut changed = None;
+        let mut missing = |this: &mut Self, from: DateTime<Utc>, end| {
+            let revision = this.revision;
+            this.add_missing(from, end);
+            if this.revision != revision {
+                changed = Some(changed.map_or(from, |first: DateTime<Utc>| first.min(from)));
+            }
+        };
+        if let Some(from) = lost_from
+            && let Some(lost) = trades.lost_until().filter(|lost| *lost >= before)
+        {
+            let oldest = trades.iter().next().map_or(after(lost), |trade| trade.ts);
+            missing(self, from.max(before), after(lost).max(oldest));
         }
         for &left in trades.left_out().range(before..) {
-            self.add_missing(left, after(left));
+            missing(self, left, after(left));
         }
-        let tape = trades.retained_until();
         let stream = trades
             .live()
-            .find(|trade| tape.is_none_or(|until| trade.ts >= until))
+            .find(|trade| {
+                trades
+                    .retained_until()
+                    .is_none_or(|until| trade.ts >= until)
+            })
             .map(|trade| after(trade.ts));
-        if let Some(retained) = tape {
-            self.add_missing(
+        if let Some(retained) = retained {
+            missing(
+                self,
                 retained.max(before),
                 stream.unwrap_or(DateTime::<Utc>::MAX_UTC),
             );
@@ -619,8 +648,14 @@ impl Footprint {
             && end == DateTime::<Utc>::MAX_UTC
             && let Some(first) = stream
         {
-            self.cover_missing(first.max(from), end);
+            let from = first.max(from);
+            let revision = self.revision;
+            self.cover_missing(from, end);
+            if self.revision != revision {
+                changed = Some(changed.map_or(from, |first| first.min(from)));
+            }
         }
+        changed
     }
 
     /// Takes out the executions dropped from the host's store, the newest at `through`, and

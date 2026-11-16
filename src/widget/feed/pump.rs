@@ -339,6 +339,16 @@ impl Chart {
             let inputs = &link.study_inputs;
             let clock = &link.clock;
             let lost_before = link.trades.lost_until();
+            // Once the stream starts, raw eviction must not widen its already known join.
+            let retained_gap = link
+                .trades
+                .retained_until()
+                .filter(|until| !link.trades.live().any(|trade| trade.ts >= *until));
+            if let Some(lost) = updates.trades.lost_until() {
+                for (input, _) in inputs {
+                    input.refresh_footprint_coverage(&updates.trades, Some(lost), None);
+                }
+            }
             let mut evicted = false;
             let mut unplaced = false;
             let fold = &mut |trade: &Tick, added| {
@@ -401,7 +411,7 @@ impl Chart {
                             link.footprint.as_ref(),
                         );
                     } else {
-                        input.refresh_footprint_coverage(&link.trades);
+                        input.refresh_footprint_coverage(&link.trades, None, retained_gap);
                     }
                 }
             }

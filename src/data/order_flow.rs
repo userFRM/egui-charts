@@ -1018,14 +1018,25 @@ impl OrderFlowInput {
     }
 
     #[cfg(feature = "widget")]
-    pub(crate) fn refresh_footprint_coverage(&self, trades: &super::trades::Trades) {
+    pub(crate) fn refresh_footprint_coverage(
+        &self,
+        trades: &super::trades::Trades,
+        lost: Option<DateTime<Utc>>,
+        retained: Option<DateTime<Utc>>,
+    ) {
         let mut state = self.state();
+        let last = state.last;
         if let Some(flow) = &mut state.footprint {
-            let revision = flow.live.revision();
-            flow.live.refresh_prepared_gap(trades);
-            if flow.live.revision() != revision {
+            let from = lost.and_then(|lost| {
+                flow.live
+                    .prepared_before()
+                    .map(|before| last.unwrap_or(before).min(lost))
+            });
+            if let Some(changed) = flow.live.refresh_prepared_coverage(trades, from, retained) {
+                let open = flow.view().clock().bar_open(changed);
                 state.revision = state.revision.wrapping_add(1);
-                state.reset_revision = state.revision;
+                let revision = state.revision;
+                state.changes.insert(open, revision);
             }
         }
     }
@@ -1262,16 +1273,29 @@ impl OrderFlowInput {
             } else {
                 place(cutoff)
             };
-            // A bar of a trading date can start before its own time.
+            let prepared = state
+                .footprint
+                .as_ref()
+                .and_then(|flow| flow.live.prepared_before());
+            // The saved boundary already holds executions before the prepared cutoff.
             let start = if footprint {
-                open
+                open.max(prepared.unwrap_or(open))
             } else {
                 clock.instant_start(cutoff)
             };
-            let held = trades
-                .filter(|trades| {
-                    (trades.lost_until()).is_none_or(|lost| !trade_based && place(lost) < open)
-                })
+            let held = trades.filter(|trades| {
+                prepared.is_none_or(|before| cutoff >= before)
+                    && trades.lost_until().is_none_or(|lost| {
+                        !trade_based
+                            && if footprint {
+                                lost < start
+                            } else {
+                                place(lost) < open
+                            }
+                    })
+            });
+            let known = held.is_some();
+            let held = held
                 .into_iter()
                 .flat_map(|trades| trades.iter())
                 .filter(|trade| (trade_based || start <= trade.ts) && trade.ts < cutoff);
@@ -1302,9 +1326,22 @@ impl OrderFlowInput {
                             .as_ref()
                             .and_then(|flow| flow.view().bar_at(open))
                             .map(FootprintBar::copy_from);
-                    } else if let Some(tick_size) = state.tick_size.filter(|_| time_based(clock))
-                        && let Ok(mut part) = Footprint::new(clock.clone(), tick_size, 1)
+                    } else if known
+                        && let Some(tick_size) = state.tick_size.filter(|_| time_based(clock))
                     {
+                        let seed = state
+                            .footprint
+                            .as_ref()
+                            .and_then(|flow| flow.live.prepared_boundary())
+                            .filter(|bar| bar.time == open);
+                        let Ok(mut part) = Footprint::from_bars(
+                            clock.clone(),
+                            tick_size,
+                            1,
+                            seed.into_iter().cloned(),
+                        ) else {
+                            return replay;
+                        };
                         // In arrival order, so an execution older than the one before is left out.
                         for trade in held {
                             let _ = part.push(trade);
