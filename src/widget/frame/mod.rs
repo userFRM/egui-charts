@@ -3778,8 +3778,7 @@ impl Chart {
                     // Convert bar index to screen x coordinate
                     let x = coords.index_to_x(bar_idx);
                     if coords.is_x_visible(x) {
-                        // At the host's price, or a synthetic position at the centre of the
-                        // price range for a time alone
+                        // At the sent price; a time alone has no horizontal guide or price label
                         let target = self.synced_crosshair_series;
                         let main_target = target.is_none_or(|id| {
                             self.series_pane(id) == Some(main_pane) && self.is_series_visible(id)
@@ -3789,7 +3788,7 @@ impl Chart {
                             .and_then(|id| self.series_price_map(id))
                             .unwrap_or(price_map);
                         let mut options = self.chart_options.crosshair;
-                        if !main_target {
+                        if !main_target || self.synced_crosshair_price.is_none() {
                             options.horz_line_visible = false;
                             options.horz_label_visible = false;
                             if options.style == crate::config::CrosshairStyle::Dot {
@@ -3806,26 +3805,6 @@ impl Chart {
                         let time = self
                             .pointer_time(Pos2::new(x, y))
                             .and_then(|(time, _)| time);
-                        let y = if self.synced_crosshair_price.is_none() && options.mode.snaps() {
-                            self.state
-                                .shown()
-                                .get(bar_idx.round() as usize)
-                                .filter(|bar| Some(bar.time) == time && !bar.is_whitespace())
-                                .and_then(|bar| {
-                                    let prices = [bar.open, bar.high, bar.low, bar.close];
-                                    let values = if options.mode
-                                        == crate::config::CrosshairMode::MagnetClose
-                                    {
-                                        &prices[3..]
-                                    } else {
-                                        &prices[..]
-                                    };
-                                    rendering::snap_to_values(y, &map, values.iter().copied())
-                                })
-                                .map_or(y, |price| map.price_to_y(price))
-                        } else {
-                            y
-                        };
                         self.last_crosshair = time.map(|time| (time, self.synced_crosshair_price));
                         self.last_crosshair_series = target;
                         let target_axis = target.and_then(|id| {

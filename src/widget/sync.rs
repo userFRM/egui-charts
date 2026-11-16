@@ -65,10 +65,11 @@ impl Chart {
     }
 
     /// Shows a crosshair at the local bar whose period holds `time`, from its open until the
-    /// next bar of its interval opens. Between bars it marks the nearest one; ties choose the
-    /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
-    /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
-    /// against its own series, including after bars are evicted or older history is loaded.
+    /// next bar of its interval opens, with the vertical guide and time label alone. Between
+    /// bars it marks the nearest one; ties choose the earlier bar. Times before the first bar or
+    /// after the last bar's period, and `None`, clear it. Repeated element times choose the
+    /// first element. Each receiver resolves the timestamp against its own series, including
+    /// after bars are evicted or older history is loaded.
     /// An exact added or custom point between main bars keeps its fractional position.
     /// Inside a [`super::ChartLayout`] the position stays until it is cleared or replaced, and
     /// returns after a linked pointer leaves.

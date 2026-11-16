@@ -3920,6 +3920,56 @@ mod tests {
         }
     }
 
+    /// A time sent without a price, from a pointer over a study pane, draws the vertical guide
+    /// and the time label alone, with no price label in the normal or magnet crosshair mode.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn time_only_crosshair_draws_no_price_guide() {
+        for mode in [
+            crate::config::CrosshairMode::Normal,
+            crate::config::CrosshairMode::Magnet,
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60)];
+            for chart in &mut charts {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
+            charts[1].set_crosshair_mode(mode);
+            let size = vec2(1440.0, 900.0);
+            frame_texts(&ctx, &mut layout, &mut charts, size, 0.0, vec![]);
+            // The texts painted on the receiver's price axis, beside its price pane.
+            let axis = |texts: &[(String, Rect, Pos2)], chart: &Chart| -> Vec<String> {
+                let plot = chart.last_rendered_price_rect;
+                texts
+                    .iter()
+                    .filter(|(_, _, centre)| {
+                        centre.x > plot.right() && plot.y_range().contains(centre.y)
+                    })
+                    .map(|(text, ..)| text.clone())
+                    .collect()
+            };
+            let idle = frame_texts(&ctx, &mut layout, &mut charts, size, 0.1, vec![]);
+            let pane = charts[0].get_rendered_indicator_panes()[0].panel_rect;
+            let pointer = pos2(charts[0].index_to_x(40.0).unwrap(), pane.center().y);
+            let mut texts = Vec::new();
+            for time in [0.2, 0.3] {
+                let events = vec![Event::PointerMoved(pointer)];
+                texts = frame_texts(&ctx, &mut layout, &mut charts, size, time, events);
+            }
+            assert_eq!(charts[1].synced_crosshair_bar_idx, Some(40.0), "{mode:?}");
+            assert_eq!(charts[1].last_crosshair.map(|(_, price)| price), Some(None));
+            assert_eq!(
+                axis(&texts, &charts[1]),
+                axis(&idle, &charts[1]),
+                "{mode:?}"
+            );
+        }
+    }
+
     #[test]
     fn sync_switches_and_groups_isolate_changes() {
         let mut layout = ChartLayout {
