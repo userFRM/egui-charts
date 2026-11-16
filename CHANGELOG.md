@@ -1387,6 +1387,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Footprint annotations skip the price-row calculations for disabled POCs and stacked imbalances. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
+
 - `FootprintPage::bars` is now `FootprintBars`, with owned and shared variants. `FootprintPage::new` keeps the owned constructor; `from_shared` retains an immutable `FootprintSource`. Its borrowed `FootprintBarView` and `FootprintRows` let feeds keep native slices or compatible encoded row buffers without rebuilding completed price-level trees. Migration: code that reads `page.bars` as a `Vec` reads it with `page.bars.iter()`, which yields a `FootprintBarView` for either form; `FootprintPage::new` is unchanged. Built-in footprints, their statistics and annotations, and session-profile readers share the completeness rules. Profile drawings keep their labelled bar estimate for shared history; replay and independent trade studies still use raw executions. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `FootprintLevel` now has a documented `repr(C, align(8))` layout with compile-time checks for its size, alignment and field offsets. Hosts can use this contract when borrowing rows from compatible encoded buffers; byte conversion remains outside the library. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
