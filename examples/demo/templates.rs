@@ -1,11 +1,32 @@
 //! Study and drawing templates, kept in the demo's storage.
 
-use super::DemoApp;
+use super::{DemoApp, DemoSymbol};
 use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::dialogs::templates::DrawingTemplate;
 
 impl DemoApp {
     pub(super) fn load_study_template(&mut self, template: &StudyTemplateSet) {
+        // A kept symbol or interval is refused as a switch to it is, before anything changes, so
+        // that a visitor's own service is asked only for what its profile offers.
+        let own = self.own_data.as_ref();
+        let offered = |symbol: &String| match own {
+            Some(own) => own.profile.symbols.contains(symbol),
+            None => DemoSymbol::catalog().iter().any(|row| row.symbol == symbol),
+        };
+        if let Some(symbol) = &template.symbol
+            && !offered(symbol)
+        {
+            self.toasts
+                .error(format!("{symbol} is not a symbol of this data source"));
+            return;
+        }
+        if let (Some(own), Some(tf)) = (own, template.interval)
+            && own.profile.service_interval(tf).is_none()
+        {
+            self.toasts
+                .error(format!("The data source has no interval {tf}"));
+            return;
+        }
         let applied = self.user_action(|app| {
             app.chart.apply_study_template_set(template)?;
             let captions: Vec<_> = app
