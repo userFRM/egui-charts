@@ -1,5 +1,6 @@
 //! Matched raw and prepared history, including admission, steady frames and live updates.
 //! `--profile` also draws a fixed range volume profile over the last 120 bars (needs `drawings`).
+//! `--dense-stacks` or `--sparse-stacks` supplies both sides with real imbalance runs.
 //! `--profile-study` attaches the built-in fixed range volume profile study.
 
 #[expect(
