@@ -260,7 +260,6 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [ ] Open the drawing toolbar's colour popup from a visible control, and keep the favourite tools strip in `Terminal` settings.
 - [x] The terminal and demo persist indicator favourites, restore them in the browser and toolbar, and retain stars for temporarily unavailable studies.
 - [x] The floating selection toolbar follows the selected drawing and performs its settings, duplicate, lock, visibility, delete and colour actions in the terminal and demo.
-- [x] The standalone quick settings menu is removed; the price scale context menu and the chart settings dialog provide its controls.
 - [ ] Handle the series context menu's Copy price action in the demo; `Terminal` already copies the clicked price.
 - [x] Alt+Shift+R selects the rectangle tool and Alt+Enter maximises or restores the selected chart of a grid. Interval entry and go-to-date shortcuts run in `Terminal`.
 - [x] Main-symbol legend controls hide or show the series, open its settings and remove it.

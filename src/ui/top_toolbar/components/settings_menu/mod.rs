@@ -15,4 +15,3 @@ pub use config::SettingsDialogConfig;
 pub use crate::ui::dialogs::chart_settings as dialog;
 pub use crate::ui::dialogs::chart_settings::SettingsDialog;
 pub use types::SettingsTab;
-// ChartType is re-exported from chart_type_selector - use that as single source of truth
