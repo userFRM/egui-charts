@@ -492,10 +492,9 @@ impl Chart {
             time_axis: self.horizontal_scale.is_none(),
             executions: self.feed_link.as_ref().and_then(|link| {
                 if self.replay.is_some() {
-                    link.replay_footprint.as_ref()?.1.as_ref()
+                    link.replay_footprint.as_ref()?.1.as_ref().map(Into::into)
                 } else {
-                    // shortcut: shared pages use the labelled bar estimate until ChartView accepts them.
-                    link.footprint.as_ref().and_then(|flow| flow.owned())
+                    link.footprint.as_ref().map(|flow| flow.view())
                 }
             }),
             timeframe: self.drawing_timeframe(),

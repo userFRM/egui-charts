@@ -26,6 +26,7 @@ pub(crate) mod utils {
 }
 
 pub(crate) use outline::Outline;
+pub(crate) use trading::anchored_vwap_through;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
@@ -83,7 +84,29 @@ pub struct ChartView<'a> {
     /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
     /// then show the executed volume at each price, split by aggressor side, instead of
     /// spreading bar volume over bar ranges; `None` estimates from the bars.
-    pub executions: Option<&'a crate::data::Footprint>,
+    ///
+    /// Hosts with an owned footprint construct the borrowed view without copying:
+    /// ```
+    /// use egui_charts::{
+    ///     data::Footprint, drawings::rendering::ChartView,
+    ///     model::{Bar, BarClock, Tick, Timeframe},
+    /// };
+    /// let time = "2026-01-05T10:00:00Z".parse()?;
+    /// let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1)?;
+    /// flow.push(&Tick::new(time, 100.0, 2.0, None))?;
+    /// let bars = [Bar::new(time, 100.0, 100.0, 100.0, 100.0, 2.0)];
+    /// let view = ChartView {
+    ///     price_formatter: None, time_formatter: None, instrument: None, bar_seconds: 60,
+    ///     bars: &bars, revision: 0, bar_to_x: &|x| x, bar_spacing: 1.0,
+    ///     price_to_y: &|price| price as f32, y_to_price: &f64::from, time_axis: true,
+    ///     executions: Some((&flow).into()), timeframe: Some(Timeframe::Min1), finer: &[],
+    /// };
+    /// let executions = view.executions.unwrap();
+    /// assert!(executions.span_is_complete(time, time));
+    /// assert_eq!(executions.profile(time, time).volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub executions: Option<crate::data::FootprintView<'a>>,
     /// Interval of `bars`, or `None` for price-based chart types, trade-based intervals and
     /// horizontal scales other than time. Volume profiles read finer bars only with an interval.
     pub timeframe: Option<crate::model::Timeframe>,
@@ -154,6 +177,8 @@ impl Drawing {
     /// This method handles rendering for every drawing tool type,
     /// delegating to the appropriate category-specific implementation. `selected`
     /// lets a tool mark its selection, as a position's statistics block does.
+    /// Default colours are drawn in the shade the theme needs, as [`Drawing::theme_shaded`]
+    /// gives.
     pub(crate) fn render_with_selection(
         &self,
         painter: &egui::Painter,
@@ -164,7 +189,20 @@ impl Drawing {
         if self.points.is_empty() {
             return;
         }
+        match self.theme_shaded(painter.ctx()) {
+            Some(shaded) => shaded.paint_with_selection(painter, rect, view, selected),
+            None => self.paint_with_selection(painter, rect, view, selected),
+        }
+    }
 
+    /// [`Self::render_with_selection`] in the colours stored in the drawing.
+    fn paint_with_selection(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &ChartView,
+        selected: bool,
+    ) {
         let painter = &painter.with_clip_rect(rect);
         let start = painter.ctx().graphics(|g| {
             g.get(painter.layer_id())

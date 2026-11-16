@@ -326,6 +326,7 @@ impl DrawingProps {
                     regression_trend,
                     vwap,
                     channel_midline,
+                    theme_shade,
                     line_measurements.price_change,
                     line_measurements.percent_change,
                     line_measurements.pip_change,
