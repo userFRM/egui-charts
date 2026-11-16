@@ -7,7 +7,7 @@ use egui::Color32;
 /// Ultimate Momentum Oscillator
 /// Custom composite momentum indicator
 /// Combines multiple timeframes for confirmation
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UltimateMomentum {
     /// Short period (typically 5)
     short_period: usize,

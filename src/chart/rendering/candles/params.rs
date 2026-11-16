@@ -61,13 +61,16 @@ impl BarDimensions {
 pub struct VolumeSettings {
     pub show_volume: bool,
     pub max_volume: f64,
+    /// Width of each volume bar, as `ChartMapping::volume_bar_width` gives it.
+    pub width: f32,
 }
 
 impl VolumeSettings {
-    pub fn new(show_volume: bool, max_volume: f64) -> Self {
+    pub fn new(show_volume: bool, max_volume: f64, width: f32) -> Self {
         Self {
             show_volume,
             max_volume,
+            width,
         }
     }
 }
@@ -139,6 +142,9 @@ impl<'a> ChartTypeParams<'a> {
     }
     pub fn max_volume(&self) -> f64 {
         self.volume.max_volume
+    }
+    pub fn volume_width(&self) -> f32 {
+        self.volume.width
     }
     pub fn bullish_color(&self) -> Color32 {
         self.colors.bullish

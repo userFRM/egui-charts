@@ -41,6 +41,7 @@ pub(crate) mod depth;
 mod depth_history;
 mod financials;
 mod footprint;
+mod footprint_view;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg_attr(
@@ -68,9 +69,14 @@ mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
+#[cfg(feature = "widget")]
+pub(crate) use footprint::FootprintState;
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub(crate) use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
@@ -180,7 +186,8 @@ pub trait Datafeed: MaybeSend + 'static {
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>);
 
     /// Starts pushing live updates into `subscription.sink` until `unsubscribe`. The default does
-    /// nothing, which gives a history-only chart.
+    /// nothing, which gives a history-only chart. See [`trades`](Self::trades) for the feed's
+    /// obligation when joining the latest trade reply to this stream.
     fn subscribe(&self, subscription: Subscription) {
         let _ = subscription;
     }
@@ -209,7 +216,22 @@ pub trait Datafeed: MaybeSend + 'static {
     /// Up to `request.count` trades of the range `[request.since, request.before)`, the newest
     /// ones when there are more, so order flow survives a reload and follows the view back in
     /// time. The default answers [`FeedError::NotSupported`].
+    ///
+    /// For a latest request (`before` is `None`) made for a subscription, the feed must return a
+    /// page that joins the start of that subscription's stream without an unreported gap, including
+    /// pre-stream executions at the first live timestamp. A cache that may lag the stream is not
+    /// sufficient on its own.
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Prepared execution rows for the time-based volume footprint chart. OHLC still comes
+    /// from [`history`](Self::history); both replies must use the same request context.
+    /// Held and live trades at or after [`FootprintPage::complete_before`] continue the page.
+    /// Prepared rows survive raw-trade eviction; a changed request context or feed reset clears them.
+    /// The default answers [`FeedError::NotSupported`] and keeps the trade-based loading path.
+    fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
     }
@@ -320,10 +342,28 @@ pub trait Datafeed: MaybeSend + 'static {
         let _ = subscription;
     }
 
-    /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
-    /// which leaves the chart without targets and shows no error.
+    /// Analyst price targets for `symbol`, in its own currency and unit. The chart asks while no
+    /// conversion is chosen, and [`price_targets_converted`](Self::price_targets_converted)
+    /// under one. The default answers [`FeedError::NotSupported`], which leaves the chart
+    /// without targets and shows no error.
     fn price_targets(&self, symbol: &str, reply: Reply<crate::data::PriceTargets>) {
         let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Analyst price targets for `symbol` in `conversion`, the currency or unit the host chose
+    /// with `Chart::set_conversion` (requires `widget`), which
+    /// [`resolve_converted`](Self::resolve_converted) also receives. The chart asks this instead
+    /// of [`price_targets`](Self::price_targets) while a conversion is chosen. The library
+    /// converts nothing: the default answers [`FeedError::NotSupported`], which leaves the chart
+    /// without targets rather than drawing them in another currency, and shows no error.
+    fn price_targets_converted(
+        &self,
+        symbol: &str,
+        conversion: &str,
+        reply: Reply<crate::data::PriceTargets>,
+    ) {
+        let _ = (symbol, conversion);
         reply.send(Err(FeedError::NotSupported));
     }
 
@@ -539,6 +579,145 @@ impl HistoryPage {
     }
 
     /// Sets [`continue_before`](Self::continue_before).
+    pub fn with_continue_before(mut self, before: DateTime<Utc>) -> Self {
+        self.continue_before = Some(before);
+        self
+    }
+}
+
+/// A request for prepared execution rows on the chart's time and price grid.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FootprintRequest {
+    /// Instrument identifier used by the host.
+    pub symbol: String,
+    /// Time-based bar interval requested from the feed.
+    pub timeframe: Timeframe,
+    /// The same calendar boundaries as [`HistoryRequest::clock`].
+    pub clock: BarClock,
+    /// Positive finite instrument tick size.
+    pub tick_size: f64,
+    /// Instrument ticks per price row. The chart requests one and groups rows for display.
+    pub ticks_per_row: u32,
+    /// Only bars opening strictly before this instant; `None` requests the latest page.
+    pub before: Option<DateTime<Utc>>,
+    /// Only bars opening at or after this instant; see [`HistoryRequest::since`].
+    pub since: Option<DateTime<Utc>>,
+    /// Maximum bars wanted, the newest ones in the requested range. A page exceeding this
+    /// count is rejected as [`FeedError::InvalidData`], not truncated.
+    pub count: usize,
+    /// Include extended hours, with the same meaning as [`HistoryRequest::extended_hours`].
+    pub extended_hours: bool,
+    /// Use the same adjustment as [`HistoryRequest::adjusted`].
+    pub adjusted: bool,
+    /// Requested price currency or unit; see [`HistoryRequest::conversion`].
+    pub conversion: Option<String>,
+}
+
+/// Prepared footprint history, validated as [`Footprint::from_bars`] before it is displayed.
+///
+/// The page covers every execution from its first bar's open to `complete_before`, exclusive.
+/// Missing bars in that range had no executions. Do not span a gap in the host's recording.
+/// Supply matching OHLC through [`Datafeed::history`]. Individual trades remain available
+/// through [`Datafeed::trades`] for consumers such as the tape and volume bubbles.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FootprintPage {
+    /// Unique, clock-aligned bars on the requested grid within the requested `[since, before)`
+    /// range. Owned bars may arrive in any order; shared bars must be strictly chronological.
+    /// Unknown-side volume stays separate from bid and ask.
+    pub bars: FootprintBars,
+    /// Exclusive execution cutoff, later than every supplied bar's open. Every eligible trade
+    /// before this instant is included, and none at this instant is. Held or live trades at
+    /// or after it continue the page; trade IDs do not order or define this boundary.
+    /// If a snapshot ends partway through one timestamp, exclude that entire instant.
+    /// An older page with bars or a continuation must end at [`FootprintRequest::before`].
+    /// An empty continuation certifies that nothing traded from `continue_before` to that
+    /// boundary, so the next page can end at its own requested boundary without a gap.
+    pub complete_before: DateTime<Utc>,
+    /// Nothing exists before the oldest returned bar, or the requested boundary for an empty page.
+    pub end_of_history: bool,
+    /// An empty page may continue before this instant instead of ending history, as in
+    /// [`HistoryPage::continue_before`]. Ignored when the page has bars.
+    pub continue_before: Option<DateTime<Utc>>,
+}
+
+impl FootprintPage {
+    /// A page containing every execution before `complete_before`, from its first bar on.
+    ///
+    /// ```
+    /// use egui_charts::data::{FootprintBar, FootprintLevel, FootprintPage};
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let cutoff = "2026-01-05T00:01:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// bar.levels.insert(100, FootprintLevel {
+    ///     level: 100, unknown: 3.0, unknown_trades: 1, ..Default::default()
+    /// });
+    /// bar.unknown = 3.0;
+    /// let page = FootprintPage::new(vec![bar], cutoff, true);
+    /// assert_eq!(page.bars.len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(
+        bars: Vec<FootprintBar>,
+        complete_before: DateTime<Utc>,
+        end_of_history: bool,
+    ) -> Self {
+        Self {
+            bars: FootprintBars::Owned(bars),
+            complete_before,
+            end_of_history,
+            continue_before: None,
+        }
+    }
+
+    /// A page that keeps its immutable owner alive instead of copying its price rows.
+    /// Bars must be in strictly ascending order, unlike the owned constructor. Shared payload
+    /// equality is owner identity. The same admission validation applies to both forms.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use chrono::{DateTime, Utc};
+    /// use egui_charts::data::{
+    ///     FootprintBarView, FootprintLevel, FootprintPage, FootprintRows, FootprintSource,
+    /// };
+    /// struct SavedBar { time: DateTime<Utc>, rows: [FootprintLevel; 1] }
+    /// impl FootprintSource for SavedBar {
+    ///     fn len(&self) -> usize { 1 }
+    ///     fn bar(&self, index: usize) -> FootprintBarView<'_> {
+    ///         assert_eq!(index, 0);
+    ///         let mut bar = FootprintBarView::new(self.time, FootprintRows::Slice(&self.rows));
+    ///         bar.unknown = 3.0;
+    ///         bar
+    ///     }
+    /// }
+    /// let owner = Arc::new(SavedBar {
+    ///     time: "2026-01-05T00:00:00Z".parse()?,
+    ///     rows: [FootprintLevel {
+    ///         level: 100, unknown: 3.0, unknown_trades: 1, ..Default::default()
+    ///     }],
+    /// });
+    /// let cutoff = "2026-01-05T00:01:00Z".parse()?;
+    /// let page = FootprintPage::from_shared(owner.clone(), cutoff, true);
+    /// let second_chart = page.clone();
+    /// assert_eq!(page, second_chart); // Both retain the same immutable owner.
+    /// assert_eq!(page.bars.iter().next().unwrap().unknown, 3.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_shared(
+        source: std::sync::Arc<dyn FootprintSource>,
+        complete_before: DateTime<Utc>,
+        end_of_history: bool,
+    ) -> Self {
+        Self {
+            bars: FootprintBars::Shared(source),
+            complete_before,
+            end_of_history,
+            continue_before: None,
+        }
+    }
+
+    /// Sets [`continue_before`](Self::continue_before) for an empty page.
     pub fn with_continue_before(mut self, before: DateTime<Utc>) -> Self {
         self.continue_before = Some(before);
         self

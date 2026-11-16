@@ -18,7 +18,7 @@
 mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
-#[cfg(feature = "widget")]
+#[cfg(any(feature = "widget", feature = "studies"))]
 pub(crate) use exchange::MarketSession;
 
 use crate::model::{Bar, TimezoneId, local_instant, local_time};
@@ -339,6 +339,14 @@ impl std::fmt::Debug for CompositeSessionProvider {
 /// Returns a `Vec` of `(bar_index, SessionBreak)` pairs indicating
 /// where each break falls. The `bar_index` is the index of the bar
 /// *after* the break (i.e., the first bar of the new session).
+///
+/// ```
+/// use egui_charts::model::{Bar, DailySessionProvider, find_session_breaks};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let breaks = find_session_breaks(&bars, &DailySessionProvider::new(9, 30));
+/// assert!(breaks.is_empty());
+/// ```
 pub fn find_session_breaks(
     bars: &[Bar],
     provider: &dyn SessionProvider,

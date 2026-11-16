@@ -7,6 +7,7 @@ use crate::ui::drawing_toolbar::components::draw_tool_button;
 use egui::Ui;
 
 /// Show/hide button for the favourite tools strip.
+#[derive(Debug)]
 pub struct FavoritesButton;
 
 impl FavoritesButton {

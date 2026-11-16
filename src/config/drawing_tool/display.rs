@@ -19,6 +19,7 @@ impl fmt::Display for DrawingToolType {
 /// The error [`DrawingToolType`]'s [`FromStr`] returns for a name that is not a
 /// drawing tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseToolTypeError {
     /// The name that did not parse, as given.
     pub input: String,

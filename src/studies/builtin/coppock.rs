@@ -8,7 +8,7 @@ use egui::Color32;
 /// Coppock Curve
 /// A momentum indicator originally designed to identify buying opportunities in stock indices
 /// Uses a weighted moving avg of the sum of two ROC periods
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CoppockCurve {
     /// Long ROC period (typically 14)
     long_roc: usize,

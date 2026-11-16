@@ -43,7 +43,7 @@ pub type SMIErgodicIndicator = SMIErgodic<false>;
 pub type SMIErgodicOscillator = SMIErgodic<true>;
 
 /// Blau's SMI Ergodic study: the SMI and signal lines, or with `OSCILLATOR` their difference.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SMIErgodic<const OSCILLATOR: bool> {
     long_length: usize,
     short_length: usize,

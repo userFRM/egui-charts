@@ -24,14 +24,42 @@
 //! # }
 //! ```
 //!
+//! # Configuring a built-in study
+//!
+//! Built-in studies take their options through constructors and `with_*` methods.
+//!
+//! ```
+//! # #[cfg(feature = "studies")] {
+//! use ecolor::Color32;
+//! use egui_charts::studies::{
+//!     AutoDrawing, AutoDrawingKind, AverageLine, AverageType, CVD, CVDMode, FootprintStudyConfig,
+//!     MACD, MACombination, OscillatorAverage, RelativeVolumeAnchor, RelativeVolumeAtTime, Volume,
+//!     VolumeAverage, ZigZag, ZigZagMode,
+//! };
+//!
+//! let channel = AutoDrawing::new(AutoDrawingKind::ParallelChannel, 5.0, 10);
+//! let delta = CVD::new().with_mode(CVDMode::BodyRatio);
+//! let ribbon = MACombination::new(vec![
+//!     AverageLine::new(AverageType::Exponential, 20, Color32::YELLOW),
+//!     AverageLine::new(AverageType::Simple, 50, Color32::LIGHT_BLUE),
+//! ])
+//! .unwrap();
+//! let macd = MACD::new(12, 26, 9)
+//!     .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple);
+//! let relative = RelativeVolumeAtTime::new(10).with_anchor(RelativeVolumeAnchor::Week);
+//! let volume = Volume::new(20).with_average(Some(VolumeAverage::Exponential));
+//! let zigzag = ZigZag::new(5.0, 10).with_mode(ZigZagMode::Close);
+//! let mut footprint = FootprintStudyConfig::default();
+//! footprint.naked_poc = true;
+//! # }
+//! ```
+//!
 //! [`helpers`] provides scalar calculations for custom studies, and [`Stepper`]
 //! provides incremental calculation state. [`StudyData`] carries auxiliary data
 //! requested from the host's feed.
 
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-// Debug for these types remains follow-up work from #1315.
-#[allow(missing_debug_implementations)]
 mod builtin;
 mod custom;
 mod error;

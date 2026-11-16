@@ -38,6 +38,7 @@ const TALLEST_TAB_HEIGHT: f32 = 840.0;
 ///
 /// Edits chart display settings, event category visibility and the host trading and
 /// alert-overlay preferences.
+#[derive(Debug)]
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -50,7 +51,7 @@ pub struct SettingsDialog {
     /// Host-readable chart templates and their optional storage connection.
     pub templates: TemplateStore<ChartSettingsState>,
     save_name: Option<String>,
-    timezones: Vec<String>,
+    timezones: Vec<crate::model::TimezoneId>,
     /// Dialog styling configuration (width, height overrides)
     config: SettingsDialogConfig,
     color_picker_states: ColorPickerStates,
@@ -74,7 +75,7 @@ pub struct SettingsDialog {
     opened_font_family: Option<egui::FontFamily>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct ColorPickerStates {
     body_up: ColorPickerState,
     body_down: ColorPickerState,
@@ -107,24 +108,6 @@ impl SettingsDialog {
     /// Create a [`SettingsDialog`] with default settings.
     pub fn new() -> Self {
         let settings = ChartSettingsState::default();
-        let timezones: &[&str] = if cfg!(feature = "timezones") {
-            &[
-                "UTC",
-                "America/New_York",
-                "America/Chicago",
-                "America/Los_Angeles",
-                "Europe/London",
-                "Europe/Paris",
-                "Asia/Tokyo",
-                "Asia/Hong_Kong",
-                "Asia/Singapore",
-                "Australia/Sydney",
-            ]
-        } else {
-            &[
-                "UTC", "-08:00", "-06:00", "-05:00", "+01:00", "+08:00", "+09:00", "+10:00",
-            ]
-        };
         Self {
             is_open: false,
             active_tab: SettingsTab::Symbol,
@@ -173,7 +156,7 @@ impl SettingsDialog {
             template_menu_open: false,
             templates: TemplateStore::new(StoreKind::ChartTemplates),
             save_name: None,
-            timezones: timezones.iter().map(|zone| (*zone).to_owned()).collect(),
+            timezones: crate::ui::timeframe_toolbar::default_time_zones(),
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
             apply_to_all: false,
@@ -183,6 +166,12 @@ impl SettingsDialog {
             price_targets_offered: true,
             opened_font_family: None,
         }
+    }
+
+    /// Offers `zones` in the Symbol tab's time zone list after UTC, exchange time and local time,
+    /// in place of [`default_time_zones`](crate::ui::timeframe_toolbar::default_time_zones).
+    pub fn set_time_zones(&mut self, zones: Vec<crate::model::TimezoneId>) {
+        self.timezones = zones;
     }
 
     /// Offers a button that applies the dialog's settings to all charts of the layout and closes
@@ -759,12 +748,15 @@ impl SettingsDialog {
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
-                // The whole bars of the margin shown are an unedited margin, which stays as shown.
-                let shown = self.settings.margins.right_bars;
-                let right_bars = if template.scales_appearance.font_family.is_none()
-                    && template.margins.right_bars == shown.trunc()
+                // The whole bars of the margin shown, or its pixels, are an unedited margin, which
+                // stays as shown.
+                let shown = &self.settings.margins;
+                let right_bars = if (template.scales_appearance.font_family.is_none()
+                    && template.margins.right_bars == shown.right_bars.trunc())
+                    || (template.margins.right_pixels.is_some()
+                        && template.margins.right_pixels == shown.right_pixels)
                 {
-                    shown
+                    shown.right_bars
                 } else {
                     template.margins.right_bars
                 };
@@ -1332,7 +1324,10 @@ mod tests {
     #[test]
     fn offered_time_zones_and_session_presets_are_available() {
         use crate::config::SessionConfig;
-        let mut zones = SettingsDialog::new().timezones;
+        let mut zones: Vec<String> = crate::ui::timeframe_toolbar::toolbar::DEFAULT_TIME_ZONES
+            .iter()
+            .map(|zone| (*zone).to_owned())
+            .collect();
         zones.extend(
             [
                 SessionConfig::default(),
@@ -1347,6 +1342,34 @@ mod tests {
         for zone in zones {
             assert!(zone.parse::<crate::model::TimezoneId>().is_ok(), "{zone}");
         }
+    }
+
+    /// The time zone list names exchange time and local time as rows, shows the chart's mode by
+    /// its row and applies the row picked, while settings keep the text saved before: #2885.
+    #[test]
+    fn time_zone_dropdown_offers_exchange_and_local_time() {
+        use crate::{Chart, model::BarData, scales::TimezoneMode};
+        let mut chart = Chart::new(BarData::new());
+        let exchange = TimezoneMode::Exchange("+05:45".parse().unwrap());
+        chart.chart_options.time_scale.timezone = exchange.clone();
+        let saved = ChartSettingsState::from_chart(&chart);
+        assert_eq!(saved.timezone, "Exchange:+05:45");
+        let mut dialog = SettingsDialog::new();
+        dialog.open(saved.clone());
+        let SettingsAction::Apply(settings) = click_through(
+            &mut dialog,
+            &["scroll", "Exchange time", "Local time", "Ok"],
+        ) else {
+            panic!("Ok must apply the settings");
+        };
+        assert_eq!(settings.timezone, "Local");
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(
+            chart.chart_options().time_scale.timezone,
+            TimezoneMode::Local
+        );
+        saved.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(chart.chart_options().time_scale.timezone, exchange);
     }
 
     #[test]
@@ -1964,44 +1987,7 @@ mod tests {
                 .save("Old", serde_json::from_value(saved).unwrap())
                 .unwrap();
             dialog.open(ChartSettingsState::from_chart(&chart));
-            let ctx = Context::default();
-            let mut item = None;
-            for step in 0..4 {
-                let events = match (step, item) {
-                    (2, Some(pos)) | (3, Some(pos)) => vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            pressed: step == 2,
-                            button: egui::PointerButton::Primary,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                    _ => vec![],
-                };
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.draw_template_item(
-                            ui,
-                            &Theme::light(),
-                            "Old".into(),
-                            SettingsAction::None,
-                        );
-                    },
-                );
-                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                }));
-                output.drop_without_applying_deltas();
-            }
-            assert_eq!(dialog.template_name, "Old", "{entry}");
+            load_template(&mut dialog, "Old");
             assert_eq!(
                 dialog.settings().candle_colors,
                 CandleColorConfig {
@@ -2028,6 +2014,7 @@ mod tests {
 
     /// Clicks the texts `labels` name one after the other in a 1440 by 900 window, as opening a
     /// dropdown, picking an entry and pressing Ok do, and returns the action of the last click.
+    /// The label `scroll` scrolls the tab to its end instead, for the rows below its fold.
     fn click_through(dialog: &mut SettingsDialog, labels: &[&str]) -> SettingsAction {
         fn center(shape: &egui::Shape, label: &str) -> Option<Pos2> {
             match shape {
@@ -2060,6 +2047,24 @@ mod tests {
         };
         let mut action = SettingsAction::None;
         for label in labels {
+            if *label == "scroll" {
+                let pos = Pos2::new(900.0, 450.0);
+                frame(vec![egui::Event::PointerMoved(pos)], label);
+                frame(
+                    vec![egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        source: egui::MouseWheelSource::Wheel,
+                        phase: egui::TouchPhase::Move,
+                        delta: Vec2::new(0.0, -2000.0),
+                        modifiers: Default::default(),
+                    }],
+                    label,
+                );
+                for _ in 0..30 {
+                    frame(vec![], label);
+                }
+                continue;
+            }
             frame(vec![], label);
             let pos = frame(vec![], label).1.expect(label);
             frame(vec![egui::Event::PointerMoved(pos)], label);
@@ -2077,6 +2082,48 @@ mod tests {
             }
         }
         action
+    }
+
+    /// Clicks the entry of the template `name` in the template menu, which loads it.
+    fn load_template(dialog: &mut SettingsDialog, name: &str) {
+        let ctx = Context::default();
+        let mut item = None;
+        for step in 0..4 {
+            let events = match (step, item) {
+                (2, Some(pos)) | (3, Some(pos)) => vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed: step == 2,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    },
+                ],
+                _ => vec![],
+            };
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    dialog.draw_template_item(
+                        ui,
+                        &Theme::light(),
+                        name.into(),
+                        SettingsAction::None,
+                    );
+                },
+            );
+            item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == name => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            }));
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(dialog.template_name, name);
     }
 
     /// Choosing a family next to the font size draws the labels of the price, study and time
@@ -2222,44 +2269,7 @@ mod tests {
                 .save("Old", serde_json::from_value(saved).unwrap())
                 .unwrap();
             dialog.open(ChartSettingsState::from_chart(&chart));
-            let ctx = Context::default();
-            let mut item = None;
-            for step in 0..4 {
-                let events = match (step, item) {
-                    (2, Some(pos)) | (3, Some(pos)) => vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            pressed: step == 2,
-                            button: egui::PointerButton::Primary,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                    _ => vec![],
-                };
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.draw_template_item(
-                            ui,
-                            &Theme::light(),
-                            "Old".into(),
-                            SettingsAction::None,
-                        );
-                    },
-                );
-                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                }));
-                output.drop_without_applying_deltas();
-            }
-            assert_eq!(dialog.template_name, "Old", "{pixels:?}");
+            load_template(&mut dialog, "Old");
             let shown = dialog.settings();
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
@@ -2285,5 +2295,46 @@ mod tests {
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
         }
+    }
+
+    /// A template saved from a chart that keeps its right margin in pixels, loaded on a chart that
+    /// keeps the same pixels at another bar spacing, shows that chart's margin in bars, and Ok keeps
+    /// its margin and its view. An edit of the margin row then sets the margin in bars.
+    #[test]
+    fn templates_keep_a_pixel_right_margin_and_edits_set_bars() {
+        use crate::widget::test_frames::chart;
+        let mut options = crate::config::ChartOptions::default();
+        options.time_scale.right_offset_pixels = Some(60.0);
+        let first = chart(&[100.0], &[110.0]).with_chart_options(options.clone());
+        let mut second = chart(&[100.0], &[110.0]).with_chart_options(options);
+        second.apply_synced_time_scale(12.0, -20.0);
+        let saved = serde_json::to_value(ChartSettingsState::from_chart(&first)).unwrap();
+        let mut dialog = SettingsDialog::new();
+        dialog
+            .templates
+            .save("Pixels", serde_json::from_value(saved).unwrap())
+            .unwrap();
+        dialog.open(ChartSettingsState::from_chart(&second));
+        load_template(&mut dialog, "Pixels");
+        // 60 pixels are 10 bars at the 6 points per bar of the first chart and 5 at 12.
+        assert_eq!(dialog.settings().margins.right_bars, 5.0);
+        dialog.settings().apply_to_chart(&mut second).unwrap();
+        let margin = |chart: &crate::Chart| {
+            let time_scale = &chart.chart_options().time_scale;
+            (
+                time_scale.right_offset,
+                time_scale.right_offset_pixels,
+                chart.get_time_scale_state(),
+            )
+        };
+        assert_eq!(margin(&second), (2.5, Some(60.0), (12.0, -20.0)));
+
+        dialog.margin_right_str = "7.5".into();
+        dialog.active_tab = SettingsTab::Canvas;
+        let SettingsAction::Apply(settings) = click_through(&mut dialog, &["Ok"]) else {
+            panic!("Ok must apply the settings");
+        };
+        settings.apply_to_chart(&mut second).unwrap();
+        assert_eq!(margin(&second), (7.5, None, (12.0, 7.5)));
     }
 }

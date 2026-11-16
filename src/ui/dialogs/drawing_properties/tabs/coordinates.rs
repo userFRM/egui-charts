@@ -129,6 +129,7 @@ impl CoordinatesState {
 }
 
 /// Coordinates tab renderer.
+#[derive(Debug)]
 pub struct CoordinatesTab;
 
 impl CoordinatesTab {

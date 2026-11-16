@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::bars::{self, Aggregator, DAY_MS};
 use super::http::{self, Request};
-use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url};
+use super::profile::{History, Profile, RangeFormat, RouteKind, fill, fill_url, stream_values};
 use super::stream::{Routed, Session, StreamEvent};
 use super::{Failure, Secrets, conceal, endpoint, shape, time};
 
@@ -60,7 +60,11 @@ struct Key {
 struct Join {
     /// The newest bar of the last latest page that held bars.
     newest: Option<Bar>,
-    /// Latest pages being fetched. The subscriptions of the key fold no trade meanwhile.
+    /// Whether the last latest page held bars. After one that failed or held none, `newest` may
+    /// be older than the bar a later page brings.
+    held: bool,
+    /// Latest pages being fetched. The subscriptions of the key that wait for one fold no trade
+    /// meanwhile.
     in_flight: usize,
 }
 
@@ -84,6 +88,11 @@ struct Live {
     /// The address of the stream without its query, for errors and log lines.
     endpoint: String,
     aggregator: Aggregator,
+    /// Whether the subscription waits for a latest page of its key to start from: it was made
+    /// while one was in flight or when the last one held no bars. A page joins only the
+    /// subscriptions that wait for it, so a study that loads the chart's interval leaves the
+    /// chart's bar as it is.
+    waiting: bool,
     /// The slot of the newest bar pushed from a bar route.
     pushed: Option<DateTime<Utc>>,
     /// How often the socket has opened.
@@ -268,11 +277,7 @@ impl Datafeed for MappedFeed {
             return;
         };
         sink.set_status(FeedStatus::Connecting);
-        let mut values = vec![
-            ("symbol".to_owned(), symbol.clone()),
-            ("interval".to_owned(), interval.to_owned()),
-        ];
-        values.extend(shared.secrets.iter().cloned());
+        let values = stream_values(&symbol, interval, &shared.secrets);
         let filled: Vec<(&str, &str)> = values
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -287,6 +292,7 @@ impl Datafeed for MappedFeed {
             let mut state = shared.state();
             let mut aggregator = Aggregator::new(key.clock.clone(), timeframe);
             let join = state.join(&key);
+            let waiting = join.in_flight > 0 || !join.held;
             if join.in_flight == 0 {
                 aggregator.start(join.newest.clone());
             }
@@ -297,6 +303,7 @@ impl Datafeed for MappedFeed {
                 serial: state.subscribed,
                 endpoint,
                 aggregator,
+                waiting,
                 pushed: None,
                 opens: 0,
                 filling: None,
@@ -372,17 +379,19 @@ impl Shared {
         let kept = result.and_then(|body| self.kept(history, ask, url, &body));
         let mut state = self.state();
         if ask.before.is_none() {
-            // A latest page. The streams of its key go on from its newest bar, which the chart
-            // gets with the page.
+            // A latest page. The streams of its key that wait for one go on from its newest bar,
+            // which the chart gets with the page.
             let key = ask.key();
             let newest = kept.as_ref().ok().and_then(|kept| kept.bars.last());
             let join = state.join(&key);
             join.in_flight = join.in_flight.saturating_sub(1);
+            join.held = newest.is_some();
             if let Some(newest) = newest {
                 join.newest = Some(newest.clone());
                 let joining = state.subscriptions.values_mut();
-                for live in joining.filter(|live| live.key == key) {
+                for live in joining.filter(|live| live.key == key && live.waiting) {
                     live.aggregator.start(Some(newest.clone()));
+                    live.waiting = false;
                 }
             }
         }
@@ -425,6 +434,7 @@ impl Shared {
         let reading = read(
             &response,
             history,
+            &ask.symbol,
             zone,
             &ask.clock,
             ask.timeframe,
@@ -486,7 +496,8 @@ impl Shared {
                     let Some(live) = state.subscriptions.get(&id) else {
                         return;
                     };
-                    let folding = live.filling.is_none() && !state.fetching(&live.key);
+                    let folding =
+                        live.filling.is_none() && !(live.waiting && state.fetching(&live.key));
                     let Some(live) = state.subscriptions.get_mut(&id) else {
                         return;
                     };
@@ -511,6 +522,9 @@ impl Shared {
                                         // is not the newest bar known.
                                         if !bars::ahead(clock, *timeframe, slot, now) {
                                             live.pushed = live.pushed.max(Some(slot));
+                                            // The trades that follow continue the service's
+                                            // own bar.
+                                            live.aggregator.follow(&bar);
                                         }
                                         pushes.push((None, bar));
                                     }
@@ -826,8 +840,10 @@ fn request_for(
     secrets: &Secrets,
 ) -> Request {
     let limit = window.limit.to_string();
+    let lower = symbol.to_lowercase();
     let mut values = vec![
         ("symbol", symbol),
+        ("symbol_lower", lower.as_str()),
         ("interval", interval),
         ("from", window.from.as_str()),
         ("to", window.to.as_str()),
@@ -875,17 +891,21 @@ pub(crate) struct Reading {
 }
 
 /// Reads a parsed history response. The feed and the dialog's Test both call it, so the preview
-/// cannot disagree with the chart. The error says why nothing can be read: the rows are not
-/// where the mapping says, or no row has a readable time.
+/// cannot disagree with the chart. The rows are looked up for `symbol` ([`Rows::for_symbol`]).
+/// The error says why nothing can be read: the rows are not where the mapping says, or no row
+/// has a readable time.
+///
+/// [`Rows::for_symbol`]: super::profile::Rows::for_symbol
 pub(crate) fn read(
     response: &Value,
     history: &History,
+    symbol: &str,
     zone: &TimezoneId,
     clock: &BarClock,
     timeframe: Timeframe,
     now: DateTime<Utc>,
 ) -> Result<Reading, String> {
-    let rows = shape::rows(response, &history.rows)?;
+    let rows = shape::rows(response, &history.rows.for_symbol(symbol))?;
     let read = rows
         .iter()
         .filter_map(|row| bars::bar(row, &history.bar, zone, clock, timeframe));
@@ -1275,6 +1295,25 @@ pub(crate) mod tests {
                 ],
                 FIRST,
                 vec![BEFORE_B3, BEFORE_B0],
+                all(),
+            ),
+            case(
+                "rows filed under the symbol, and the symbol in lower case in the address",
+                |profile| {
+                    let history = profile.history.as_mut().unwrap();
+                    history.url = history.url.replace("{symbol}", "{symbol_lower}");
+                    history.rows.path = vec![Segment::Key("result".into()), Segment::Key("{symbol}".into())];
+                },
+                vec![
+                    format!(r#"{{"error":[],"result":{{"ABC":{},"last":1794407700}}}}"#, list(&[J3, J4, J5])),
+                    format!(r#"{{"error":[],"result":{{"ABC":{},"last":1794407520}}}}"#, list(&[J0, J1, J2])),
+                    r#"{"error":[],"result":{"last":1794407400}}"#.into(),
+                ],
+                "GET /bars?symbol=abc&interval=1m&to=",
+                vec![
+                    "GET /bars?symbol=abc&interval=1m&to=1794407580&limit=3",
+                    "GET /bars?symbol=abc&interval=1m&to=1794407400&limit=3",
+                ],
                 all(),
             ),
             // Five rows for a limit of three: the newest three are B3 to B5 once sorted.

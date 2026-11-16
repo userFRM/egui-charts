@@ -50,6 +50,25 @@ pub enum DrawingSyncAction {
 /// This struct is passed to [`DrawingManager::sync_from_app_state`] at the start
 /// of each frame to ensure the manager stays in sync with toolbar selections,
 /// keyboard shortcuts, and other UI actions that modify drawing state.
+///
+/// ```
+/// use egui_charts::drawings::services::HandleConfig;
+/// use egui_charts::drawings::{
+///     DrawingManager, DrawingManagerOptions, DrawingState, DrawingToolType, HandlePos,
+/// };
+///
+/// let mut state = DrawingState::default();
+/// state.active_tool = Some(DrawingToolType::TrendLine);
+/// let mut handles = HandleConfig::default();
+/// handles.size = 10.0;
+/// let mut options = DrawingManagerOptions::default();
+/// options.snap_to_price = true;
+/// options.handle_config = handles;
+/// let mut manager = DrawingManager::new();
+/// manager.options = options;
+/// manager.sync_from_app_state(&state);
+/// manager.start_drag_handle(1, HandlePos::End);
+/// ```
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct DrawingState {
@@ -168,6 +187,8 @@ impl TextEditState {
             );
         }
         shown.text = Some(self.shown_text(ctx));
+        // A pin whose popup is switched off still shows the text being written.
+        shown.marker.show_text = true;
         shown
     }
 }
@@ -197,18 +218,19 @@ impl TextEditState {
 /// #     bar_to_x: impl Fn(f32) -> f32 + Copy,
 /// #     price_to_y: impl Fn(f64) -> f32 + Copy,
 /// #     y_to_price: impl Fn(f32) -> f64 + Copy,
+/// #     bar_spacing: f32,
 /// # ) {
 /// // 1. Sync state from app
 /// manager.sync_from_app_state(drawing_state);
 ///
 /// // 2. Update screen coordinates from chart coordinates
-/// manager.update_all_screen_coords(bar_to_x, price_to_y);
+/// manager.update_all_screen_coords(bar_to_x, price_to_y, bar_spacing);
 ///
 /// // 3. Handle user input (clicks, drags, keyboard)
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
 /// // 4. Render against the chart's bars and coordinate mapping
-/// let view = ChartView { price_formatter: None, time_formatter: None, bar_seconds: 0, instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, y_to_price: &y_to_price, time_axis: true, executions: None, timeframe: None, finer: &[] };
+/// let view = ChartView { price_formatter: None, time_formatter: None, bar_seconds: 0, instrument: None, bars, revision, bar_to_x: &bar_to_x, bar_spacing, price_to_y: &price_to_y, y_to_price: &y_to_price, time_axis: true, executions: None, timeframe: None, finer: &[] };
 /// manager.render_all(painter, price_rect, &view);
 /// # }
 /// ```
@@ -288,6 +310,10 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
+    /// Tells this manager from one that replaced it, such as `Chart::load_drawings` makes, whose
+    /// drawing ids start again: unique to each manager, and kept when the manager moves or reads
+    /// its drawings from storage again.
+    pub(crate) identity: u64,
 }
 
 impl std::fmt::Debug for DrawingManager {
@@ -356,6 +382,7 @@ impl DrawingManager {
             eraser_mode: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
+            identity: crate::model::next_revision(),
         }
     }
 
@@ -696,6 +723,7 @@ impl DrawingManager {
                 .filter(|d| !d.saveable)
                 .cloned()
                 .collect(),
+            identity: self.identity,
         }
     }
 
@@ -709,7 +737,10 @@ impl DrawingManager {
             ids,
             next_id,
             unsaved,
+            identity,
         } = previous;
+        // The same drawings to a layout that mirrors them, as their ids are.
+        self.identity = identity;
         self.next_id = self.next_id.max(next_id);
         // The drawings that stay are in place before ids are handed out, so none gets theirs.
         let read = self.drawings.len();
@@ -766,6 +797,8 @@ pub(crate) struct BeforeRead {
     next_id: usize,
     /// The drawings that are never stored.
     unsaved: Vec<Drawing>,
+    /// The `DrawingManager::identity` of the manager.
+    identity: u64,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.
@@ -1020,7 +1053,7 @@ mod tests {
 
         // Pasting a lower layer puts the copy above existing drawings too.
         manager.paste_drawings(&[manager.drawings[1].clone()]);
-        manager.update_all_screen_coords(|bar| bar, |price| price as f32);
+        manager.update_all_screen_coords(|bar| bar, |price| price as f32, 1.0);
         let copy_id = manager.drawings.last().unwrap().id;
         assert_eq!(manager.hit_test(on_both), Some(copy_id));
         assert!(manager.undo());
@@ -1245,7 +1278,7 @@ mod tests {
         manager.drawings[2].selectable = false;
         manager.drawings[2].chart_points =
             vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(100.0, 10.0)];
-        manager.update_all_screen_coords(|x| x, |y| y as f32);
+        manager.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
         assert_eq!(manager.hit_test(Pos2::new(50.0, 10.0)), None);
         assert_eq!(
             manager.hit_test_handle(&manager.drawings[2], Pos2::new(0.0, 10.0)),

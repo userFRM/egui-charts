@@ -132,6 +132,11 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ParkinsonVol::new(l(0))),
         Box::new(ZeroTrendVol::new(l(0)).with_trading_days(x(252.0))),
         Box::new(RelativeVolatilityIndex::new(l(0))),
+        Box::new(VolatilityIndex::new(l(0), x(3.0))),
+        Box::new(
+            VolatilityIndex::new(l(0), x(3.0))
+                .with_smoothing(VolatilityIndexSmoothing::Exponential),
+        ),
         Box::new(
             CommoditySelectionIndex::new(l(0))
                 .with_point_value(x(1.0))

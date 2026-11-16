@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "name": "Kraken (public)",
+  "symbols": [
+    "BTC/USD",
+    "ETH/USD",
+    "BTC/EUR",
+    "ETH/EUR",
+    "BTC/CHF"
+  ],
+  "time_zone": "UTC",
+  "tick_size": 0.01,
+  "intervals": [
+    {
+      "chart": "Min1",
+      "service": "1"
+    },
+    {
+      "chart": "Min5",
+      "service": "5"
+    },
+    {
+      "chart": "Min15",
+      "service": "15"
+    },
+    {
+      "chart": "Min30",
+      "service": "30"
+    },
+    {
+      "chart": "Hour1",
+      "service": "60"
+    },
+    {
+      "chart": "Hour4",
+      "service": "240"
+    },
+    {
+      "chart": "Day1",
+      "service": "1440"
+    }
+  ],
+  "keys": [],
+  "history": {
+    "url": "https://api.kraken.com/0/public/OHLC?pair={symbol}&interval={interval}&assetVersion=1",
+    "headers": [],
+    "body": "",
+    "range": "seconds",
+    "page_size": 720,
+    "rows": {
+      "path": [
+        "result",
+        "{symbol}"
+      ],
+      "layout": {
+        "arrays": {
+          "header": null
+        }
+      }
+    },
+    "bar": {
+      "time": {
+        "instant": {
+          "field": [
+            0
+          ],
+          "unit": "seconds"
+        }
+      },
+      "open": [
+        1
+      ],
+      "high": [
+        2
+      ],
+      "low": [
+        3
+      ],
+      "close": [
+        4
+      ],
+      "volume": [
+        6
+      ]
+    }
+  },
+  "stream": {
+    "url": "wss://ws.kraken.com/v2",
+    "protocols": [],
+    "connect": [
+      "{\"method\":\"subscribe\",\"params\":{\"channel\":\"trade\",\"symbol\":[\"{symbol}\"]}}"
+    ],
+    "keep_alive": "{\"method\":\"ping\"}",
+    "keep_alive_every": 30,
+    "records": [
+      "data"
+    ],
+    "route_by": [
+      "channel"
+    ],
+    "routes": [
+      {
+        "value": "trade",
+        "kind": {
+          "trades": {
+            "time": {
+              "instant": {
+                "field": [
+                  "timestamp"
+                ],
+                "unit": "iso8601"
+              }
+            },
+            "price": [
+              "price"
+            ],
+            "size": [
+              "qty"
+            ],
+            "condition": [],
+            "conditions": [],
+            "side": [
+              "side"
+            ],
+            "buy": "buy",
+            "sell": "sell"
+          }
+        }
+      },
+      {
+        "value": "heartbeat",
+        "kind": "ignore"
+      },
+      {
+        "value": "status",
+        "kind": "ignore"
+      },
+      {
+        "value": "",
+        "kind": "ignore"
+      }
+    ]
+  }
+}

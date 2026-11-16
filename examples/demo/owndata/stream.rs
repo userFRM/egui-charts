@@ -65,12 +65,14 @@ pub(crate) fn route(stream: &Stream, message: &str) -> Vec<Routed> {
             (!stream.routes.is_empty()).then_some(0)
         } else {
             // The record's own value, then the one the message names once at its root, then
-            // the record itself when it is a bare value.
-            at(record, &stream.route_by)
+            // the record itself when it is a bare value. A record without one takes the route
+            // whose value is empty.
+            let value = at(record, &stream.route_by)
                 .and_then(text)
                 .or_else(|| at(&root, &stream.route_by).and_then(text))
                 .or_else(|| text(record))
-                .and_then(|value| stream.routes.iter().position(|route| route.value == value))
+                .unwrap_or_default();
+            stream.routes.iter().position(|route| route.value == value)
         };
         match route {
             Some(route) if matches!(stream.routes[route].kind, RouteKind::Ignore) => {
@@ -449,7 +451,8 @@ pub(crate) mod tests {
             value: value.to_owned(),
             kind,
         };
-        // A status route, a keep-alive answer, trades, and a route whose value is a number.
+        // A status route, a keep-alive answer, trades, a route whose value is a number, and one
+        // without a value for the records that have no `type`.
         let stream = Stream {
             records: key("data"),
             route_by: key("type"),
@@ -458,6 +461,7 @@ pub(crate) mod tests {
                 to("pong", RouteKind::Ignore),
                 to("trade", RouteKind::Trades(TradeFields::default())),
                 to("7", RouteKind::Bars(BarFields::default())),
+                to("", RouteKind::Ignore),
             ],
             ..Stream::default()
         };
@@ -502,19 +506,20 @@ pub(crate) mod tests {
                 r#"{"type":7,"data":[{"o":1}]}"#,
                 vec![record(3, json!({"o": 1}))],
             ),
-            // 9: the root is a list, so `data` leads nowhere and a list has no `type`.
+            // 9: an answer to a subscribe or a ping that names no `type` anywhere.
             (
-                whole,
-                vec![Routed::Unrouted {
-                    record: serde_json::from_str(whole).unwrap(),
-                }],
+                r#"{"method":"pong","time_in":"2026-11-11T14:33:00.000000Z"}"#,
+                vec![Routed::Ignored { route: 4 }],
             ),
+            // 10: the root is a list, so `data` leads nowhere and the list is one record, which
+            // has no `type`.
+            (whole, vec![Routed::Ignored { route: 4 }]),
         ];
         for (message, expected) in rows {
             assert_eq!(route(&stream, message), expected, "{message}");
         }
 
-        // With the root as the place of the records, the list of row 9 is split.
+        // With the root as the place of the records, the list of row 10 is split.
         let rooted = Stream {
             records: vec![],
             ..stream.clone()
@@ -1017,5 +1022,359 @@ pub(crate) mod tests {
         let tape = feed.drain_tape("ABC", Some(Timeframe::Min1));
         let listed: Vec<_> = tape.iter().map(row).collect();
         assert_eq!(listed, [(1794355210000, 101.75)]);
+    }
+
+    /// A study that loads the history of the chart's symbol on the chart's interval, as Volume
+    /// Delta does on a one-minute chart, leaves the bar the chart's stream is forming as it was.
+    /// The service's pages end at the last closed bar, so only the stream knows the minute that
+    /// is forming. A second chart on the feed stands for the study.
+    #[test]
+    fn a_study_page_on_the_chart_interval_keeps_the_forming_bar() {
+        use super::super::feed::tests::{Server, Shown, profile, shown, until};
+        // The closed bar of 23:59 on 10 November 2026, the newest the service holds.
+        const BAR: &str = r#"[{"t":1794355140,"o":100.0,"h":100.5,"l":99.5,"c":100.25,"v":500}]"#;
+        const CLOSED: Shown = (1794355140, Some([100.0, 100.5, 99.5, 100.25, 500.0]));
+        // Two trades of the minute of midnight before the study loads, and after it a third one
+        // of that minute and one of the next.
+        const BEFORE: &str = r#"{"type":"trade","data":[{"p":101.0,"s":3,"t":1794355210000},{"p":102.0,"s":2,"t":1794355220000}]}"#;
+        const AFTER: &str = r#"{"type":"trade","data":[{"p":100.5,"s":4,"t":1794355230000},{"p":100.75,"s":1,"t":1794355265000}]}"#;
+        const NEXT: Shown = (1794355260, Some([100.75, 100.75, 100.75, 100.75, 1.0]));
+        let server = Server::start(|_, seen| {
+            // A request for bars before the closed bar gets none, which ends history.
+            let older = seen.line.contains("&to=1794355140&");
+            let page = if older { "[]" } else { BAR };
+            (200, page.to_owned())
+        });
+        // The chart's socket. The study's waits behind it and never opens.
+        let peer = Peer::start(vec![vec![
+            Step::Receive(1),
+            Step::Hold,
+            Step::Send(BEFORE),
+            Step::Hold,
+            Step::Send(AFTER),
+            Step::UntilClosed,
+        ]]);
+        let key = |name: &str| vec![Segment::Key(name.to_owned())];
+        let mut profile = profile(&server.origin);
+        profile.stream = Some(Stream {
+            url: peer.url.clone(),
+            connect: vec![r#"{"symbol":"{symbol}"}"#.to_owned()],
+            records: key("data"),
+            route_by: key("type"),
+            routes: vec![Route {
+                value: "trade".to_owned(),
+                kind: RouteKind::Trades(TradeFields {
+                    time: TimeSpec::Instant {
+                        field: key("t"),
+                        unit: TimeUnit::Milliseconds,
+                    },
+                    price: key("p"),
+                    size: key("s"),
+                    ..TradeFields::default()
+                }),
+            }],
+            ..Stream::default()
+        });
+        let feed = Arc::new(MappedFeed::new(profile, Vec::new()));
+        let open = || {
+            ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("ABC")
+                .with_timeframe(Timeframe::Min1)
+                .with_initial_bars(3)
+                .build()
+        };
+        let complete = |chart: &Chart| {
+            let state = chart.feed_state(SeriesId::MAIN);
+            state.is_some_and(|state| state.history_complete)
+        };
+        let ctx = egui::Context::default();
+        let mut chart = open();
+        until(&ctx, &mut chart, "the chart's history", |chart| {
+            complete(chart) && shown(chart) == [CLOSED]
+        });
+        peer.release();
+        let forming: Shown = (1794355200, Some([101.0, 102.0, 101.0, 102.0, 5.0]));
+        until(&ctx, &mut chart, "the forming bar", |chart| {
+            shown(chart) == [CLOSED, forming]
+        });
+        let mut study = open();
+        until(&ctx, &mut study, "the study's history", |study| {
+            complete(study) && shown(study) == [CLOSED]
+        });
+        peer.release();
+        until(&ctx, &mut chart, "the next minute", |chart| {
+            shown(chart).last() == Some(&NEXT)
+        });
+        // The minute of midnight holds its three trades: 3 + 2 + 4.
+        let midnight: Shown = (1794355200, Some([101.0, 102.0, 100.5, 100.5, 9.0]));
+        assert_eq!(shown(&chart), [CLOSED, midnight, NEXT]);
+    }
+
+    /// Every ready profile reads its service's history rows, bar messages and trade messages,
+    /// in the form the service documents them, into the chart's bars and trades. The service's
+    /// hosts are swapped for local ones, so nothing leaves the machine. The fixtures are
+    /// one-minute bars of 11 November 2026 from 14:33 UTC (second 1,794,407,580) and daily bars
+    /// of the 9th to the 11th; every expected bar and request is worked out by hand.
+    #[test]
+    fn ready_profiles_chart_recorded_history_and_stream() {
+        use super::super::feed::tests::{Server, Shown, pages, shown, until};
+        use super::super::profile::Profile;
+        use super::super::store;
+
+        /// A ready profile on recorded answers. The pages answer the history requests in order;
+        /// the script runs the peer's one connection, each `Hold` until the bars before it are
+        /// shown.
+        struct Ready {
+            name: &'static str,
+            symbol: &'static str,
+            timeframe: Timeframe,
+            pages: Vec<String>,
+            script: Vec<Step>,
+            /// The bars once history has ended, then after each release of the peer.
+            bars: Vec<Vec<Shown>>,
+            /// What the chart and the tape hold at the end: time in ms, price, size, side.
+            trades: Vec<(i64, f64, f64, Option<OrderSide>)>,
+            tick_size: f64,
+            /// The start and the end of the first request line, whose bound comes from the
+            /// clock.
+            first: (&'static str, &'static str),
+            /// Every later request line.
+            asked: Vec<&'static str>,
+            /// The handshake's target and the messages the peer received.
+            target: &'static str,
+            received: Vec<&'static str>,
+        }
+
+        // Binance: rows of twelve columns, times in milliseconds, values as text.
+        const R3: &str = r#"[1794407580000,"100750.00","103000.00","100500.00","102500.00","1.50000000",1794407639999,"153375.00000000",120,"0.75000000","76687.50000000","0"]"#;
+        const R4: &str = r#"[1794407640000,"102500.00","102750.00","101000.00","101250.00","0.75000000",1794407699999,"76312.50000000",64,"0.25000000","25437.50000000","0"]"#;
+        const R5: &str = r#"[1794407700000,"101250.00","101500.00","100000.00","100250.00","0.50000000",1794407759999,"50437.50000000",41,"0.25000000","25218.75000000","0"]"#;
+        const KLINE: &str = r#"{"stream":"btcusdt@kline_1m","data":{"e":"kline","E":1794407711000,"s":"BTCUSDT","k":{"t":1794407700000,"T":1794407759999,"s":"BTCUSDT","i":"1m","f":4100,"L":4180,"o":"101250.00","c":"99750.00","h":"101750.00","l":"99750.00","v":"0.75000000","n":81,"x":false,"q":"75687.50000000","V":"0.25000000","Q":"25312.50000000","B":"0"}}}"#;
+        // `m` is true when the buyer was the maker: the trade sold into the bid.
+        const SELL: &str = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1794407712001,"s":"BTCUSDT","a":2001,"p":"100000.00","q":"0.12500000","f":4181,"l":4182,"T":1794407712000,"m":true,"M":true}}"#;
+        const BUY: &str = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1794407713001,"s":"BTCUSDT","a":2002,"p":"102000.00","q":"0.25000000","f":4183,"l":4183,"T":1794407713000,"m":false,"M":true}}"#;
+        const B3: Shown = (
+            1794407580,
+            Some([100750.0, 103000.0, 100500.0, 102500.0, 1.5]),
+        );
+        const B4: Shown = (
+            1794407640,
+            Some([102500.0, 102750.0, 101000.0, 101250.0, 0.75]),
+        );
+        const B5: Shown = (
+            1794407700,
+            Some([101250.0, 101500.0, 100000.0, 100250.0, 0.5]),
+        );
+        // The kline takes the place of the history bar.
+        const K5: Shown = (
+            1794407700,
+            Some([101250.0, 101750.0, 99750.0, 99750.0, 0.75]),
+        );
+        // The trades continue the kline's bar: the sell at 100000 is the close, volume 0.875;
+        // the buy at 102000 is the high and the close, volume 1.125. Continuing the history
+        // bar would give the low 100000 and the volume 0.875.
+        const K5T: Shown = (
+            1794407700,
+            Some([101250.0, 102000.0, 99750.0, 102000.0, 1.125]),
+        );
+
+        // Coinbase Exchange: daily rows of time in seconds, low, high, open, close and volume,
+        // newest first, the 9th to the 11th of November.
+        const C9: &str = "[1794182400,97000,99500,98000,99000,120.5]";
+        const C10: &str = "[1794268800,98500,101000,99000,100500,98.25]";
+        const C11: &str = "[1794355200,99500,101500,100500,101000,75.5]";
+        // The trade before the subscription, already in the history bar.
+        const LAST_MATCH: &str = r#"{"type":"last_match","trade_id":29001,"maker_order_id":"ac928c66-ca53-498f-9c13-a110027a60e8","taker_order_id":"132fb6ae-456b-4654-b4e0-d681ac05cea1","side":"buy","size":"0.50000000","price":"95000.00","product_id":"BTC-USD","sequence":61001,"time":"2026-11-11T14:35:11.000000Z"}"#;
+        // `side` is the side of the resting order: a `sell` match is a buy.
+        const SOLD: &str = r#"{"type":"match","trade_id":29002,"maker_order_id":"5b8e0a3c-1d6f-4f0e-9a7b-2c4d6e8f0a1b","taker_order_id":"7c9e1b4d-2e70-4a1f-8b6c-3d5e7f9a1b2c","side":"sell","size":"0.25000000","price":"102000.00","product_id":"BTC-USD","sequence":61002,"time":"2026-11-11T14:35:12.000000Z"}"#;
+        const BOUGHT: &str = r#"{"type":"match","trade_id":29003,"maker_order_id":"8d0f2c5e-3f81-4b2a-9c7d-4e6f8a0b2c3d","taker_order_id":"9e1a3d6f-4a92-4c3b-8d8e-5f7a9b1c3d4e","side":"buy","size":"0.12500000","price":"100000.00","product_id":"BTC-USD","sequence":61003,"time":"2026-11-11T14:35:13.000000Z"}"#;
+        const D9: Shown = (
+            1794182400,
+            Some([98000.0, 99500.0, 97000.0, 99000.0, 120.5]),
+        );
+        const D10: Shown = (
+            1794268800,
+            Some([99000.0, 101000.0, 98500.0, 100500.0, 98.25]),
+        );
+        const D11: Shown = (
+            1794355200,
+            Some([100500.0, 101500.0, 99500.0, 101000.0, 75.5]),
+        );
+        // The buy at 102000 is the high, the sell at 100000 the close; volume 75.875. The last
+        // match at 95000 would be the low.
+        const D11T: Shown = (
+            1794355200,
+            Some([100500.0, 102000.0, 99500.0, 100000.0, 75.875]),
+        );
+
+        // Kraken: rows under the pair's name, time in seconds, then open, high, low, close,
+        // vwap, volume and count; values as text. `last` beside them is not a row.
+        const OHLC: &str = r#"{"error":[],"result":{"BTC/USD":[[1794407580,"100750.0","103000.0","100500.0","102500.0","101900.0","1.50000000",120],[1794407640,"102500.0","102750.0","101000.0","101250.0","101800.0","0.75000000",64],[1794407700,"101250.0","101500.0","100000.0","100250.0","100700.0","0.50000000",41]],"last":1794407640}}"#;
+        // `side` is the taker's.
+        const TRADES: &str = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"sell","price":100000.0,"qty":0.125,"ord_type":"market","trade_id":4665906,"timestamp":"2026-11-11T14:35:12.000000Z"},{"symbol":"BTC/USD","side":"buy","price":102000.0,"qty":0.25,"ord_type":"limit","trade_id":4665907,"timestamp":"2026-11-11T14:35:13.000000Z"}]}"#;
+        // The trades continue the history bar: the sell at 100000 is the close, the buy at
+        // 102000 the high and the close; volume 0.875.
+        const B5T: Shown = (
+            1794407700,
+            Some([101250.0, 102000.0, 100000.0, 102000.0, 0.875]),
+        );
+
+        let rows = [
+            Ready {
+                name: "Binance spot (public)",
+                symbol: "BTCUSDT",
+                timeframe: Timeframe::Min1,
+                // At or before `endTime`, so the older page holds the row that opens at it. That
+                // row is the symbol's first: the page ends history.
+                pages: vec![format!("[{R3},{R4},{R5}]"), format!("[{R3}]")],
+                script: vec![
+                    Step::Hold,
+                    Step::Send(KLINE),
+                    Step::Hold,
+                    Step::Send(SELL),
+                    Step::Send(BUY),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![B3, B4, B5], vec![B3, B4, K5], vec![B3, B4, K5T]],
+                trades: vec![
+                    (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                    (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                ],
+                tick_size: 0.01,
+                first: (
+                    "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=",
+                    "&limit=3",
+                ),
+                // Before the oldest bar held, in milliseconds; the chart asks 600 bars at a time.
+                asked: vec![
+                    "GET /api/v3/klines?symbol=BTCUSDT&interval=1m&endTime=1794407580000&limit=600",
+                ],
+                target: "/stream?streams=btcusdt@kline_1m/btcusdt@aggTrade",
+                received: vec![],
+            },
+            Ready {
+                name: "Coinbase Exchange (public)",
+                symbol: "BTC-USD",
+                // Daily, so that two empty older windows of 299 days reach past a year and end
+                // history.
+                timeframe: Timeframe::Day1,
+                // Newest first. `end` is inclusive, so the older page holds the row that opens at
+                // it; that row is the symbol's first.
+                pages: vec![
+                    format!("[{C11},{C10},{C9}]"),
+                    format!("[{C9}]"),
+                    "[]".to_owned(),
+                ],
+                script: vec![
+                    Step::Receive(1),
+                    Step::Hold,
+                    Step::Send(LAST_MATCH),
+                    Step::Send(SOLD),
+                    Step::Send(BOUGHT),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![D9, D10, D11], vec![D9, D10, D11T]],
+                trades: vec![
+                    (1794407712000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                    (1794407713000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                ],
+                tick_size: 0.01,
+                first: ("GET /products/BTC-USD/candles?granularity=86400&start=", ""),
+                // Windows of 299 days, in seconds: at most 300 candles with both ends counted.
+                asked: vec![
+                    "GET /products/BTC-USD/candles?granularity=86400&start=1768348800&end=1794182400",
+                    "GET /products/BTC-USD/candles?granularity=86400&start=1742515200&end=1768348800",
+                ],
+                target: "/",
+                received: vec![
+                    r#"{"type":"subscribe","product_ids":["BTC-USD"],"channels":["matches"]}"#,
+                ],
+            },
+            Ready {
+                name: "Kraken (public)",
+                symbol: "BTC/USD",
+                timeframe: Timeframe::Min1,
+                // Kraken sends its newest bars and no older ones, so the chart asks once.
+                pages: vec![OHLC.to_owned()],
+                script: vec![
+                    Step::Receive(1),
+                    Step::Hold,
+                    Step::Send(TRADES),
+                    Step::UntilClosed,
+                ],
+                bars: vec![vec![B3, B4, B5], vec![B3, B4, B5T]],
+                trades: vec![
+                    (1794407712000, 100000.0, 0.125, Some(OrderSide::Sell)),
+                    (1794407713000, 102000.0, 0.25, Some(OrderSide::Buy)),
+                ],
+                tick_size: 0.01,
+                first: (
+                    "GET /0/public/OHLC?pair=BTC%2FUSD&interval=1&assetVersion=1",
+                    "",
+                ),
+                asked: vec![],
+                target: "/v2",
+                received: vec![
+                    r#"{"method":"subscribe","params":{"channel":"trade","symbol":["BTC/USD"]}}"#,
+                ],
+            },
+        ];
+
+        for row in rows {
+            let server = Server::start(pages(row.pages));
+            let peer = Peer::start(vec![row.script]);
+            let named = |ready: &Profile| ready.name == row.name;
+            let mut profile = store::ready().into_iter().find(named).unwrap();
+            // The service's address is kept after its host, which is the local one.
+            let local = |url: &mut String, origin: &str| {
+                let rest = url.split_once("://").unwrap().1;
+                let path = rest.find('/').map_or("", |at| &rest[at..]);
+                *url = format!("{origin}{path}");
+            };
+            local(&mut profile.history.as_mut().unwrap().url, &server.origin);
+            local(&mut profile.stream.as_mut().unwrap().url, &peer.url);
+            let feed = Arc::new(MappedFeed::new(profile, Vec::new()));
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(row.symbol)
+                .with_timeframe(row.timeframe)
+                .with_initial_bars(3)
+                .build();
+            let ctx = egui::Context::default();
+            for (step, bars) in row.bars.iter().enumerate() {
+                if step > 0 {
+                    peer.release();
+                }
+                let what = format!("{}, bars {step}", row.name);
+                until(&ctx, &mut chart, &what, |chart| {
+                    let state = chart.feed_state(SeriesId::MAIN);
+                    state.is_some_and(|state| state.history_complete) && shown(chart) == *bars
+                });
+            }
+            let fed = |trades: Vec<Tick>| -> Vec<(i64, f64, f64, Option<OrderSide>)> {
+                let row = |t: &Tick| (t.ts.timestamp_millis(), t.price, t.size, t.side);
+                trades.iter().map(row).collect()
+            };
+            let held = fed(chart.trades(SeriesId::MAIN).cloned().collect());
+            assert_eq!(held, row.trades, "{}", row.name);
+            let tape = fed(feed.drain_tape(row.symbol, Some(row.timeframe)));
+            assert_eq!(tape, row.trades, "{}", row.name);
+            let step = chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size);
+            assert_eq!(step, Some(row.tick_size), "{}", row.name);
+
+            let lines: Vec<String> = server.seen().iter().map(|seen| seen.line.clone()).collect();
+            let (start, end) = row.first;
+            let first = lines.first().map(String::as_str).unwrap_or_default();
+            assert!(
+                first.starts_with(start) && first.ends_with(end),
+                "{lines:?}"
+            );
+            assert_eq!(lines[1..], row.asked, "{}", row.name);
+            assert_eq!(peer.asked(), [row.target], "{}", row.name);
+            assert_eq!(peer.received(), [row.received], "{}", row.name);
+        }
     }
 }

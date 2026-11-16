@@ -37,7 +37,11 @@ use crate::model::{Alert, AlertId};
 /// of a host-named run through `AlertEngine::strategy_fills`, with `strategies` and `alert-engine`.
 /// Its event carries the fill time, execution price and a message such as
 /// "Buy 2 at 187.50, position 4". The host supplies bars and retains the run; delivery outside the
-/// application remains the host's responsibility.
+/// application remains the host's responsibility. In the same way a
+/// [`DetectorSignals`](crate::model::AlertCondition::DetectorSignals) alert fires on each new
+/// signal of a named detector, and a [`CustomEvents`](crate::model::AlertCondition::CustomEvents)
+/// alert on each event a named host source raises, which a service without that source refuses
+/// to save.
 ///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through

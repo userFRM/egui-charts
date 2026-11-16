@@ -179,6 +179,7 @@ pub enum CompareAction {
 /// }
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct CompareSymbolsDialog {
     /// Is dialog open
     pub is_open: bool,

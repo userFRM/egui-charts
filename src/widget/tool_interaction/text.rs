@@ -917,7 +917,8 @@ mod tests {
     }
 
     /// Completing an annotation focuses its editor. Inline text joins the placement undo step;
-    /// double-click reopens it, and Escape discards the draft without deselecting.
+    /// double-click reopens it, and Escape discards the draft without deselecting. A pin whose
+    /// popup is switched off still shows the text being written.
     #[test]
     fn placement_and_double_click_edit_annotation_text() {
         for (tool, pane) in [
@@ -926,6 +927,7 @@ mod tests {
             DrawingToolType::Note,
             DrawingToolType::AnchoredNote,
             DrawingToolType::Callout,
+            DrawingToolType::Signpost,
             DrawingToolType::Table,
             DrawingToolType::Image,
             DrawingToolType::Tweet,
@@ -973,7 +975,10 @@ mod tests {
             };
             step(&mut chart, vec![Event::PointerMoved(from)]);
             step(&mut chart, vec![button(from, true)]);
-            if matches!(tool, DrawingToolType::Callout | DrawingToolType::Note) {
+            if matches!(
+                tool,
+                DrawingToolType::Callout | DrawingToolType::Note | DrawingToolType::Signpost
+            ) {
                 step(
                     &mut chart,
                     vec![Event::PointerMoved(from + egui::vec2(8.0, 0.0))],
@@ -1038,6 +1043,8 @@ mod tests {
                 }
                 // Inside the pin's head, outside its hole.
                 DrawingToolType::AnchoredNote => points[0] - egui::vec2(0.0, 12.0),
+                // On the signpost's label, at the second anchor's height above the first.
+                DrawingToolType::Signpost => egui::pos2(points[0].x, points[1].y),
                 _ => points[0] + egui::vec2(10.0, 10.0),
             };
             assert_eq!(
@@ -1088,6 +1095,32 @@ mod tests {
                 ],
             );
             assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
+            if tool == DrawingToolType::AnchoredNote {
+                chart.drawings_mut().edit_drawing(id, |drawing| {
+                    drawing.locked = false;
+                    drawing.marker.show_text = false;
+                });
+                // Long enough for the next click to start a new double click.
+                for _ in 0..5 {
+                    step(&mut chart, vec![]);
+                }
+                for _ in 0..2 {
+                    step(
+                        &mut chart,
+                        vec![Event::PointerMoved(on_text), button(on_text, true)],
+                    );
+                    step(&mut chart, vec![button(on_text, false)]);
+                }
+                step(
+                    &mut chart,
+                    vec![
+                        key(Key::A, Modifiers::COMMAND),
+                        Event::Text("Hidden".into()),
+                    ],
+                );
+                step(&mut chart, vec![key(Key::Enter, Modifiers::COMMAND)]);
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some("Hidden"));
+            }
         }
     }
 
@@ -1434,11 +1467,11 @@ mod tests {
                     |price, from, to| price + f64::from(to - from),
                 );
                 manager.end_drag_handle();
-                manager.update_all_screen_coords(|x| x, |y| y as f32);
+                manager.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
                 manager.update_pane_anchors(pane);
                 assert_eq!(manager.drawings[0].points[0], pos2(170.0, 400.0));
                 assert!(manager.undo());
-                manager.update_all_screen_coords(|x| x, |y| y as f32);
+                manager.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
                 manager.update_pane_anchors(pane);
                 assert_eq!(manager.drawings[0].points[0], pos2(130.0, 360.0));
                 let saved = chart.save_drawings().unwrap().to_json().unwrap();
@@ -1468,5 +1501,70 @@ mod tests {
         let pin = &chart.drawings().drawings[0];
         assert_ne!(pin.points[0].x, x);
         assert_eq!(pin.chart_points[0], anchor);
+    }
+
+    /// On a numeric scale with uneven key gaps, text that follows the zoom keeps its size when
+    /// it moves or the chart scrolls under it, and doubles when the bar spacing doubles.
+    #[test]
+    fn zoom_following_text_keeps_its_size_on_a_numeric_scale() {
+        use crate::drawings::{ChartPoint, Drawing};
+        use crate::model::{Bar, BarData};
+        use crate::scales::{PriceHorizontalScale, key_time};
+        use std::sync::Arc;
+
+        // Strikes 0 to 200 one apart, then 225 to 1200 25 apart: one unit is 1200 / 240 = 5.
+        let keys = (0..=200).chain((225..=1200).step_by(25));
+        let bars = keys
+            .map(|k| Bar::from_value(key_time(f64::from(k)).unwrap(), 1.0))
+            .collect();
+        let ctx = Context::default();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::default())));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.state.time_scale_mut().set_bar_spacing(4.0);
+        chart.scroll_to_position(-60.0, false);
+        let mut label = Drawing::with_text(1, "Label".into());
+        label.chart_points.push(ChartPoint::new(100.0, 1.0));
+        let mut note = Drawing::new(2, DrawingToolType::AnchoredText);
+        note.text = Some("Note".into());
+        note.chart_points.push(ChartPoint::new(50.0, 1.0));
+        for mut text in [label, note] {
+            text.text_follows_zoom = true;
+            chart.drawings_mut().drawings.push(text);
+        }
+        let sizes = |chart: &crate::Chart| {
+            [(1, "Label"), (2, "Note")].map(|(id, text)| {
+                let (_, galley) = chart.drawings().painted_text(id, text).unwrap();
+                galley.job.sections[0].format.font_id.size
+            })
+        };
+        // The bar under the note, which stays where it is in the pane.
+        let bar_under_note = |chart: &crate::Chart| {
+            let clip = chart.drawings().pane_clips[&None];
+            let x = chart.drawings().drawings[1].points[0].x;
+            chart
+                .state
+                .time_scale()
+                .coord_to_idx_precise(x, clip.min.x, clip.width())
+        };
+
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert_eq!(chart.state.time_scale().bar_spacing(), 4.0);
+        assert!(bar_under_note(&chart) <= 200.0);
+        let at_first = sizes(&chart);
+
+        // The label moves over 25-apart strikes and they scroll under the note.
+        chart.drawings_mut().drawings[0].chart_points[0].bar_idx = 205.0;
+        chart.scroll_to_position(0.0, false);
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        assert!(bar_under_note(&chart) >= 201.0);
+        let moved = sizes(&chart);
+
+        chart.state.time_scale_mut().set_bar_spacing(8.0);
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        let zoomed = sizes(&chart);
+
+        // 4 / 4 at the first zoom, wherever the text sits, and 8 / 4 after zooming.
+        assert_eq!([at_first, moved, zoomed], [[14.0; 2], [14.0; 2], [28.0; 2]]);
     }
 }

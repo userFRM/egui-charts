@@ -54,6 +54,7 @@ fn alignment_row<T: Copy + PartialEq, const N: usize>(
 }
 
 /// Text tab renderer
+#[derive(Debug)]
 pub struct TextTab;
 
 impl TextTab {
@@ -315,6 +316,16 @@ impl TextTab {
         FormGrid::new("text_grid").show(ui, |ui| {
             let writes = (props.tool_settings.as_ref())
                 .is_none_or(|template| template.settings.tool_type.supports_text());
+            if let Some(template) = &mut props.tool_settings
+                && template.settings.tool_type == DrawingToolType::AnchoredNote
+            {
+                ui.label("");
+                ui.checkbox(
+                    &mut template.settings.marker.show_text,
+                    l10n::text(ui.ctx(), "Show text"),
+                );
+                ui.end_row();
+            }
             // Label text
             if writes {
                 let label = ui.label(l10n::text(ui.ctx(), "Label"));

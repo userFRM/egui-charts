@@ -46,6 +46,7 @@ pub trait TabLabel: Copy + PartialEq {
 ///
 /// Renders clickable text labels 16 px apart over a full-width rule, starting at the content
 /// edge. The active tab's accent underline sits on the rule, and content starts 8 px below it.
+#[derive(Debug)]
 pub struct TabBar<'a, T: TabLabel> {
     tabs: &'a [T],
     active: &'a mut T,

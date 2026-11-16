@@ -757,10 +757,11 @@ fn opening_a_menu_suppresses_hover_paint_in_the_same_frame() {
 }
 
 /// Guards #106: actual profile clicks merge neighbours, extend a composite and split it,
-/// preserving unrelated host ranges and making each command one undoable edit.
+/// preserving unrelated host ranges and making each command one undoable edit. The commands and
+/// their undo keep the resolved ATR size of the price-based chart types.
 #[test]
 fn tpo_profile_menu_merges_and_splits_sessions() {
-    use crate::model::{Bar, BarData, ChartType, Timeframe, to_tpo_profiles};
+    use crate::model::{Bar, BarData, BoxSizeMethod, ChartType, Timeframe, to_tpo_profiles};
     use chrono::{DateTime, Duration};
     use egui::{Event, PointerButton, RawInput, Shape};
     for (theme, width) in [
@@ -784,13 +785,23 @@ fn tpo_profile_menu_merges_and_splits_sessions() {
                 )
             })
             .collect();
-        let mut chart = Chart::new(BarData::from_bars(bars));
+        // The Renko ATR(14) brick resolves while the last bar reaches 103, a true range of
+        // max(3, 1, 2) = 3 after fifteen of 2: 2 + (3 - 2) / 14 = 29 / 14. The live correction
+        // back to 102 keeps it, as recalculating would give 2.
+        let mut wide = bars.clone();
+        wide[15].high = 103.0;
+        let mut chart = Chart::new(BarData::from_bars(wide));
         chart.set_timeframe(Timeframe::Min30);
         chart.set_chart_type(ChartType::TimePriceOpportunity);
         let mut params = chart.chart_type_params().clone();
         // The last loaded session belongs to a separate host range extending into the future.
         params.tpo_composites = vec![day(3)..=day(4)];
+        params.renko_size_method = BoxSizeMethod::Atr {
+            period: 14,
+            multiplier: 1.0,
+        };
         chart.set_chart_type_params(params);
+        chart.update(SeriesId::MAIN, bars[15].clone());
         let mut menus = ChartMenus::default();
         let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
             let mut action = None;
@@ -885,6 +896,7 @@ fn tpo_profile_menu_merges_and_splits_sessions() {
         assert_eq!(chart.chart_type_params().tpo_composites, [day(3)..=day(4)]);
         assert!(chart.undo());
         assert_eq!(counts(&chart), [12, 4]);
+        assert!((chart.chart_type_params().renko_brick_size - 29.0 / 14.0).abs() < 1e-12);
     }
 }
 

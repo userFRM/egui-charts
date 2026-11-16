@@ -4,7 +4,7 @@ use crate::model::Bar;
 
 /// Least-squares line through the closes of a span of bars, against their
 /// position in the span.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct LinearFit {
     /// Price change per bar.
     pub(crate) slope: f64,

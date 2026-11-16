@@ -6,7 +6,8 @@
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`],
-//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]).
+//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]), and the marker settings of pins
+//! and signposts ([`AnnotationMarker`]).
 
 use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
@@ -285,6 +286,13 @@ impl TimeframeVisibility {
 }
 
 /// Drawing interaction options
+///
+/// ```
+/// use egui_charts::drawings::DrawingOptions;
+///
+/// let mut options = DrawingOptions::default();
+/// options.handle_size = 10.0;
+/// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DrawingOptions {
@@ -964,8 +972,16 @@ impl PositionSizing {
 /// Statistics and account conversion for long and short position drawings.
 /// New drawings show full statistics only while selected. Currency conversion is supplied
 /// by the host: the library never downloads exchange rates.
+///
+/// ```
+/// use egui_charts::drawings::PositionReadout;
+///
+/// let mut readout = PositionReadout::default();
+/// readout.account_currency = Some("USD".into());
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionReadout {
     /// Keep statistics visible when the drawing is not selected.
     pub persistent: bool,
@@ -1073,8 +1089,17 @@ impl PositionReadout {
 /// stop colours, whose opacity is that of their zones, are
 /// [`Drawing::position_target_color`](crate::drawings::Drawing::position_target_color) and
 /// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
+///
+/// ```
+/// use egui_charts::drawings::PositionStyle;
+///
+/// let mut style = PositionStyle::default();
+/// style.line_width = 2.0;
+/// assert!(style.is_valid());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionStyle {
     /// Colour of the entry line, its price tag and the trade's path; `None` draws the lines in a
     /// translucent shade of the theme's secondary text colour and the tag in that colour.
@@ -1123,6 +1148,7 @@ impl PositionStyle {
 
 /// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NoteTextStyle {
     /// Text colour as RGBA.
     pub color: [u8; 4],
@@ -1135,14 +1161,68 @@ pub struct NoteTextStyle {
 }
 
 impl NoteTextStyle {
+    /// Text of `color` at `font_size` points, neither bold nor italic.
+    ///
+    /// ```
+    /// use egui_charts::drawings::NoteTextStyle;
+    ///
+    /// let mut style = NoteTextStyle::new([255, 255, 255, 255], 14.0);
+    /// style.bold = true;
+    /// assert!(style.is_valid());
+    /// ```
+    pub fn new(color: [u8; 4], font_size: f32) -> Self {
+        Self {
+            color,
+            font_size,
+            bold: false,
+            italic: false,
+        }
+    }
+
     /// Whether the font size lies in 1 to 256 points.
     pub fn is_valid(&self) -> bool {
         (1.0..=256.0).contains(&self.font_size)
     }
 }
 
+/// What a pin and a signpost show at their marker: a pin's text popup, and the glyph a signpost
+/// can carry on a coloured disc below its text. Other tools ignore these settings. A new drawing
+/// shows a pin's text and leaves a signpost's glyph off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct AnnotationMarker {
+    /// Whether a pin shows its text in a popup while it is selected or under the pointer.
+    pub show_text: bool,
+    /// Glyph on a signpost's disc: an emoji, or the id of a bundled icon or sticker.
+    pub glyph: String,
+    /// Whether a signpost carries the disc and its glyph.
+    pub show_glyph: bool,
+    /// Colour of a signpost's disc; `None` takes the drawing colour.
+    pub glyph_color: Option<[u8; 4]>,
+}
+
+impl Default for AnnotationMarker {
+    fn default() -> Self {
+        Self {
+            show_text: true,
+            glyph: "🙂".into(),
+            show_glyph: false,
+            glyph_color: None,
+        }
+    }
+}
+
+impl AnnotationMarker {
+    /// Whether the glyph is named, in at most 32 bytes.
+    pub fn is_valid(&self) -> bool {
+        (1..=32).contains(&self.glyph.len())
+    }
+}
+
 /// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineMeasurementPosition {
     /// Before the left anchor.
     Left,
@@ -1159,6 +1239,7 @@ pub enum LineMeasurementPosition {
 /// Which part of a line's text sits at which point of the line, reading left to right. A vertical
 /// line reads from bottom to top, so its left end is at the bottom, whichever way its text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextHorizontalAlign {
     /// The text starts at the line's left end.
     Left,
@@ -1172,6 +1253,7 @@ pub enum LineTextHorizontalAlign {
 /// Which edge of a line's text rests on the line. A vertical line takes its text's top to face
 /// left, so [`Self::Top`] reads right of the line and [`Self::Bottom`] left of it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextVerticalAlign {
     /// The text's top edge, so that it reads below the line.
     Top,
@@ -1184,6 +1266,7 @@ pub enum LineTextVerticalAlign {
 
 /// How a vertical line's text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextOrientation {
     /// Along the line, reading from bottom to top.
     #[default]
@@ -1197,8 +1280,16 @@ pub enum LineTextOrientation {
 /// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
 /// saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
+///
+/// ```
+/// use egui_charts::drawings::LineMeasurements;
+///
+/// let mut measurements = LineMeasurements::default();
+/// measurements.bar_count = true;
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LineMeasurements {
     /// Keep enabled readouts visible without selecting the line.
     pub persistent: bool,

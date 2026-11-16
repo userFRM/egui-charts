@@ -27,11 +27,11 @@ pub use gann::{GannConfig, GannFanDirection, GannLevel};
 pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
 pub use image::ImageConfig;
 pub use options::{
-    ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
-    LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign, LineTextOrientation,
-    LineTextVerticalAlign, NoteTextStyle, PositionReadout, PositionSize, PositionSizing,
-    PositionStyle, RegressionTrendConfig, TimeframeVisibility,
+    AnnotationMarker, ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight,
+    HandlePos, LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign,
+    LineTextOrientation, LineTextVerticalAlign, NoteTextStyle, PositionReadout, PositionSize,
+    PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;
-pub use vwap::{VwapBand, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};
+pub use vwap::{VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};

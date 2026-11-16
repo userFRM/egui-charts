@@ -50,13 +50,16 @@ impl Chart {
         let history = (self.replay.as_ref())
             .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
             .map_or(self.state.data().bars.as_slice(), Vec::as_slice);
-        if let Some(link) = self
-            .feed_link
-            .as_mut()
-            .filter(|link| executions != link.footprint.is_some())
-        {
+        if let Some(link) = self.feed_link.as_mut().filter(|link| {
+            executions != link.footprint.is_some()
+                && link
+                    .footprint
+                    .as_ref()
+                    .is_none_or(|flow| flow.live.prepared_before().is_none())
+        }) {
             link.footprint = if executions {
                 link.footprint(None, history)
+                    .map(crate::data::FootprintState::new)
             } else {
                 None
             };
@@ -152,6 +155,7 @@ impl Chart {
             }
         }
         let now = ctx.input(|input| input.time);
+        self.scroll_footprints(&mut link);
         let drained = link.inbox.drain();
         for (key, answer) in drained.answers {
             let Some(at) = link
@@ -227,6 +231,11 @@ impl Chart {
                         now,
                     ),
                 },
+                Request::Footprints(asked) => match result::<crate::data::FootprintPage>(answer) {
+                    Ok(page) => self.apply_footprints(&mut link, &asked, page),
+                    Err(FeedError::NotSupported) => link.footprints_complete = true,
+                    Err(error) => self.request_failed(&mut link, request, failures, error, now),
+                },
                 Request::Trades(asked) => match result::<TradePage>(answer) {
                     Ok(page) => self.apply_trades(&mut link, &asked, page),
                     Err(error) if error.is_recoverable() => {
@@ -245,6 +254,9 @@ impl Chart {
             if link.subscription != Some(id) {
                 continue;
             }
+            // A seek empties the bars and rebuilds them through its position: the view follows
+            // the bars it showed before the reset to the rebuilt ones, as playback would.
+            let before = updates.reset.then(|| self.edge());
             if updates.reset {
                 link.time = None;
                 self.bar_close_time = None;
@@ -256,6 +268,17 @@ impl Chart {
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
                 link.trades_from_start = false;
+                link.footprints_complete = false;
+                link.footprint_cursor = None;
+                link.pending
+                    .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
+                link.retries
+                    .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
+                if link.footprint.is_some() {
+                    link.footprint = link
+                        .footprint(None, &[])
+                        .map(crate::data::FootprintState::new);
+                }
                 link.order_book = None;
                 link.order_queue = None;
                 link.depth_history.iter_mut().for_each(DepthHistory::clear);
@@ -297,6 +320,9 @@ impl Chart {
                     self.data_updated(SeriesId::MAIN);
                 }
             }
+            if let Some(before) = before {
+                self.follow_live_edge(before, &link.clock);
+            }
             if let Some(quote) = updates.quote
                 && self.quote.as_ref().is_none_or(|old| quote.ts >= old.ts)
             {
@@ -324,8 +350,12 @@ impl Chart {
                 if added {
                     if let Some(flow) = footprint
                         && clock.timeframe().is_none_or(|tf| !tf.is_trade_based())
+                        && flow
+                            .live
+                            .prepared_before()
+                            .is_none_or(|before| trade.ts >= before)
                     {
-                        let _ = flow.push(trade);
+                        let _ = flow.live.push(trade);
                     }
                     if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
                         for (input, _) in inputs {
@@ -339,11 +369,17 @@ impl Chart {
             if let (Some(flow), Some(lost)) = (&mut link.footprint, link.trades.lost_until())
                 && (evicted || Some(lost) != lost_before)
             {
-                flow.drop_through(lost, link.trades.iter());
+                flow.live.drop_through(lost, link.trades.iter());
             }
             // Trades before the oldest held one may never have arrived.
-            if let (Some(first), Some(flow)) = (link.unconfirmed_start(), &mut link.footprint) {
-                flow.received_from(first);
+            if let Some(flow) = &mut link.footprint
+                && flow.live.prepared_before().is_some()
+            {
+                flow.live.refresh_prepared_gap(&link.trades);
+            } else if let (Some(first), Some(flow)) =
+                (link.unconfirmed_start(), &mut link.footprint)
+            {
+                flow.live.received_from(first);
             }
             link.time = link.time.max(updates.time);
             if let Some(now) = link.time {
@@ -402,6 +438,11 @@ impl Chart {
                     link.pending.last_mut().unwrap().2 = failures;
                     feed.depth_history(depth, reply);
                 }
+                Request::Footprints(footprints) => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.footprints(footprints, reply);
+                }
                 Request::Trades(trades) => {
                     let reply = link.reply(request);
                     link.pending.last_mut().unwrap().2 = failures;
@@ -445,13 +486,13 @@ impl Chart {
         }
         if let (Some((input, seen)), Some(flow)) = (&mut link.footprint_input, &mut link.footprint)
         {
-            *seen = input.copy_footprint(flow, *seen);
+            *seen = input.copy_footprint(&mut flow.live, *seen);
             if let Some(lost) = link.trades.lost_until() {
-                flow.drop_through(lost, link.trades.iter());
+                flow.live.drop_through(lost, link.trades.iter());
             }
         }
         self.scroll_back(&mut link);
-        self.scroll_trades(&mut link);
+        self.scroll_trades(&mut link, executions);
         self.scroll_depth(&mut link);
         self.feed.trade_history_complete = link.trades_complete;
         self.feed.depth_history_complete = link.depth_complete || link.depth_history.is_none();
@@ -526,6 +567,13 @@ impl Chart {
             link.depth_history.iter_mut().for_each(DepthHistory::clear);
         }
         link.depth_complete = false;
+        if !resume {
+            link.footprints_complete = false;
+            link.footprint_cursor = None;
+            link.footprint = link
+                .footprint(None, &[])
+                .map(crate::data::FootprintState::new);
+        }
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
         link.trades_from_start &= retain_trades;
@@ -608,6 +656,16 @@ impl Chart {
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
         self.readout_revision = crate::model::next_revision();
+        if link.footprint.as_ref().is_some_and(|flow| {
+            flow.live.prepared_before().is_some()
+                && Some(flow.live.tick_size()) != link.instrument.as_ref().and_then(|i| i.tick_size)
+        }) {
+            link.footprint = link
+                .footprint(None, &self.state.data().bars)
+                .map(crate::data::FootprintState::new);
+            link.footprints_complete = false;
+            link.footprint_cursor = None;
+        }
         link.rebuild_bubbles(&self.state.data().bars);
         if !supports(link.instrument.as_ref(), timeframe) {
             self.rule_out(link);
@@ -735,7 +793,9 @@ impl Chart {
         // Paged executions on a trade-based interval fill the bars they rebuild.
         if link.footprint.is_some() && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
         {
-            link.footprint = link.footprint(None, &self.state.data().bars);
+            link.footprint = link
+                .footprint(None, &self.state.data().bars)
+                .map(crate::data::FootprintState::new);
         }
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A nonempty page with no valid bar older than the oldest held would be requested
@@ -772,6 +832,8 @@ impl Chart {
                 request,
                 failures.saturating_add(1),
             ));
+        } else if matches!(request, Request::Footprints(_)) {
+            link.footprints_complete = true;
         } else if matches!(request, Request::Depth(_)) {
             link.depth_complete = true;
             if error == FeedError::NotSupported {
@@ -801,12 +863,65 @@ impl Chart {
         link.trades_from_start |= end;
         let unproven = (link.trades.left_out_at(), link.trades.retained_until());
         let bubbles = &mut link.bubbles;
+        let prepared_before = link
+            .footprint
+            .as_ref()
+            .and_then(|flow| flow.live.prepared_before());
+        let coverage = prepared_before.and_then(|_| {
+            let from = if end {
+                Some(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+            } else {
+                page.trades.iter().map(|t| t.ts).min()
+            }?;
+            let valid_range = page.trades.iter().all(|t| {
+                asked.before.is_none_or(|before| t.ts < before)
+                    && asked.since.is_none_or(|since| t.ts >= since)
+            });
+            let until = |boundary: Option<chrono::DateTime<chrono::Utc>>| {
+                boundary.map(|at| {
+                    if end
+                        || asked.before.is_none()
+                        || page.trades.iter().any(|trade| trade.ts == at)
+                    {
+                        at.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                            .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
+                    } else {
+                        at
+                    }
+                })
+            };
+            valid_range.then_some((
+                from.max(asked.since.unwrap_or(from)),
+                asked
+                    .before
+                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                until(link.trades.iter().next().map(|t| t.ts)),
+                until(link.trades.live().next().map(|t| t.ts)),
+            ))
+        });
+        let ambiguous_retained = link
+            .trades
+            .retained_until()
+            .filter(|at| prepared_before.is_some_and(|before| *at >= before))
+            .filter(|at| {
+                let ids = link
+                    .trades
+                    .iter()
+                    .filter(|t| t.ts == *at)
+                    .all(|t| t.id.is_some());
+                page.trades
+                    .iter()
+                    .any(|t| t.ts == *at && !(ids && t.id.is_some()))
+            });
+        let mut tail_changed = false;
         let mut changed = false;
         let fold = &mut |trade: &Tick, added| {
             changed |= added;
+            tail_changed |= prepared_before.is_some_and(|before| trade.ts >= before);
             bubbles.iter_mut().for_each(|b| b.fold(trade, added));
         };
-        self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
+        let rejected = link.trades.prepend(page.trades, fold);
+        self.feed.rejected_bars += rejected;
         if changed {
             for (input, _) in &link.study_inputs {
                 input.replace_trades(&link.clock, &link.trades, &self.state.data().bars);
@@ -815,8 +930,37 @@ impl Chart {
         // A page that only leaves executions out, or fills the time after the retained ones with
         // none, adds none, yet the held ones then prove less or more.
         let cut = (link.trades.left_out_at(), link.trades.retained_until()) != unproven;
-        if (changed || reached_start || cut) && link.footprint.is_some() {
-            link.footprint = link.footprint(None, &self.state.data().bars);
+        if let Some(flow) = link
+            .footprint
+            .as_mut()
+            .filter(|flow| flow.live.prepared_before().is_some())
+        {
+            if rejected == 0
+                && let Some((from, end, oldest, live)) = coverage
+            {
+                // Prepend admits older trades and the latest reconnect; it discards other overlaps.
+                flow.live
+                    .cover_missing(from, end.min(oldest.unwrap_or(end)));
+                if let Some(retained) = unproven.1 {
+                    flow.live
+                        .cover_missing(from.max(retained), end.min(live.unwrap_or(end)));
+                }
+            }
+            if let Some(at) = ambiguous_retained {
+                let after = at
+                    .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
+                flow.live.add_missing(at, after);
+            }
+            if tail_changed {
+                flow.live.rebuild_prepared(&link.trades);
+            } else {
+                flow.live.refresh_prepared_gap(&link.trades);
+            }
+        } else if (changed || reached_start || cut) && link.footprint.is_some() {
+            link.footprint = link
+                .footprint(None, &self.state.data().bars)
+                .map(crate::data::FootprintState::new);
         }
         link.trade_cursor = continuation;
         link.trades_complete |=
@@ -836,9 +980,10 @@ impl Chart {
 
     /// Asks for trades older than the oldest held once the view reaches it, for the order flow
     /// that consumes them: bubbles, a footprint or a study.
-    fn scroll_trades(&mut self, link: &mut FeedLink) {
-        let consumed =
-            link.bubbles.is_some() || link.footprint.is_some() || !link.study_inputs.is_empty();
+    fn scroll_trades(&mut self, link: &mut FeedLink, executions: bool) {
+        let consumed = link.bubbles.is_some()
+            || (executions && link.footprint.is_some())
+            || !link.study_inputs.is_empty();
         let asking = |r: &Request| matches!(r, Request::Trades(_));
         if !consumed
             || link.trades_complete
@@ -994,7 +1139,7 @@ impl Chart {
 
 /// The error for a continuation `at` that does not lie before the `before` it was asked for,
 /// which would repeat the request.
-fn non_progressing(
+pub(super) fn non_progressing(
     before: Option<chrono::DateTime<chrono::Utc>>,
     at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Option<FeedError> {

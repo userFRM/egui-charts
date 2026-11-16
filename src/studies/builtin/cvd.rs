@@ -14,7 +14,7 @@ use egui::Color32;
 ///
 /// Shows the running total of (buy volume - sell volume), with each bar's split
 /// estimated from its open, high, low and close.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CVD {
     /// Values calculated from bars
     values: IndicatorValues,

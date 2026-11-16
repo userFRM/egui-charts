@@ -1,5 +1,6 @@
 //! Serializable inputs and presentation of studies, alone or as a chart's set.
 
+use crate::model::Timeframe;
 use crate::studies::{
     ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyInput, StudyScale, StudySettings,
 };
@@ -34,7 +35,8 @@ pub struct StudyTemplate {
 /// pane heights and the place of the price pane among the panes are not kept.
 ///
 /// A list of study templates also reads as a set: its sources name positions in the list and
-/// every study takes its default place.
+/// every study takes its default place. Sets saved without a [`symbol`](Self::symbol) or an
+/// [`interval`](Self::interval) keep the chart's when applied.
 #[derive(Clone, Debug, Default, serde::Serialize)]
 #[non_exhaustive]
 pub struct StudyTemplateSet {
@@ -45,6 +47,12 @@ pub struct StudyTemplateSet {
     /// The other panes that hold studies of the set, from top to bottom, each with the
     /// positions in `studies` of its studies in legend order.
     pub panes: Vec<Vec<usize>>,
+    /// The symbol the chart shows when the set is applied, or `None` to keep the chart's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// The interval the chart shows when the set is applied, or `None` to keep the chart's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<Timeframe>,
 }
 
 impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
@@ -56,6 +64,10 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
             price_pane: Vec<usize>,
             #[serde(default)]
             panes: Vec<Vec<usize>>,
+            #[serde(default)]
+            symbol: Option<String>,
+            #[serde(default)]
+            interval: Option<Timeframe>,
         }
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
@@ -83,6 +95,8 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
                     studies,
                     price_pane,
                     panes,
+                    symbol,
+                    interval,
                 } = serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(
                     map,
                 ))?;
@@ -90,6 +104,8 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
                     studies,
                     price_pane,
                     panes,
+                    symbol,
+                    interval,
                 })
             }
         }
@@ -818,7 +834,8 @@ mod tests {
                 vec![("start_time", Number(-8e15))],
                 vec![("start_time", Text(String::new()))],
             ),
-            // Saved before the levels could extend past their profiles.
+            // Saved before the levels could extend past their profiles, and before sessions,
+            // leaving out the bars outside them and rows in ticks could be chosen.
             (
                 "Vol Profile Session",
                 vec![("row_count", Length(30))],
@@ -827,6 +844,9 @@ mod tests {
                     ("extend_poc", Toggle(false)),
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
+                    ("sessions", Choice(0)),
+                    ("hours_only", Toggle(false)),
+                    ("row_ticks", Length(0)),
                 ],
             ),
             // Saved before the twelve lengths were inputs.
@@ -846,6 +866,9 @@ mod tests {
                     ("extend_poc", Toggle(false)),
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
+                    ("period_count", Length(1)),
+                    ("restart_yearly", Toggle(false)),
+                    ("row_ticks", Length(0)),
                 ],
             )
         });

@@ -19,7 +19,7 @@ use egui::Color32;
 /// [`OscillatorAverage`] independently. With lengths 12, 26 and 9 a bar has no value before
 /// bar 25, the PVO alone on bars 25 to 32, and all three lines from bar 33, under either
 /// formula. A bar with a non-finite volume has no value and is skipped by the averages.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PercentageVolumeOscillator {
     short_period: usize,
     long_period: usize,

@@ -25,7 +25,7 @@ use egui::Color32;
 use std::collections::VecDeque;
 
 /// Reversal: bars that make a new extreme and close beyond the previous close.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Reversal {
     lookback: usize,
     values: IndicatorValues,

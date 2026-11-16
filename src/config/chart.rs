@@ -40,6 +40,7 @@ pub enum BackgroundStyle {
 /// When the chart shows a group of buttons: its navigation buttons in the main pane, or the
 /// maximize and menu buttons of its panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
@@ -76,12 +77,23 @@ fn pixel_conflation_threshold() -> Option<f32> {
 ///
 /// Tick spacing is a property of each scale, set through
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
+///
+/// ```
+/// use egui_charts::config::PriceAxisOptions;
+///
+/// let mut options = PriceAxisOptions::default();
+/// options.show_symbol_name = true;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PriceAxisOptions {
     /// Allow value tags to overlap instead of moving them to free vertical slots.
     pub allow_label_overlap: bool,
-    /// Display study value tags on price axes, independently of the status line values.
+    /// Display study value tags on price axes, independently of the status line values. Each tag
+    /// reads its plot at the last bar in view, or at its last value when the view reaches past
+    /// it, so it stays where the plot leaves the pane while the chart scrolls; the main series'
+    /// last price tag follows its own price line source.
     pub show_study_values: bool,
     /// Study value tag colour; `None` follows each plot's colour.
     pub study_value_color: Option<Color32>,

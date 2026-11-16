@@ -79,7 +79,7 @@ pub fn trade_delta(
 }
 
 /// Closed-bar detection state; the live bar never enters a run or confirms a pivot.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct CvdMarkers {
     pub divergence: bool,
     pub swing_bars: usize,

@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
-use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertStatus};
-use crate::services::{AlertEvent, Alerts, Listener};
+use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertSourceName, AlertStatus};
+use crate::services::{AlertEvent, Alerts, Listener, Notification, Notifications};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::alert_dialog::rule_form;
 use crate::ui_kit::buttons::Button;
@@ -51,6 +51,7 @@ pub enum AlertPanelAction {
 
 /// The property the alert list is ordered by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertSortKey {
     /// Arrival order, as the host pushed the alerts.
     Arrival,
@@ -70,8 +71,16 @@ pub enum AlertSortKey {
 }
 
 /// Saved presentation of the manager. Every optional field starts visible.
+///
+/// ```
+/// use egui_charts::ui::widget_bar::AlertListOptions;
+///
+/// let mut options = AlertListOptions::default();
+/// options.descending = true;
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct AlertListOptions {
     /// Property to order by; creation time by default.
     pub sort: AlertSortKey,
@@ -104,13 +113,14 @@ impl Default for AlertListOptions {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum PresentationEdit {
     List(AlertListOptions),
     Marker(AlertId, bool, bool),
 }
 
 // Reserve both history positions while the host confirms the marker change.
+#[derive(Debug)]
 struct PresentationRestore {
     redo: bool,
     request: u64,
@@ -121,6 +131,7 @@ struct PresentationRestore {
 
 /// One trigger the host reported, retained even after the alert is removed.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AlertTrigger {
     /// Host alert identifier.
     pub id: AlertId,
@@ -138,6 +149,9 @@ pub struct AlertTrigger {
 
 /// Reply key of the inline draft's save, apart from the stream generations and other replies.
 const DRAFT_REPLY: u64 = u64::MAX;
+
+/// Triggers the log keeps, and toasts the stack keeps while they wait to be dismissed.
+const LOG_BOUND: usize = 10_000;
 
 /// An alert panel connected to the host's [`Alerts`] service.
 ///
@@ -163,7 +177,7 @@ pub struct AlertsPanel {
     restoring: Option<PresentationRestore>,
     staged_display: Vec<(u64, PresentationEdit, bool)>,
     next_reply: u64,
-    sources: Vec<(AlertSource, String)>,
+    sources: Vec<(AlertSource, AlertSourceName)>,
     symbol: String,
     draft: Alert,
     inputs: Option<(crate::model::AlertInputs, Option<crate::model::Timeframe>)>,
@@ -171,6 +185,34 @@ pub struct AlertsPanel {
     pending: usize,
     sound_choice: Option<String>,
     sound: Option<String>,
+    desktop: Option<Arc<dyn Notifications>>,
+    desktop_inbox: Arc<Inbox>,
+    desktop_toast: Option<u64>,
+}
+
+impl std::fmt::Debug for AlertsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertsPanel")
+            .field("config", &self.config)
+            .field("generation", &self.generation)
+            .field("alerts", &self.alerts)
+            .field("log", &self.log)
+            .field("error", &self.error)
+            .field("show_log", &self.show_log)
+            .field("notification_seconds", &self.notification_seconds)
+            .field("options", &self.options)
+            .field("marks", &self.marks)
+            .field("next_reply", &self.next_reply)
+            .field("sources", &self.sources)
+            .field("symbol", &self.symbol)
+            .field("draft", &self.draft)
+            .field("inputs", &self.inputs)
+            .field("draft_saving", &self.draft_saving)
+            .field("pending", &self.pending)
+            .field("sound_choice", &self.sound_choice)
+            .field("sound", &self.sound)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for AlertsPanel {
@@ -192,7 +234,7 @@ impl AlertsPanel {
             log: VecDeque::new(),
             error: None,
             show_log: false,
-            notification_seconds: 5.0,
+            notification_seconds: 20.0,
             options: AlertListOptions::default(),
             marks: HashMap::new(),
             undo: Vec::new(),
@@ -208,6 +250,9 @@ impl AlertsPanel {
             pending: 0,
             sound_choice: None,
             sound: None,
+            desktop: None,
+            desktop_inbox: Arc::default(),
+            desktop_toast: None,
         }
     }
 
@@ -331,9 +376,9 @@ impl AlertsPanel {
         }
     }
 
-    /// Offer these study outputs and drawings, as stable identifiers and display names, to the
-    /// inline alert form.
-    pub fn set_sources(&mut self, sources: Vec<(AlertSource, String)>) {
+    /// Offer these study outputs and drawings, as stable identifiers and names, which are
+    /// translated when shown, to the inline alert form.
+    pub fn set_sources(&mut self, sources: Vec<(AlertSource, AlertSourceName)>) {
         self.sources = sources;
     }
 
@@ -346,13 +391,23 @@ impl AlertsPanel {
         self.inputs = Some((inputs, timeframe));
     }
 
-    /// Keep each trigger notification on screen for this many seconds, five by default.
+    /// Keep each trigger notification on screen for this many seconds, 20 by default, or until
+    /// the user dismisses it when zero. The stack keeps the most recent 10,000 toasts, as many as
+    /// the [`log`](Self::log) keeps triggers.
     pub fn set_notification_seconds(&mut self, seconds: f32) {
         self.notification_seconds = if seconds.is_finite() {
             seconds.max(0.0)
         } else {
-            5.0
+            20.0
         };
+    }
+
+    /// Also show each trigger popup as a desktop notification through
+    /// [`Notifications::deliver`], or only in the app when `None`, the default. A refused or
+    /// failed delivery shows an error toast that stays until the user dismisses it; deliveries
+    /// that fail while it shows add none.
+    pub fn set_desktop(&mut self, service: Option<Arc<dyn Notifications>>) {
+        self.desktop = service;
     }
 
     /// The sound to play when an alert fires, as the user chose it in the alert settings: its
@@ -543,6 +598,30 @@ impl AlertsPanel {
             self.cancel_restore();
             self.staged_display.clear();
             self.watch();
+        }
+        let repaint = ctx.clone();
+        self.desktop_inbox
+            .set_waker(move || repaint.request_repaint());
+        for (_, answer) in self.desktop_inbox.drain().answers {
+            let Ok(result) = answer.downcast::<Result<(), FeedError>>() else {
+                continue;
+            };
+            // One failure toast on screen at a time, however many triggers fail meanwhile. It
+            // stays until dismissed: a lifetime would bring it back with every later trigger.
+            if let Err(error) = *result
+                && !self
+                    .desktop_toast
+                    .is_some_and(|id| toasts.toasts().iter().any(|t| t.id == id))
+            {
+                let toast = Toast::error(l10n::format_text(
+                    ctx,
+                    "Desktop notification failed: {error}",
+                    &[("error", error.to_string().as_str())],
+                ))
+                .permanent();
+                self.desktop_toast = Some(toast.id);
+                toasts.add(toast);
+            }
         }
         for (key, answer) in self.inbox.drain().answers {
             if key == self.generation {
@@ -752,6 +831,22 @@ impl AlertsPanel {
             .find(|a| a.id.as_ref() == Some(id))
             .map(|a| &a.delivery);
         if delivery.is_none_or(|d| d.popup) {
+            if let Some(desktop) = &self.desktop {
+                let mut notification = Notification::new(trigger.time, title.clone());
+                notification.body.clone_from(message);
+                notification.symbol = (!symbol.is_empty()).then(|| symbol.clone());
+                desktop.deliver(notification, self.desktop_inbox.reply(0));
+            }
+            // Make room by closing the oldest toasts that would close by themselves; the others
+            // stay until the user dismisses them, as many as the log keeps.
+            let mut extra = toasts.len().saturating_sub(4);
+            toasts.toasts_mut().retain(|toast| {
+                let drop = extra > 0 && toast.duration > 0.0;
+                extra -= usize::from(drop);
+                !drop
+            });
+            let extra = toasts.len().saturating_sub(LOG_BOUND - 1);
+            toasts.toasts_mut().drain(..extra);
             toasts.add(
                 Toast::info(if message.is_empty() {
                     title
@@ -760,8 +855,6 @@ impl AlertsPanel {
                 })
                 .duration(self.notification_seconds),
             );
-            let extra = toasts.len().saturating_sub(5);
-            toasts.toasts_mut().drain(..extra);
         }
         if delivery.is_none_or(|d| d.sound) {
             self.sound = self.sound_choice.clone();
@@ -783,7 +876,7 @@ impl AlertsPanel {
 
     fn log_trigger(&mut self, trigger: AlertTrigger) {
         self.log.push_back(trigger);
-        if self.log.len() > 10_000 {
+        if self.log.len() > LOG_BOUND {
             self.log.pop_front();
         }
     }
@@ -1237,6 +1330,7 @@ mod tests {
     use crate::data::Reply;
     use crate::model::AlertCondition;
     use crate::services::Events;
+    use crate::ui_kit::notifications::ToastKind;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -1980,6 +2074,103 @@ mod tests {
             assert_eq!(toasts.len(), usize::from(popup));
             assert_eq!(panel.take_sound().is_some(), sound);
         }
+    }
+
+    /// Trigger toasts kept until dismissed are never closed to make room, and an auto-closing
+    /// trigger toast still shows beside five of them. The stack keeps as many as the log, the
+    /// oldest closing beyond.
+    #[test]
+    fn toasts_kept_until_dismissed_are_not_closed_to_make_room() {
+        let mut panel = AlertsPanel::default();
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        let trigger = |n: u32| AlertTrigger {
+            id: AlertId(n.to_string()),
+            symbol: format!("S{n}"),
+            time: Utc::now(),
+            price: None,
+            message: String::new(),
+            silent: false,
+        };
+        panel.set_notification_seconds(0.0);
+        for n in 0..6 {
+            panel.record_trigger(&ctx, trigger(n), &mut toasts);
+        }
+        assert_eq!(toasts.len(), 6);
+        panel.set_notification_seconds(20.0);
+        panel.record_trigger(&ctx, trigger(6), &mut toasts);
+        assert_eq!(toasts.len(), 7);
+        assert_eq!(toasts.toasts()[6].message, "Alert triggered: S6");
+        panel.set_notification_seconds(0.0);
+        while toasts.len() < 10_000 {
+            toasts.add(Toast::info("kept").permanent());
+        }
+        for n in 7..9 {
+            panel.record_trigger(&ctx, trigger(n), &mut toasts);
+        }
+        assert_eq!(toasts.len(), 10_000);
+        assert_eq!(toasts.toasts()[0].message, "Alert triggered: S1");
+        assert_eq!(toasts.toasts()[9_999].message, "Alert triggered: S8");
+    }
+
+    /// Each trigger popup also goes to the desktop when the host routes it there, and a refused
+    /// delivery shows one error toast, which stays after the trigger toasts close.
+    #[test]
+    fn a_popup_goes_to_the_desktop_and_a_refusal_is_shown_once() {
+        #[derive(Default)]
+        struct Desktop(Mutex<Vec<Notification>>);
+        impl Notifications for Desktop {
+            fn watch(&self, _: Events<Notification>) {}
+            fn deliver(&self, notification: Notification, reply: Reply<()>) {
+                self.0.lock().unwrap().push(notification);
+                reply.send(Err(FeedError::Other("permission denied".into())));
+            }
+        }
+        let host = Arc::new(Host::default());
+        let desktop = Arc::new(Desktop::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        panel.set_desktop(Some(desktop.clone()));
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        let frame = |panel: &mut AlertsPanel, toasts: &mut Toasts| {
+            ctx.run_ui(egui::RawInput::default(), |ui| panel.poll(ui.ctx(), toasts))
+                .drop_without_applying_deltas();
+        };
+        let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+        alert.id = Some(AlertId("1".into()));
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        let mut errors = Vec::new();
+        for delivered in 1..=2 {
+            events.push(AlertEvent::Triggered {
+                id: alert.id.clone().unwrap(),
+                time: "2026-10-23T12:00:00Z".parse().unwrap(),
+                price: None,
+            });
+            frame(&mut panel, &mut toasts);
+            frame(&mut panel, &mut toasts);
+            let sent = desktop.0.lock().unwrap();
+            assert_eq!(sent.len(), delivered);
+            assert_eq!(sent[0].title, "Alert triggered: SYM");
+            assert_eq!(sent[0].symbol.as_deref(), Some("SYM"));
+            errors.push(
+                toasts
+                    .toasts()
+                    .iter()
+                    .filter(|t| t.kind == ToastKind::Error)
+                    .map(|t| (t.id, t.message.clone()))
+                    .collect::<Vec<_>>(),
+            );
+            // A minute later the trigger toast has closed; the error waits to be dismissed.
+            for toast in toasts.toasts_mut() {
+                toast.created_at -= 60.0;
+            }
+            toasts.cleanup_expired();
+        }
+        let refused = "Desktop notification failed: permission denied".to_owned();
+        assert_eq!(errors[0], [(errors[0][0].0, refused)]);
+        assert_eq!(errors[1], errors[0], "the first error toast stays, alone");
     }
 
     #[test]

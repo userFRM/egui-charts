@@ -191,9 +191,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace an anchored VWAP's settings (source, bands and their unit, fills, line plot,
-    /// latest-value tracking and its precision) as one undoable edit. Unknown ids, locked
-    /// drawings, other tools and invalid settings change nothing.
+    /// Replace an anchored VWAP's settings (source, bands, their unit and the style of each band
+    /// line, fills, line plot, latest-value tracking and its precision) as one undoable edit.
+    /// Unknown ids, locked drawings, other tools and invalid settings change nothing.
     pub fn set_vwap_config(
         &mut self,
         id: usize,
@@ -272,6 +272,43 @@ impl Chart {
                     drawing.position_target_color = target_color;
                     drawing.position_stop_color = stop_color;
                 });
+            });
+        }
+        Ok(())
+    }
+
+    /// Replace a pin's text popup switch or a signpost's glyph, its switch and its disc colour in
+    /// one undoable edit. Other drawing tools, a glyph that is empty or longer than 32 bytes, and
+    /// locked drawings change nothing.
+    pub fn set_annotation_marker(
+        &mut self,
+        id: usize,
+        marker: crate::drawings::AnnotationMarker,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if !matches!(
+            drawing.tool_type,
+            crate::drawings::DrawingToolType::AnchoredNote
+                | crate::drawings::DrawingToolType::Signpost
+        ) {
+            return Err(DrawingError::Invalid("Drawing is not a pin or signpost"));
+        }
+        if !marker.is_valid() {
+            return Err(DrawingError::Invalid("Invalid annotation marker"));
+        }
+        if drawing.marker != marker {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.marker = marker);
             });
         }
         Ok(())
@@ -1002,6 +1039,56 @@ mod tests {
         assert_eq!(chart.drawings().drawings[0].vwap, Some(edited));
         assert!(chart.undo());
         assert!(!chart.can_undo());
+    }
+
+    /// A host sets a pin's or a signpost's marker in one undoable step; other tools, a glyph
+    /// that is empty or longer than 32 bytes, and locked drawings change nothing.
+    #[test]
+    fn annotation_marker_host_edits_are_validated_and_undoable() {
+        use crate::drawings::AnnotationMarker;
+        let marker = AnnotationMarker {
+            show_text: false,
+            glyph: "🚀".into(),
+            show_glyph: true,
+            glyph_color: Some([255, 152, 0, 255]),
+        };
+        for tool in [DrawingToolType::AnchoredNote, DrawingToolType::Signpost] {
+            let mut chart = Chart::new(BarData::default());
+            chart.drawings_mut().drawings.push(Drawing::new(7, tool));
+            chart.set_annotation_marker(7, marker.clone()).unwrap();
+            chart.set_annotation_marker(7, marker.clone()).unwrap();
+            assert_eq!(chart.drawings().drawings[0].marker, marker, "{tool:?}");
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].marker, Default::default());
+            assert!(!chart.undo(), "an unchanged marker adds no step");
+            for glyph in ["", "012345678901234567890123456789012"] {
+                let invalid = AnnotationMarker {
+                    glyph: glyph.into(),
+                    ..marker.clone()
+                };
+                assert!(matches!(
+                    chart.set_annotation_marker(7, invalid),
+                    Err(DrawingError::Invalid(_))
+                ));
+            }
+            assert_eq!(
+                chart.set_annotation_marker(8, marker.clone()),
+                Err(DrawingError::UnknownDrawing(8))
+            );
+            chart.drawings_mut().drawings[0].locked = true;
+            assert_eq!(
+                chart.set_annotation_marker(7, marker.clone()),
+                Err(DrawingError::Locked(7))
+            );
+            chart.drawings_mut().drawings[0].locked = false;
+            chart.drawings_mut().drawings[0].tool_type = DrawingToolType::Note;
+            assert!(matches!(
+                chart.set_annotation_marker(7, marker.clone()),
+                Err(DrawingError::Invalid(_))
+            ));
+            assert_eq!(chart.drawings().drawings[0].marker, Default::default());
+            assert!(!chart.can_undo());
+        }
     }
 
     /// Readout edits and reversal each undo in one step, preserve times and identity, and

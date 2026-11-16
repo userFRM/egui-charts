@@ -7,6 +7,7 @@
 /// How a touch crosshair activated by a long press is exited.
 /// This does not control live-edge following.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum TouchTrackingExitMode {
     /// Hide the crosshair and readout when the touch ends.
     #[default]

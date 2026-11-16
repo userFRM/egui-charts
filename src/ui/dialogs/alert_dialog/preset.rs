@@ -8,14 +8,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery, AlertFrequency,
-    AlertRule, AlertSource, NotificationSchedule, Timeframe,
+    AlertRule, AlertSource, AlertSourceName, NotificationSchedule, Timeframe,
 };
 
 /// How many presets the user can keep.
 pub(super) const MAX_PRESETS: usize = 5;
 
-/// The stored document's current version. Version 1 kept whole alerts.
-const VERSION: u32 = 2;
+/// The stored document's current version. Version 1 kept whole alerts, version 2 source names
+/// as finished text.
+const VERSION: u32 = 3;
 
 /// Which groups of settings a preset stores and restores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +72,7 @@ pub(super) struct AlertPreset {
     rules: Vec<AlertRule>,
     /// The saving chart's names for what `rules` test: studies are numbered per chart, so an id
     /// alone may name another study elsewhere. Presets saved without names have none.
-    source_names: Vec<(AlertSource, String)>,
+    source_names: Vec<(AlertSource, AlertSourceName)>,
     timeframe: Option<Timeframe>,
     additional_timeframes: Vec<Option<Timeframe>>,
     frequency: AlertFrequency,
@@ -88,7 +89,7 @@ impl AlertPreset {
     /// entered times do. `sources` names what its chart offers.
     pub(super) fn capture(
         alert: &Alert,
-        sources: &[(AlertSource, String)],
+        sources: &[(AlertSource, AlertSourceName)],
         fields: PresetFields,
         now: DateTime<Utc>,
     ) -> Self {
@@ -157,16 +158,16 @@ impl AlertPreset {
     /// Set the selected groups on `alert`, whose subject, levels, drawings, compared plots and
     /// webhook address stay. A rule stays whole where its stored operator would drop the drawings
     /// or plots it tests or needs levels it lacks. A stored study that `sources` does not offer
-    /// under its stored name is not reused, and a strategy fill alert keeps its condition, interval
+    /// under its stored name is not reused, and an alert on host events keeps its condition, interval
     /// and any frequency it cannot use.
     pub(super) fn apply(
         &self,
         alert: &mut Alert,
-        sources: &[(AlertSource, String)],
+        sources: &[(AlertSource, AlertSourceName)],
         now: DateTime<Utc>,
     ) {
-        let fills = matches!(alert.condition, AlertCondition::StrategyFills(_));
-        if self.fields.condition && !fills && !self.rules.is_empty() {
+        let events = alert.condition.is_event();
+        if self.fields.condition && !events && !self.rules.is_empty() {
             let first = AlertRule {
                 source: alert.source.clone(),
                 condition: alert.condition.clone(),
@@ -205,7 +206,7 @@ impl AlertPreset {
             }
             alert.additional_conditions = additional;
         }
-        if self.fields.interval && !fills {
+        if self.fields.interval && !events {
             if alert.timeframe != self.timeframe
                 && let Some(inputs) = &mut alert.inputs
             {
@@ -222,7 +223,7 @@ impl AlertPreset {
             .additional_timeframes
             .truncate(alert.additional_conditions.len());
         if self.fields.frequency
-            && (!fills
+            && (!events
                 || matches!(
                     self.frequency,
                     AlertFrequency::Once | AlertFrequency::EveryTime
@@ -258,7 +259,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
-        C::StrategyFills(_) => return None,
+        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) => return None,
         C::Crossing(_) => C::Crossing(0.0),
         C::CrossingUp(_) => C::CrossingUp(0.0),
         C::CrossingDown(_) => C::CrossingDown(0.0),
@@ -300,8 +301,8 @@ fn restored_condition(
     stored: &AlertCondition,
     current: &AlertCondition,
     replaces: bool,
-    names: &[(AlertSource, String)],
-    sources: &[(AlertSource, String)],
+    names: &[(AlertSource, AlertSourceName)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) -> Option<AlertCondition> {
     use AlertCondition as C;
     let levels = match current {
@@ -335,7 +336,9 @@ fn restored_condition(
         _ => 1.0,
     };
     Some(match stored {
-        C::StrategyFills(_) | C::Channel { .. } => return None,
+        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Channel { .. } => {
+            return None;
+        }
         C::MovingBy { .. } | C::MovingByPercent { .. } | C::VolumeAboveAverage { .. }
             if compares =>
         {
@@ -379,8 +382,8 @@ fn restored_condition(
 fn restored_source(
     stored: &AlertSource,
     current: &AlertSource,
-    names: &[(AlertSource, String)],
-    sources: &[(AlertSource, String)],
+    names: &[(AlertSource, AlertSourceName)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) -> AlertSource {
     if matches!(current, AlertSource::Drawing(_)) || !offered(stored, names, sources) {
         current.clone()
@@ -394,8 +397,8 @@ fn restored_source(
 /// accepts the identifier only when it is unambiguous.
 fn offered(
     source: &AlertSource,
-    names: &[(AlertSource, String)],
-    sources: &[(AlertSource, String)],
+    names: &[(AlertSource, AlertSourceName)],
+    sources: &[(AlertSource, AlertSourceName)],
 ) -> bool {
     match source {
         AlertSource::Price | AlertSource::Volume => true,
@@ -453,7 +456,7 @@ pub(super) fn to_document(
 /// Read a stored document. Whole alerts from version 1 become presets of every group except an
 /// expiry, whose duration they did not record; a later save rewrites them without their excluded
 /// values. Any other version is an error, so that a save cannot overwrite it. The remembered
-/// schedule is read from either version.
+/// schedule is read from each of them.
 pub(super) fn from_document(
     document: &str,
     now: DateTime<Utc>,
@@ -475,7 +478,8 @@ pub(super) fn from_document(
                     .collect()
             })
             .map_err(|error| error.to_string()),
-        VERSION => serde_json::from_value(document.presets).map_err(|error| error.to_string()),
+        // Version 2 holds every source name as finished text, which loads as a name without parts.
+        2 | VERSION => serde_json::from_value(document.presets).map_err(|error| error.to_string()),
         _ => Err("Unsupported alert preset version".into()),
     };
     presets.map(|presets| (presets, document.last_schedule))
@@ -823,7 +827,7 @@ mod tests {
                 C::Below(100.0),
             ),
         ];
-        let sources = [(study(), "RSI signal".to_owned())];
+        let sources = [(study(), AlertSourceName::from("RSI signal"))];
         for (stored_source, stored, current_source, current, source, condition) in cases {
             let mut saved = Alert::new("OLD", stored.clone());
             saved.source = stored_source;
@@ -981,7 +985,7 @@ mod tests {
     fn rules_a_preset_adds_take_their_stored_operators() {
         use AlertCondition as C;
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
-        let sources = [(study(), "RSI signal".to_owned())];
+        let sources = [(study(), AlertSourceName::from("RSI signal"))];
         let rule = |source, condition| AlertRule { source, condition };
         let crossing_up_plot = C::Compare {
             other: study(),
@@ -1045,7 +1049,7 @@ mod tests {
             id: "2".into(),
             output: 0,
         };
-        let named = |name: &str| (plot.clone(), name.to_owned());
+        let named = |name: &str| (plot.clone(), AlertSourceName::from(name));
         let crossing_up_plot = AlertCondition::Compare {
             other: plot.clone(),
             comparison: AlertComparison::CrossingUp,
@@ -1069,6 +1073,26 @@ mod tests {
             serde_json::json!({"Compare": {"other": study, "comparison": "CrossingUp"}}),
             serde_json::json!("Price"),
         );
+        // What this file stored before names kept their parts: the name as finished text.
+        let saved_on_rsi = from_document(
+            r#"{"version": 2, "presets": {"P": {
+                "rules": [{"source": {"Study": {"id": "2", "output": 0}}, "condition": {"Above": 0.0}}],
+                "source_names": [[{"Study": {"id": "2", "output": 0}}, "RSI: RSI"]]
+            }}}"#,
+            now,
+        )
+        .unwrap()
+        .0
+        .remove("P")
+        .unwrap();
+        let built_rsi = [(
+            plot.clone(),
+            AlertSourceName::new(
+                "{study}: {output}",
+                &[("study", "RSI")],
+                &[("output", "RSI")],
+            ),
+        )];
 
         let rsi = [named("RSI: RSI")];
         let sma = [named("SMA: SMA")];
@@ -1080,7 +1104,7 @@ mod tests {
         let crossing_level = (AlertSource::Price, AlertCondition::CrossingUp(100.0));
         let reused_source = (plot.clone(), AlertCondition::Above(100.0));
         let reused_other = (AlertSource::Price, crossing_up_plot);
-        let rows: [(&AlertPreset, &[(AlertSource, String)], _); 8] = [
+        let rows: [(&AlertPreset, &[(AlertSource, AlertSourceName)], _); 10] = [
             // Another chart's study 2 is not the stored one.
             (&on_plot, &macd, &kept_on_level),
             (&crossing, &macd, &crossing_level),
@@ -1092,6 +1116,9 @@ mod tests {
             (&unnamed_crossing, &macd, &reused_other),
             (&unnamed_on_plot, &twice, &kept_on_level),
             (&unnamed_crossing, &twice, &crossing_level),
+            // A name saved as finished text is the chart's name with the same English text.
+            (&saved_on_rsi, &built_rsi, &reused_source),
+            (&saved_on_rsi, &macd, &kept_on_level),
         ];
         for (index, (preset, sources, expected)) in rows.into_iter().enumerate() {
             let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));

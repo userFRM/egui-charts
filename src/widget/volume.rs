@@ -101,7 +101,7 @@ pub(super) fn paint(
         }
         let histogram = matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns);
         if histogram {
-            plot.width = coords.bar_spacing_for_width() * factor as f32 * 0.8;
+            plot.width = coords.volume_bar_width() * factor as f32;
         }
         let mut points = Vec::new();
         for group in visible.start / factor..visible.end.div_ceil(factor) {
@@ -151,16 +151,18 @@ pub(super) fn paint(
     crate::chart::indicators::plots::paint_price_lines(&painter, study, &map);
 }
 
+/// The volume study's value tags, read at the bar `study_tag_bar` gives for `last_in_view`.
 pub(super) fn tags(
     painter: &Painter,
     rect: Rect,
     map: &crate::scales::PriceMap,
     study: &dyn Indicator,
+    last_in_view: Option<usize>,
     edge: f32,
     occupied: &mut Vec<Option<Rect>>,
     axis: &crate::config::PriceAxisOptions,
 ) {
-    let Some(bar) = study.values().len().checked_sub(1) else {
+    let Some(bar) = crate::chart::rendering::axes::study_tag_bar(study, last_in_view) else {
         return;
     };
     if !axis.show_study_values

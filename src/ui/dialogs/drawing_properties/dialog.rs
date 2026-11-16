@@ -18,6 +18,7 @@ use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
 use crate::ui_kit::tab_bar::TabBar;
 
 /// Drawing properties dialog
+#[derive(Debug)]
 pub struct DrawingPropertiesDialog {
     /// Display and layout options for this component.
     pub config: DrawingPropertiesConfig,
@@ -249,6 +250,7 @@ impl DrawingPropertiesDialog {
                 drawing.position_target_color = old.position_target_color;
                 drawing.position_stop_color = old.position_stop_color;
                 drawing.position_style = old.position_style;
+                drawing.marker = old.marker;
                 drawing.volume_profile = old.volume_profile;
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
@@ -582,8 +584,8 @@ const FOOTER_HEIGHT: f32 = 60.0;
 /// Keyboard and colour picker state kept in egui memory between frames.
 #[derive(Clone, Default)]
 struct UiState {
-    /// Colour and fill colour pickers of the Style tab.
-    pickers: [ColorPickerState; 2],
+    /// Colour, fill colour and signpost disc colour pickers of the Style tab.
+    pickers: [ColorPickerState; 3],
     /// Text colour, background and border pickers of the Text tab, and of the Style tab's rows
     /// for a price label's badge and a price note's label.
     text_pickers: [ColorPickerState; 3],
@@ -594,6 +596,7 @@ struct UiState {
 }
 
 /// Only previewed drawings are restored; incoming host drawings and metadata stay intact.
+#[derive(Debug)]
 struct PreviewDrawing {
     drawing: Drawing,
     times: Vec<Option<chrono::DateTime<chrono::Utc>>>,
@@ -820,6 +823,7 @@ mod tests {
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
                 settings.position_style.border = true;
+                settings.marker.show_text = false;
                 settings.price_axis_label = false;
                 settings.time_axis_label = false;
                 settings.italic = true;
@@ -847,6 +851,7 @@ mod tests {
                 assert_eq!(preview.position_target_color, Some([40, 100, 220, 255]));
                 assert_eq!(preview.position_stop_color, Some([220, 140, 40, 255]));
                 assert!(preview.position_style.border);
+                assert!(!preview.marker.show_text);
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
                 assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
@@ -896,6 +901,7 @@ mod tests {
             assert_eq!(restored.position_target_color, None, "{finish}");
             assert_eq!(restored.position_stop_color, None, "{finish}");
             assert!(!restored.position_style.border, "{finish}");
+            assert!(restored.marker.show_text, "{finish}");
             assert!(
                 restored.price_axis_label && restored.time_axis_label,
                 "{finish}"

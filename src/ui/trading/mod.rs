@@ -124,8 +124,39 @@ pub struct Trading {
     calculator: Option<(egui::Pos2, String)>,
 }
 
+impl std::fmt::Debug for Trading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Trading")
+            .field("generation", &self.generation)
+            .field("connection", &self.connection)
+            .field("restating", &self.restating)
+            .field("account", &self.account)
+            .field("orders", &self.orders)
+            .field("positions", &self.positions)
+            .field("rules", &self.rules)
+            .field("rules_key", &self.rules_key)
+            .field("request_key", &self.request_key)
+            .field("rules_ready", &self.rules_ready)
+            .field("rules_failed", &self.rules_failed)
+            .field("placing", &self.placing)
+            .field("pending", &self.pending)
+            .field("decimals", &self.decimals)
+            .field("instruments", &self.instruments)
+            .field("chart_logo", &self.chart_logo)
+            .field("quote", &self.quote)
+            .field("quantity", &self.quantity)
+            .field("presets", &self.presets)
+            .field("account_panel", &self.account_panel)
+            .field("display", &self.display)
+            .field("sound", &self.sound)
+            .field("calculator", &self.calculator)
+            .finish_non_exhaustive()
+    }
+}
+
 /// An order sent to [`Broker::preview`] and the estimate it was answered with. Confirming the
 /// preview places `request` itself, whatever the ticket shows by then.
+#[derive(Debug)]
 struct Preview {
     key: u64,
     request: OrderRequest,

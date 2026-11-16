@@ -96,6 +96,8 @@ pub(crate) struct DataSourceDialog {
     can_save: bool,
     /// The saved state as it was last written.
     saved: Saved,
+    /// The ready profiles whose name no saved profile has, first in the profile list.
+    ready: Vec<Profile>,
     open: bool,
     /// Whether `startup` has acted.
     started: bool,
@@ -218,9 +220,10 @@ impl Draft {
         Self::of(profile.clone(), values, kept.is_some(), origin)
     }
 
-    /// The profile in use, else the one used last, else a new one.
-    fn current(saved: &Saved) -> Self {
-        let named = |name: &String| saved.profiles.iter().find(|profile| profile.name == *name);
+    /// The profile in use, else the one used last, saved or ready, else a new one.
+    fn current(saved: &Saved, ready: &[Profile]) -> Self {
+        let mut listed = saved.profiles.iter().chain(ready);
+        let named = |name: &String| listed.find(|profile| profile.name == *name);
         let profile = saved.current.as_ref().and_then(named);
         profile.map_or_else(Self::blank, |profile| Self::saved(saved, profile))
     }
@@ -508,8 +511,11 @@ impl<'a> Fields<'a> {
     fn rows(&mut self, ui: &mut egui::Ui, record: Option<&Value>, active: &mut Slot) {
         for slot in self.slots() {
             let path = self.path(slot).unwrap_or_default();
-            slot_cells(ui, slot, active, &path, false, record);
-            if clear_button(ui, !path.is_empty()) {
+            let mut cleared = false;
+            slot_cells(ui, slot, active, &path, false, record, |ui| {
+                cleared = clear_button(ui, !path.is_empty());
+            });
+            if cleared {
                 self.clear(slot);
             }
             ui.end_row();
@@ -554,10 +560,13 @@ impl<'a> Fields<'a> {
 
 /// The Test of the History step and what it found.
 struct HistoryTest {
-    /// Where the answer of the request in flight arrives, and the endpoint it was sent to.
-    pending: Option<(Answer, String)>,
+    /// Where the answer of the request in flight arrives, the endpoint it was sent to and its
+    /// symbol.
+    pending: Option<(Answer, String, String)>,
     /// The endpoint of the last answer.
     endpoint: String,
+    /// The symbol of the last sample. A key of the rows path can name it.
+    symbol: String,
     /// Why the last Test gave no sample.
     error: Option<String>,
     /// Whether the last Test proposed the mapping.
@@ -579,6 +588,7 @@ impl Default for HistoryTest {
         Self {
             pending: None,
             endpoint: String::new(),
+            symbol: String::new(),
             error: None,
             proposed: false,
             sample: None,
@@ -698,11 +708,15 @@ impl DataSourceDialog {
     /// its answer could not be remembered, and nothing is saved.
     pub(crate) fn new(storage: Arc<DemoStorage>, can_save: bool) -> Self {
         let saved = Saved::load(&storage);
+        let mut ready = store::ready();
+        // A saved profile of that name, made before the ready one shipped, stays the visitor's.
+        ready.retain(|profile| !saved.profiles.iter().any(|held| held.name == profile.name));
         Self {
-            draft: Draft::current(&saved),
+            draft: Draft::current(&saved, &ready),
             storage,
             can_save,
             saved,
+            ready,
             open: false,
             started: false,
             view: View::Steps,
@@ -746,7 +760,8 @@ impl DataSourceDialog {
             return None;
         }
         let current = self.saved.current.as_ref();
-        let named = |name: &String| self.saved.profiles.iter().find(|saved| saved.name == *name);
+        let mut listed = self.saved.profiles.iter().chain(&self.ready);
+        let named = |name: &String| listed.find(|saved| saved.name == *name);
         let Some(profile) = current.and_then(named) else {
             // The profile that was in use is gone.
             self.saved.own = false;
@@ -928,7 +943,8 @@ impl DataSourceDialog {
         let footer = footer.primary_enabled(problem.is_none() && !taken);
         let (connect, cancel) = footer.show_with_left(ui, |ui| {
             if self.can_save {
-                let named = !self.draft.profile.name.is_empty() && !taken;
+                let named =
+                    !self.draft.profile.name.is_empty() && !taken && self.ready_draft().is_none();
                 save = ui
                     .add(Button::new("Save").outlined().enabled(named))
                     .clicked();
@@ -977,13 +993,24 @@ impl DataSourceDialog {
         });
     }
 
-    /// Whether another saved profile has the name of the draft.
+    /// Whether another saved profile has the name of the draft, or a ready profile that the
+    /// draft no longer equals: a ready profile is never saved, so a changed one needs another
+    /// name.
     fn name_taken(&self) -> bool {
         let draft = &self.draft;
         let other = |saved: &Profile| {
             saved.name == draft.profile.name && Some(&saved.name) != draft.origin.as_ref()
         };
         self.saved.profiles.iter().any(other)
+            || self
+                .ready_draft()
+                .is_some_and(|ready| *ready != draft.profile)
+    }
+
+    /// The ready profile with the draft's name.
+    fn ready_draft(&self) -> Option<&Profile> {
+        let name = &self.draft.profile.name;
+        self.ready.iter().find(|ready| ready.name == *name)
     }
 
     /// Stores the draft: it replaces the saved profile it was loaded from, or is appended when
@@ -1029,7 +1056,10 @@ impl DataSourceDialog {
         if !self.report.is_empty() {
             return None;
         }
-        self.store_draft();
+        // A ready profile connects as shipped and is not stored.
+        if self.ready_draft().is_none() {
+            self.store_draft();
+        }
         self.saved.own = true;
         self.saved.current = Some(self.draft.profile.name.clone());
         self.saved.save(&self.storage);
@@ -1050,7 +1080,7 @@ impl DataSourceDialog {
             saved.current = None;
         }
         saved.save(&self.storage);
-        self.draft = Draft::current(&self.saved);
+        self.draft = Draft::current(&self.saved, &self.ready);
         self.forget_tests();
     }
 
@@ -1065,16 +1095,14 @@ impl DataSourceDialog {
             Export,
             Delete,
         }
-        let names = self
-            .saved
-            .profiles
-            .iter()
-            .map(|saved| Some(saved.name.clone()));
+        let profiles = self.ready.iter().chain(&self.saved.profiles);
+        let names = profiles.map(|profile| Some(profile.name.clone()));
         let names: Vec<Option<String>> = names.collect();
         let mut chosen = self.draft.origin.clone();
-        // The profile on the chart stays.
+        // The profile on the chart stays, and a ready one is never stored.
         let on_chart = self.saved.own && self.saved.current == chosen;
-        let deletable = chosen.is_some() && !on_chart;
+        let ready = |name: &String| self.ready.iter().any(|ready| ready.name == *name);
+        let deletable = chosen.as_ref().is_some_and(|name| !ready(name)) && !on_chart;
         let idle = self.import.is_none();
         let mut pick = None;
         FormRow::new("Profile").show(ui, |ui| {
@@ -1103,8 +1131,8 @@ impl DataSourceDialog {
         });
         match pick {
             Some(Pick::Load) => {
-                let named =
-                    |name: String| self.saved.profiles.iter().find(|saved| saved.name == name);
+                let mut listed = self.saved.profiles.iter().chain(&self.ready);
+                let named = |name: String| listed.find(|saved| saved.name == name);
                 if let Some(profile) = chosen.and_then(named) {
                     self.draft = Draft::saved(&self.saved, profile);
                     self.forget_tests();
@@ -1120,13 +1148,16 @@ impl DataSourceDialog {
             None => {}
         }
 
-        let taken = self.name_taken();
+        let taken = self.name_taken().then(|| match self.ready_draft() {
+            Some(_) => "A ready profile has this name. Rename it to save your own copy.",
+            None => "Another saved profile has this name.",
+        });
         let draft = &mut self.draft;
         FormRow::new("Name").show(ui, |ui| {
             ui.add(TextEdit::singleline(&mut draft.profile.name).desired_width(f32::INFINITY));
         });
-        if taken {
-            ui.error_label("Another saved profile has this name.");
+        if let Some(taken) = taken {
+            ui.error_label(taken);
         }
         let symbols = FormRow::new("Symbols").description(
             "Spelled as the service expects them, separated by commas or line ends. The chart \
@@ -1281,6 +1312,7 @@ impl DataSourceDialog {
             .saved
             .profiles
             .iter()
+            .chain(&self.ready)
             .any(|saved| saved.name == profile.name)
         {
             profile.name = format!("{base} {number}");
@@ -1343,8 +1375,9 @@ impl DataSourceDialog {
             ui.add(field.desired_width(f32::INFINITY));
         });
         ui.hint_label(format!(
-            "Placeholders: {{symbol}}, {{interval}}, {{from}}, {{to}}, {{limit}}{keys}. A key \
-             typed here instead of as {{name}} is saved and exported with the profile."
+            "Placeholders: {{symbol}}, {{symbol_lower}}, {{interval}}, {{from}}, {{to}}, \
+             {{limit}}{keys}. A key typed here instead of as {{name}} is saved and exported with \
+             the profile."
         ));
         FormRow::new("Headers").show(ui, |_| {});
         header_rows(ui, &mut history.headers);
@@ -1421,7 +1454,7 @@ impl DataSourceDialog {
             Ok(request) => {
                 let answer = Answer::default();
                 let shown = conceal(endpoint(&request.url), &secrets);
-                test.pending = Some((answer.clone(), shown));
+                test.pending = Some((answer.clone(), shown, symbol.clone()));
                 let repaint = ctx.clone();
                 http::fetch(request, move |result| {
                     // A reason can repeat the endpoint, and a key in its path.
@@ -1439,13 +1472,14 @@ impl DataSourceDialog {
     /// Takes the answer of the history Test when it has arrived.
     fn poll_history(&mut self) {
         let test = &mut self.history;
-        let Some((answer, endpoint)) = &test.pending else {
+        let Some((answer, endpoint, symbol)) = &test.pending else {
             return;
         };
         let Some(result) = answer.lock().unwrap_or_else(PoisonError::into_inner).take() else {
             return;
         };
         test.endpoint.clone_from(endpoint);
+        let symbol = symbol.clone();
         test.pending = None;
         let failed = |failure: Failure| format!("{}: {failure}", test.endpoint);
         let body = match result {
@@ -1474,12 +1508,14 @@ impl DataSourceDialog {
             test.slot = Fields::bar(&mut history.bar).next(Slot::Rows);
         }
         test.sample = Some(sample);
+        test.symbol = symbol;
         test.samples += 1;
     }
 
     /// The preview of the sample, its two trees and the slots of the mapping.
     fn history_mapping(&mut self, ui: &mut egui::Ui) {
         let zone = self.draft.profile.time_zone.clone();
+        let symbol = self.history.symbol.clone();
         let timeframe = self
             .target()
             .map_or(Timeframe::Min1, |(_, timeframe)| timeframe);
@@ -1496,14 +1532,22 @@ impl DataSourceDialog {
             };
             if !test.preview.as_ref().is_some_and(fresh) {
                 let clock = BarClock::new(timeframe).with_timezone(zone.clone());
-                let rows = shape::rows(sample, &history.rows);
+                let rows = shape::rows(sample, &history.rows.for_symbol(&symbol));
                 test.preview = Some(Preview {
                     history: history.clone(),
                     zone: zone.clone(),
                     timeframe,
                     samples: test.samples,
                     row: rows.ok().and_then(|rows| rows.into_iter().next()),
-                    reading: feed::read(sample, history, &zone, &clock, timeframe, Utc::now()),
+                    reading: feed::read(
+                        sample,
+                        history,
+                        &symbol,
+                        &zone,
+                        &clock,
+                        timeframe,
+                        Utc::now(),
+                    ),
                 });
             }
         }
@@ -1549,6 +1593,8 @@ impl DataSourceDialog {
             history.bar = bar;
         }
 
+        // The place of the rows in the sample, for the marks and the slots.
+        let found = history.rows.for_symbol(&symbol);
         let row = test
             .preview
             .as_ref()
@@ -1556,10 +1602,10 @@ impl DataSourceDialog {
         let mut clicked_response = None;
         let mut clicked_row = None;
         if let Some(sample) = &test.sample {
-            let mut response = vec![(history.rows.path.clone(), Slot::Rows.label())];
+            let mut response = vec![(found.path.clone(), Slot::Rows.label())];
             if let Layout::Arrays {
                 header: Some(header),
-            } = &history.rows.layout
+            } = &found.layout
             {
                 response.push((header.clone(), Slot::Header.label()));
             }
@@ -1589,24 +1635,23 @@ impl DataSourceDialog {
         }
 
         let mut clear = None;
-        FormGrid::new("history_slots").columns(4).show(ui, |ui| {
+        FormGrid::new("history_slots").columns(3).show(ui, |ui| {
             slot_cells(
                 ui,
                 Slot::Rows,
                 &mut test.slot,
-                &history.rows.path,
+                &found.path,
                 true,
                 test.sample.as_ref(),
+                |ui| {
+                    if clear_button(ui, !history.rows.path.is_empty()) {
+                        clear = Some(Slot::Rows);
+                    }
+                    ui.weak(layout_label(&history.rows.layout));
+                },
             );
-            // The last cell is as wide as the step leaves it, and wraps on a phone.
-            ui.horizontal_wrapped(|ui| {
-                if clear_button(ui, !history.rows.path.is_empty()) {
-                    clear = Some(Slot::Rows);
-                }
-                ui.weak(layout_label(&history.rows.layout));
-            });
             ui.end_row();
-            if let Layout::Arrays { header } = &history.rows.layout {
+            if let Layout::Arrays { header } = &found.layout {
                 let path = header.clone().unwrap_or_default();
                 slot_cells(
                     ui,
@@ -1615,10 +1660,12 @@ impl DataSourceDialog {
                     &path,
                     false,
                     test.sample.as_ref(),
+                    |ui| {
+                        if clear_button(ui, header.is_some()) {
+                            clear = Some(Slot::Header);
+                        }
+                    },
                 );
-                if clear_button(ui, header.is_some()) {
-                    clear = Some(Slot::Header);
-                }
                 ui.end_row();
             }
             Fields::bar(&mut history.bar).rows(ui, row, &mut test.slot);
@@ -1683,8 +1730,8 @@ impl DataSourceDialog {
         ui.hint_label(format!(
             "{NO_HEADERS} Write {{name}} in the URL, \
              in a subprotocol or in a connect message to send the key of that name there. \
-             Placeholders: {{symbol}}, {{interval}}{keys}. A key typed here instead of as \
-             {{name}} is saved and exported with the profile."
+             Placeholders: {{symbol}}, {{symbol_lower}}, {{interval}}{keys}. A key typed here \
+             instead of as {{name}} is saved and exported with the profile."
         ));
         let protocols = FormRow::new("Subprotocols").description(
             "Offer one only when the service answers with it: a connection that offers \
@@ -1741,11 +1788,7 @@ impl DataSourceDialog {
             return;
         }
         let interval = profile.service_interval(timeframe).unwrap_or_default();
-        let mut values = vec![
-            ("symbol".to_owned(), symbol),
-            ("interval".to_owned(), interval.to_owned()),
-        ];
-        values.extend(secrets.iter().cloned());
+        let values = profile::stream_values(&symbol, interval, &secrets);
         let borrowed: Vec<(&str, &str)> = values
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -2042,7 +2085,7 @@ impl DataSourceDialog {
 
         let root = message.map(|(_, message)| &message.root);
         let mut clear = None;
-        FormGrid::new("live_slots").columns(4).show(ui, |ui| {
+        FormGrid::new("live_slots").columns(3).show(ui, |ui| {
             slot_cells(
                 ui,
                 Slot::Records,
@@ -2050,10 +2093,12 @@ impl DataSourceDialog {
                 &stream.records,
                 true,
                 root,
+                |ui| {
+                    if clear_button(ui, !stream.records.is_empty()) {
+                        clear = Some(Slot::Records);
+                    }
+                },
             );
-            if clear_button(ui, !stream.records.is_empty()) {
-                clear = Some(Slot::Records);
-            }
             ui.end_row();
             // The routing field is looked up in the record and then in the message.
             let holder = record.filter(|record| at(record, &stream.route_by).is_some());
@@ -2065,10 +2110,12 @@ impl DataSourceDialog {
                 &stream.route_by,
                 false,
                 base,
+                |ui| {
+                    if clear_button(ui, !stream.route_by.is_empty()) {
+                        clear = Some(Slot::RouteBy);
+                    }
+                },
             );
-            if clear_button(ui, !stream.route_by.is_empty()) {
-                clear = Some(Slot::RouteBy);
-            }
             ui.end_row();
         });
         match clear {
@@ -2133,7 +2180,7 @@ impl DataSourceDialog {
         // The slots of the selected route, and what the feed reads from the record shown.
         if let Some(route) = stream.routes.get_mut(live.route) {
             if let Some(mut fields) = Fields::route(&mut route.kind) {
-                FormGrid::new("route_slots").columns(4).show(ui, |ui| {
+                FormGrid::new("route_slots").columns(3).show(ui, |ui| {
                     fields.rows(ui, record, &mut live.slot);
                 });
                 fields.forms(ui, record, &zone);
@@ -2573,9 +2620,11 @@ fn badges(stream: &Stream, routed: &[Routed]) -> Vec<(String, bool)> {
     outcomes.into_iter().map(badge).collect()
 }
 
-/// The first three cells of a slot's row: its button, the path it holds and the value found
-/// there below `base`. `whole` says that an empty path is the whole of `base`, as for the
-/// place of the rows; for a field it means that nothing is mapped.
+/// The three cells of a slot's row: its button, the path it holds, and a last cell with what
+/// `controls` draws, such as its Clear button, then the value found there below `base`. The
+/// last cell is as wide as the step leaves it, and wraps on a phone. `whole` says that an empty
+/// path is the whole of `base`, as for the place of the rows; for a field it means that nothing
+/// is mapped.
 fn slot_cells(
     ui: &mut egui::Ui,
     slot: Slot,
@@ -2583,22 +2632,30 @@ fn slot_cells(
     path: &[Segment],
     whole: bool,
     base: Option<&Value>,
+    controls: impl FnOnce(&mut egui::Ui),
 ) {
     let button = Button::new(slot.label()).outlined().small();
     if ui.add(button.selected(*active == slot)).clicked() {
         *active = slot;
     }
-    if path.is_empty() && !whole {
+    let mapped = !path.is_empty() || whole;
+    if mapped {
+        ui.monospace(place(path));
+    } else {
         ui.weak("not mapped");
-        ui.label("");
-        return;
     }
-    ui.monospace(place(path));
-    match base.map(|base| at(base, path)) {
-        Some(Some(found)) => ui.monospace(brief(found)),
-        Some(None) => ui.warning_label("nothing there"),
-        None => ui.label(""),
-    };
+    ui.horizontal_wrapped(|ui| {
+        controls(ui);
+        match base.map(|base| at(base, path)).filter(|_| mapped) {
+            Some(Some(found)) => {
+                ui.monospace(brief(found));
+            }
+            Some(None) => {
+                ui.warning_label("nothing there");
+            }
+            None => {}
+        }
+    });
 }
 
 /// The `Clear` button of a slot. Returns whether it was clicked.
@@ -2623,24 +2680,66 @@ fn preview_table(ui: &mut egui::Ui, reading: &Reading, zone: &TimezoneId) {
     } else {
         bars.iter().collect()
     };
-    FormGrid::new("history_preview").columns(6).show(ui, |ui| {
-        for heading in ["time", "open", "high", "low", "close", "volume"] {
-            ui.weak(heading);
-        }
-        ui.end_row();
-        for (index, bar) in shown.into_iter().enumerate() {
-            if cut && index == 5 {
-                ui.weak("…");
-                ui.end_row();
-            }
+    const HEADINGS: [&str; 6] = ["time", "open", "high", "low", "close", "volume"];
+    let rows: Vec<[String; 6]> = shown
+        .iter()
+        .map(|bar| {
             let at = bar.time.with_timezone(zone).naive_local();
-            ui.monospace(at.format("%Y-%m-%d %H:%M:%S").to_string());
-            for value in [bar.open, bar.high, bar.low, bar.close, bar.volume] {
-                ui.monospace(number(value));
+            let [open, high, low, close, volume] =
+                [bar.open, bar.high, bar.low, bar.close, bar.volume].map(number);
+            let time = at.format("%Y-%m-%d %H:%M:%S").to_string();
+            [time, open, high, low, close, volume]
+        })
+        .collect();
+    // The width of the grid, laid out as `egui::Grid` does: each column as wide as its widest
+    // cell and at least the minimum width of a control, with the grid's spacing between them.
+    let measure = |text: &str, style: egui::TextStyle| {
+        let text = egui::WidgetText::from(text);
+        let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style);
+        galley.size().x
+    };
+    let least = ui.spacing().interact_size.x;
+    let columns = (0..6).map(|column| {
+        let heading = measure(HEADINGS[column], egui::TextStyle::Body);
+        let cells = rows
+            .iter()
+            .map(|row| measure(&row[column], egui::TextStyle::Monospace));
+        cells.fold(heading.max(least), f32::max)
+    });
+    let wide = columns.sum::<f32>() + 5.0 * ui.active_theme().spacing.lg;
+    let cut_at = |index: usize| cut && index == 5;
+    if wide <= ui.available_width() {
+        FormGrid::new("history_preview").columns(6).show(ui, |ui| {
+            for heading in HEADINGS {
+                ui.weak(heading);
             }
             ui.end_row();
+            for (index, row) in rows.iter().enumerate() {
+                if cut_at(index) {
+                    ui.weak("…");
+                    ui.end_row();
+                }
+                for cell in row {
+                    ui.monospace(cell);
+                }
+                ui.end_row();
+            }
+        });
+    } else {
+        // On a phone each bar's values go on below its time, named, and wrap.
+        for (index, row) in rows.iter().enumerate() {
+            if cut_at(index) {
+                ui.weak("…");
+            }
+            ui.monospace(&row[0]);
+            ui.horizontal_wrapped(|ui| {
+                for (heading, cell) in HEADINGS[1..].iter().zip(&row[1..]) {
+                    ui.weak(*heading);
+                    ui.monospace(cell);
+                }
+            });
         }
-    });
+    }
     let skipped = counted(reading.skipped, "row");
     ui.label(format!("{}, {skipped} skipped", counted(bars.len(), "bar")));
 }
@@ -2908,8 +3007,12 @@ mod tests {
         /// when enough of it is to be hit.
         fn visible(&self, node: &Node) -> Option<egui::Pos2> {
             let area = node.rect.expand(2.0);
+            // An empty text, such as a field's cursor, is no node's: a node without a hint, as in
+            // a list, would otherwise take it.
             let own = |(text, rect, _): &&Painted| {
-                (*text == node.text || *text == node.hint) && area.contains(rect.center())
+                !text.is_empty()
+                    && (*text == node.text || *text == node.hint)
+                    && area.contains(rect.center())
             };
             let (_, rect, clip) = self.texts.iter().find(own)?;
             let shown = rect.intersect(*clip);
@@ -3270,6 +3373,10 @@ mod tests {
         click(&ctx, &mut dialog, "Live");
         click(&ctx, &mut dialog, "Test");
         wait(&ctx, &mut dialog, "No route for this message:");
+        // Each line that arrives moves the controls below the log down, so the clicks wait for
+        // the second message: one that arrived between finding a control and clicking it would
+        // put the click on the control above.
+        let line = wait(&ctx, &mut dialog, r#"{"type":"trade""#);
         // The field that tells the kinds of message apart, clicked in the first message.
         click(&ctx, &mut dialog, "route by");
         node(&ctx, &mut dialog, "Message", "type:");
@@ -3279,7 +3386,6 @@ mod tests {
         click(&ctx, &mut dialog, r#"Add route for "trade""#);
         choose(&ctx, &mut dialog, "trade", "Trades");
         // The records of the trades message are the elements of its `data`.
-        let line = wait(&ctx, &mut dialog, r#"{"type":"trade""#);
         click(&ctx, &mut dialog, &line);
         click(&ctx, &mut dialog, "records");
         node(&ctx, &mut dialog, "Message", "data");
@@ -3477,6 +3583,83 @@ mod tests {
         assert!(faults.is_empty(), "\n{}", faults.join("\n"));
     }
 
+    /// After a Test at the width of a phone, the preview of the bars and every control of the
+    /// History step lie within the step, so that a bar is read and mapped without scrolling
+    /// sideways. The trees of the sample scroll inside their own column, so their labels are
+    /// not checked.
+    #[test]
+    fn history_preview_fits_a_phone() {
+        use serde_json::json;
+        let saved = Saved {
+            asked: true,
+            current: Some("Local".to_owned()),
+            profiles: vec![profile("http://127.0.0.1:9")],
+            ..Saved::default()
+        };
+        // The cells of the bar, at 2025-11-11 09:30:00 UTC in the fields of `profile`.
+        let cells = [
+            "2025-11-11 09:30:00",
+            "4321.25",
+            "4322.5",
+            "4320.75",
+            "4321.5",
+            "1250",
+        ];
+        let controls = [
+            accesskit::Role::Button,
+            accesskit::Role::CheckBox,
+            accesskit::Role::ComboBox,
+            accesskit::Role::SpinButton,
+            accesskit::Role::TextInput,
+            accesskit::Role::MultilineTextInput,
+            accesskit::Role::PasswordInput,
+        ];
+        let mut faults = Vec::new();
+        for size in [egui::vec2(393.0, 852.0), egui::vec2(360.0, 800.0)] {
+            let storage = Arc::new(DemoStorage::default());
+            saved.save(&storage);
+            let mut dialog = DataSourceDialog::new(storage, true);
+            dialog.open();
+            dialog.step = super::Step::History;
+            // The answer of a Test.
+            dialog.history.sample = Some(json!([
+                {"t": 1_762_853_400, "o": 4321.25, "h": 4322.5, "l": 4320.75, "c": 4321.5, "v": 1250}
+            ]));
+            let ctx = egui::Context::default();
+            for _ in 0..3 {
+                draw_at(&ctx, &mut dialog, vec![], size);
+            }
+            let screen = draw_at(&ctx, &mut dialog, vec![], size);
+            let (.., step) = screen
+                .texts
+                .iter()
+                .find(|(text, ..)| text == "Use REST history")
+                .expect("no History step");
+            for cell in cells {
+                let label = |node: &&Node| node.role == accesskit::Role::Label && node.text == cell;
+                assert!(
+                    screen.nodes.iter().any(|node| label(&node)),
+                    "{cell} not shown"
+                );
+            }
+            let checked = |node: &&Node| {
+                let cell =
+                    node.role == accesskit::Role::Label && cells.contains(&node.text.as_str());
+                (cell || controls.contains(&node.role)) && node.rect.top() >= step.top()
+            };
+            for node in screen.nodes.iter().filter(checked) {
+                if node.rect.left() < step.left() - 0.5 || node.rect.right() > step.right() + 0.5 {
+                    let (text, rect) = (&node.text, node.rect);
+                    faults.push(format!(
+                        "{} px: {text:?} at {rect:?}, step at {step:?}",
+                        size.x
+                    ));
+                }
+            }
+        }
+        assert!(faults.is_empty(), "\n{}", faults.join("\n"));
+    }
+
     /// A click on a time-of-day field picks the form its value reads in, so the preview reads
     /// the bar without a choice by hand. A value that no form reads keeps the form held.
     #[test]
@@ -3634,6 +3817,98 @@ mod tests {
         click(&ctx, &mut dialog, "Keep keys on this device");
         click(&ctx, &mut dialog, "Save");
         assert!(!stored(&fresh).contains(SECRET));
+    }
+
+    /// A ready profile is listed above the visitor's profiles, connects as shipped without being
+    /// stored, connects again at the next start, and is saved only as a renamed copy once
+    /// changed. Opening its steps leaves it unchanged.
+    #[test]
+    fn a_ready_profile_connects_as_shipped_and_saves_only_as_a_renamed_copy() {
+        const READY: &str = "Binance spot (public)";
+        let ctx = egui::Context::default();
+        let storage = Arc::new(DemoStorage::default());
+        let local = Saved {
+            asked: true,
+            profiles: vec![profile("http://127.0.0.1:9")],
+            ..Saved::default()
+        };
+        local.save(&storage);
+        let names = || -> Vec<String> {
+            let saved = Saved::load(&storage).profiles.into_iter();
+            saved.map(|profile| profile.name).collect()
+        };
+        let mut dialog = DataSourceDialog::new(storage.clone(), true);
+        dialog.open();
+
+        // 1. The list shows the ready profile first.
+        click(&ctx, &mut dialog, "New profile");
+        let screen = draw(&ctx, &mut dialog, vec![]);
+        let top = |text: &str| {
+            let listed = |node: &&Node| node.text == text && !node.field();
+            screen.nodes.iter().find(listed).map(|node| node.rect.top())
+        };
+        let (ready, local) = (top(READY).unwrap(), top("Local").unwrap());
+        assert!(ready < local, "{ready} {local}");
+
+        // 2. Chosen and its steps opened, it connects as shipped, with no key, and is not stored.
+        click(&ctx, &mut dialog, READY);
+        click(&ctx, &mut dialog, "History");
+        click(&ctx, &mut dialog, "Live");
+        let Some(Outcome::Connect { profile, secrets }) = click(&ctx, &mut dialog, "Connect")
+        else {
+            panic!("the ready profile did not connect");
+        };
+        assert_eq!(*profile, store::ready()[0]);
+        assert!(secrets.is_empty());
+        let saved = Saved::load(&storage);
+        assert!(saved.own);
+        assert_eq!(saved.current.as_deref(), Some(READY));
+        assert_eq!(names(), ["Local"]);
+
+        // 3. The next start connects it again.
+        let mut next = DataSourceDialog::new(storage.clone(), true);
+        let Some(Outcome::Connect { profile, .. }) = next.startup() else {
+            panic!("the start did not connect the ready profile");
+        };
+        assert_eq!(profile.name, READY);
+
+        // 4. Changed, it neither connects nor saves under its name; renamed, it saves.
+        dialog.open();
+        click(&ctx, &mut dialog, "Source");
+        dialog.draft.profile.symbols.push("XRPUSDT".to_owned());
+        wait(&ctx, &mut dialog, "A ready profile has this name");
+        assert!(click(&ctx, &mut dialog, "Connect").is_none());
+        click(&ctx, &mut dialog, "Save");
+        assert_eq!(names(), ["Local"]);
+        dialog.draft.profile.name = "My Binance".to_owned();
+        click(&ctx, &mut dialog, "Save");
+        assert_eq!(names(), ["Local", "My Binance"]);
+    }
+
+    /// The History Test of the ready Kraken profile previews the bars Kraken files under the
+    /// pair's name: the sample is read for the symbol the Test asked for.
+    #[test]
+    fn the_history_test_reads_rows_filed_under_the_symbol() {
+        const OHLC: &str = r#"{"error":[],"result":{"BTC/USD":[[1794407580,"100750.0","103000.0","100500.0","102500.0","101900.0","1.50000000",120],[1794407640,"102500.0","102750.0","101000.0","101250.0","101800.0","0.75000000",64],[1794407700,"101250.0","101500.0","100000.0","100250.0","100700.0","0.50000000",41]],"last":1794407640}}"#;
+        let server = Server::start(|_, _| (200, OHLC.to_owned()));
+        let storage = Arc::new(DemoStorage::default());
+        let chosen = Saved {
+            asked: true,
+            current: Some("Kraken (public)".to_owned()),
+            ..Saved::default()
+        };
+        chosen.save(&storage);
+        let ctx = egui::Context::default();
+        let mut dialog = DataSourceDialog::new(storage, true);
+        dialog.open();
+        let history = dialog.draft.profile.history.as_mut().unwrap();
+        history.url = history
+            .url
+            .replace("https://api.kraken.com", &server.origin);
+
+        click(&ctx, &mut dialog, "History");
+        click(&ctx, &mut dialog, "Test");
+        wait(&ctx, &mut dialog, "3 bars, 0 rows skipped");
     }
 
     /// The status line shows the connection error while the stream is down, and no longer once it

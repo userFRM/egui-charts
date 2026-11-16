@@ -15,6 +15,7 @@ use chrono::{NaiveTime, Timelike};
 use egui::{Color32, RichText, Ui};
 
 /// Symbol tab renderer - shows chart type and style settings
+#[derive(Debug)]
 pub struct SymbolTab;
 
 impl SymbolTab {
@@ -270,25 +271,40 @@ impl SymbolTab {
         });
         Self::section(ui, "Rows", true, |ui| {
             let label = ui.label(l10n::text(ui.ctx(), "Grouping"));
-            let mut automatic = params.footprint_row_ticks == 0;
-            let previous = automatic;
+            // 0 groups by zoom, 1 by a fixed tick count and 2 by the average true range.
+            let mut method = match (params.footprint_row_atr, params.footprint_row_ticks) {
+                (true, _) => 2,
+                (false, 0) => 0,
+                (false, _) => 1,
+            };
+            let previous = method;
             ui.label_inputs_by(label.id, |ui| {
-                ui.combo_select("footprint_rows", &mut automatic, [true, false], |auto| {
-                    if *auto {
-                        "Automatic by zoom"
-                    } else {
-                        "Fixed ticks"
+                ui.combo_select("footprint_rows", &mut method, [0, 1, 2], |method| {
+                    match method {
+                        0 => "Automatic by zoom",
+                        1 => "Fixed ticks",
+                        _ => "Average true range",
                     }
                     .to_owned()
                 });
             });
-            if automatic != previous {
-                params.footprint_row_ticks = if automatic { 0 } else { 1 };
+            if method != previous {
+                params.footprint_row_atr = method == 2;
+                match method {
+                    0 => params.footprint_row_ticks = 0,
+                    1 => params.footprint_row_ticks = params.footprint_row_ticks.max(1),
+                    _ => {}
+                }
             }
             ui.end_row();
-            if !automatic {
+            if method == 1 {
                 let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(egui::DragValue::new(&mut params.footprint_row_ticks).range(1..=1_000_000))
+                    .labelled_by(label.id);
+                ui.end_row();
+            } else if method == 2 {
+                let label = ui.label(l10n::text(ui.ctx(), "ATR length"));
+                ui.add(egui::DragValue::new(&mut params.footprint_row_atr_length).range(1..=200))
                     .labelled_by(label.id);
                 ui.end_row();
             }
@@ -529,8 +545,8 @@ impl SymbolTab {
         });
     }
 
-    /// Session hours: the chart's calendar, the instrument's regular or extended windows, or a
-    /// daily window of its own.
+    /// Session hours: the chart's calendar, the instrument's regular or extended windows, its
+    /// pre-market or post-market alone or each segment apart, or a daily window of its own.
     fn profile_session(ui: &mut Ui, session: &mut ProfileSession) {
         let label = ui.label(l10n::text(ui.ctx(), "Session"));
         let custom = || {
@@ -546,11 +562,23 @@ impl SymbolTab {
             ProfileSession::Regular => 1,
             ProfileSession::Extended => 2,
             ProfileSession::Custom(_) => 3,
+            ProfileSession::PreMarket => 4,
+            ProfileSession::PostMarket => 5,
+            ProfileSession::Segments => 6,
         };
         let mut selected = choice(session);
         ui.label_inputs_by(label.id, |ui| {
-            ui.combo_select("profile_session", &mut selected, 0..4, |i| {
-                ["Chart hours", "Regular hours", "Extended hours", "Custom"][*i].to_owned()
+            ui.combo_select("profile_session", &mut selected, 0..7, |i| {
+                [
+                    "Chart hours",
+                    "Regular hours",
+                    "Extended hours",
+                    "Custom",
+                    "Pre-market only",
+                    "Post-market only",
+                    "Each segment of the day",
+                ][*i]
+                    .to_owned()
             });
         });
         ui.end_row();
@@ -560,6 +588,9 @@ impl SymbolTab {
                 ProfileSession::Regular,
                 ProfileSession::Extended,
                 custom(),
+                ProfileSession::PreMarket,
+                ProfileSession::PostMarket,
+                ProfileSession::Segments,
             ][selected]
                 .clone();
         }

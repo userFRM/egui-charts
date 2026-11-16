@@ -379,10 +379,10 @@ pub(crate) enum DrawingAxisTag {
 impl DrawingManager {
     /// The axis tags of visible drawings of the pane last handled, in drawing order: enabled
     /// price and time labels of horizontal, vertical and cross lines reaching `plot`, position
-    /// levels, whose entry takes `entry_color`, the latest value of an anchored VWAP that tracks
-    /// it over the pane's `bars` at `revision`, and the time of a vertical line reaching that
-    /// pane from another. Call after the pane handles input so tags follow a drag in the same
-    /// frame. Line tags use opaque RGB so their text stays legible.
+    /// levels, whose entry takes `entry_color`, the latest values of an anchored VWAP's tracked
+    /// line and band lines over the pane's `bars` at `revision`, and the time of a vertical line
+    /// reaching that pane from another. Call after the pane handles input so tags follow a drag
+    /// in the same frame. Line tags use opaque RGB so their text stays legible.
     pub(crate) fn axis_tags<'a>(
         &'a self,
         plot: Rect,
@@ -422,14 +422,18 @@ impl DrawingManager {
                         color,
                         decimals: None,
                     });
-                let vwap =
-                    drawing
-                        .anchored_vwap_last(bars, revision)
-                        .map(|price| DrawingAxisTag::Price {
+                let decimals = drawing.vwap.and_then(|config| config.precision);
+                let vwap = drawing
+                    .anchored_vwap_tracked(bars, revision)
+                    .into_iter()
+                    .map(move |(price, line)| {
+                        let [r, g, b, _] = line.color;
+                        DrawingAxisTag::Price {
                             price,
-                            color,
-                            decimals: drawing.vwap.and_then(|config| config.precision),
-                        });
+                            color: Color32::from_rgb(r, g, b),
+                            decimals,
+                        }
+                    });
                 let time = at
                     .filter(|(_, point)| time && plot.x_range().contains(point.x))
                     .map(|(anchor, point)| DrawingAxisTag::Time {
@@ -445,7 +449,9 @@ impl DrawingManager {
                         color,
                         decimals: None,
                     })
-                    .chain([price, vwap, time].into_iter().flatten())
+                    .chain(price)
+                    .chain(vwap)
+                    .chain(time)
             })
     }
 }
@@ -496,8 +502,11 @@ mod tests {
             manager.drawings.push(drawing);
             manager.select(7);
             let render = |manager: &mut DrawingManager, bars: &[Bar]| {
-                manager
-                    .update_all_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+                manager.update_all_screen_coords(
+                    |b| 100.0 + b * 100.0,
+                    |p| 500.0 - p as f32 * 10.0,
+                    100.0,
+                );
                 ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(pane),
@@ -515,6 +524,7 @@ mod tests {
                                 bars,
                                 revision: 0,
                                 bar_to_x: &|b| 100.0 + b * 100.0,
+                                bar_spacing: 100.0,
                                 price_to_y: &|p| 500.0 - p as f32 * 10.0,
                                 y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                 time_axis: true,
@@ -678,6 +688,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
+                        bar_spacing: 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
@@ -764,6 +775,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b * 10.0,
+                    bar_spacing: 10.0,
                     price_to_y: &|p| 500.0 - p as f32,
                     y_to_price: &|y| 500.0 - f64::from(y),
                     time_axis: true,

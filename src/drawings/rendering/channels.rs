@@ -226,8 +226,10 @@ impl Drawing {
         painter.text(
             label_pos,
             egui::Align2::LEFT_TOP,
-            fit.correlation
-                .map_or_else(|| "n/a".to_owned(), |r| format!("{r:.2}")),
+            fit.correlation.map_or_else(
+                || crate::localization::text(painter.ctx(), "n/a"),
+                |r| format!("{r:.2}"),
+            ),
             egui::FontId::proportional(typography::XS),
             band_color,
         );
@@ -606,6 +608,7 @@ mod tests {
                                     bars: &bars,
                                     revision: 0,
                                     bar_to_x: &|b| 100.0 + b * 100.0,
+                                    bar_spacing: 100.0,
                                     price_to_y: &|p| 500.0 - p as f32 * 10.0,
                                     y_to_price: &|y| f64::from((500.0 - y) / 10.0),
                                     time_axis: true,

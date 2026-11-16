@@ -183,12 +183,10 @@ fn run(name: &str, levels: i64, columns: usize, cadence: TimeDelta, warmup: usiz
         .with_timeframe(Timeframe::Min1)
         .with_feed(feed.clone())
         .build();
-    let config = DepthHistoryConfig {
-        cadence,
-        rows: levels as usize,
-        columns,
-        ..Default::default()
-    };
+    let mut config = DepthHistoryConfig::default();
+    config.cadence = cadence;
+    config.rows = levels as usize;
+    config.columns = columns;
     chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
     chart.set_liquidity_heatmap(true);
     let ctx = egui::Context::default();

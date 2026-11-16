@@ -24,6 +24,7 @@ pub const MENU_ICON: Icon = Icon::new("top-toolbar-menu.svg", include_bytes!("me
 ///
 /// Note: This is the top-toolbar-specific variant that uses [`TopToolbarConfig`]
 /// for sizing. For a generic icon button, see [`crate::ui_kit::buttons::IconButton`].
+#[derive(Debug)]
 pub struct ToolbarIconButton<'a> {
     /// Glyph displayed by the component.
     pub icon: &'a Icon,
@@ -97,6 +98,7 @@ impl<'a> ToolbarIconButton<'a> {
 /// Icon button with text label
 ///
 /// Used for: Indicators, Alert, Replay btns.
+#[derive(Debug)]
 pub struct IconTextButton<'a> {
     /// Glyph displayed by the component.
     pub icon: &'a Icon,
@@ -217,6 +219,7 @@ impl<'a> IconTextButton<'a> {
 /// Text-only button (used for interval dropdown)
 ///
 /// Displays text with hover/pressed background.
+#[derive(Debug)]
 pub struct TextButton {
     /// Button label.
     pub text: String,
@@ -308,6 +311,7 @@ pub fn separator(ui: &mut Ui) {
 }
 
 /// Text + icon dropdown button (Save dropdown, etc.)
+#[derive(Debug)]
 pub struct TextIconButton<'a> {
     /// Button label.
     pub text: &'static str,

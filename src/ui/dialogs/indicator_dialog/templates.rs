@@ -107,6 +107,7 @@ impl IndicatorTemplateState {
 ///
 /// Renders inside the indicator dialog's configuration area.
 /// Shows template list, save form, and action buttons.
+#[derive(Debug)]
 pub struct IndicatorTemplatePanel<'a> {
     state: &'a mut IndicatorTemplateState,
     indicator_type: &'a str,

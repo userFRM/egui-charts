@@ -43,7 +43,7 @@ use egui::Color32;
 ///
 /// Computes the arithmetic mean of closing prices over a rolling window of
 /// `period` bars. This is an overlay indicator (drawn on the price chart).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SMA {
     period: usize,
     values: IndicatorValues,
