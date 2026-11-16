@@ -891,7 +891,7 @@ impl Drawing {
     /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
     /// they are linear in price except on a logarithmic scale.
     /// Fork levels use two stable slots per configured level (first and second line), with
-    /// only the first slot used by a median. Regression levels require
+    /// only the first slot used by a median. Regression and anchored VWAP levels require
     /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
     /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
     /// non-positive price on a logarithmic scale.
