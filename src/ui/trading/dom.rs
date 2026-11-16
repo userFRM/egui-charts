@@ -475,7 +475,11 @@ impl Ladder {
             (size > 0.0).then_some(count)
         };
         let change = |row: usize, side: usize| {
-            (self.changes[side].get(&(top - row as i64))).map(|n| format!("{n:+}"))
+            (self.changes[side].get(&(top - row as i64))).map(|&n| {
+                // Signed, with the sizes' separators and at most four decimals.
+                let text = grouped(n, 4, true);
+                text.trim_end_matches('0').trim_end_matches('.').to_owned()
+            })
         };
         let prices: Vec<_> = if self.centre.is_some() {
             (0..rows)
@@ -1992,7 +1996,7 @@ mod tests {
                     );
                 }
                 assert!(labels.iter().any(|(text, _)| text == "1,018 | 1,637"));
-                assert!(labels.iter().any(|(text, _)| text == "+1234 | -"));
+                assert!(labels.iter().any(|(text, _)| text == "+1,234 | -"));
                 assert_eq!(
                     labels
                         .iter()
@@ -2349,6 +2353,8 @@ mod tests {
             (None, "- | -"),
             (Some(4.0), "- | -"),
             (Some(2.0), "-2 | -"),
+            (Some(0.3), "-1.7 | -"),
+            (Some(0.1), "-0.2 | -"),
         ] {
             let book = size.map(|size| OrderBook {
                 ts: chrono::Utc::now(),
