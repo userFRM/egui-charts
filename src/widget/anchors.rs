@@ -813,8 +813,10 @@ mod tests {
         // under `smooth1`, and `second` under `smooth2`.
         let split = |second: usize| {
             move |inputs: &mut Vec<serde_json::Value>| {
-                let at = inputs.iter().position(|input| input[0] == "smoothing");
-                let at = at.unwrap();
+                let at = inputs
+                    .iter()
+                    .position(|input| input[0] == "smoothing")
+                    .unwrap();
                 inputs[at][0] = "smooth1".into();
                 let second = serde_json::to_value(InputValue::Length(second)).unwrap();
                 inputs.insert(at + 1, serde_json::json!(["smooth2", second]));
