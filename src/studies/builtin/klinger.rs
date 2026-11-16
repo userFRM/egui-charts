@@ -12,7 +12,7 @@ use egui::Color32;
 /// There is no trend, and so no volume force, until a bar's sum first differs from the bar before. On that first trend bar `cm` is the bar's `dm`, and a bar with `cm = 0` has a volume force of 0. Each EMA starts at the mean of its first `n` inputs.
 ///
 /// Values are `None` until the oscillator exists, then `[oscillator, signal]`, with the signal NaN until it exists.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KlingerOscillator {
     /// Short EMA period (typically 34)
     short_period: usize,
@@ -27,7 +27,7 @@ pub struct KlingerOscillator {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<[f64; 3]>,
     trend: f64,

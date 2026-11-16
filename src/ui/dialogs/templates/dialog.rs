@@ -3,11 +3,14 @@
 use super::TemplateStore;
 use crate::localization as l10n;
 use crate::services::StoreKind;
+use crate::studies::StudyTemplateSet;
 use crate::ui_kit::modal::Modal;
+use crate::widget::Chart;
 use serde::{Serialize, de::DeserializeOwned};
 
 /// Template management opened by a host's study or drawing toolbar intents. The host supplies
 /// the current value, handles the returned loaded value and supplies durable storage if desired.
+#[derive(Debug)]
 pub struct TemplateDialog<T> {
     /// Host-readable catalog and storage connection.
     pub templates: TemplateStore<T>,
@@ -45,6 +48,16 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
     /// Poll storage and show named Save/Replace, Load and Delete controls. A loaded value is
     /// returned without mutating the host chart; cancellation never applies the pending snapshot.
     pub fn show(&mut self, ctx: &egui::Context, title: &str) -> Option<T> {
+        self.show_with(ctx, title, |_, _| {})
+    }
+
+    /// Shows the dialog with `choices`, drawn under the name, editing the value to save.
+    fn show_with(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        choices: impl FnOnce(&mut egui::Ui, &mut T),
+    ) -> Option<T> {
         self.templates.poll(ctx);
         if !self.is_open {
             return None;
@@ -64,6 +77,9 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                                 egui::TextEdit::singleline(&mut self.name)
                                     .desired_width(ui.available_width()),
                             );
+                            if let Some(current) = &mut self.current {
+                                choices(ui, current);
+                            }
                             let label = if self.templates.entries().contains_key(self.name.trim()) {
                                 "Replace"
                             } else {
@@ -130,6 +146,41 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
             });
         self.is_open = open && loaded.is_none();
         loaded
+    }
+}
+
+impl TemplateDialog<StudyTemplateSet> {
+    /// Shows the dialog as [`show`](Self::show) does, with choices to keep `chart`'s symbol and
+    /// interval in the set saved, so that applying it shows them. The choices start off for a
+    /// set from [`Chart::study_template_set`], which keeps neither.
+    pub fn show_for_chart(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        chart: &Chart,
+    ) -> Option<StudyTemplateSet> {
+        self.show_with(ctx, title, |ui, set| {
+            let mut symbol = set.symbol.is_some();
+            if ui
+                .add_enabled(
+                    !chart.symbol().is_empty(),
+                    egui::Checkbox::new(&mut symbol, l10n::text(ui.ctx(), "Keep the symbol")),
+                )
+                .changed()
+            {
+                set.symbol = symbol.then(|| chart.symbol().to_owned());
+            }
+            let mut interval = set.interval.is_some();
+            if ui
+                .add_enabled(
+                    chart.timeframe().is_some(),
+                    egui::Checkbox::new(&mut interval, l10n::text(ui.ctx(), "Keep the interval")),
+                )
+                .changed()
+            {
+                set.interval = chart.timeframe().filter(|_| interval);
+            }
+        })
     }
 }
 

@@ -1001,10 +1001,16 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
     // A host that repaints only on input or new data shows this frame until the next event.
     use crate::model::{Bar, BarData, ChartType};
     use std::time::Duration;
+    // A drawn countdown repaints when its label next changes. Each frame sets the server clock
+    // half a second into a second, so that is half a second less the frame's own time.
+    let countdown = Duration::from_millis(250)..=Duration::from_millis(500);
+    let settled = || Duration::MAX..=Duration::MAX;
     let cases = [
-        (false, true, Duration::MAX, None, ChartType::Candles),
-        (true, true, Duration::from_secs(1), None, ChartType::Candles),
-        (true, false, Duration::MAX, None, ChartType::Candles),
+        (false, true, false, settled(), None, ChartType::Candles),
+        (true, true, false, countdown, None, ChartType::Candles),
+        (true, false, false, settled(), None, ChartType::Candles),
+        // A paused replay's clock stands still, so its countdown never changes.
+        (true, true, true, settled(), None, ChartType::Candles),
     ]
     .into_iter()
     .chain([0, 1, 128].into_iter().flat_map(|count| {
@@ -1014,9 +1020,9 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
             ChartType::Area,
             ChartType::Heikin,
         ]
-        .map(move |kind| (false, true, Duration::MAX, Some(count), kind))
+        .map(move |kind| (false, true, false, settled(), Some(count), kind))
     }));
-    for (server_time, axis, delay, flat_count, kind) in cases {
+    for (server_time, axis, replay, delay, flat_count, kind) in cases {
         let ctx = egui::Context::default();
         let mut chart = if let Some(count) = flat_count {
             let bars = (0..count)
@@ -1033,12 +1039,21 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
         chart.set_visible_bars(50);
         chart.set_timeframe(crate::model::Timeframe::Min1);
         chart.config.show_right_axis = axis;
-        chart.set_server_time(
-            server_time.then(|| {
-                chart.state.data().bars.last().unwrap().time + chrono::Duration::seconds(30)
-            }),
-        );
+        let last = chart.state.data().bars.last().map(|bar| bar.time);
+        if replay {
+            // Bar replay forms the newest bar from the finer bars before its cursor.
+            let last = last.unwrap();
+            chart.set_replay_time(Some(last + chrono::Duration::seconds(30)));
+            let source = vec![Bar::new(last, 104.0, 108.0, 104.0, 108.0, 1.0)];
+            let clock = crate::model::BarClock::new(crate::model::Timeframe::Sec5);
+            assert!(chart.set_replay_source(source, clock));
+            assert!(chart.current_bar_countdown().is_some());
+        }
         let mut run = || {
+            // Set in each frame, so the frame's own time is all that has run of the second.
+            chart.set_server_time(
+                server_time.then(|| last.unwrap() + chrono::Duration::milliseconds(30_500)),
+            );
             let input = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
                 ..Default::default()
@@ -1079,13 +1094,16 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
             let (shapes, actual) = run();
             if flat_count.is_none() {
                 // A drawn countdown changes its text as the clock runs.
-                if delay == Duration::MAX {
+                if *delay.start() == Duration::MAX {
                     assert!(
                         shapes == first,
                         "the first frame must draw the settled chart"
                     );
                 }
-                assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
+                assert!(
+                    delay.contains(&actual),
+                    "server time {server_time}, axis {axis}, replay {replay}: {actual:?}"
+                );
             }
         }
     }
@@ -1354,7 +1372,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
                 .as_ref()
                 .unwrap();
             assert_eq!(
-                flow.price_step(),
+                flow.live.price_step(),
                 1.0,
                 "display grouping keeps the source executions"
             );

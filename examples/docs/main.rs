@@ -146,6 +146,7 @@ impl eframe::App for ExampleApp {
                     .and_then(|observer| observer.observe_with_options(&root, &options))
                     .unwrap();
                 wake.forget();
+                wake_on_pixel_ratio_change(ui.ctx().clone());
             }
             let dark = root.get_attribute("data-theme").as_deref() != Some("light");
             if self.dark != Some(dark) {
@@ -191,6 +192,31 @@ impl eframe::App for ExampleApp {
             self.chart.show(ui);
         });
     }
+}
+
+/// Draws the example again when the device pixel ratio changes at the same CSS size. eframe
+/// then resizes the canvas backing, which clears it, without requesting a pass.
+#[cfg(target_arch = "wasm32")]
+fn wake_on_pixel_ratio_change(ctx: egui::Context) {
+    use wasm_bindgen::JsCast;
+
+    let window = web_sys::window().unwrap();
+    let query = format!("(resolution: {}dppx)", window.device_pixel_ratio());
+    let Ok(Some(list)) = window.match_media(&query) else {
+        return;
+    };
+    let wake = wasm_bindgen::closure::Closure::once_into_js(move || {
+        ctx.request_repaint();
+        wake_on_pixel_ratio_change(ctx);
+    });
+    let options = web_sys::AddEventListenerOptions::new();
+    options.set_once(true);
+    list.add_event_listener_with_callback_and_add_event_listener_options(
+        "change",
+        wake.unchecked_ref(),
+        &options,
+    )
+    .unwrap();
 }
 
 fn main() -> eframe::Result {

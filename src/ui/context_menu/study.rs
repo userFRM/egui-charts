@@ -57,7 +57,8 @@ pub enum StudyContextMenuAction {
     Help(String),
 }
 
-/// Intervals on which a study is shown, relative to the chart's interval.
+/// Intervals on which a study is shown, relative to the chart's interval. The set is closed: a
+/// study shows on every interval, on the chart's interval only, or also on those above or below it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntervalRange {
     /// The chart's interval and every longer one.
@@ -89,6 +90,7 @@ impl IntervalRange {
 
 /// Where the study context menu moves a study.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PaneTarget {
     /// A new pane directly above the study's pane.
     NewPaneAbove,
@@ -148,7 +150,7 @@ pub(crate) fn other_panes(
 
 /// The study context menu of [`ChartMenus`](crate::ui::context_menu::ChartMenus), with the
 /// study's state taken when it opened.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct StudyContextMenu {
     is_open: bool,
     name: String,

@@ -1439,7 +1439,9 @@ mod tests {
         }
     }
 
-    /// Body widths follow the closest loaded keys, rather than a mean inflated by gaps.
+    /// Body widths follow the closest loaded keys, rather than a mean inflated by gaps, and
+    /// volume bars the same gap, painted where they are selected, also where dense keys lie
+    /// outside the view.
     #[test]
     fn custom_key_columns_of_neighbouring_categories_do_not_overlap() {
         use crate::model::{BarColors, ChartType};
@@ -1448,119 +1450,141 @@ mod tests {
         use crate::widget::ChartElementId;
         use std::sync::Arc;
 
-        let custom = Arc::new(CustomHorizontalScale::new(0..10, |key| key.to_string()));
+        let custom = Arc::new(CustomHorizontalScale::new(0..50, |key| key.to_string()));
         let scales: [Arc<dyn HorizontalScale>; 2] =
             [custom, Arc::new(PriceHorizontalScale::default())];
         let color = egui::Color32::from_rgb(177, 52, 210);
-        for theme in [Theme::light(), Theme::dark()] {
-            for scale in &scales {
-                for (chart_type, added) in [ChartType::Columns, ChartType::Candles]
-                    .into_iter()
-                    .flat_map(|chart_type| [false, true].map(|added| (chart_type, added)))
-                {
-                    let ctx = egui::Context::default();
-                    apply_to_egui(&ctx, &theme);
-                    let bars = [0.0, 1.0, 6.0]
+        // Keys, bar spacing, view, the closest gap between neighbouring keys, if it is the one
+        // the bars take, and the second bar shown. Mean gap 3: 30 / 3 = 10 points per key. The
+        // second view holds sparse keys while the dense ones lie to its left.
+        let dense = &[0.0, 1.0, 6.0][..];
+        let sparse = &[0.0, 1.0, 2.0, 3.0, 13.0, 23.0, 33.0, 43.0][..];
+        let cases = [
+            (dense, 30.0, None, Some(10.0), 1),
+            (sparse, 60.0, Some(LogicalRange::new(4.5, 7.5)), None, 6),
+        ];
+        for (keys, bar_spacing, view, gap, shown) in cases {
+            for theme in [Theme::light(), Theme::dark()] {
+                for scale in &scales {
+                    for (chart_type, added) in [ChartType::Columns, ChartType::Candles]
                         .into_iter()
-                        .map(|key| {
-                            let mut bar =
-                                Bar::new(key_time(key).unwrap(), 10.0, 13.0, 9.0, 12.0, 1.0);
-                            bar.colors = Some(Box::new(BarColors {
-                                color: Some(color),
-                                ..Default::default()
-                            }));
-                            bar
-                        })
-                        .collect();
-                    let mut chart = Chart::new(BarData::from_bars(bars));
-                    let series = if added {
-                        let series = chart.add_series(crate::widget::SeriesOptions {
-                            chart_type,
-                            ..Default::default()
-                        });
-                        chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
-                        chart.set_main_series_visible(false);
-                        series
-                    } else {
-                        SeriesId::MAIN
-                    };
-                    chart.set_horizontal_scale(Some(scale.clone()));
-                    chart.set_chart_type(chart_type);
-                    let mut options = chart.chart_options().clone();
-                    options.time_scale.bar_spacing = 30.0;
-                    chart.set_chart_options(options);
-                    let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
-                    let plot = chart.get_rendered_price_rect();
-                    let mut bodies: Vec<_> = painted
-                        .iter()
-                        .filter_map(|shape| match shape {
-                            egui::Shape::Rect(rect)
-                                if rect.fill == color && plot.contains(rect.rect.center()) =>
-                            {
-                                Some(rect.rect)
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    bodies.sort_by(|a, b| a.left().total_cmp(&b.left()));
-                    assert_eq!(bodies.len(), 3, "{chart_type:?}");
-                    // Mean gap 3: 30 / 3 * 0.6 = 6, including custom domains.
-                    let gap = 10.0;
-                    for body in &bodies {
-                        assert_close(body.width().into(), gap * 0.6, "numeric body width");
-                    }
-                    assert!(bodies[0].right() < bodies[1].left(), "{bodies:?}");
-                    assert_close(
-                        (bodies[1].center().x - bodies[0].center().x).into(),
-                        gap,
-                        "neighbouring key gap",
-                    );
-                    // A click inside the second body, where a mean-gap body of the first would reach.
-                    let mut clicks = vec![(
-                        egui::pos2(bodies[1].left() + 1.5, bodies[1].top() + 1.0),
-                        ChartElementId::Series(series),
-                    )];
-                    if !added {
-                        let volume = volume_bodies(&painted, plot, &ctx);
-                        assert!(!volume.is_empty(), "missing volume bars");
-                        for bar in &volume {
-                            assert_close(bar.width().into(), gap * 0.8, "numeric volume width");
-                        }
-                        let second = volume
+                        .flat_map(|chart_type| [false, true].map(|added| (chart_type, added)))
+                    {
+                        let ctx = egui::Context::default();
+                        apply_to_egui(&ctx, &theme);
+                        let bars = keys
                             .iter()
-                            .find(|bar| (bar.center().x - bodies[1].center().x).abs() < 0.01)
-                            .expect("second volume bar");
-                        // Builds with studies paint volume as a study, others as the series.
-                        let id = chart
-                            .indicators()
-                            .find(|(_, study)| study.is_volume())
-                            .map_or(ChartElementId::Series(SeriesId::VOLUME), |(id, _)| {
-                                ChartElementId::Indicator(id)
+                            .map(|&key| {
+                                let mut bar =
+                                    Bar::new(key_time(key).unwrap(), 10.0, 13.0, 9.0, 12.0, 1.0);
+                                bar.colors = Some(Box::new(BarColors {
+                                    color: Some(color),
+                                    ..Default::default()
+                                }));
+                                bar
+                            })
+                            .collect();
+                        let mut chart = Chart::new(BarData::from_bars(bars));
+                        let series = if added {
+                            let series = chart.add_series(crate::widget::SeriesOptions {
+                                chart_type,
+                                ..Default::default()
                             });
-                        // Its centre, past the tolerance band of the first volume bar.
-                        clicks.push((egui::pos2(second.center().x, second.bottom() - 1.0), id));
-                    }
-                    for (step, (pos, hit)) in clicks.into_iter().enumerate() {
-                        let time = 0.1 + step as f64 * 0.1;
-                        frame(&ctx, &mut chart, time, vec![egui::Event::PointerMoved(pos)]);
-                        for pressed in [true, false] {
-                            let button = egui::Event::PointerButton {
-                                pos,
-                                button: egui::PointerButton::Secondary,
-                                pressed,
-                                modifiers: Default::default(),
-                            };
-                            frame(&ctx, &mut chart, time + 0.05, vec![button]);
+                            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+                            chart.set_main_series_visible(false);
+                            series
+                        } else {
+                            SeriesId::MAIN
+                        };
+                        chart.set_horizontal_scale(Some(scale.clone()));
+                        chart.set_chart_type(chart_type);
+                        let mut options = chart.chart_options().clone();
+                        options.time_scale.bar_spacing = bar_spacing;
+                        chart.set_chart_options(options);
+                        if let Some(view) = view {
+                            assert!(chart.set_visible_logical_range(view));
                         }
-                        let target = chart.take_right_click();
-                        assert!(
-                            matches!(target, Some(crate::widget::RightClickTarget::Element {
+                        let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+                        let plot = chart.get_rendered_price_rect();
+                        let mut bodies: Vec<_> = painted
+                            .iter()
+                            .filter_map(|shape| match shape {
+                                egui::Shape::Rect(rect)
+                                    if rect.fill == color && plot.contains(rect.rect.center()) =>
+                                {
+                                    Some(rect.rect)
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        bodies.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                        assert_eq!(bodies.len(), 3, "{chart_type:?}");
+                        if let Some(gap) = gap {
+                            for body in &bodies {
+                                assert_close(body.width().into(), gap * 0.6, "numeric body width");
+                            }
+                            assert_close(
+                                (bodies[1].center().x - bodies[0].center().x).into(),
+                                gap,
+                                "neighbouring key gap",
+                            );
+                        }
+                        assert!(bodies[0].right() < bodies[1].left(), "{bodies:?}");
+                        // A click inside the second body, where a mean-gap body of the first would reach.
+                        let mut clicks = vec![(
+                            egui::pos2(bodies[1].left() + 1.5, bodies[1].top() + 1.0),
+                            ChartElementId::Series(series),
+                        )];
+                        if !added {
+                            let volume = volume_bodies(&painted, plot, &ctx);
+                            assert!(!volume.is_empty(), "missing volume bars");
+                            // 0.8 against the bodies' 0.6 of the same gap.
+                            for bar in &volume {
+                                assert_close(
+                                    bar.width().into(),
+                                    f64::from(bodies[1].width()) * 4.0 / 3.0,
+                                    "numeric volume width",
+                                );
+                            }
+                            let second = volume
+                                .iter()
+                                .find(|bar| (bar.center().x - bodies[1].center().x).abs() < 0.01)
+                                .expect("second volume bar");
+                            // Builds with studies paint volume as a study, others as the series.
+                            let id = chart
+                                .indicators()
+                                .find(|(_, study)| study.is_volume())
+                                .map_or(ChartElementId::Series(SeriesId::VOLUME), |(id, _)| {
+                                    ChartElementId::Indicator(id)
+                                });
+                            // Just inside its right edge, past the tolerance band of the first.
+                            clicks.push((
+                                egui::pos2(second.right() - 1.0, second.bottom() - 1.0),
                                 id,
-                                bar_idx: 1,
+                            ));
+                        }
+                        for (step, (pos, hit)) in clicks.into_iter().enumerate() {
+                            let time = 0.1 + step as f64 * 0.1;
+                            frame(&ctx, &mut chart, time, vec![egui::Event::PointerMoved(pos)]);
+                            for pressed in [true, false] {
+                                let button = egui::Event::PointerButton {
+                                    pos,
+                                    button: egui::PointerButton::Secondary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                };
+                                frame(&ctx, &mut chart, time + 0.05, vec![button]);
+                            }
+                            let target = chart.take_right_click();
+                            assert!(
+                                matches!(target, Some(crate::widget::RightClickTarget::Element {
+                                id,
+                                bar_idx,
                                 ..
-                            }) if id == hit),
-                            "{chart_type:?}, added {added}: {target:?}"
-                        );
+                            }) if id == hit && bar_idx == shown),
+                                "{chart_type:?}, added {added}: {target:?}"
+                            );
+                        }
                     }
                 }
             }

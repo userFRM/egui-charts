@@ -32,7 +32,7 @@ use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// SuperTrend indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SuperTrend {
     atr_period: usize,
     multiplier: f64,
@@ -43,7 +43,7 @@ pub struct SuperTrend {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct State {
     usable: usize,
     previous: f64,

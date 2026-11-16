@@ -8,7 +8,7 @@ use egui::Color32;
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StochasticMomentumIndex {
     /// Lookback period (typically 10)
     period: usize,

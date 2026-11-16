@@ -30,7 +30,7 @@ use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Chande Kroll Stop: a short (upper) and a long (lower) trailing stop.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChandeKrollStop {
     atr_length: usize,
     multiplier: f64,
@@ -42,7 +42,7 @@ pub struct ChandeKrollStop {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     index: usize,
     count: usize,

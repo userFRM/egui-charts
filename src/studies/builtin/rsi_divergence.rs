@@ -57,7 +57,7 @@ const RSI_TIE: f64 = 1e-9;
 pub(super) const MARKS: [&str; 4] = ["Bull", "H Bull", "Bear", "H Bear"];
 
 /// RSI Divergence Indicator: the RSI with regular and hidden divergences against price.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RsiDivergence {
     period: usize,
     left: usize,
@@ -71,14 +71,13 @@ pub struct RsiDivergence {
     values: IndicatorValues,
     stepper: Stepper<State>,
     undo: Confirmed,
-    rsi_color: Color32,
+    /// The colour of each plot, in the order of `line_names`.
+    plot_colors: [Color32; 9],
     fill_color: Color32,
-    bull_color: Color32,
-    bear_color: Color32,
     visible: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Pivot {
     source: usize,
     position: usize,
@@ -87,7 +86,7 @@ struct Pivot {
     low: f64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     rsi: RsiState,
@@ -133,7 +132,7 @@ impl Search {
 
 /// The bars a divergence search still compares and the last pivot low and high. A study keeps
 /// it in its checkpointed state.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Pivots {
     position: usize,
     window: std::collections::VecDeque<Pivot>,
@@ -258,7 +257,7 @@ impl Pivots {
 
 /// What the divergences confirmed on the last bar replaced. A study keeps it beside its values,
 /// so that a correction of that bar can withdraw them.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Confirmed(Vec<(usize, usize, f64)>);
 
 impl Confirmed {
@@ -312,6 +311,9 @@ impl RsiDivergence {
         min_range: usize,
         max_range: usize,
     ) -> Self {
+        let (green, red) = (palette::GREEN, palette::RED);
+        // Hidden divergences are drawn at a fifth of the opacity.
+        let hidden = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 51);
         Self {
             period: period.max(1),
             left: left.max(1),
@@ -325,10 +327,18 @@ impl RsiDivergence {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             undo: Confirmed::default(),
-            rsi_color: palette::BLUE,
+            plot_colors: [
+                palette::BLUE,
+                green,
+                hidden(green),
+                red,
+                hidden(red),
+                green,
+                green,
+                red,
+                red,
+            ],
             fill_color: palette::LIGHT_BLUE.gamma_multiply_u8(26),
-            bull_color: palette::GREEN,
-            bear_color: palette::RED,
             visible: true,
         }
     }
@@ -435,37 +445,32 @@ impl Indicator for RsiDivergence {
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
-        use crate::studies::PlotType;
-        let hidden = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 51);
-        let (color, plot_type) = match line {
-            0 => (self.rsi_color, PlotType::Line),
-            1 => (self.bull_color, PlotType::Line),
-            2 => (hidden(self.bull_color), PlotType::Line),
-            3 => (self.bear_color, PlotType::Line),
-            4 => (hidden(self.bear_color), PlotType::Line),
-            5 => (self.bull_color, PlotType::TriangleUp),
-            6 => (self.bull_color, PlotType::TriangleUp),
-            7 => (self.bear_color, PlotType::TriangleDown),
-            _ => (self.bear_color, PlotType::TriangleDown),
-        };
+        use crate::studies::PlotType::{Line, TriangleDown, TriangleUp};
+        // A table like the colours: a `match` on the line crashed the optimiser of the compiler
+        // the performance job pins once inlined into `settings`.
+        let plot_types = [
+            Line,
+            Line,
+            Line,
+            Line,
+            Line,
+            TriangleUp,
+            TriangleUp,
+            TriangleDown,
+            TriangleDown,
+        ];
+        let line = line.min(8);
         crate::studies::PlotStyle {
-            color,
+            color: self.plot_colors[line],
             width: 2.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type,
+            plot_type: plot_types[line],
             visible: true,
         }
     }
 
     fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
-        (line >= 5).then_some((
-            if line < 7 {
-                self.bull_color
-            } else {
-                self.bear_color
-            },
-            Color32::WHITE,
-        ))
+        (line >= 5).then_some((self.plot_colors[line.min(8)], Color32::WHITE))
     }
 
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
@@ -481,36 +486,24 @@ impl Indicator for RsiDivergence {
         &self.values
     }
 
+    /// The colour of each of the nine plots in turn, then the band between the levels.
     fn colors(&self) -> Vec<Color32> {
-        vec![
-            self.rsi_color,
-            self.bull_color,
-            self.bear_color,
-            self.fill_color,
-        ]
+        let mut colors = self.plot_colors.to_vec();
+        colors.push(self.fill_color);
+        colors
     }
 
+    /// Each colour recolours the plot in its place, and a tenth the band between the levels,
+    /// which a list without one gives the RSI's colour at a low opacity.
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if let Some(&color) = colors.first() {
-            self.fill_color = colors.get(3).copied().unwrap_or_else(|| {
-                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
+        for (slot, color) in self.plot_colors.iter_mut().zip(&colors) {
+            *slot = *color;
+        }
+        if !colors.is_empty() {
+            self.fill_color = colors.get(9).copied().unwrap_or_else(|| {
+                let rsi = self.plot_colors[0];
+                Color32::from_rgba_unmultiplied(rsi.r(), rsi.g(), rsi.b(), 16)
             });
-        }
-        for (color, slot) in colors.into_iter().zip([
-            &mut self.rsi_color,
-            &mut self.bull_color,
-            &mut self.bear_color,
-        ]) {
-            *slot = color;
-        }
-    }
-
-    fn set_color(&mut self, line: usize, color: Color32) {
-        match line {
-            0 => self.rsi_color = color,
-            1 => self.bull_color = color,
-            2 => self.bear_color = color,
-            _ => {}
         }
     }
 
@@ -558,5 +551,56 @@ impl Indicator for RsiDivergence {
         ]
         .map(String::from)
         .to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::StudyTemplate;
+
+    /// A colour list names each of the nine plots in turn, so a saved study restores as it was
+    /// saved, and recolouring the RSI line, or Hidden Bullish through its own colour, leaves every
+    /// other plot the colour it had and never reads the level fill as a plot colour.
+    #[test]
+    fn a_colour_list_names_each_plot_in_turn() {
+        // Saved while the study held one colour per kind of divergence, with Hidden Bullish
+        // styled gold and the Regular Bearish Label brown, apart from their kind.
+        let saved = r#"{"name":"RSI Divergence Indicator","inputs":[["period",{"Length":14}],["right",{"Length":5}],["left",{"Length":5}],["max_range",{"Length":60}],["min_range",{"Length":5}],["bullish",{"Toggle":true}],["hidden_bullish",{"Toggle":false}],["bearish",{"Toggle":true}],["hidden_bearish",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RsiDivergence.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[255,215,0,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[242,54,69,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[48,11,14,51],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[76,175,80,255],"width":2.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[76,175,80,255],"width":2.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[165,42,42,255],"width":2.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":2.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[3,15,25,26],"untagged_plots":[0,1,2,3,4,5,6,7,8],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let restored = || {
+            serde_json::from_str::<StudyTemplate>(saved)
+                .unwrap()
+                .create()
+                .unwrap()
+        };
+        let plots = |study: &dyn Indicator| -> Vec<Color32> {
+            (0..9).map(|line| study.plot_style(line).color).collect()
+        };
+        let (green, red) = (palette::GREEN, palette::RED);
+        let saved_plots = [
+            palette::BLUE,
+            green,
+            Color32::GOLD,
+            red,
+            Color32::from_rgba_unmultiplied(242, 54, 69, 51),
+            green,
+            green,
+            Color32::BROWN,
+            red,
+        ];
+        assert_eq!(plots(restored().as_ref()), saved_plots);
+        // The RSI line recoloured by a list of one colour, and Hidden Bullish by its own.
+        type Recolour = fn(&mut dyn Indicator, Color32);
+        let rows: [(Recolour, usize); 2] = [
+            (|study, color| study.set_colors(vec![color]), 0),
+            (|study, color| study.set_color(2, color), 2),
+        ];
+        for (recolour, line) in rows {
+            let mut study = restored();
+            recolour(study.as_mut(), Color32::WHITE);
+            let mut expected = saved_plots;
+            expected[line] = Color32::WHITE;
+            assert_eq!(plots(study.as_ref()), expected, "recoloured plot {line}");
+        }
     }
 }

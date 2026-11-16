@@ -65,7 +65,7 @@ pub enum StrategyReportAction {
     },
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Tab {
     #[default]
     Summary,
@@ -83,6 +83,7 @@ impl TabLabel for Tab {
     }
 }
 
+#[derive(Debug)]
 struct ReportData {
     report: StrategyReport,
     performance: StrategyPerformance,
@@ -97,7 +98,7 @@ struct ReportData {
 /// Call [`Self::set_report`] once when the host supplies or replaces a run. Metrics and display
 /// ordering are cached there. Mount [`Self::show`] in the host's panel below the chart; without a
 /// report it draws no controls and takes no space. Give each instance its own egui id scope.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StrategyReportPanel {
     data: Option<ReportData>,
     tab: Tab,

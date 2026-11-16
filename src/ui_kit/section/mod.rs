@@ -35,6 +35,7 @@ pub(crate) fn menu_heading_color(theme: &crate::theme::Theme) -> egui::Color32 {
 }
 
 /// A collapsible section with header
+#[derive(Debug)]
 pub struct Section {
     id: Id,
     title: String,

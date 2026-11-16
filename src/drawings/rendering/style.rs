@@ -278,6 +278,7 @@ impl Drawing {
                     | DrawingToolType::FibonacciCircles
                     | DrawingToolType::FibonacciSpeedResistanceArcs
                     | DrawingToolType::FibonacciWedge
+                    | DrawingToolType::AnchoredVWAP
             ) {
             None
         } else {
@@ -681,6 +682,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y: &|p| p as f32,
                         y_to_price: &f64::from,
                         time_axis: true,
@@ -1620,6 +1622,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| p as f32,
                     y_to_price: &f64::from,
                     time_axis: true,

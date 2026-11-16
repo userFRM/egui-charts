@@ -15,6 +15,7 @@ use chrono::{NaiveTime, Timelike};
 use egui::{Color32, RichText, Ui};
 
 /// Symbol tab renderer - shows chart type and style settings
+#[derive(Debug)]
 pub struct SymbolTab;
 
 impl SymbolTab {
@@ -544,8 +545,8 @@ impl SymbolTab {
         });
     }
 
-    /// Session hours: the chart's calendar, the instrument's regular or extended windows, or a
-    /// daily window of its own.
+    /// Session hours: the chart's calendar, the instrument's regular or extended windows, its
+    /// pre-market or post-market alone or each segment apart, or a daily window of its own.
     fn profile_session(ui: &mut Ui, session: &mut ProfileSession) {
         let label = ui.label(l10n::text(ui.ctx(), "Session"));
         let custom = || {
@@ -561,11 +562,23 @@ impl SymbolTab {
             ProfileSession::Regular => 1,
             ProfileSession::Extended => 2,
             ProfileSession::Custom(_) => 3,
+            ProfileSession::PreMarket => 4,
+            ProfileSession::PostMarket => 5,
+            ProfileSession::Segments => 6,
         };
         let mut selected = choice(session);
         ui.label_inputs_by(label.id, |ui| {
-            ui.combo_select("profile_session", &mut selected, 0..4, |i| {
-                ["Chart hours", "Regular hours", "Extended hours", "Custom"][*i].to_owned()
+            ui.combo_select("profile_session", &mut selected, 0..7, |i| {
+                [
+                    "Chart hours",
+                    "Regular hours",
+                    "Extended hours",
+                    "Custom",
+                    "Pre-market only",
+                    "Post-market only",
+                    "Each segment of the day",
+                ][*i]
+                    .to_owned()
             });
         });
         ui.end_row();
@@ -575,6 +588,9 @@ impl SymbolTab {
                 ProfileSession::Regular,
                 ProfileSession::Extended,
                 custom(),
+                ProfileSession::PreMarket,
+                ProfileSession::PostMarket,
+                ProfileSession::Segments,
             ][selected]
                 .clone();
         }

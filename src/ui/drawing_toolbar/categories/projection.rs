@@ -11,6 +11,7 @@ use crate::icons::{Icon, icons};
 use crate::ui::drawing_toolbar::icons as toolbar_icons;
 
 /// Projection & Measurement category implementation
+#[derive(Debug)]
 pub struct ProjectionCategory;
 
 impl ToolCategory for ProjectionCategory {

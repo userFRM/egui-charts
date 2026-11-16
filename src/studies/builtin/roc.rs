@@ -29,7 +29,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Rate of Change indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RateOfChange {
     period: usize,
     values: IndicatorValues,

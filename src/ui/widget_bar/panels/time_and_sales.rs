@@ -21,6 +21,7 @@ const ROW_HEIGHT: f32 = 20.0;
 
 /// A size filter of the time and sales panel.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TradeSizeFilter {
     /// Smallest matching size, inclusive.
     pub min_size: f64,
@@ -28,8 +29,28 @@ pub struct TradeSizeFilter {
     pub sound: bool,
 }
 
+impl TradeSizeFilter {
+    /// Trades of at least `min_size`, reported without a sound.
+    pub fn new(min_size: f64) -> Self {
+        Self {
+            min_size,
+            sound: false,
+        }
+    }
+}
+
 /// Formatting of the time and sales panel.
+///
+/// ```
+/// use egui_charts::ui::widget_bar::{TimeAndSalesConfig, TradeSizeFilter};
+///
+/// let mut config = TimeAndSalesConfig::default();
+/// config.size_decimals = Some(0);
+/// let mut filter = TradeSizeFilter::new(100.0);
+/// filter.sound = true;
+/// ```
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct TimeAndSalesConfig {
     /// Decimals of prices, as `Instrument::price_decimals`. `None` chooses them from each price.
     pub price_decimals: Option<u8>,
@@ -46,6 +67,7 @@ pub struct TimeAndSalesConfig {
 /// trades of unknown side neutral. The user adds, edits and removes size [`filters`](Self::filters)
 /// in the panel: with any filter, only trades matching one are listed, and each filter can ask
 /// for a sound.
+#[derive(Debug)]
 pub struct TimeAndSalesPanel {
     /// Display and layout options for this component.
     pub config: TimeAndSalesConfig,

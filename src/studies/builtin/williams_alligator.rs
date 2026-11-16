@@ -33,7 +33,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Williams Alligator: jaw, teeth and lips lines, displaced forward.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WilliamsAlligator {
     jaw_length: usize,
     teeth_length: usize,

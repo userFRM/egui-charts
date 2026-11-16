@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 ///
 /// `(close - lowest_low) / (highest_high - lowest_low) * 100`, or 50 for a flat range.
 /// Bars before 52 weeks of history have no value, regardless of the bar interval.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Week52HighLow {
     values: IndicatorValues,
     state: State,
@@ -109,7 +109,7 @@ impl Indicator for Week52HighLow {
 
 /// Highest high and lowest low over the inclusive last 364 days, drawn on the price pane.
 /// Bars before 52 weeks of history have no value, regardless of the bar interval.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Week52HighLowLevels {
     values: IndicatorValues,
     state: State,
@@ -195,7 +195,7 @@ impl Indicator for Week52HighLowLevels {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     processed: usize,
     first: Option<chrono::DateTime<chrono::Utc>>,

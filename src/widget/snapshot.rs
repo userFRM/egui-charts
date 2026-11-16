@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 /// One study of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedStudy {
     /// The study's id when saved, used by study sources and drawings in its pane.
     pub id: usize,
@@ -27,7 +28,16 @@ pub struct SavedStudy {
 }
 
 /// The markers and price lines of one bar series of a [`ChartSnapshot`].
+///
+/// ```
+/// use egui_charts::model::MarkerOptions;
+/// use egui_charts::widget::SavedAnnotations;
+///
+/// let mut annotations = SavedAnnotations::default();
+/// annotations.options = MarkerOptions::default();
+/// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedAnnotations {
     /// The markers from [`Chart::set_markers`], with their colours.
     pub markers: Vec<Marker>,
@@ -42,6 +52,7 @@ pub struct SavedAnnotations {
 /// [`Chart::set_data`] on [`Chart::restored_series_id`] of [`id`](Self::id), or set
 /// [`fed`](Self::fed) to reconnect its symbol or spread to the chart feed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedSeries {
     /// The series' id when saved, which [`SavedPane::members`] and drawings in its pane use.
     pub id: usize,
@@ -65,6 +76,7 @@ pub struct SavedSeries {
 
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedPane {
     /// Whether it is the original price pane. A layout may omit that pane.
     pub main: bool,
@@ -97,6 +109,7 @@ pub struct SavedPane {
 /// The trading and alert settings of the settings dialog belong to the host and are not part
 /// of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ChartSnapshot {
     /// The main series' assignment within its saved pane. `None` in layouts saved before it was
     /// recorded, which keep the restoring chart's assignment.
@@ -501,6 +514,7 @@ impl Chart {
         }
         self.config.show_volume = show_volume;
         self.restored_studies.clear();
+        self.restored_from = snapshot.saved_by;
         self.pane_layout
             .panes
             .retain(|pane| (main_present && pane.id == PaneId::MAIN) || !pane.members.is_empty());
@@ -999,6 +1013,7 @@ fn check_source_links(
 /// the chart sizes, as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts)
 /// documents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedLayout {
     /// How the charts are arranged.
     pub mode: ChartLayoutMode,
@@ -1021,6 +1036,16 @@ struct Document<T> {
 impl SavedLayout {
     /// The version of the document [`to_json`](Self::to_json) writes.
     pub const VERSION: u32 = 3;
+
+    /// `charts` in the order of their slots, arranged as `mode` in the preset proportions:
+    /// assign [`sizing`](Self::sizing) to keep other sizes.
+    pub fn new(mode: ChartLayoutMode, charts: Vec<ChartSnapshot>) -> Self {
+        Self {
+            mode,
+            charts,
+            sizing: None,
+        }
+    }
 
     /// The layout as a versioned JSON document.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {

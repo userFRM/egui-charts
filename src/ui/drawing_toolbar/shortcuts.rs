@@ -22,6 +22,7 @@ use egui::{Context, KeyboardShortcut, ModifierNames};
 ///     DrawingToolType::TrendLine
 /// );
 /// ```
+#[derive(Debug)]
 pub struct DrawingToolShortcuts {
     shortcuts: Vec<(KeyboardShortcut, DrawingToolType)>,
 }

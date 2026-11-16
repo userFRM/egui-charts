@@ -4,7 +4,7 @@ use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
     BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig,
     GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize,
-    RegressionTrendConfig, VwapBand, VwapBandMode, VwapFill, VwapPlotType,
+    RegressionTrendConfig, VwapBand, VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -457,9 +457,15 @@ impl InputsTab {
                 let original = drawing.vwap.unwrap_or_default();
                 let mut config = original;
                 let pickers = grid_pickers(pickers, 0);
-                // One picker per band, then the band fill's and the background's.
-                pickers.resize_with(config.bands.len() + 2, ColorPickerState::default);
-                for (i, band) in config.bands.iter_mut().enumerate() {
+                // Two pickers per band, then the band fill's and the background's.
+                pickers.resize_with(config.bands.len() * 2 + 2, ColorPickerState::default);
+                let (line_pickers, fill_pickers) = pickers.split_at_mut(config.bands.len() * 2);
+                for ((i, band), band_pickers) in config
+                    .bands
+                    .iter_mut()
+                    .enumerate()
+                    .zip(line_pickers.chunks_mut(2))
+                {
                     ui.push_id(i, |ui| {
                         ui.horizontal(|ui| {
                             let name = |ui: &Ui, property| {
@@ -477,15 +483,20 @@ impl InputsTab {
                                 .changed()
                                 && let Some(mut updated) = VwapBand::new(band.enabled, multiplier)
                             {
-                                updated.color = band.color;
+                                updated.upper = band.upper;
+                                updated.lower = band.lower;
                                 *band = updated;
                             }
-                            level_color(ui, &mut band.color, &mut pickers[i]);
                         });
+                        let [upper_picker, lower_picker] = band_pickers else {
+                            unreachable!("two pickers per band")
+                        };
+                        vwap_band_line(ui, "Upper band", i, &mut band.upper, upper_picker);
+                        vwap_band_line(ui, "Lower band", i, &mut band.lower, lower_picker);
                     });
                 }
-                let (band_color, line_color) = (config.bands[0].color, drawing.color);
-                let [band_picker, background_picker] = &mut pickers[3..] else {
+                let (band_color, line_color) = (config.bands[0].upper.color, drawing.color);
+                let [band_picker, background_picker] = fill_pickers else {
                     unreachable!("resized above")
                 };
                 vwap_fill(
@@ -719,6 +730,91 @@ fn number(ui: &mut Ui, label: &str, value: &mut f64, range: std::ops::RangeInclu
     ui.add(egui::DragValue::new(value).range(range).speed(0.1))
         .labelled_by(label.id);
     ui.end_row();
+}
+
+/// The switch, colour, pattern, width, plot, price line and opacity of one line of an anchored
+/// VWAP's band `index`, its controls named after `item`, the English noun of the line.
+fn vwap_band_line(
+    ui: &mut Ui,
+    item: &str,
+    index: usize,
+    line: &mut VwapBandLine,
+    picker: &mut ColorPickerState,
+) {
+    ui.push_id(item, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let ctx = ui.ctx().clone();
+            let name = |property: &str| {
+                l10n::format_text(
+                    &ctx,
+                    &format!("{item} {{0}}{property}"),
+                    &[("0", (index + 1).to_string())],
+                )
+            };
+            ui.add_space(ui.spacing().indent);
+            ui.checkbox(&mut line.visible, name(""));
+            level_color(ui, &mut line.color, picker);
+            egui::ComboBox::from_id_salt("line_style")
+                .icon(crate::ui_kit::buttons::combo_chevron)
+                .selected_text(l10n::text(&ctx, line.line_style.name()))
+                .show_ui(ui, |ui| {
+                    for &style in LineStyle::all() {
+                        ui.selectable_value(
+                            &mut line.line_style,
+                            style,
+                            l10n::text(&ctx, style.name()),
+                        );
+                    }
+                })
+                .response
+                .accessible_name(name(" line style"));
+            let mut width = line.width();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut width)
+                        .range(f32::MIN_POSITIVE..=crate::drawings::validation::MAX_STROKE_WIDTH)
+                        .speed(0.1)
+                        .suffix(" px"),
+                )
+                .accessible_name(name(" width"))
+                .changed()
+                && let Some(updated) = line.with_width(width)
+            {
+                *line = updated;
+            }
+            egui::ComboBox::from_id_salt("plot_type")
+                .icon(crate::ui_kit::buttons::combo_chevron)
+                .selected_text(l10n::text(&ctx, line.plot_type.name()))
+                .show_ui(ui, |ui| {
+                    for plot in VwapPlotType::ALL {
+                        ui.selectable_value(
+                            &mut line.plot_type,
+                            plot,
+                            l10n::text(&ctx, plot.name()),
+                        );
+                    }
+                })
+                .response
+                .accessible_name(name(" plot type"));
+            ui.checkbox(&mut line.track_price, l10n::text(&ctx, "Price line"))
+                .accessible_name(name(" price line"));
+            let mut percent = line.opacity() * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut percent)
+                        .range(0.0..=100.0)
+                        .max_decimals(1)
+                        .suffix("%")
+                        .prefix(l10n::text(&ctx, "Opacity ")),
+                )
+                .accessible_name(name(" opacity"))
+                .changed()
+                && let Some(updated) = line.with_opacity(percent / 100.0)
+            {
+                *line = updated;
+            }
+        });
+    });
 }
 
 /// A checkbox, colour and opacity row for an anchored VWAP fill whose colour follows `fallback`
