@@ -2,14 +2,15 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::draw_dashed_line;
-use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+use crate::data::{
+    Footprint, FootprintBar, FootprintBarView, FootprintLevel, FootprintView, NodeSensitivity,
+};
 use crate::localization as l10n;
 use crate::model::{Bar, ChartTypeParams, FootprintStatistic, SessionProvider};
 use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -246,6 +247,10 @@ impl FootprintConfig {
 /// follows the bar as it develops, and it only selects rows: their executed volume is never
 /// changed.
 pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
+    pullback_range_read(bar, flow.into())
+}
+
+pub(crate) fn pullback_range_read(bar: &Bar, flow: FootprintView<'_>) -> Option<(i64, i64)> {
     let source = flow.bar_at(bar.time)?;
     let low = *source.levels.first_key_value()?.0;
     let high = *source.levels.last_key_value()?.0;
@@ -290,6 +295,16 @@ pub fn render_footprint(
     mapping: &ChartMapping,
     bars: &[Bar],
     flow: &Footprint,
+    config: &FootprintConfig,
+) {
+    render_footprint_read(painter, mapping, bars, flow.into(), config)
+}
+
+pub(crate) fn render_footprint_read(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: FootprintView<'_>,
     config: &FootprintConfig,
 ) {
     let Some(width) = footprint_column_width(mapping.bar_spacing, config) else {
@@ -354,7 +369,8 @@ pub fn render_footprint(
         }
         // Automatic grouping uses the local price mapping, including log and inverted scales.
         let group = row_group(mapping, bar, flow, config);
-        let shown = group_bar(source, group);
+        let grouped = group_bar(source, group);
+        let shown = grouped.view();
         let max_volume = shown
             .levels
             .values()
@@ -379,7 +395,7 @@ pub fn render_footprint(
         let poc = config.show_poc.then(|| shown.poc()).flatten();
         let pullback = config
             .pullback
-            .then(|| pullback_range(bar, flow))
+            .then(|| pullback_range_read(bar, flow))
             .flatten()
             .map(|(low, high)| (low.div_euclid(group), high.div_euclid(group)));
         let text_rows: Vec<_> = shown
@@ -968,7 +984,7 @@ fn volume_text(value: f64, abbreviate: bool) -> String {
 
 /// Input rows per displayed row holding at least `row_ticks` instrument ticks; zero keeps the
 /// input rows.
-pub(crate) fn fixed_row_group(flow: &Footprint, row_ticks: u32) -> i64 {
+pub(crate) fn fixed_row_group(flow: FootprintView<'_>, row_ticks: u32) -> i64 {
     let input_ticks = (flow.price_step() / flow.tick_size()).round() as u32;
     i64::from(row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000))
 }
@@ -984,7 +1000,7 @@ pub(crate) fn automatic_row_height(config: &FootprintConfig) -> Option<f32> {
 pub(crate) fn row_group(
     mapping: &ChartMapping,
     bar: &Bar,
-    flow: &Footprint,
+    flow: FootprintView<'_>,
     config: &FootprintConfig,
 ) -> i64 {
     let raw_height =
@@ -1001,7 +1017,7 @@ pub(crate) fn row_group(
 /// complete bar of `bars`, its rows holding `group(bar)` input rows.
 pub(crate) fn row_edges<'a>(
     bars: &'a [Bar],
-    flow: &'a Footprint,
+    flow: FootprintView<'a>,
     group: impl Fn(&Bar) -> i64 + 'a,
 ) -> impl Iterator<Item = f64> + 'a {
     bars.iter()
@@ -1022,9 +1038,22 @@ pub(crate) fn row_edges<'a>(
         .flatten()
 }
 
-fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
+enum GroupedBar<'a> {
+    Borrowed(FootprintBarView<'a>),
+    Owned(FootprintBar),
+}
+impl GroupedBar<'_> {
+    fn view(&self) -> FootprintBarView<'_> {
+        match self {
+            Self::Borrowed(bar) => *bar,
+            Self::Owned(bar) => bar.into(),
+        }
+    }
+}
+
+fn group_bar(source: FootprintBarView<'_>, group: i64) -> GroupedBar<'_> {
     if group == 1 {
-        return Cow::Borrowed(source);
+        return GroupedBar::Borrowed(source);
     }
     let mut shown = FootprintBar {
         time: source.time,
@@ -1043,7 +1072,7 @@ fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
         });
         target.absorb(row);
     }
-    Cow::Owned(shown)
+    GroupedBar::Owned(shown)
 }
 
 fn has_ladder(config: &FootprintConfig) -> bool {
@@ -1130,8 +1159,8 @@ fn contrasting_text(fill: Color32) -> Color32 {
 fn render_info_box(
     painter: &Painter,
     mapping: &ChartMapping,
-    flow: &Footprint,
-    shown: &FootprintBar,
+    flow: FootprintView<'_>,
+    shown: &FootprintBarView<'_>,
     group: i64,
     block: Rect,
     config: &FootprintConfig,
@@ -1235,7 +1264,7 @@ fn render_info_box(
 }
 
 fn cell_color(
-    bar: &FootprintBar,
+    bar: &FootprintBarView<'_>,
     row: &FootprintLevel,
     max_volume: f64,
     max_delta: f64,
@@ -1330,6 +1359,17 @@ pub fn render_footprint_statistics_rows(
     config: &FootprintConfig,
     sessions: Option<&dyn SessionProvider>,
 ) {
+    render_footprint_statistics_rows_read(painter, mapping, bars, flow.into(), config, sessions)
+}
+
+pub(crate) fn render_footprint_statistics_rows_read(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: FootprintView<'_>,
+    config: &FootprintConfig,
+    sessions: Option<&dyn SessionProvider>,
+) {
     let (rows, text_color) = (config.statistics_rows.as_slice(), config.text_color);
     if rows.is_empty() {
         return;
@@ -1384,12 +1424,12 @@ pub fn render_footprint_statistics_rows(
     let mut cumulative_start = None;
     let mut has_data = false;
     let mut columns = Vec::new();
-    for (i, bar) in bars.iter().enumerate() {
+    for (i, (bar, row)) in bars.iter().zip(flow.matching(bars)).enumerate() {
         if restarts.binary_search(&i).is_ok() {
             cumulative = 0.0;
             cumulative_start = Some(flow.clock().bar_open(bar.time));
         }
-        let Some(row) = flow.complete_bar_at(bar.time) else {
+        let Some(row) = row.filter(|row| flow.complete_at(row.time)) else {
             continue;
         };
         cumulative += row.delta();
@@ -1419,7 +1459,10 @@ pub fn render_footprint_statistics_rows(
             .then(|| {
                 let group = row_group(mapping, bar, flow, config);
                 let step = flow.price_step() * group as f64;
-                group_bar(row, group).poc().map(|level| level as f64 * step)
+                group_bar(row, group)
+                    .view()
+                    .poc()
+                    .map(|level| level as f64 * step)
             })
             .flatten();
         let values = [
@@ -1567,7 +1610,7 @@ pub(crate) fn render_footprint_annotations(
     painter: &Painter,
     mapping: &ChartMapping,
     bars: &[Bar],
-    flow: &Footprint,
+    flow: FootprintView<'_>,
     config: &FootprintConfig,
     chart_id: egui::Id,
 ) {
@@ -1580,8 +1623,9 @@ pub(crate) fn render_footprint_annotations(
     };
     let source: Vec<_> = bars
         .iter()
-        .filter_map(|bar| {
-            flow.complete_bar_at(bar.time)
+        .zip(flow.matching(bars))
+        .filter_map(|(bar, row)| {
+            row.filter(|row| flow.complete_at(row.time))
                 .map(|row| (bar.time, row, row_group(mapping, bar, flow, config)))
         })
         .collect();
@@ -1603,11 +1647,11 @@ pub(crate) fn render_footprint_annotations(
                 .collect();
             let grouped: Vec<_> = source
                 .iter()
-                .map(|(_, bar, group)| (group_bar(bar, *group), *group))
+                .map(|(_, bar, group)| (group_bar(*bar, *group), *group))
                 .collect();
             let rows: Vec<_> = grouped
                 .iter()
-                .map(|(bar, group)| (bar.as_ref(), *group))
+                .map(|(bar, group)| (bar.view(), *group))
                 .collect();
             cache.studies =
                 crate::studies::footprint_studies_on_rows(&rows, &settings, flow).into();
@@ -1616,7 +1660,7 @@ pub(crate) fn render_footprint_annotations(
         }
         cache.studies.clone()
     });
-    render_footprint_studies(painter, mapping, bars, flow, &studies, config);
+    render_footprint_studies_read(painter, mapping, bars, flow, &studies, config);
 }
 
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.
@@ -1638,17 +1682,34 @@ pub fn render_footprint_studies(
     studies: &[crate::studies::FootprintStudy],
     config: &FootprintConfig,
 ) {
+    render_footprint_studies_read(painter, mapping, bars, flow.into(), studies, config)
+}
+
+#[cfg(feature = "studies")]
+pub(crate) fn render_footprint_studies_read(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: FootprintView<'_>,
+    studies: &[crate::studies::FootprintStudy],
+    config: &FootprintConfig,
+) {
     use crate::studies::{FootprintStudyKind, FootprintStudyState};
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
-    let indices: BTreeMap<_, _> = bars
-        .iter()
+    let indices: BTreeMap<_, _> = flow
+        .matching(bars)
         .enumerate()
-        .filter_map(|(i, bar)| flow.bar_at(bar.time).map(|flow_bar| (flow_bar.time, i)))
+        .filter_map(|(i, row)| row.map(|row| (row.time, i)))
         .collect();
     let occupied: BTreeMap<_, _> = bars
         .iter()
         .enumerate()
         .filter_map(|(index, bar)| {
+            let x = mapping.idx_to_x(index);
+            let half_width = mapping.bar_spacing * 0.46;
+            if x + half_width < mapping.rect.left() || x - half_width > mapping.rect.right() {
+                return None;
+            }
             let source = flow.bar_at(bar.time)?;
             let group = row_group(mapping, bar, flow, config);
             let low = source.levels.first_key_value()?.0.div_euclid(group);
@@ -1657,7 +1718,6 @@ pub fn render_footprint_studies(
             let y1 = mapping.price_to_y((low as f64 * step - flow.tick_size() * 0.5).min(bar.low));
             let y2 = mapping
                 .price_to_y(((high as f64 + 1.0) * step - flow.tick_size() * 0.5).max(bar.high));
-            let x = mapping.idx_to_x(index);
             let rect = Rect::from_min_max(
                 pos2(x - mapping.bar_spacing * 0.46, y1.min(y2)),
                 pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
@@ -1762,7 +1822,7 @@ pub fn render_footprint_studies(
                 let source = flow.bar_at(bars[start].time);
                 let value = match study.kind {
                     FootprintStudyKind::DeltaAsk | FootprintStudyKind::DeltaBid => source
-                        .and_then(FootprintBar::delta_percent)
+                        .and_then(|bar| bar.delta_percent())
                         .map(|value| format!("{value:.1}%")),
                     _ => source.and_then(|bar| {
                         let (side, opposite) = if above {
@@ -1898,7 +1958,7 @@ mod tests {
     ) -> Arc<[crate::studies::FootprintStudy]> {
         let id = egui::Id::unique("cache regression");
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            render_footprint_annotations(ui.painter(), mapping, bars, flow, config, id);
+            render_footprint_annotations(ui.painter(), mapping, bars, flow.into(), config, id);
         });
         output.textures_delta.clear();
         ctx.data_mut(|data| {
@@ -1964,20 +2024,25 @@ mod tests {
             let grouped: Vec<_> = selected
                 .iter()
                 .filter_map(|bar| {
-                    flow.complete_bar_at(bar.time).map(|source| {
-                        let group = row_group(&map, bar, flow, config);
-                        let mut owned = FootprintBar::empty(source.time);
-                        owned.absorb_grouped(source, group);
-                        (owned, group)
-                    })
+                    FootprintView::from(flow)
+                        .complete_bar_at(bar.time)
+                        .map(|source| {
+                            let group = row_group(&map, bar, flow.into(), config);
+                            let mut owned = FootprintBar::empty(source.time);
+                            owned.absorb_grouped(source, group);
+                            (owned, group)
+                        })
                 })
                 .collect();
-            let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
+            let rows: Vec<_> = grouped
+                .iter()
+                .map(|(bar, group)| (bar.into(), *group))
+                .collect();
             let settings = crate::studies::FootprintStudyConfig {
                 imbalance_min_volume: config.imbalance_min_volume,
                 ..config.studies.clone().unwrap()
             };
-            crate::studies::footprint_studies_on_rows(&rows, &settings, flow)
+            crate::studies::footprint_studies_on_rows(&rows, &settings, flow.into())
         };
         for selected in [
             bars.clone(),
@@ -2853,7 +2918,7 @@ mod tests {
                             ui.painter(),
                             &map,
                             &bars,
-                            &flow,
+                            (&flow).into(),
                             &config,
                             egui::Id::unique("minimum"),
                         );
@@ -3308,7 +3373,7 @@ mod tests {
                 .collect();
             assert_eq!(texts, expected);
             assert_eq!(
-                row_edges(&bars, &flow, |_| 1).count(),
+                row_edges(&bars, (&flow).into(), |_| 1).count(),
                 if filled { 8 } else { 4 }
             );
         }
@@ -3564,7 +3629,7 @@ mod tests {
                 color_by,
                 ..Default::default()
             };
-            (cell_color(&bar, &row, 10.0, 6.0, &config), config)
+            (cell_color(&(&bar).into(), &row, 10.0, 6.0, &config), config)
         };
         let (color, config) = colors(FootprintColor::DeltaOpacity, row(2.0, 8.0, 0.0));
         assert_eq!(color, config.ask_color.gamma_multiply(1.0));
