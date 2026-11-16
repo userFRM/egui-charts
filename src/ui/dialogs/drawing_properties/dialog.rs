@@ -791,6 +791,8 @@ mod tests {
             for (id, width) in [(7, 20.0), (8, 4.0), (9, 6.0)] {
                 let mut drawing = Drawing::new(id, Tool::TrendLine);
                 drawing.stroke_width = width;
+                // As saved before the theme shade, which Reset to defaults switches on.
+                drawing.theme_shade = false;
                 drawing.chart_points =
                     vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(5.0, 110.0)];
                 chart.drawings_mut().drawings.push(drawing);
@@ -840,6 +842,7 @@ mod tests {
                 settings.note_text_style = Some(note_text);
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
+                settings.theme_shade = true;
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -860,6 +863,7 @@ mod tests {
                 assert_eq!(preview.note_text_style, Some(note_text));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
+                assert!(preview.theme_shade);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -917,6 +921,7 @@ mod tests {
             );
             assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
+            assert!(!restored.theme_shade, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(
