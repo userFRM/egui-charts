@@ -50,6 +50,19 @@ impl<T> std::fmt::Debug for TemplateStore<T> {
 
 impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {
     /// An empty catalog in the supplied namespace, initially kept only in memory.
+    ///
+    /// ```
+    /// use egui_charts::model::Timeframe;
+    /// use egui_charts::services::StoreKind;
+    /// use egui_charts::studies::StudyTemplateSet;
+    /// use egui_charts::ui::dialogs::templates::TemplateStore;
+    ///
+    /// let mut store = TemplateStore::new(StoreKind::StudyTemplates);
+    /// let mut set = StudyTemplateSet::default();
+    /// set.interval = Some(Timeframe::Day1);
+    /// store.save("Daily", set).unwrap();
+    /// assert_eq!(store.entries()["Daily"].interval, Some(Timeframe::Day1));
+    /// ```
     pub fn new(kind: StoreKind) -> Self {
         Self {
             entries: BTreeMap::new(),

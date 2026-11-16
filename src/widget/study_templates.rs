@@ -11,7 +11,9 @@ impl Chart {
     /// The chart's studies as a [`StudyTemplateSet`], in the order they were added. A link to
     /// another study's plot is saved as that study's position in the set, or past the end of
     /// the set when the chart no longer has that study, and the panes record which studies
-    /// share a pane. Apply the set to this or another chart with
+    /// share a pane. The set keeps no symbol or interval; set
+    /// [`symbol`](StudyTemplateSet::symbol) or [`interval`](StudyTemplateSet::interval) to
+    /// have applying it show them. Apply the set to this or another chart with
     /// [`apply_study_template_set`](Self::apply_study_template_set).
     pub fn study_template_set(&self) -> StudyTemplateSet {
         let ids: Vec<_> = self.indicators().map(|(id, _)| id).collect();
@@ -66,6 +68,7 @@ impl Chart {
             studies,
             price_pane,
             panes,
+            ..StudyTemplateSet::default()
         }
     }
 
@@ -85,16 +88,20 @@ impl Chart {
     /// of the set reads nothing. The studies listed in
     /// [`price_pane`](StudyTemplateSet::price_pane) are drawn on the price pane, each list in
     /// [`panes`](StudyTemplateSet::panes) becomes a new pane at the bottom, in order, and the
-    /// other studies are placed as [`add_indicator`](Self::add_indicator) places them. The
-    /// studies are computed at once from the bars. The chart's volume setting follows the set:
-    /// a volume study in it becomes the chart's volume, and without one the setting is off, as
-    /// when the volume study is removed.
+    /// other studies are placed as [`add_indicator`](Self::add_indicator) places them. A set
+    /// with a [`symbol`](StudyTemplateSet::symbol) or an
+    /// [`interval`](StudyTemplateSet::interval) first shows them as
+    /// [`set_symbol`](Self::set_symbol) and [`set_timeframe`](Self::set_timeframe) do; a set
+    /// without them keeps the chart's. The studies are computed at once from the bars. The
+    /// chart's volume setting follows the set: a volume study in it becomes the chart's volume,
+    /// and without one the setting is off, as when the volume study is removed.
     ///
     /// Fails without changing the chart when the set holds more studies than the
     /// [study cap](Self::set_study_limit) allows, when its panes name a position twice or past
     /// its studies, or when a study cannot be built, with the error of
     /// [`StudyTemplate::create_with`]. Wrap the call in [`user_action`](Self::user_action) when
-    /// it applies a user's choice, so that one undo restores the previous studies.
+    /// it applies a user's choice, so that one undo restores the previous studies, symbol and
+    /// interval.
     pub fn apply_study_template_set_with(
         &mut self,
         set: &StudyTemplateSet,
@@ -138,6 +145,12 @@ impl Chart {
                     .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(symbol) = &set.symbol {
+            self.set_symbol(symbol.clone());
+        }
+        if let Some(interval) = set.interval {
+            self.set_timeframe(interval);
+        }
         if replace {
             let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
             for id in replaced {
@@ -358,9 +371,14 @@ mod tests {
         let mut chart = test_frames::chart(&[1.0], &[2.0]);
         chart.add_indicator(Box::new(EMA::new(5)));
         chart.add_indicator(Box::new(CCI::new(20)));
-        let saved = chart.study_template_set();
+        // Every failing set also keeps a symbol and an interval, which the chart must not show.
+        let mut saved = chart.study_template_set();
+        saved.symbol = Some("MSFT".into());
+        saved.interval = Some(crate::model::Timeframe::Hour1);
         let layout = |chart: &Chart| {
             (
+                chart.symbol().to_owned(),
+                chart.timeframe(),
                 chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
                 chart
                     .panes()
@@ -441,5 +459,67 @@ mod tests {
             [chart.series_pane(ids[0]), fresh.series_pane(fresh_ids[0])],
             [Some(price), Some(PaneId::MAIN)]
         );
+    }
+
+    /// A set saved before sets kept a symbol and an interval applies over the chart's own, and
+    /// a set that keeps them shows them, with one undo restoring the symbol, interval and studies.
+    #[test]
+    fn study_template_sets_show_only_the_symbol_and_interval_they_keep() {
+        use crate::model::Timeframe;
+
+        let mut chart = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+        chart.set_symbol("AAPL");
+        chart.set_timeframe(Timeframe::Day1);
+        chart.add_indicator(Box::new(EMA::new(5)));
+        let mut kept = serde_json::to_value(chart.study_template_set()).unwrap();
+        assert!(kept.get("symbol").is_none() && kept.get("interval").is_none());
+        kept["symbol"] = "MSFT".into();
+        kept["interval"] = "Hour1".into();
+        let kept: StudyTemplateSet = serde_json::from_value(kept).unwrap();
+        let saved_before: StudyTemplateSet = serde_json::from_str(
+            r#"{"studies":[{"name":"SMA","inputs":[["period",{"Length":3}]],"settings":{"plots":[{"color":[255,235,59,255],"width":2.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[]},"visible":true}],"price_pane":[0],"panes":[]}"#,
+        )
+        .unwrap();
+        let shown = |chart: &Chart| {
+            (
+                chart.symbol().to_owned(),
+                chart.timeframe(),
+                chart
+                    .indicators()
+                    .map(|(_, study)| study.name().to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        chart
+            .user_action(|chart| chart.apply_study_template_set(&saved_before))
+            .unwrap();
+        let before = (
+            "AAPL".to_owned(),
+            Some(Timeframe::Day1),
+            vec!["SMA".to_owned()],
+        );
+        assert_eq!(shown(&chart), before);
+        let study = chart.indicators().next().unwrap().1;
+        assert_eq!(
+            study.plot_style(0).color,
+            egui::Color32::from_rgb(255, 235, 59)
+        );
+        // The three closes average to (2 + 5 + 8) / 3 = 5.
+        assert_eq!(study.values().value(0, 2), Some(5.0));
+
+        chart
+            .user_action(|chart| chart.apply_study_template_set(&kept))
+            .unwrap();
+        assert_eq!(
+            shown(&chart),
+            (
+                "MSFT".to_owned(),
+                Some(Timeframe::Hour1),
+                vec!["EMA".to_owned()]
+            )
+        );
+        assert!(chart.undo());
+        assert_eq!(shown(&chart), before);
     }
 }
