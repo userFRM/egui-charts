@@ -156,19 +156,6 @@ pub(crate) fn footprint_studies_on_rows(
     config: &FootprintStudyConfig,
     flow: FootprintView<'_>,
 ) -> Vec<FootprintStudy> {
-    if config.naked_poc && config.delta_poc && config.stacked_imbalances {
-        calculate_on_rows::<true>(bars, config, flow)
-    } else {
-        calculate_on_rows::<false>(bars, config, flow)
-    }
-}
-
-// Check the all-enabled case once, rather than adding guards to each bar.
-fn calculate_on_rows<const ALL: bool>(
-    bars: &[(FootprintBarView<'_>, i64)],
-    config: &FootprintStudyConfig,
-    flow: FootprintView<'_>,
-) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
     for (index, &(bar, group)) in bars.iter().enumerate() {
         let mut add = |low: i64, high: i64, kind, extended| {
@@ -215,12 +202,12 @@ fn calculate_on_rows<const ALL: bool>(
         else {
             continue;
         };
-        if (ALL || config.naked_poc)
+        if config.naked_poc
             && let Some(poc) = bar.poc()
         {
             add(poc, poc, FootprintStudyKind::NakedPoc, true);
         }
-        if (ALL || config.delta_poc)
+        if config.delta_poc
             && let Some(row) = bar
                 .levels
                 .values()
@@ -234,10 +221,10 @@ fn calculate_on_rows<const ALL: bool>(
         {
             add(row.level, row.level, FootprintStudyKind::DeltaPoc, false);
         }
-        if config.unfinished_auctions && last_row.bid > 0.0 {
+        if last_row.bid > 0.0 && config.unfinished_auctions {
             add(last, last, FootprintStudyKind::UnfinishedHigh, true);
         }
-        if config.unfinished_auctions && first_row.ask > 0.0 {
+        if first_row.ask > 0.0 && config.unfinished_auctions {
             add(first, first, FootprintStudyKind::UnfinishedLow, true);
         }
         if let Some(max) = config.single_print_max.filter(|max| max.is_finite()) {
@@ -288,7 +275,7 @@ fn calculate_on_rows<const ALL: bool>(
                 add(first, last, FootprintStudyKind::RatioBid, false);
             }
         }
-        if !ALL && !config.stacked_imbalances {
+        if !config.stacked_imbalances {
             continue;
         }
         for (side, kind) in [
