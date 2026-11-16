@@ -251,6 +251,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(PriceChannel::new(l(0))),
         Box::new(LinearRegression::new(l(0))),
         Box::new(LinearRegressionChannel::new(l(0), x(2.0)).with_multipliers(x(2.0), x(1.0))),
+        Box::new(LinearRegressionChannel::new(l(0), x(2.0)).with_deviations_used(false, true)),
         Box::new(LinearRegressionSlope::new(l(0))),
         Box::new(TrendStrengthIndex::new(l(0))),
         Box::new(StandardError::new(l(0))),
