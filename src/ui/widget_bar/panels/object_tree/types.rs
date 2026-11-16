@@ -329,6 +329,14 @@ impl SourceItem {
 ///
 /// Displays real-time price data for the bar under the cursor. Build it with
 /// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
+///
+/// ```
+/// use egui_charts::ui::widget_bar::panels::object_tree::{DataWindowInfo, DataWindowSeries};
+///
+/// let mut info = DataWindowInfo::new("XAUUSD").with_ohlcv(2400.0, 2410.0, 2395.0, 2405.0, 9.0);
+/// let value = Some("5,000.00".to_owned());
+/// info.series.push(DataWindowSeries::new("SPX", egui::Color32::GOLD, value));
+/// ```
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct DataWindowInfo {
