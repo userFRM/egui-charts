@@ -260,7 +260,6 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [ ] Open the drawing toolbar's colour popup from a visible control, and keep the favourite tools strip in `Terminal` settings.
 - [x] The terminal and demo persist indicator favourites, restore them in the browser and toolbar, and retain stars for temporarily unavailable studies.
 - [x] The floating selection toolbar follows the selected drawing and performs its settings, duplicate, lock, visibility, delete and colour actions in the terminal and demo.
-- [ ] Connect the standalone quick settings menu, its scale-settings action and all of its configuration fields.
 - [ ] Handle the series context menu's Copy price action in the demo; `Terminal` already copies the clicked price.
 - [x] Alt+Shift+R selects the rectangle tool and Alt+Enter maximises or restores the selected chart of a grid. Interval entry and go-to-date shortcuts run in `Terminal`.
 - [x] Main-symbol legend controls hide or show the series, open its settings and remove it.
@@ -352,6 +351,6 @@ The order below prioritises correctness and complete library workflows. It carri
 
 1. **Chart rendering and order flow:** leave bars outside session hours out of session profiles, finish scale name tags, and the ladder's size mode and highlight tiers.
 2. **Indicators and drawings:** finish the remaining style and calculation controls of built-in studies, volume profile study settings and the remaining dedicated studies; give drawing tools their own default styles and complete the labels of line drawings.
-3. **Terminal UI:** handle the remaining actions with application interception and move the demo onto `Terminal`; gate order-flow entries on the feed's declarations, add the depth panel and open the study editor and replay trading in the bottom dock; finish the colour popup, quick settings menu and standalone replay toolbar.
+3. **Terminal UI:** handle the remaining actions with application interception and move the demo onto `Terminal`; gate order-flow entries on the feed's declarations, add the depth panel and open the study editor and replay trading in the bottom dock; finish the colour popup and standalone replay toolbar.
 4. **Layouts and snapshots:** restore custom series from snapshots and include symbol navigation in terminal undo.
 5. **Presentation and extensions:** finish complete terminal capture, print/PDF output and native save-file choice, translation and theme coverage, idle repaints, public API stability and the desktop-webview example.
