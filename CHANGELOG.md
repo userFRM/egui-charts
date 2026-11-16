@@ -1391,6 +1391,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Stacked footprint annotations calculate bid and ask imbalances in one row pass, preserving zone order, thresholds and revisit behavior. ([#3160](https://github.com/userFRM/egui-charts/issues/3160))
+
 - Fixed range and anchored volume profile drawings read shared prepared footprint rows through `ChartView::executions`, preserving executed volumes and missing-join completeness. Migration: its field is now `Option<FootprintView<'_>>`; hosts passing `Some(&footprint)` use `Some((&footprint).into())`. The view borrows rows and `FootprintPage::new` remains unchanged. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - Footprint annotations skip the price-row calculations for disabled POCs and stacked imbalances. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
