@@ -873,6 +873,18 @@ impl FibonacciConfig {
 }
 
 /// Settings of the regression trend drawing.
+///
+/// ```
+/// use egui_charts::drawings::RegressionTrendConfig;
+/// use egui_charts::model::{LineStyle, PriceSource};
+///
+/// let mut config = RegressionTrendConfig::default()
+///     .with_deviations(1.5, 2.5)
+///     .unwrap();
+/// config.use_upper = false;
+/// config.source = PriceSource::HL2;
+/// config.line_style = LineStyle::Solid;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RegressionTrendFields")]
 pub struct RegressionTrendConfig {
@@ -891,8 +903,9 @@ pub struct RegressionTrendConfig {
     precision: Option<u8>,
 }
 
-/// Stored settings of a regression trend, checked by [`RegressionTrendConfig::new`] on load.
-/// Settings saved before the bounds were set apart hold one `deviations` for both.
+/// Stored settings of a regression trend, checked by [`RegressionTrendConfig::with_deviations`]
+/// and [`RegressionTrendConfig::with_precision`] on load. Settings saved before the bounds were
+/// set apart hold one `deviations` for both.
 #[derive(Deserialize)]
 struct RegressionTrendFields {
     deviations: Option<f64>,

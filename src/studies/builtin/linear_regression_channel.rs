@@ -66,6 +66,12 @@ impl LinearRegressionChannel {
     /// Bound the upper band by its deviation when `upper` is set and the lower band by its
     /// deviation when `lower` is set; a band without one passes through the highest high
     /// above the line or the lowest low below it. Both default to set.
+    ///
+    /// ```
+    /// use egui_charts::studies::LinearRegressionChannel;
+    ///
+    /// let channel = LinearRegressionChannel::new(100, 2.0).with_deviations_used(false, true);
+    /// ```
     pub fn with_deviations_used(mut self, upper: bool, lower: bool) -> Self {
         self.use_upper = upper;
         self.use_lower = lower;
