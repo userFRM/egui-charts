@@ -38,7 +38,6 @@ pub use components::{
     SettingsAction,
     SettingsDialog,
     SettingsDialogConfig,
-    SettingsMenu,
     SettingsTab,
     SymbolSearchConfig,
     SymbolSearchDialog,
