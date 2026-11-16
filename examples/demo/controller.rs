@@ -1469,8 +1469,18 @@ impl DemoApp {
         self.chart.begin_user_action();
         self.settings_state = state.clone();
         self.trading.display = state.trading.clone();
+        let alerts = &state.alerts;
         self.alerts
-            .set_notification_seconds(state.alerts.notification_seconds as f32);
+            .set_notification_seconds(if alerts.close_toasts {
+                alerts.notification_seconds as f32
+            } else {
+                0.0
+            });
+        self.alerts.set_desktop(
+            alerts
+                .desktop_notifications
+                .then(|| self.notification_host.clone() as _),
+        );
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
         if news_changed {
@@ -3047,6 +3057,12 @@ impl DemoApp {
             }
             if let Some(decimals) = live::price_decimals(&symbol) {
                 self.watchlist.set_price_decimals(&symbol, decimals);
+            }
+            if let Some(spec) = DemoSymbol::catalog()
+                .iter()
+                .find(|spec| spec.symbol.eq_ignore_ascii_case(&symbol))
+            {
+                self.watchlist.set_description(&symbol, spec.company_name);
             }
         }
         self.watchlist.set_selected(&selected);
@@ -7857,6 +7873,8 @@ mod tests {
         app.alerts.set_options(list_options.clone());
         let mut settings = app.settings_state.clone();
         settings.alerts.notification_seconds = 12;
+        settings.alerts.close_toasts = false;
+        settings.alerts.desktop_notifications = true;
         settings.alerts.show_active_only = false;
         settings.alerts.sound_volume = 0.35;
         app.apply_chart_settings(settings.clone());

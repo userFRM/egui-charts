@@ -17,7 +17,7 @@ pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
-    /// Expires when the divider drag ends or its layout is dropped.
+    /// Expires when the press on a divider or its drag ends, or its layout is dropped.
     pub(super) resizing: std::sync::Weak<()>,
     /// Split size and link membership steps undone or redone since a layout last showed the
     /// chart, for that layout to apply in the order of their process-wide numbers.
@@ -244,9 +244,9 @@ impl ChartHistory {
         })
     }
 
-    pub(super) fn record_links(&mut self, change: super::layout::LinkChange) {
+    pub(super) fn record_links(&mut self, change: Arc<Mutex<super::layout::LinkChange>>) {
         self.push(Action {
-            layout_links: Some(Arc::new(Mutex::new(change))),
+            layout_links: Some(change),
             ..Action::default()
         });
     }
@@ -892,15 +892,15 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
-    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
-    /// finish it first.
+    /// Returns false while a user action or a drawing drag is in progress, or a layout divider
+    /// is pressed or dragged; finish it first.
     pub fn undo(&mut self) -> bool {
         self.step_chart_history(false)
     }
 
     /// Redo the most recently undone chart user action.
-    /// Returns false while a user action, a drawing drag or a divider drag is in progress;
-    /// finish it first.
+    /// Returns false while a user action or a drawing drag is in progress, or a layout divider
+    /// is pressed or dragged; finish it first.
     pub fn redo(&mut self) -> bool {
         self.step_chart_history(true)
     }
@@ -943,9 +943,9 @@ impl Chart {
         }
     }
 
-    /// Whether undo and redo wait for a user action, a divider drag or a drawing drag to end. The
-    /// end of a drawing drag records the drawing as the drag found it, which a step taken
-    /// meanwhile would no longer lead back to.
+    /// Whether undo and redo wait for a user action, a divider press or drag, or a drawing drag
+    /// to end. The end of a drawing drag records the drawing as the drag found it, which a step
+    /// taken meanwhile would no longer lead back to.
     pub(super) fn history_blocked(&self) -> bool {
         #[cfg(feature = "drawings")]
         if self.drawings.drag_in_progress() {

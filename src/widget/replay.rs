@@ -85,6 +85,7 @@ impl Chart {
     /// Retains the live bars, quotes, pause state and feed configuration for exit, which gives
     /// back the ATR and percentage sizes as [`Self::set_replay_time`] describes. Recorded trades
     /// build partial bars through the normal feed path, alongside quotes, orders and depth.
+    /// Analyst targets come from the driver, which answers none, and from the live feed on exit.
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
     /// nanosecond later. An interval change resubscribes at the same shared position.
@@ -98,6 +99,8 @@ impl Chart {
     pub fn set_market_replay(&mut self, driver: Option<Arc<ReplayDriver>>) {
         if let Some(replay) = self.market_replay.take() {
             self.feed_link = replay.feed;
+            // The targets held are the driver's: ask the live feed again.
+            self.reload_price_targets();
             self.replay = Some(replay.window);
             self.set_replay_time(None);
         }
@@ -1428,6 +1431,8 @@ mod tests {
                 .unwrap()
                 .footprint
                 .as_ref()
+                .unwrap()
+                .owned()
                 .unwrap()
                 .bars()
                 .len(),

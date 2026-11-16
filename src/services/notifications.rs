@@ -3,13 +3,13 @@
 use chrono::{DateTime, Utc};
 
 use super::{Events, ProfileId};
-use crate::data::MaybeSend;
+use crate::data::{MaybeSend, Reply};
 
 /// Events the host tells the user about, such as alert triggers, filled orders or a lost
 /// connection, for the notifications panel. The host keeps the log; the panel shows what the
 /// service pushes, newest first.
 ///
-/// [`watch`](Self::watch) is called on the UI thread and must return at once. Push from any
+/// Methods are called on the UI thread and must return at once. Push and answer from any
 /// thread, runtime or browser task.
 ///
 /// ```
@@ -32,6 +32,17 @@ pub trait Notifications: MaybeSend + 'static {
     /// The stream takes at most 10,000 pushes between two frames: push at most that many recent
     /// notifications at once, or the stream lags on every call and none shows.
     fn watch(&self, events: Events<Notification>);
+
+    /// Shows `notification` on the desktop, asking the user's permission first where the
+    /// platform needs it. The alerts panel calls it for each trigger popup once the host passes
+    /// this service to its `set_desktop`. Return at once and answer through `reply` once shown,
+    /// or with the reason the permission was refused or the delivery failed, such as
+    /// [`FeedError::Other`](crate::data::FeedError::Other): the user sees it. The default answers
+    /// [`FeedError::NotSupported`](crate::data::FeedError::NotSupported).
+    fn deliver(&self, notification: Notification, reply: Reply<()>) {
+        let _ = notification;
+        reply.send(Err(crate::data::FeedError::NotSupported));
+    }
 }
 
 /// One entry of the log.
