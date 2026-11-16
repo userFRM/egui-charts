@@ -552,7 +552,7 @@ impl AlertEvaluator {
             if let Some(newest) = data.bars.len().checked_sub(1) {
                 engine.detector_signals(
                     &data.request.symbol,
-                    None,
+                    data.exchange,
                     data.request.timeframe,
                     data.signals.iter().copied(),
                     data.bars[newest.saturating_sub(1)].time,
@@ -785,6 +785,7 @@ mod tests {
                 history_complete: true,
                 drawings: &[],
                 signals: Vec::new(),
+                exchange: None,
             },
             AlertData {
                 request: AlertFeed::history_request("SYM", Timeframe::Min15),
@@ -792,6 +793,7 @@ mod tests {
                 history_complete: true,
                 drawings: std::slice::from_ref(&drawing),
                 signals: Vec::new(),
+                exchange: None,
             },
         ];
         #[cfg(not(feature = "ui"))]
@@ -1109,6 +1111,63 @@ mod tests {
                 alert
             ),
             ["NASDAQ:AAPL closed at 300"]
+        );
+    }
+
+    /// A detector alert follows the signals of a chart lent to the evaluator: a signal anchored
+    /// in the bar before the newest fires once, with the chart's exchange, and an older one is
+    /// history.
+    #[test]
+    fn detector_alerts_follow_the_signals_of_the_charts_lent() {
+        use crate::model::{AlertCondition, Direction, Signal, SignalId, SignalShape};
+        let mut alert = Alert::new("AAPL", AlertCondition::DetectorSignals("Big trades".into()));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{exchange}}:{{ticker}}".into();
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| {
+                if let crate::services::AlertEvent::TriggeredForSymbol { time, message, .. } = event
+                {
+                    sink.lock().unwrap().push((*time, message.clone()));
+                }
+            });
+        let bars = [bar(0, 1.0), bar(1, 1.0), bar(2, 1.0)];
+        let marker = |id: &str, at: &Bar| {
+            let shape = SignalShape::Marker {
+                time: at.time,
+                price: None,
+                direction: Direction::Up,
+            };
+            Signal::new(SignalId(id.into()), shape, "Big trades")
+        };
+        let (old, closed) = (marker("old", &bars[0]), marker("closed", &bars[1]));
+        let live = [AlertData {
+            request: AlertFeed::history_request("AAPL", Timeframe::Min1),
+            bars: &bars,
+            history_complete: true,
+            #[cfg(feature = "ui")]
+            drawings: &[],
+            signals: vec![&old, &closed],
+            exchange: Some("NASDAQ"),
+        }];
+        let mut evaluator = AlertEvaluator::new(Arc::new(Feed::default()));
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            evaluator.poll(
+                &engine,
+                &IndicatorFactory::new(),
+                &live,
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        }
+        assert_eq!(
+            *delivered.lock().unwrap(),
+            [(bars[1].time, "NASDAQ:AAPL".to_owned())]
         );
     }
 

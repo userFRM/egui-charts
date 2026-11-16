@@ -21,6 +21,8 @@ pub struct AlertData<'a> {
     pub drawings: &'a [crate::drawings::Drawing],
     /// The signals the host's analytics pushed for these bars, which detector alerts follow.
     pub signals: Vec<&'a crate::model::Signal>,
+    /// The exchange the feed reports for the symbol, for the messages of detector alerts.
+    pub exchange: Option<&'a str>,
 }
 
 impl std::fmt::Debug for AlertData<'_> {

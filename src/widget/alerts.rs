@@ -32,6 +32,9 @@ impl Chart {
             #[cfg(feature = "ui")]
             drawings: &self.drawings().drawings,
             signals: self.signals().collect(),
+            exchange: self
+                .instrument()
+                .and_then(|instrument| instrument.exchange.as_deref()),
         })
     }
 
