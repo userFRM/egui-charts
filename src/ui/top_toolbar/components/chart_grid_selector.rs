@@ -142,7 +142,7 @@ impl ChartGridSelector {
                     (
                         &mut self.sync.sync_date_range,
                         "Date range",
-                        "A date range chosen on one chart applies to every chart of the group.",
+                        "A date range chosen on one chart applies to every chart of the group; later scrolling stays on each chart. With Scroll and zoom on, chosen ranges reach the group already.",
                     ),
                     (
                         &mut self.sync.sync_drawings,

@@ -3433,7 +3433,7 @@ impl DemoApp {
                 let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
                 self.chart.disable_tracking_mode();
                 self.chart.apply_synced_time_scale(spacing, 0.5);
-                if self.layout.sync.sync_date_range
+                if (self.layout.sync.sync_date_range || self.layout.sync.sync_time_axis)
                     && let Some(range) = self.chart.visible_time_range()
                 {
                     let mut charts: Vec<_> =

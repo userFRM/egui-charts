@@ -955,7 +955,9 @@ pub struct ChartSyncOptions {
     /// Synchronize interval changes for fields following the layout setting.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
     pub sync_timeframe: bool,
-    /// Apply host date-range selections to the group, independently of scrolling and zooming.
+    /// Pass chosen date ranges, as given to [`ChartLayout::apply_date_range`], on to the group.
+    /// Later scrolling and zooming stay on each chart. A group that synchronizes scrolling and
+    /// zooming receives chosen ranges whether this is on or off.
     pub sync_date_range: bool,
 }
 
@@ -1566,21 +1568,24 @@ impl ChartLayout {
         self.detached.get(index).copied().unwrap_or(false)
     }
 
-    /// Fits an explicit date selection to the active chart, or its synchronization group
-    /// when `sync_date_range` is enabled. Call after the charts have rendered at their sizes.
+    /// Fits an explicit date selection to the active chart. With `sync_time_axis` on, the other
+    /// charts of its synchronization group then show the active chart's new span, as after a
+    /// scroll or zoom; otherwise they fit the selection itself when `sync_date_range` is on, and
+    /// keep their view with both off. Call after the charts have rendered at their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
         let Some(active) = charts.get_mut(self.active) else {
             return;
         };
-        let source = active
-            .fit_time_range(range, f64::INFINITY)
-            .then(|| active.sync_source())
-            .flatten();
+        let fitted = active.fit_time_range(range, f64::INFINITY);
+        let source = fitted.then(|| active.sync_source()).flatten();
+        let span = active
+            .visible_time_range()
+            .filter(|_| fitted && self.sync.sync_time_axis);
+        let Some(range) = span.or(self.sync.sync_date_range.then_some(range)) else {
+            return;
+        };
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
-            if index != self.active
-                && self.sync.sync_date_range
-                && self.same_group(index, self.active)
-            {
+            if index != self.active && self.same_group(index, self.active) {
                 chart.apply_synced_time_range_from(range, source);
             }
         }
@@ -4075,14 +4080,27 @@ mod tests {
             from: refs[0].state.shown()[10].time,
             to: refs[0].state.shown()[30].time,
         };
+        // Shared scrolling and zooming passes a chosen range on; without it only "Date range"
+        // does, and other groups keep their view either way.
         let before = refs[1].get_time_scale_state();
-        layout.apply_date_range(&mut refs, range);
-        assert_eq!(refs[1].get_time_scale_state(), before);
-        layout.sync.sync_date_range = true;
         let isolated = refs[2].get_time_scale_state();
-        layout.apply_date_range(&mut refs, range);
-        assert_ne!(refs[1].get_time_scale_state(), before);
-        assert_eq!(refs[2].get_time_scale_state(), isolated);
+        for (sync_time_axis, sync_date_range, moves) in [
+            (true, false, true),
+            (false, false, false),
+            (false, true, true),
+        ] {
+            layout.sync.sync_time_axis = sync_time_axis;
+            layout.sync.sync_date_range = sync_date_range;
+            refs[1].apply_synced_time_scale(before.0, before.1);
+            layout.apply_date_range(&mut refs, range);
+            assert_eq!(
+                refs[1].get_time_scale_state() != before,
+                moves,
+                "{sync_time_axis} {sync_date_range}"
+            );
+            assert_eq!(refs[2].get_time_scale_state(), isolated);
+        }
+        layout.sync.sync_time_axis = true;
 
         // Clearing the legacy picker must exclude a chart, rather than joining unnamed charts.
         {
