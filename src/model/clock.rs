@@ -5,6 +5,7 @@ use chrono::{
     DateTime, Datelike, LocalResult, NaiveDate, NaiveTime, Offset, TimeDelta, TimeZone, Utc,
 };
 use std::ops::Range;
+use std::sync::Arc;
 
 const DAY_MS: i64 = 86_400_000;
 /// 1970-01-05, the first Monday after the Unix epoch.
@@ -16,7 +17,8 @@ pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
     timezone: Option<TimezoneId>,
-    session: Option<super::ExchangeSessionProvider>,
+    /// Shared by the clock's copies, so that copying and comparing them stays cheap.
+    session: Option<Arc<super::ExchangeSessionProvider>>,
 }
 
 impl BarClock {
@@ -55,7 +57,8 @@ impl BarClock {
         if !extended_hours {
             session.clear_extended_windows();
         }
-        self.session = Some(super::ExchangeSessionProvider::new(zone, Some(session)));
+        let provider = super::ExchangeSessionProvider::new(zone, Some(session));
+        self.session = Some(Arc::new(provider));
         self
     }
 
@@ -289,7 +292,7 @@ impl BarClock {
 
     /// The session of a clock whose bars are trading dates: a daily or longer clock with one.
     fn date_session(&self) -> Option<&super::ExchangeSessionProvider> {
-        (self.session.as_ref())
+        (self.session.as_deref())
             .filter(|_| self.timeframe.is_some_and(|tf| tf.duration_ms() >= DAY_MS))
     }
 
@@ -364,7 +367,7 @@ impl BarClock {
     /// time zone without them.
     pub(crate) fn sessions(&self) -> super::ExchangeSessionProvider {
         let sessions = match (&self.session, &self.timezone) {
-            (Some(session), _) => session.clone(),
+            (Some(session), _) => super::ExchangeSessionProvider::clone(session),
             (None, Some(zone)) => super::ExchangeSessionProvider::new(zone.clone(), None),
             (None, None) => super::ExchangeSessionProvider::local(None),
         };
