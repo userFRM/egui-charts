@@ -316,7 +316,8 @@ pub(crate) fn footprint_studies_on_rows(
                 finish(side, run);
             }
         }
-        // Keep bid zones before ask zones, reusing the pending spans across bars.
+        // Ask zones follow bid zones, as the two loops emitted them;
+        // only the buffer's allocation outlives the bar.
         for (low, high) in asks.drain(..) {
             add(low, high, FootprintStudyKind::StackedAsk, true);
         }
