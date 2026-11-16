@@ -26,14 +26,26 @@ impl VisibleTimeRange {
 }
 
 impl Chart {
-    /// The time of the nearest eligible hovered point, or `None` outside the data.
+    /// The time of the nearest eligible hovered point, the start of the hovered whitespace slot
+    /// after the last bar, or `None` elsewhere outside the data.
     pub fn hover_time(&self) -> Option<DateTime<Utc>> {
         self.hover_period().map(|(open, _)| open)
     }
 
-    /// The hovered bar's period, or an independently keyed point's exact timestamp as both bounds.
+    /// The start of the whitespace slot at `index` after the last bar, extrapolated as in
+    /// [`Self::index_to_time`]; `None` at or before the last bar.
+    pub(super) fn whitespace_time(&self, index: f64) -> Option<DateTime<Utc>> {
+        (index >= self.state.shown().len() as f64)
+            .then(|| self.index_to_time(index))
+            .flatten()
+    }
+
+    /// The hovered bar's period, an independently keyed point's exact timestamp as both bounds,
+    /// or the start of the hovered whitespace slot after the last bar as both bounds.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let index = self.last_hover_bar_idx?;
+        let Some(index) = self.last_hover_bar_idx else {
+            return self.last_hover_whitespace.map(|time| (time, time));
+        };
         if index.fract() != 0.0 || index < 0.0 || index >= self.state.shown().len() as f64 {
             let time = self.last_crosshair?.0;
             return Some((time, time));
@@ -66,10 +78,12 @@ impl Chart {
 
     /// Shows a crosshair at the local bar whose period holds `time`, from its open until the
     /// next bar of its interval opens, with the vertical guide and time label alone. Between
-    /// bars it marks the nearest one; ties choose the earlier bar. Times before the first bar or
-    /// after the last bar's period, and `None`, clear it. Repeated element times choose the
-    /// first element. Each receiver resolves the timestamp against its own series, including
-    /// after bars are evicted or older history is loaded.
+    /// bars it marks the nearest one; ties choose the earlier bar. A time after the last bar's
+    /// period marks the whitespace slot that holds it, stepped by the chart's own interval or
+    /// bar spacing, and is drawn while that slot is in view. Times before the first bar and
+    /// `None` clear it. Repeated element times choose the first element. Each receiver resolves
+    /// the timestamp against its own series, including after bars are evicted or older history
+    /// is loaded.
     /// An exact added or custom point between main bars keeps its fractional position.
     /// Inside a [`super::ChartLayout`] the position stays until it is cleared or replaced, and
     /// returns after a linked pointer leaves.
@@ -82,7 +96,7 @@ impl Chart {
 
     /// Shows a crosshair at the local bar for `time`, as [`Self::set_synced_crosshair_time`]
     /// does, with its horizontal line and price label at `price` on the main price scale.
-    /// `None`, a time outside the data or a non-finite price clears it. The pointer's own
+    /// `None`, a time before the first bar or a non-finite price clears it. The pointer's own
     /// crosshair takes its place while the pointer is over the plots.
     /// Use [`Self::set_series_crosshair_position`] to target another bar series or pane.
     pub fn set_crosshair_position(&mut self, position: Option<(DateTime<Utc>, f64)>) {
@@ -104,7 +118,7 @@ impl Chart {
     /// apply without price snapping. Moving the series or changing its scale updates the
     /// position on the next frame. Hidden axes have no price label.
     ///
-    /// `None`, a non-finite price, a time outside the chart's data or an unknown or removed
+    /// `None`, a non-finite price, a time before the chart's first bar or an unknown or removed
     /// target clears the position. A hidden series or collapsed pane retains the position;
     /// its horizontal line and price label wait until it is shown. Offscreen prices have
     /// only the time line and label. The pointer takes precedence over all host positions
@@ -179,8 +193,13 @@ impl Chart {
             after - 1
         } else if after < bars.len() && bars[after].time < to {
             after
-        } else if after == 0 || after == bars.len() {
+        } else if after == 0 {
             return None;
+        } else if after == bars.len() {
+            // The slot holding the time; the tolerance absorbs rounding at a slot's start.
+            return self
+                .time_to_index(from)
+                .map(|index| (index + 1e-9).floor().max(bars.len() as f64));
         } else if from - bars[after - 1].time <= bars[after].time - from {
             after - 1
         } else {
@@ -389,8 +408,8 @@ mod tests {
     }
 
     /// On a custom axis a key's period ends at the next key whatever the displayed interval:
-    /// key 4 lies past the period of key 3, the last of keys 0 to 3, and the period of key 4,
-    /// the last of keys 0 to 4, ends at key 5.
+    /// key 4 lies past the period of key 3, the last of keys 0 to 3, so it marks the whitespace
+    /// slot 4, and the period of key 4, the last of keys 0 to 4, ends at key 5.
     #[test]
     fn custom_key_crosshair_period_ignores_the_timeframe() {
         let scale =
@@ -409,7 +428,7 @@ mod tests {
         };
         let mut receiver = keyed(&[0, 1, 2, 3]);
         receiver.set_synced_crosshair_time(scale.time(&4));
-        assert_eq!(receiver.synced_crosshair_bar_idx, None);
+        assert_eq!(receiver.synced_crosshair_bar_idx, Some(4.0));
         let mut source = keyed(&[0, 1, 2, 3, 4]);
         source.last_hover_bar_idx = Some(4.0);
         assert_eq!(source.hover_period(), scale.time(&4).zip(scale.time(&5)));
@@ -515,7 +534,12 @@ mod tests {
             // A time inside a coarser bar's period marks that bar, the latest one included.
             (&one(10 * D + 14 * H + 1800), Some(0.0), &days, Some(10.0)),
             (&one(29 * D + 14 * H + 1800), Some(0.0), &days, Some(29.0)),
-            (&one(30 * D + 1800), Some(0.0), &days, None),
+            // After the last bar's period a time marks the whitespace slot holding it.
+            (&one(30 * D + 1800), Some(0.0), &days, Some(30.0)),
+            (&one(31 * D), Some(0.0), &days, Some(31.0)),
+            // 25:30 lies in the four-hour slot from 24:00, slot 6; 28:00 opens slot 7.
+            (&one(25 * H + 1800), Some(0.0), &four_hours, Some(6.0)),
+            (&one(28 * H), Some(0.0), &four_hours, Some(7.0)),
             (&one(3 * H), Some(0.0), &four_hours, Some(0.0)),
             // The daily bar of day 1 marks its first minute, not the last minute of day 0.
             (&days, Some(1.0), &sessions, Some(390.0)),

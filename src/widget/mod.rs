@@ -477,6 +477,8 @@ pub struct Chart {
     last_crosshair_series: Option<SeriesId>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
+    /// Time of the hovered whitespace slot after the last bar, sent to linked charts.
+    pub(crate) last_hover_whitespace: Option<DateTime<Utc>>,
 
     // =========================================================================
     // Marks (Widget API)

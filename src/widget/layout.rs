@@ -1744,6 +1744,7 @@ impl ChartLayout {
         }
         for chart in charts.iter_mut() {
             chart.last_hover_bar_idx = None;
+            chart.last_hover_whitespace = None;
         }
         let mut pointer_down = ui.input(|i| i.pointer.any_down());
         let before_range = charts[self.active].visible_time_range();
@@ -3917,6 +3918,65 @@ mod tests {
                 frame(&mut layout, &mut charts, vec![]);
                 assert_eq!(charts[1].last_crosshair, None);
             }
+        }
+    }
+
+    /// Linked charts mark a time the pointer reaches after the last bar at the slot holding it:
+    /// eight one-minute slots after bar 99, opened 22:13:20 on Tuesday 14 November 2023, open
+    /// at 00:00:20 the next day, which a chart of twenty five-minute bars holds in its slot 21,
+    /// opened at 23:58:20.
+    #[test]
+    fn linked_crosshair_marks_a_time_after_the_last_bar() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut five = Chart::new(BarData::from_bars(
+            (0..20)
+                .map(|i| Bar::new(start + Duration::minutes(5 * i), 10.0, 11.0, 9.0, 10.0, 1.0))
+                .collect(),
+        ));
+        five.set_symbol("SAMPLE");
+        five.set_timeframe(Timeframe::Min5);
+        for (receiver, slot, label) in [
+            (chart(60), 107.0, "Wed 15 Nov '23 00:00"),
+            (five, 21.0, "Tue 14 Nov '23 23:58"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), receiver];
+            let size = vec2(1440.0, 900.0);
+            frame_texts(&ctx, &mut layout, &mut charts, size, 0.0, vec![]);
+            // Twenty empty slots after the last bar of each chart.
+            for chart in &mut charts {
+                chart.apply_synced_time_scale(8.0, 20.0);
+            }
+            frame_texts(&ctx, &mut layout, &mut charts, size, 0.1, vec![]);
+            let pointer = pos2(
+                charts[0].index_to_x(107.0).unwrap(),
+                charts[0].last_rendered_price_rect.center().y,
+            );
+            let marked = |texts: &[(String, Rect, Pos2)], chart: &Chart| {
+                let x = chart.index_to_x(slot).unwrap();
+                let bottom = chart.last_rendered_price_rect.bottom();
+                texts.iter().any(|(text, _, centre)| {
+                    text == label && (centre.x - x).abs() < 2.0 && (centre.y - bottom).abs() < 30.0
+                })
+            };
+            let mut texts = Vec::new();
+            for time in [0.2, 0.3] {
+                let events = vec![Event::PointerMoved(pointer)];
+                texts = frame_texts(&ctx, &mut layout, &mut charts, size, time, events);
+            }
+            assert!(marked(&texts, &charts[1]), "{label}");
+            for time in [0.4, 0.5] {
+                let events = vec![Event::PointerGone];
+                texts = frame_texts(&ctx, &mut layout, &mut charts, size, time, events);
+            }
+            assert!(
+                !marked(&texts, &charts[1]),
+                "{label} after the pointer left"
+            );
         }
     }
 

@@ -922,6 +922,7 @@ impl Chart {
 
         if self.state.data().is_empty() && self.state.shown().is_empty() {
             self.last_hover_bar_idx = None;
+            self.last_hover_whitespace = None;
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
@@ -3536,10 +3537,15 @@ impl Chart {
             self.last_crosshair = None;
         }
         if let Some(hover_pos) = hover_pos {
+            // After the last bar the time continues into whitespace, for the label and linked charts.
+            let whitespace_time = crosshair_point
+                .filter(|(time, _)| time.is_none())
+                .and_then(|(_, index)| self.whitespace_time(index));
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = crosshair_point
                 .filter(|(time, _)| time.is_some())
                 .map(|(_, index)| index);
+            self.last_hover_whitespace = whitespace_time;
 
             if !menu_open {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
@@ -3571,7 +3577,7 @@ impl Chart {
                 } else {
                     hover_pos
                 };
-                self.last_crosshair = crosshair_time.map(|time| {
+                self.last_crosshair = crosshair_time.or(whitespace_time).map(|time| {
                     let main = price_rect.contains(hover_pos) && !volume_rect.contains(hover_pos);
                     (time, main.then(|| price_map.y_to_price(snapped.y)))
                 });
@@ -3588,7 +3594,7 @@ impl Chart {
                 crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
-                    crosshair_time,
+                    crosshair_time.or(whitespace_time),
                     &price_map,
                     &main_options,
                     time_axis_top,
@@ -3760,6 +3766,7 @@ impl Chart {
         } else {
             // Clear hover bar index when not hovering locally
             self.last_hover_bar_idx = None;
+            self.last_hover_whitespace = None;
             if touch_readout.touch_input {
                 self.last_crosshair = None;
             }
@@ -3804,7 +3811,8 @@ impl Chart {
                         };
                         let time = self
                             .pointer_time(Pos2::new(x, y))
-                            .and_then(|(time, _)| time);
+                            .and_then(|(time, _)| time)
+                            .or_else(|| self.whitespace_time(bar_idx));
                         self.last_crosshair = time.map(|time| (time, self.synced_crosshair_price));
                         self.last_crosshair_series = target;
                         let target_axis = target.and_then(|id| {
