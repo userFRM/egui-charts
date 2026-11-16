@@ -73,6 +73,8 @@ pub struct SettingsDialog {
     price_targets_offered: bool,
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
+    /// The top and bottom margins in percent the dialog was opened with.
+    opened_margins: (f32, f32),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -165,6 +167,7 @@ impl SettingsDialog {
             order_flow_layers: [true; 4],
             price_targets_offered: true,
             opened_font_family: None,
+            opened_margins: (0.0, 0.0),
         }
     }
 
@@ -237,6 +240,10 @@ impl SettingsDialog {
         self.save_name = None;
         self.sound_preview = None;
         self.opened_font_family = settings.scales_appearance.font_family.clone();
+        self.opened_margins = (
+            settings.margins.top_percent,
+            settings.margins.bottom_percent,
+        );
         self.settings = settings;
         self.active_tab = SettingsTab::Symbol;
         self.update_color_pickers_from_settings();
@@ -445,6 +452,16 @@ impl SettingsDialog {
             .validate()
             .err()
             .map(|error| error.to_string())
+            .or_else(|| {
+                // Margins leaving no room for prices are kept when unedited; the fit ignores them.
+                let (top, bottom) = (
+                    self.settings.margins.top_percent,
+                    self.settings.margins.bottom_percent,
+                );
+                (top + bottom >= 100.0 && (top, bottom) != self.opened_margins).then(|| {
+                    crate::widget::settings::ChartSettingsError::Margins { top, bottom }.to_string()
+                })
+            })
             .or_else(|| {
                 (self.margin_top_str.parse::<f32>().is_err()
                     || self.margin_bottom_str.parse::<f32>().is_err()
