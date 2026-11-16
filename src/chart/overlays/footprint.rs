@@ -996,12 +996,15 @@ pub(crate) fn row_group(
 }
 
 /// The prices of the bottom edge of the lowest row and the top edge of the highest row of each
-/// complete bar of `bars`, its rows holding `group(bar)` input rows.
+/// complete bar of `bars`, its rows holding `group(bar)` input rows. A bar whose rows a usable
+/// automatic height of `config` keeps one tick tall has none: it keeps the candles' fit.
 pub(crate) fn row_edges<'a>(
     bars: &'a [Bar],
     flow: &'a Footprint,
+    config: &FootprintConfig,
     group: impl Fn(&Bar) -> i64 + 'a,
 ) -> impl Iterator<Item = f64> + 'a {
+    let zoomed = automatic_row_height(config).is_some();
     bars.iter()
         .filter(move |bar| flow.complete_from().is_some_and(|from| bar.time >= from))
         .filter_map(move |bar| {
@@ -1010,6 +1013,10 @@ pub(crate) fn row_edges<'a>(
             let (&high, _) = rows.last_key_value()?;
             let group = group(bar);
             let step = flow.price_step() * group as f64;
+            // A price step is a whole number of ticks, so one tick is exactly `tick_size`.
+            if zoomed && step <= flow.tick_size() {
+                return None;
+            }
             Some(
                 [
                     low.div_euclid(group) as f64,
