@@ -847,10 +847,10 @@ mod tests {
     use crate::theme::Theme;
     use egui::{Context, Shape, Vec2};
 
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     struct DepthFeed;
 
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     impl crate::data::Datafeed for DepthFeed {
         fn resolve(&self, symbol: &str, reply: crate::data::Reply<Instrument>) {
             reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
@@ -894,7 +894,7 @@ mod tests {
     /// Saved layers and disabled preferences survive a layout round trip, while each book
     /// profile follows its own switch, irrespective of the heatmap or the chart type.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn order_flow_settings_round_trip_and_render_independently() {
         use crate::chart::overlays::{BubbleColor, BubbleGrouping, BubbleScalingMode};
         use crate::widget::{ChartBuilder, ChartSnapshot};
@@ -997,7 +997,7 @@ mod tests {
     /// Component switches affect transformed candles, including borders without bodies;
     /// source OHLC direction must not choose their colours. Saved styles and undo stay local.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn heikin_components_paint_and_keep_independent_saved_values() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
@@ -1168,7 +1168,7 @@ mod tests {
     /// price outside the bar in the label colour and size, also on an inverted scale and on a
     /// flat bar. Saved styles and undo keep these apart from the candle settings.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn high_low_style_paints_bars_and_labels_and_keeps_saved_values() {
         use crate::model::{ChartType, HighLowStyle};
         use crate::widget::ChartSnapshot;
@@ -1500,7 +1500,7 @@ mod tests {
     /// always filled. Each component has its own switch and colours, and saved styles and undo
     /// keep them apart from the plain candle settings.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn hollow_and_volume_components_paint_and_keep_independent_saved_values() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
@@ -1722,7 +1722,7 @@ mod tests {
     /// keeps the pair. The source (10, 18, 8, 14) closes at 14 and its transformed close is
     /// (10 + 18 + 8 + 14) / 4 = 12.5.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn heikin_layout_saved_before_the_style_restores_its_scale() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
@@ -1795,7 +1795,7 @@ mod tests {
     /// off by default, and the painter ignored them: rising candles outlined, falling candles
     /// filled, every wick drawn. Such a layout restores as it was painted, with its switches on.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn hollow_layout_saved_before_the_style_restores_its_candles() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
@@ -1877,7 +1877,7 @@ mod tests {
     /// configuration still gives it the candle colours of its settings. The third bar closes at
     /// 12.5, below its open of 13 and above the previous close of 11.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn volume_candle_layout_saved_before_the_style_restores_as_drawn() {
         use super::super::CandleColorConfig;
         use crate::model::ChartType;
@@ -2119,7 +2119,7 @@ mod tests {
     /// sizes in a saved layout, and `Chart::snapshot` refuses a chart that holds one. Label sizes of
     /// zero or below hide the labels and still restore.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn high_low_label_size_is_bounded_like_other_text() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
@@ -2193,7 +2193,7 @@ mod tests {
     /// a chart settings template saved then restores without them; a layout saved with the style
     /// keeps its six. Labels are picked by their text and size, whatever their colour.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn high_low_layout_saved_before_the_style_restores_without_labels() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
@@ -2343,7 +2343,7 @@ mod tests {
     /// The default scale tags both closes; selecting original prices suppresses only the
     /// synthetic tag, and the choice survives layouts and undo.
     #[test]
-    #[cfg(feature = "drawings")]
+    #[cfg(feature = "ui")]
     fn heikin_scale_prices_follow_the_saved_switch() {
         use crate::model::ChartType;
         use crate::widget::test_frames::{frame, shapes};

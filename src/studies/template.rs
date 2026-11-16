@@ -818,8 +818,8 @@ mod tests {
                 vec![("start_time", Number(-8e15))],
                 vec![("start_time", Text(String::new()))],
             ),
-            // Saved before the levels could extend past their profiles, and before sessions and
-            // rows in ticks could be chosen.
+            // Saved before the levels could extend past their profiles, and before sessions,
+            // leaving out the bars outside them and rows in ticks could be chosen.
             (
                 "Vol Profile Session",
                 vec![("row_count", Length(30))],
@@ -829,6 +829,7 @@ mod tests {
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
                     ("sessions", Choice(0)),
+                    ("hours_only", Toggle(false)),
                     ("row_ticks", Length(0)),
                 ],
             ),
@@ -850,6 +851,7 @@ mod tests {
                     ("extend_vah", Toggle(false)),
                     ("extend_val", Toggle(false)),
                     ("period_count", Length(1)),
+                    ("restart_yearly", Toggle(false)),
                     ("row_ticks", Length(0)),
                 ],
             )

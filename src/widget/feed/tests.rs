@@ -1,8 +1,8 @@
 use super::super::test_frames::{candle_ys, frame, shapes};
 use super::*;
 use crate::data::{
-    DepthPage, FeedError, FootprintPage, FootprintRequest, HistoryPage, Sink, Subscription,
-    TradePage,
+    DepthPage, FeedError, FootprintPage, FootprintRequest, FootprintView, HistoryPage, Sink,
+    Subscription, TradePage,
 };
 use crate::model::{Bar, BarData, ChartType};
 use crate::widget::ChartBuilder;
@@ -574,7 +574,10 @@ fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
         Tick::new(start + TimeDelta::minutes(1), 101.0, 3.0, Some(Sell)),
         Tick::new(start + TimeDelta::minutes(2), 102.0, 5.0, None),
     ];
-    for (page_first, delay) in [(false, 0), (true, 0), (false, 2), (true, 2)] {
+    for (page_first, delay, shared) in [(false, 0), (true, 0), (false, 2), (true, 2)]
+        .into_iter()
+        .flat_map(|(first, delay)| [false, true].map(move |shared| (first, delay, shared)))
+    {
         let first = cutoff + TimeDelta::seconds(delay);
         let live = vec![
             Tick::new(first, 102.0, 7.0, Some(Buy)).with_id(99),
@@ -584,10 +587,14 @@ fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
         let (feed, mut chart, mut frames) = prepared_chart();
         let mut reply = Some(feed.footprints.lock().unwrap().remove(0));
         let mut deliver = || {
-            reply
-                .take()
-                .unwrap()
-                .send(Ok(prepared_page(&saved, cutoff, true)))
+            let mut page = prepared_page(&saved, cutoff, true);
+            if shared {
+                let crate::data::FootprintBars::Owned(bars) = page.bars else {
+                    unreachable!()
+                };
+                page.bars = crate::data::FootprintBars::Shared(Arc::new(bars));
+            }
+            reply.take().unwrap().send(Ok(page))
         };
         if page_first {
             deliver();
@@ -631,11 +638,12 @@ fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
             .unwrap()
             .footprint
             .as_ref()
-            .unwrap();
+            .unwrap()
+            .view();
         assert_eq!(
-            flow.bars().values().cloned().collect::<Vec<_>>(),
-            expected.bars,
-            "page first: {page_first}"
+            flow.bars(..).collect::<Vec<_>>(),
+            expected.bars.iter().collect::<Vec<_>>(),
+            "page first: {page_first}, shared: {shared}"
         );
         assert_eq!(flow.complete_from(), Some(start), "{page_first}, {delay}");
         assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 16.0);
@@ -662,6 +670,8 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap()
             .bar_at(start)
             .unwrap()
@@ -695,6 +705,8 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(flow.bar_at(start).unwrap().unknown, 5.0);
     assert_eq!(
@@ -736,6 +748,8 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(3)));
     assert_eq!(
@@ -744,7 +758,7 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
             .collect::<Vec<_>>(),
         vec![start, start + TimeDelta::minutes(3)]
     );
-    assert!(flow.complete_bar_at(cutoff).is_none());
+    assert!(FootprintView::from(flow).complete_bar_at(cutoff).is_none());
     feed.trades
         .lock()
         .unwrap()
@@ -760,6 +774,8 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert!(!flow.span_has_gap(start, None));
     assert_eq!(flow.complete_from(), Some(start));
@@ -786,13 +802,18 @@ fn prepared_pages_reject_invalid_ranges_and_nonprogressing_continuations() {
         );
         let mut asked = request;
         match case {
-            0 => page.bars[0].unknown = -1.0,
+            0 => {
+                let crate::data::FootprintBars::Owned(bars) = &mut page.bars else {
+                    unreachable!()
+                };
+                bars[0].unknown = -1.0;
+            }
             1 => asked.before = Some(start),
             2 => asked.since = Some(start + TimeDelta::seconds(1)),
             3 => page.complete_before = start,
             4 => asked.count = 0,
             _ => {
-                page.bars.clear();
+                page.bars = crate::data::FootprintBars::Owned(Vec::new());
                 asked.before = Some(page.complete_before);
                 page.continue_before = asked.before;
                 if case == 6 {
@@ -821,7 +842,7 @@ fn prepared_pages_reject_invalid_ranges_and_nonprogressing_continuations() {
                 .unwrap()
                 .footprint
                 .as_ref()
-                .is_none_or(|flow| flow.prepared_before().is_none())
+                .is_none_or(|flow| flow.live.prepared_before().is_none())
         );
         assert_eq!(chart.bars(SeriesId::MAIN).len(), 5);
     }
@@ -854,7 +875,7 @@ fn prepared_replies_follow_context_and_do_not_load_trade_intervals() {
                 .unwrap()
                 .footprint
                 .as_ref()
-                .is_none_or(|flow| flow.prepared_before().is_none())
+                .is_none_or(|flow| flow.live.prepared_before().is_none())
         );
     }
     for interval in ["2t", "5v", "2r"] {
@@ -933,6 +954,8 @@ fn prepared_pages_continue_backwards_without_bridging_disjoint_coverage() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap();
         assert_eq!(flow.bar_at(start).is_none(), disjoint);
         assert_eq!(flow.bar_at(boundary).unwrap().unknown, 5.0);
@@ -1018,6 +1041,8 @@ fn prepared_join_uses_the_stream_start_after_a_context_change() {
                 .unwrap()
                 .footprint
                 .as_ref()
+                .unwrap()
+                .owned()
                 .unwrap();
             assert!(
                 !flow.span_has_gap(start, None),
@@ -1064,9 +1089,13 @@ fn prepared_repeated_retained_trade_before_cutoff_keeps_its_bar_complete() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(
-        flow.complete_bar_at(retained.ts).map(|bar| bar.unknown),
+        FootprintView::from(flow)
+            .complete_bar_at(retained.ts)
+            .map(|bar| bar.unknown),
         Some(7.0)
     );
 }
@@ -1102,6 +1131,8 @@ fn prepared_repeated_maximum_timestamp_does_not_panic() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap()
             .bar_at(start)
             .unwrap()
@@ -1204,7 +1235,7 @@ fn prepared_rows_clear_on_context_reset_and_tick_size_changes() {
                 .unwrap()
                 .footprint
                 .as_ref()
-                .is_none_or(|flow| flow.prepared_before().is_none()),
+                .is_none_or(|flow| flow.live.prepared_before().is_none()),
             "change {change}"
         );
     }
@@ -1251,6 +1282,8 @@ fn unused_prepared_rows_do_not_request_more_raw_trades() {
             .footprint
             .as_ref()
             .unwrap()
+            .owned()
+            .unwrap()
             .prepared_before()
             .is_some()
     );
@@ -1293,10 +1326,12 @@ fn prepared_first_live_instant_needs_trade_history_even_on_a_bar_open() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap();
-        assert!(flow.complete_bar_at(start).is_some());
+        assert!(FootprintView::from(flow).complete_bar_at(start).is_some());
         assert!(
-            flow.complete_bar_at(cutoff).is_none(),
+            FootprintView::from(flow).complete_bar_at(cutoff).is_none(),
             "page first {page_first}"
         );
         feed.trades
@@ -1311,9 +1346,13 @@ fn prepared_first_live_instant_needs_trade_history_even_on_a_bar_open() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap();
         assert_eq!(
-            flow.complete_bar_at(cutoff).map(|bar| bar.unknown),
+            FootprintView::from(flow)
+                .complete_bar_at(cutoff)
+                .map(|bar| bar.unknown),
             Some(7.0)
         );
     }
@@ -1373,6 +1412,8 @@ fn host_footprint_overrides_prepared_rows_for_one_draw() {
             .footprint
             .as_ref()
             .unwrap()
+            .owned()
+            .unwrap()
             .bar_at(time)
             .unwrap()
             .unknown,
@@ -1431,6 +1472,8 @@ fn prepared_resume_retains_known_rows_before_the_new_subscription_gap() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap();
         assert!(
             flow.prepared_before().is_some(),
@@ -1460,6 +1503,8 @@ fn prepared_resume_retains_known_rows_before_the_new_subscription_gap() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(
         flow.complete_bars(..)
@@ -1534,6 +1579,8 @@ fn prepared_history_is_independent_of_raw_row_bar_and_tape_budgets() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(
         flow.bars().first_key_value().map(|(time, _)| *time),
@@ -1577,6 +1624,8 @@ fn ambiguous_trade_page_boundary_keeps_prepared_cells_but_not_the_join_bar() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 7.0);
     assert_eq!(
@@ -1734,7 +1783,7 @@ fn bars_across_resumes_and_interval_changes_complete_with_every_execution() {
                         let link = chart.feed_link.as_ref().unwrap();
                         let flow = link.footprint.as_ref().unwrap();
                         assert_eq!(
-                            flow.complete_bar_at(at(*second)).map(|bar| bar.unknown),
+                            flow.view().complete_bar_at(at(*second)).map(|bar| bar.unknown),
                             if ids { *with } else { *without },
                             "{label}, ids {ids}, {second} s"
                         );
@@ -2172,6 +2221,8 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
                 .unwrap()
                 .footprint
                 .as_ref()
+                .unwrap()
+                .owned()
                 .unwrap();
             let got: Vec<_> = flow
                 .bars()
@@ -2195,7 +2246,10 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
                 );
             }
             let image = chart.feed_link.as_ref().unwrap().frozen();
-            assert_eq!(image.footprint.as_ref().unwrap().bars(), flow.bars());
+            assert_eq!(
+                image.footprint.as_ref().unwrap().owned().unwrap().bars(),
+                flow.bars()
+            );
             // A replay cutoff keeps the executions before it, and only those, on their own anchors.
             let link = chart.feed_link.as_ref().unwrap();
             let replayed = |cutoff| {
@@ -2235,6 +2289,8 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
                     .footprint
                     .as_ref()
                     .unwrap()
+                    .owned()
+                    .unwrap()
                     .bars(),
                 regrouped.bars(),
                 "{interval}: retained tape"
@@ -2258,6 +2314,8 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
                     .unwrap()
                     .footprint
                     .as_ref()
+                    .unwrap()
+                    .owned()
                     .unwrap();
                 // On the new three-trade interval the first bar lost all three fills; the
                 // next holds exactly the two retained fills, without shifting its open.
@@ -2286,6 +2344,8 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
                     .unwrap()
                     .footprint
                     .as_ref()
+                    .unwrap()
+                    .owned()
                     .unwrap();
                 assert_eq!(
                     flow.bars()
@@ -2470,6 +2530,8 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap();
         let complete = flow.complete_from();
         // As the renderer selects a bar's cells.
@@ -2598,7 +2660,7 @@ fn paged_trades_without_history_leave_their_first_bar_incomplete() {
         .send(Ok(TradePage::new(trades, false)));
     frames.run(&mut chart);
     let link = chart.feed_link.as_ref().unwrap();
-    let flow = link.footprint.as_ref().unwrap();
+    let flow = link.footprint.as_ref().unwrap().owned().unwrap();
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::seconds(2)));
 }
 
@@ -2654,7 +2716,10 @@ fn footprint_turned_on_later_counts_the_stream_at_the_first_instant() {
             .map(|bar| bar.time)
             .collect();
         assert_eq!(drawn, opens, "turned {turned}");
-        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref())
+            .unwrap()
+            .owned()
+            .unwrap();
         assert_eq!(cells(flow), [Some((0.0, 2.0)); 2], "turned {turned}");
         chart.set_chart_type(ChartType::Candles);
         frames.run(&mut chart);
@@ -2716,7 +2781,10 @@ fn footprint_turned_on_later_leaves_out_a_paged_execution_the_sink_dropped() {
             .map(|bar| bar.time)
             .collect();
         assert_eq!(drawn, opens, "sell at {price}");
-        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref())
+            .unwrap()
+            .owned()
+            .unwrap();
         let complete = flow.complete_from();
         let cells: Vec<_> = (opens.iter())
             .map(|open| {
@@ -2756,7 +2824,10 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
     let candles =
         crate::data::aggregate_trades_with_tick_size(&tape, timeframe, Some(1.0)).unwrap();
     let volumes = |chart: &Chart| -> Vec<Option<f64>> {
-        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref())
+            .unwrap()
+            .owned()
+            .unwrap();
         let complete = flow.complete_from();
         (chart.bars(SeriesId::MAIN).iter())
             .map(|bar| {
@@ -3235,7 +3306,7 @@ fn paged_cells(
         "{interval}"
     );
     let link = chart.feed_link.as_ref().unwrap();
-    let flow = link.footprint.as_ref().unwrap();
+    let flow = link.footprint.as_ref().unwrap().owned().unwrap();
     let complete = flow.complete_from();
     candles[..history.len()]
         .iter()
@@ -3583,6 +3654,8 @@ fn an_interval_change_page_fills_the_retained_tape() {
             .unwrap()
             .footprint
             .as_ref()
+            .unwrap()
+            .owned()
             .unwrap();
         assert_eq!(
             flow.bars().values().map(|bar| bar.volume()).sum::<f64>(),
@@ -3830,7 +3903,7 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
                 failures.push(format!("{label}: held {sizes:?}"));
             }
             let link = chart.feed_link.as_ref().unwrap();
-            let flow = link.footprint.as_ref().unwrap();
+            let flow = link.footprint.as_ref().unwrap().owned().unwrap();
             let complete = flow.complete_from();
             let drawn: Vec<Vec<_>> = (candles[..paged].iter())
                 .filter(|bar| complete.is_some_and(|from| bar.time >= from))
@@ -3884,6 +3957,8 @@ fn footprint_follows_trade_eviction() {
         .unwrap()
         .footprint
         .as_ref()
+        .unwrap()
+        .owned()
         .unwrap();
     assert_eq!(flow.bars(), summed.bars());
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(1)));
@@ -3958,6 +4033,8 @@ fn oldest_held_trade_leaves_its_bar_incomplete_until_history_starts() {
                 .unwrap()
                 .footprint
                 .as_ref()
+                .unwrap()
+                .owned()
                 .unwrap();
             assert_eq!(flow.complete_from(), expected, "row {row}");
         }
@@ -4915,7 +4992,7 @@ fn feed_lifecycle() {
         .feed_link
         .as_ref()
         .and_then(|link| link.footprint.as_ref());
-    let row = footprint.and_then(|flow| flow.bar_at(forming.time)?.levels.get(&14));
+    let row = footprint.and_then(|flow| flow.view().bar_at(forming.time)?.levels.get(&14));
     assert_eq!(
         row.map(|row| row.volume()),
         Some(1000.0),
@@ -4925,7 +5002,7 @@ fn feed_lifecycle() {
     let row = frozen
         .footprint
         .as_ref()
-        .and_then(|flow| flow.bar_at(forming.time)?.levels.get(&14));
+        .and_then(|flow| flow.view().bar_at(forming.time)?.levels.get(&14));
     assert_eq!(
         row.map(|row| row.volume()),
         Some(1000.0),
@@ -5971,7 +6048,13 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
             price_to_y: &|price| price as f32,
             y_to_price: &f64::from,
             time_axis: true,
-            executions: chart.feed_link.as_ref().unwrap().footprint.as_ref(),
+            executions: chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .and_then(|flow| flow.owned()),
             timeframe: None,
             finer: &[],
         };

@@ -103,7 +103,7 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     (
         "financials",
         "Company financials",
-        "Synthetic income statement, balance sheet and statistics for AAPL.",
+        "Synthetic income statement, balance sheet and statistics for STOCKA.",
     ),
 ];
 
@@ -543,7 +543,7 @@ impl DemoApp {
                 return;
             }
             "financials" => {
-                self.switch_symbol("AAPL");
+                self.switch_symbol("STOCKA");
                 self.open_financials();
                 return;
             }
@@ -1247,8 +1247,8 @@ mod tests {
         app.live.set_paused(true);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         app.execute_search_command(&ctx, "financials");
-        assert_eq!(app.chart.symbol(), "AAPL");
-        assert_eq!(app.financials.as_ref().unwrap().0, "AAPL");
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert_eq!(app.financials.as_ref().unwrap().0, "STOCKA");
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         for (page, row) in [
             ("Income statement", "Total revenue"),
@@ -1267,13 +1267,13 @@ mod tests {
         click(&mut app, &ctx, "Back to chart");
         assert!(app.financials.is_none());
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
-        assert_eq!(app.chart.symbol(), "AAPL");
+        assert_eq!(app.chart.symbol(), "STOCKA");
         assert!(!app.chart.state().shown().is_empty());
         for (symbol, available) in [
-            ("MSFT", true),
-            ("BTCUSD", false),
-            ("EURUSD", false),
-            ("SPX", false),
+            ("STOCKB", true),
+            ("TOKENA", false),
+            ("FOREXA", false),
+            ("INDEXA", false),
             ("SAMPLE", false),
         ] {
             app.execute_search_command(&ctx, "financials");
@@ -1352,10 +1352,10 @@ mod tests {
         assert!(app.open_panel == Some(super::super::SidePanel::TimeAndSales));
         let refused = [
             (
-                "BTCUSD",
+                "TOKENA",
                 ChartType::Candles,
                 true,
-                "BTCUSD has no analyst targets",
+                "TOKENA has no analyst targets",
             ),
             ("SAMPLE", ChartType::Renko, true, "time-based chart type"),
             ("SAMPLE", ChartType::Candles, false, "Show the price series"),

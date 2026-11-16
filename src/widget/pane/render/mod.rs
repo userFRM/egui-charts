@@ -104,7 +104,7 @@ impl Chart {
         &mut self,
         ui: &mut Ui,
         footprint: Option<(
-            &crate::data::Footprint,
+            crate::data::FootprintView<'_>,
             &crate::chart::overlays::FootprintConfig,
         )>,
     ) -> Response {
