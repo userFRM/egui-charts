@@ -450,10 +450,13 @@ impl AlertEngine {
             }
             fired.push((alert.clone(), event));
         }
+        // An alert on host events keeps what it received while paused, so resuming it replays
+        // nothing.
         runs.retain(|(id, _), _| {
-            alerts
-                .iter()
-                .any(|a| a.id.as_ref() == Some(id) && a.status == AlertStatus::Active)
+            alerts.iter().any(|a| {
+                a.id.as_ref() == Some(id)
+                    && (a.status == AlertStatus::Active || a.condition.is_event())
+            })
         });
         drop(state);
         if let Some(deliver) = &self.deliver {
@@ -526,12 +529,14 @@ impl AlertEngine {
     /// [`DetectorSignals`](AlertCondition::DetectorSignals) alerts naming its category. A signal
     /// fires once per alert and symbol, at its anchor time and price: a marker's time and price,
     /// a level's start and price, a price zone's start and price, a zone's start without a
-    /// price. A signal anchored before `from`, or before the `from` of an earlier call for the
-    /// same alert and symbol, is history and never fires, nor does a level without a start.
-    /// `AlertEvaluator` passes the open of the bar before the newest of each chart it is lent, so
-    /// a formation confirmed as its bar closes still fires, while one reported later counts as
-    /// history. Empty messages are the detector's name and the signal's tooltip or label; custom
-    /// messages expand as for [`strategy_fills`](Self::strategy_fills).
+    /// price. The signal is known by its id, so two charts of the symbol fire it once when every
+    /// subscription gives it the same id, as `OrderFlowDetectors` does. A signal anchored before
+    /// `from`, or before the `from` of an earlier call for the same alert and symbol, is history
+    /// and never fires, nor does a level without a start. `AlertEvaluator` passes the open of
+    /// the bar before the newest of each chart it is lent, so a formation confirmed as its bar
+    /// closes still fires, while one reported later counts as history. Empty messages are the
+    /// detector's name and the signal's tooltip or label; custom messages expand as for
+    /// [`strategy_fills`](Self::strategy_fills).
     pub fn detector_signals<'a>(
         &self,
         symbol: &str,
@@ -2592,5 +2597,15 @@ mod tests {
             triggers(&host),
             [at(100, Some(101.0), "Turn 1"), at(160, None, "Turn 2")]
         );
+        // Paused while other alerts evaluate bars, then resumed, it fires no event again.
+        let mut turns = host.engine.alerts()[0].clone();
+        for status in [AlertStatus::Disabled, AlertStatus::Active] {
+            turns.status = status;
+            assert_eq!(host.save(turns.clone()), Ok(()));
+            host.engine
+                .update("SYM", None, Timeframe::Min1, &[], time(510), |_, _| None);
+        }
+        deliver("Turns", &[event(2, 160, None)]);
+        assert_eq!(triggers(&host), []);
     }
 }
