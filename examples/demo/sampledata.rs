@@ -347,7 +347,8 @@ pub fn daily_history(symbol: &str, before: DateTime<Utc>) -> Vec<Bar> {
 /// Combine the coarse archive with recent minutes on the requested calendar.
 /// Split synthetic days follow open, low, high, close at 0, 1/4, 3/4 and 1 of their span,
 /// with uniform volume, so a shifted calendar boundary consumes only its share of a UTC day.
-/// Session calendars place coarse daily samples in the demo's regular exchange window.
+/// Session calendars place coarse daily samples in the demo's regular exchange window and the
+/// recent minutes in the bar of their trading date.
 pub fn calendar_history(
     daily: &[Bar],
     minutes: &[Bar],
@@ -464,9 +465,17 @@ pub fn calendar_history(
             from = to;
         }
     }
-    for bar in egui_charts::data::resample(minutes, egui_charts::model::Timeframe::Min1, clock)
-        .expect("nested minute history")
-    {
+    let minute = egui_charts::model::Timeframe::Min1;
+    let recent = if clock.has_session() {
+        // Live trades join the bar of their trading date, so the recent minutes do too.
+        let instrument = Instrument::new("")
+            .with_time_zone(zone)
+            .with_session(session.clone());
+        egui_charts::data::resample_with_session(minutes, minute, clock, &instrument, true)
+    } else {
+        egui_charts::data::resample(minutes, minute, clock)
+    };
+    for bar in recent.expect("nested minute history") {
         push(bar);
     }
     result

@@ -1,4 +1,5 @@
 //! Matched raw and prepared history, including admission, steady frames and live updates.
+//! `--profile` also draws a fixed range volume profile over the last 120 bars (needs `drawings`).
 
 #[expect(
     dead_code,
@@ -219,6 +220,20 @@ fn main() {
             .with_chart_type(kind)
             .build();
         chart.config_mut().show_countdown = false;
+        if std::env::args().any(|arg| arg == "--profile") {
+            #[cfg(feature = "drawings")]
+            {
+                use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+                let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+                drawing.chart_points = vec![
+                    ChartPoint::new((BARS - 120) as f32, 100.0),
+                    ChartPoint::new((BARS - 1) as f32, 103.75),
+                ];
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            #[cfg(not(feature = "drawings"))]
+            panic!("--profile requires the drawings feature");
+        }
         let mut params = chart.chart_type_params().clone();
         params.footprint_statistics = statistics;
         params.footprint_naked_poc = annotations && (all || (!delta && !stacks));
