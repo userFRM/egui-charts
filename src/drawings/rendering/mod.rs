@@ -155,6 +155,8 @@ impl Drawing {
     /// This method handles rendering for every drawing tool type,
     /// delegating to the appropriate category-specific implementation. `selected`
     /// lets a tool mark its selection, as a position's statistics block does.
+    /// Default colours are drawn in the shade the theme needs, as [`Drawing::theme_shaded`]
+    /// gives.
     pub(crate) fn render_with_selection(
         &self,
         painter: &egui::Painter,
@@ -165,7 +167,20 @@ impl Drawing {
         if self.points.is_empty() {
             return;
         }
+        match self.theme_shaded(painter.ctx()) {
+            Some(shaded) => shaded.paint_with_selection(painter, rect, view, selected),
+            None => self.paint_with_selection(painter, rect, view, selected),
+        }
+    }
 
+    /// [`Self::render_with_selection`] in the colours stored in the drawing.
+    fn paint_with_selection(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &ChartView,
+        selected: bool,
+    ) {
         let painter = &painter.with_clip_rect(rect);
         let start = painter.ctx().graphics(|g| {
             g.get(painter.layer_id())

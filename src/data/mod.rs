@@ -215,7 +215,9 @@ pub trait Datafeed: MaybeSend + 'static {
 
     /// Up to `request.count` trades of the range `[request.since, request.before)`, the newest
     /// ones when there are more, so order flow survives a reload and follows the view back in
-    /// time. The default answers [`FeedError::NotSupported`].
+    /// time. If `count` or the feed's own limit would end the page partway through one timestamp,
+    /// exclude that entire instant; if that would leave the page empty, send every trade of that
+    /// instant instead, even more than `count`. The default answers [`FeedError::NotSupported`].
     ///
     /// For a latest request (`before` is `None`) made for a subscription, the feed must return a
     /// page that joins the start of that subscription's stream without an unreported gap, including

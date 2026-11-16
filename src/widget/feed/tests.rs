@@ -1636,6 +1636,167 @@ fn ambiguous_trade_page_boundary_keeps_prepared_cells_but_not_the_join_bar() {
     );
 }
 
+/// Hand counts at price 100, on executions without ids and on the same executions with ids made of
+/// their time and size, in seconds from 00:00. A prepared bar is complete only while no instant in
+/// it may lack executions that a trade page holds, or that traded before the stream began; ids
+/// join the page's executions to the held ones and complete it. A page fills the time between the
+/// kept executions and the first streamed one at or after them, and an execution the stream stamps
+/// before kept ones joins its bar.
+/// 1. The feed resumes before the first trade page answers. The streams send 130 s (11), 180 s (13)
+///    and 250 s (17), the page 90 s (2), 130 s (3), 130 s (11), 180 s (13), 245 s (1), 250 s (4)
+///    and 250 s (17): the 2 min bar holds 11 of the instant's 14, the old stream may have stopped
+///    inside 180 s, and the 4 min bar holds 1 and 17 of 22.
+/// 2. The first page leaves out 1260 s (3), then the interval changes to five minutes: the 20 min
+///    bar holds 7 and 11 of 21.
+/// 3. The interval changes, and the page after it, answered before the prepared page, holds 1560 s
+///    (5), which the old stream did not send: the 25 min bar holds 13, 3 and 17 of 38. The 20 min
+///    bar, from the first page's 1200 s (7) and the stream's 1260 s (11), is whole: the later page
+///    repeats the first page's executions at the oldest held instant.
+/// 4. A page that starts after the first stream's first instant answers, then the interval
+///    changes, the stream starting on the 5 min bar's open: the bar may lack executions of 300 s
+///    until a page holds them, here 3.
+/// 5. A feed without trade history answers each page empty: the 5 min bar is whole.
+/// 6. After an interval change, once the prepared page answered, the stream starts with 1380 s
+///    (5), inside the kept executions, then sends 1680 s (17): the 20 min bar holds 7, 11 and 5.
+///    The page then holds 1560 s (13) and 1620 s (3): the 25 min bar holds 13, 3 and 17, and
+///    without ids the old stream may have stopped inside 1560 s.
+/// 7. After an interval change the stream starts with 1380 s (5), older than every kept execution,
+///    and the page holds 1200 s (1) and 1440 s (4): the 20 min bar holds 1, 5 and 4. In both, the
+///    stream's 1380 s without an id is taken by its time for a repeat and dropped.
+/// 8. Without prepared history, the page answers an interval change before the stream starts with
+///    1530 s (5), older than the kept 1560 s (13), then sends 1680 s (17): the 25 min bar holds 5,
+///    13 and 17. Without an id 1530 s is taken by its time for a repeat and dropped.
+#[test]
+fn bars_across_resumes_and_interval_changes_complete_with_every_execution() {
+    enum Step {
+        /// Executions the stream sends: seconds and size.
+        Stream(&'static [(i64, f64)]),
+        /// The latest trade page.
+        Trades(&'static [(i64, f64)]),
+        /// The prepared page on the chart's interval: its executions and cutoff.
+        Prepared(&'static [(i64, f64)], i64),
+        Resume,
+        /// A change to five minutes.
+        Interval,
+        /// The complete bar holding this time, by its volume without ids and with them.
+        Bar(i64, Option<f64>, Option<f64>),
+    }
+    use Step::{Bar, Interval, Prepared, Resume, Stream, Trades};
+    #[rustfmt::skip]
+    let rows = [
+        ("a resume before the first trade page", vec![
+            Stream(&[(130, 11.0), (180, 13.0)]), Prepared(&[(0, 5.0), (60, 7.0)], 90), Resume,
+            Stream(&[(250, 17.0)]),
+            Trades(&[(90, 2.0), (130, 3.0), (130, 11.0), (180, 13.0), (245, 1.0), (250, 4.0),
+                (250, 17.0)]),
+            Bar(120, None, Some(14.0)), Bar(180, None, Some(13.0)), Bar(240, None, Some(22.0)),
+        ]),
+        ("an interval change after a page left out the stream's first instant", vec![
+            Stream(&[(1260, 11.0)]), Trades(&[(1200, 7.0), (1260, 3.0), (1260, 11.0)]),
+            Stream(&[(1620, 13.0)]), Interval, Stream(&[(1860, 17.0)]),
+            Prepared(&[(1200, 7.0)], 1230), Bar(1200, None, Some(21.0)),
+        ]),
+        ("an interval change whose page leaves out the old stream's last instant", vec![
+            Stream(&[(1260, 11.0)]), Trades(&[(1200, 7.0)]), Stream(&[(1560, 13.0)]), Interval,
+            Stream(&[(1680, 17.0)]),
+            Trades(&[(1200, 7.0), (1260, 11.0), (1560, 13.0), (1560, 5.0), (1620, 3.0)]),
+            Prepared(&[(600, 1.0)], 1200), Bar(1200, Some(18.0), Some(18.0)),
+            Bar(1500, None, Some(38.0)),
+        ]),
+        ("an interval change after a page that starts after the stream's first instant", vec![
+            Stream(&[(300, 11.0), (600, 13.0)]), Trades(&[(600, 13.0)]), Interval,
+            Stream(&[(660, 17.0)]), Prepared(&[(0, 5.0)], 300), Bar(300, None, None),
+            Trades(&[(300, 3.0), (300, 11.0), (600, 13.0), (630, 1.0)]),
+            Bar(300, None, Some(14.0)),
+        ]),
+        ("an interval change on a feed without trade history", vec![
+            Stream(&[(300, 11.0)]), Trades(&[]), Interval, Stream(&[(660, 17.0)]),
+            Prepared(&[(0, 5.0)], 300), Trades(&[]), Bar(300, Some(11.0), Some(11.0)),
+        ]),
+        ("an interval change whose stream starts inside the kept executions", vec![
+            Stream(&[(1260, 11.0)]), Trades(&[(1200, 7.0)]), Stream(&[(1560, 13.0)]), Interval,
+            Stream(&[]), Prepared(&[(600, 1.0)], 1200), Stream(&[(1380, 5.0), (1680, 17.0)]),
+            Bar(1200, Some(18.0), Some(23.0)), Trades(&[(1560, 13.0), (1620, 3.0)]),
+            Bar(1500, None, Some(33.0)),
+        ]),
+        ("an interval change whose stream starts before the kept executions", vec![
+            Stream(&[(1560, 13.0)]), Trades(&[(1500, 7.0)]), Interval,
+            Stream(&[(1380, 5.0), (1680, 17.0)]),
+            Trades(&[(1200, 1.0), (1440, 4.0), (1500, 7.0), (1560, 13.0), (1620, 3.0)]),
+            Prepared(&[(600, 1.0)], 1200), Bar(1200, Some(5.0), Some(10.0)),
+        ]),
+        ("without prepared history, a stream that starts before a kept execution", vec![
+            Trades(&[(1200, 1.0)]), Stream(&[(1560, 13.0)]), Interval,
+            Trades(&[(1200, 1.0), (1560, 13.0)]), Stream(&[(1530, 5.0), (1680, 17.0)]),
+            Bar(1500, Some(30.0), Some(35.0)),
+        ]),
+    ];
+    let start = bars(1)[0].time;
+    let at = |second: i64| start + TimeDelta::seconds(second);
+    for (label, steps) in rows {
+        for ids in [false, true] {
+            let tick = |&(second, size): &(i64, f64)| {
+                let trade = Tick::new(at(second), 100.0, size, None);
+                if ids {
+                    trade.with_id(second as u64 * 100 + size as u64)
+                } else {
+                    trade
+                }
+            };
+            let (feed, mut chart, mut frames) = prepared_chart();
+            let mut timeframe = Timeframe::Min1;
+            for step in &steps {
+                match step {
+                    Stream(trades) => {
+                        for trade in *trades {
+                            feed.sink().push_tick(tick(trade));
+                        }
+                    }
+                    Trades(trades) => {
+                        let reply = feed.trades.lock().unwrap().pop().unwrap();
+                        reply.send(Ok(TradePage::new(trades.iter().map(tick).collect(), false)));
+                    }
+                    Prepared(trades, cutoff) => {
+                        let mut saved = Footprint::new(BarClock::new(timeframe), 1.0, 1).unwrap();
+                        for trade in *trades {
+                            saved.push(&tick(trade)).unwrap();
+                        }
+                        let saved = saved.bars().values().cloned().collect();
+                        let reply = feed.footprints.lock().unwrap().pop().unwrap();
+                        reply.send(Ok(FootprintPage::new(saved, at(*cutoff), true)));
+                    }
+                    Resume | Interval => {
+                        if matches!(step, Resume) {
+                            chart.set_feed_paused(true);
+                            frames.run(&mut chart);
+                            chart.set_feed_paused(false);
+                        } else {
+                            timeframe = Timeframe::Min5;
+                            chart.set_timeframe(timeframe);
+                        }
+                        frames.run(&mut chart);
+                        feed.resolve()
+                            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+                        feed.page().send(page(bars(40), true));
+                    }
+                    Bar(second, without, with) => {
+                        let link = chart.feed_link.as_ref().unwrap();
+                        let flow = link.footprint.as_ref().unwrap();
+                        assert_eq!(
+                            flow.view()
+                                .complete_bar_at(at(*second))
+                                .map(|bar| bar.unknown),
+                            if ids { *with } else { *without },
+                            "{label}, ids {ids}, {second} s"
+                        );
+                    }
+                }
+                frames.run(&mut chart);
+            }
+        }
+    }
+}
+
 /// Changing symbols fits the new prices, with or without a feed. Repeating a symbol,
 /// replacing its bars or reloading its feed preserves the user's manual range.
 /// Initial ratio-lock configuration still applies to the first frame of supplied bars.

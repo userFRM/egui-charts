@@ -1156,6 +1156,7 @@ mod v1 {
         drawing.border = true;
         drawing.border_color = None;
         drawing.channel_midline = false;
+        drawing.theme_shade = false;
         // Info lines already displayed readouts; other lines keep their old text placement.
         drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
             LineMeasurements::for_tool(tool_type)
@@ -1673,6 +1674,7 @@ mod tests {
             want.border = true;
             want.border_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
+            want.theme_shade = false; // Earlier files draw their stored colours on every theme.
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
             want.stroke_width = 3.0;
@@ -1713,6 +1715,7 @@ mod tests {
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
+            want.theme_shade = false; // Earlier files draw their stored colours on every theme.
             // Earlier files show their axis labels.
             want.price_axis_label = true;
             want.time_axis_label = true;
