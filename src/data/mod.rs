@@ -75,6 +75,8 @@ pub(crate) use footprint::FootprintState;
 pub use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
 pub(crate) use footprint::meets_threshold;
+#[cfg(any(feature = "studies", feature = "widget"))]
+pub(crate) use footprint::side_delta;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
