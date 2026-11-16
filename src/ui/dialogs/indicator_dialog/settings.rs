@@ -1811,14 +1811,18 @@ mod tests {
                     );
                 }
             }
-            if zero_guide {
+            if matches!(name, "CMF" | "Force Index") {
+                // Saved before the zero guide, with no levels: it stays hidden until shown.
                 let mut older = serde_json::to_value(StudyTemplate::from_study(study)).unwrap();
-                older["settings"].as_object_mut().unwrap().remove("levels");
+                older["settings"]["levels"] = serde_json::json!([]);
                 let older = serde_json::from_value::<StudyTemplate>(older)
                     .unwrap()
                     .create()
                     .unwrap();
-                assert_eq!(older.settings().levels, defaults.levels);
+                let mut hidden = defaults.levels.clone();
+                hidden[0].visible = false;
+                assert_eq!(older.settings().levels, hidden, "{name}");
+                assert_eq!(older.pane().levels[0].1, egui::Color32::TRANSPARENT);
                 assert_eq!(older.settings().plots, edited.plots);
             }
             if name == "StochRSI" {
