@@ -157,6 +157,7 @@ pub(crate) fn footprint_studies_on_rows(
     flow: FootprintView<'_>,
 ) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
+    let mut asks = Vec::new();
     for (index, &(bar, group)) in bars.iter().enumerate() {
         let mut add = |low: i64, high: i64, kind, extended| {
             let low = low.saturating_mul(group);
@@ -278,39 +279,46 @@ pub(crate) fn footprint_studies_on_rows(
         if !config.stacked_imbalances {
             continue;
         }
-        for (side, kind) in [
-            (0, FootprintStudyKind::StackedBid),
-            (1, FootprintStudyKind::StackedAsk),
-        ] {
-            let mut run: Option<(i64, i64, usize)> = None;
-            for row in bar.levels.values() {
-                let imbalance = bar.imbalance(
-                    row.level,
-                    config.imbalance_ratio,
-                    config.diagonal,
-                    config.imbalance_min_volume,
-                );
-                let active = if side == 0 { imbalance.0 } else { imbalance.1 };
-                if let Some((low, high, count)) = run
+        let mut runs: [Option<(i64, i64, usize)>; 2] = [None; 2];
+        let mut finish = |side, (low, high, count): (i64, i64, usize)| {
+            if count >= config.stack.max(1) {
+                if side == 0 {
+                    add(low, high, FootprintStudyKind::StackedBid, true);
+                } else {
+                    asks.push((low, high));
+                }
+            }
+        };
+        for row in bar.levels.values() {
+            let (bid, ask) = bar.imbalance(
+                row.level,
+                config.imbalance_ratio,
+                config.diagonal,
+                config.imbalance_min_volume,
+            );
+            for (side, active) in [bid, ask].into_iter().enumerate() {
+                if let Some((low, high, count)) = runs[side]
                     && (!active || high.checked_add(1) != Some(row.level))
                 {
-                    if count >= config.stack.max(1) {
-                        add(low, high, kind, true);
-                    }
-                    run = None;
+                    finish(side, (low, high, count));
+                    runs[side] = None;
                 }
                 if active {
-                    run = Some(match run {
+                    runs[side] = Some(match runs[side] {
                         Some((low, _, count)) => (low, row.level, count + 1),
                         None => (row.level, row.level, 1),
                     });
                 }
             }
-            if let Some((low, high, count)) = run
-                && count >= config.stack.max(1)
-            {
-                add(low, high, kind, true);
+        }
+        for (side, run) in runs.into_iter().enumerate() {
+            if let Some(run) = run {
+                finish(side, run);
             }
+        }
+        // Keep bid zones before ask zones, reusing the pending spans across bars.
+        for (low, high) in asks.drain(..) {
+            add(low, high, FootprintStudyKind::StackedAsk, true);
         }
     }
     result.retain(|study| {
@@ -479,6 +487,86 @@ mod tests {
                 (s.low, s.high, end, s.state)
             })
             .collect()
+    }
+
+    #[test]
+    fn stacks_keep_side_order_across_price_gaps() {
+        use FootprintStudyKind::*;
+        use FootprintStudyState::*;
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let mut trades = Vec::new();
+        for level in (100..112).chain([113, 115]) {
+            let ask = level < 103 || (106..109).contains(&level) || level > 111;
+            trades.push((0, level as f64, if ask { 1.0 } else { 4.0 }, sell));
+            trades.push((0, level as f64, if ask { 4.0 } else { 1.0 }, buy));
+        }
+        trades.extend([(0, 106.0, 7.0, None), (60, 102.0, 1.0, buy)]);
+        let flow = flow(&trades);
+        let owned: Vec<_> = flow.complete_bars(..).map(FootprintBarView::from).collect();
+        let slices: Vec<Vec<_>> = owned
+            .iter()
+            .map(|bar| bar.levels.values().cloned().collect())
+            .collect();
+        for (diagonal, expected) in [
+            (
+                false,
+                vec![
+                    (StackedBid, 103, 105, None, Unvisited),
+                    (StackedBid, 109, 111, None, Unvisited),
+                    (StackedAsk, 100, 102, Some(1), Revisited),
+                    (StackedAsk, 106, 108, None, Unvisited),
+                ],
+            ),
+            (
+                true,
+                vec![
+                    (StackedBid, 103, 104, None, Unvisited),
+                    (StackedBid, 109, 110, None, Unvisited),
+                    (StackedAsk, 101, 102, Some(1), Revisited),
+                    (StackedAsk, 107, 108, None, Unvisited),
+                ],
+            ),
+        ] {
+            for shared in [false, true] {
+                let bars: Vec<_> = owned
+                    .iter()
+                    .zip(&slices)
+                    .map(|(&bar, rows)| {
+                        let bar = if shared {
+                            FootprintBarView {
+                                levels: crate::data::FootprintRows::Slice(rows),
+                                ..bar
+                            }
+                        } else {
+                            bar
+                        };
+                        (bar, 1)
+                    })
+                    .collect();
+                // Four against one must also pass exactly at the requested ratio and minimum.
+                for ratio in [3.0, 4.0] {
+                    let config = FootprintStudyConfig {
+                        naked_poc: false,
+                        delta_poc: false,
+                        unfinished_auctions: false,
+                        stack: 2,
+                        diagonal,
+                        imbalance_ratio: ratio,
+                        imbalance_min_volume: 4.0,
+                        ..Default::default()
+                    };
+                    let actual: Vec<_> = footprint_studies_on_rows(&bars, &config, (&flow).into())
+                        .into_iter()
+                        .map(|study| {
+                            assert_eq!(study.start, owned[0].time);
+                            let end = study.end.map(|end| (end - study.start).num_minutes());
+                            (study.kind, study.low, study.high, end, study.state)
+                        })
+                        .collect();
+                    assert_eq!(actual, expected, "diagonal={diagonal}, shared={shared}");
+                }
+            }
+        }
     }
 
     #[test]
