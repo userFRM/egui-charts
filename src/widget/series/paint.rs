@@ -377,9 +377,6 @@ impl Chart {
         }
     }
 
-    /// Paints a legend row for each of `items`, the first at `top`. The values follow a pointer
-    /// over `rect`. Returns the bottom of the last row, or `top` without rows, and the
-    /// handle of the series whose remove control was activated.
     /// The value the status row of `item` shows: its close at `time`, or its last close without
     /// one; `None` when it has no bar there.
     pub(in crate::widget) fn series_status_value(
@@ -430,6 +427,9 @@ impl Chart {
             })
     }
 
+    /// Paints a legend row for each of `items`, the first at `top`, with its value at the bar the
+    /// status line reads. Returns the bottom of the last row, or `top` without rows, and the
+    /// handle of the series whose remove control was activated.
     pub(in crate::widget) fn paint_secondary_legend<'a>(
         &self,
         ui: &egui::Ui,
