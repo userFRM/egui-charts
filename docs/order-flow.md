@@ -72,8 +72,11 @@ unfinished boundary is copied into mutable rows; subsequent live trades use the 
 The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
 cells, statistics and annotations use the same complete bars,
 including valid history before a missing join. `Footprint::bars()` keeps its existing owned
-store API. Profile drawings use their labelled bar estimate with shared history; replay and
-independent trade-driven studies still require individual executions.
+store API. Fixed range and anchored volume profile drawings also read these shared rows through
+[`ChartView::executions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/rendering/struct.ChartView.html#structfield.executions).
+A selected span across missing history stays labelled partial. Hosts constructing a `ChartView`
+from an owned footprint pass `executions: Some((&footprint).into())`. Replay and independent
+trade-driven studies still require individual executions.
 
 ## Liquidity
 

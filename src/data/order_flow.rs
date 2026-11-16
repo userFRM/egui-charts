@@ -2,7 +2,7 @@
 
 use super::OrderFilter;
 use super::footprint::{Footprint, FootprintBar};
-use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, OrderSide, Tick};
+use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, OrderSide, Placement, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -363,6 +363,8 @@ struct State {
     book_rows: usize,
     tick_size: Option<f64>,
     replay: Option<Replay>,
+    /// The bar of the last update placed by time, kept while later ones share its date.
+    placement: Placement,
 }
 
 /// A bounded, thread-safe source shared by a stream study and its feed subscription.
@@ -709,7 +711,8 @@ impl OrderFlowInput {
                 state.add_trade(trade, bar.time, size, i == 0);
             }
         } else {
-            state.add_trade(trade, clock.bar_open(trade.ts), trade.size, true);
+            let open = state.placement.open(clock, trade.ts);
+            state.add_trade(trade, open, trade.size, true);
         }
     }
 
@@ -894,7 +897,7 @@ impl OrderFlowInput {
                 }
             }
             if let Some(lost) = lost {
-                let cut = clock.bar_open(lost);
+                let cut = clock.instant_open(lost);
                 let mut state = self.state();
                 state.bars.retain(|open, _| *open > cut);
                 state.changes.retain(|open, _| *open > cut);
@@ -1110,6 +1113,15 @@ impl OrderFlowInput {
                 None
             };
             let trade_based = trade_timeframe.is_some();
+            // A footprint keeps its executions in calendar periods.
+            let footprint = matches!(state.source, Source::Footprint);
+            let place = |time| {
+                if footprint {
+                    clock.bar_open(time)
+                } else {
+                    clock.instant_open(time)
+                }
+            };
             let open = if let Some((open, _)) = &partial {
                 *open
             } else if trade_based {
@@ -1131,16 +1143,21 @@ impl OrderFlowInput {
                     })
                     .unwrap_or(cutoff)
             } else {
-                clock.bar_open(cutoff)
+                place(cutoff)
+            };
+            // A bar of a trading date can start before its own time.
+            let start = if footprint {
+                open
+            } else {
+                clock.instant_start(cutoff)
             };
             let held = trades
                 .filter(|trades| {
-                    (trades.lost_until())
-                        .is_none_or(|lost| !trade_based && clock.bar_open(lost) < open)
+                    (trades.lost_until()).is_none_or(|lost| !trade_based && place(lost) < open)
                 })
                 .into_iter()
                 .flat_map(|trades| trades.iter())
-                .filter(|trade| (trade_based || open <= trade.ts) && trade.ts < cutoff);
+                .filter(|trade| (trade_based || start <= trade.ts) && trade.ts < cutoff);
             let mut replay = Replay {
                 cutoff,
                 open,
@@ -1154,7 +1171,10 @@ impl OrderFlowInput {
                         replay.row = part.bars.get(&open).map(|(row, _)| *row);
                     } else if !trade_based && sums {
                         let part = OrderFlowInput::new(kind);
-                        held.for_each(|trade| part.push_trade(clock, trade));
+                        // The store's executions are valid, and those held are the cutoff bar's.
+                        held.for_each(|trade| {
+                            part.push_trade_part(clock, trade, open, trade.size, true)
+                        });
                         replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
                     }
                 }
@@ -1274,11 +1294,11 @@ impl State {
         self.reset_revision.max(self.dropped_revision)
     }
 
-    fn open(&self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    fn open(&mut self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
         if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             self.trade_bars.forming
         } else {
-            Some(clock.bar_open(time))
+            Some(self.placement.open(clock, time))
         }
     }
 
@@ -1397,6 +1417,7 @@ impl State {
             book_rows: 0,
             tick_size: None,
             replay: None,
+            placement: Placement::default(),
         }
     }
 
@@ -1521,7 +1542,7 @@ impl State {
         if !time_based(clock) || self.last.is_some_and(|last| time < last) {
             return;
         }
-        let open = clock.bar_open(time);
+        let open = self.placement.open(clock, time);
         let old = match levels {
             None => self.books.remove(&open),
             Some(levels) => {
