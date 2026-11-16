@@ -1,21 +1,17 @@
-//! Quick settings popup and tabbed chart settings dialog.
+//! Tabbed chart settings dialog.
 //!
-//! Use [`SettingsMenu`] with [`ChartSettings`] for a compact menu, or
-//! [`SettingsDialog`] with `widget::settings::ChartSettingsState` for the full editor.
-//! Apply returned [`SettingsAction`] values in the host.
+//! Use [`SettingsDialog`] with `widget::settings::ChartSettingsState` to edit a chart's
+//! settings, and apply the returned [`SettingsAction`] values in the host.
 
 // Module declarations
 pub mod actions;
 pub mod config;
-pub mod menu;
 pub mod types;
 
 // Public re-exports
 pub use actions::SettingsAction;
-pub use config::{ChartSettings, SettingsDialogConfig};
+pub use config::SettingsDialogConfig;
 
 pub use crate::ui::dialogs::chart_settings as dialog;
 pub use crate::ui::dialogs::chart_settings::SettingsDialog;
-pub use menu::SettingsMenu;
 pub use types::SettingsTab;
-// ChartType is re-exported from chart_type_selector - use that as single source of truth
