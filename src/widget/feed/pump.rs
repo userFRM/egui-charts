@@ -139,13 +139,9 @@ impl Chart {
                     if let Some(seen) = seen {
                         (input.clone(), seen)
                     } else {
-                        input.set_tick_size(link.instrument.as_ref().and_then(|i| i.tick_size));
                         // A source restored by undo missed what the sink allocated while away.
                         input.forget_trade_bar();
-                        input.replace_trades(&link.clock, &link.trades, &self.state.data().bars);
-                        if let Some(now) = link.time {
-                            input.advance_time(&link.clock, now);
-                        }
+                        link.rebuild_study_input(input, &self.state.data().bars);
                         (input.clone(), u64::MAX)
                     }
                 })
