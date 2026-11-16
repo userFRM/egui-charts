@@ -891,10 +891,10 @@ pub struct RegressionTrendConfig {
     upper: f64,
     lower: f64,
     /// Whether the upper bound is the upper deviation away from the fitted line; otherwise it
-    /// passes through the highest high above the line.
+    /// passes through the high furthest above the line.
     pub use_upper: bool,
     /// Whether the lower bound is the lower deviation away from the fitted line; otherwise it
-    /// passes through the lowest low below the line.
+    /// passes through the low furthest below the line.
     pub use_lower: bool,
     /// Bar price the line is fitted to.
     pub source: crate::model::PriceSource,

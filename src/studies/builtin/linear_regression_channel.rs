@@ -11,7 +11,7 @@ use egui::Color32;
 /// earlier bars or until a full window is available. The upper band is
 /// `upper_multiplier` and the lower band `lower_multiplier` residual standard deviations
 /// from the line, using an n - 1 denominator; a band whose deviation is switched off passes
-/// through the highest high above the line or the lowest low below it instead. The band
+/// through the high furthest above the line or the low furthest below it instead. The band
 /// above and the band below the line are filled.
 /// Every calculation or update refits the whole channel. A window containing
 /// a non-finite source price has no values.
@@ -64,8 +64,8 @@ impl LinearRegressionChannel {
     }
 
     /// Bound the upper band by its deviation when `upper` is set and the lower band by its
-    /// deviation when `lower` is set; a band without one passes through the highest high
-    /// above the line or the lowest low below it. Both default to set.
+    /// deviation when `lower` is set; a band without one passes through the high furthest
+    /// above the line or the low furthest below it. Both default to set.
     ///
     /// ```
     /// use egui_charts::studies::LinearRegressionChannel;
