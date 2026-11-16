@@ -306,10 +306,6 @@ impl BarClock {
     /// First instant of the bar that `t` joins by [`instant_open`](Self::instant_open). On a
     /// daily or longer clock with a session it is the open of the bar's first trading date, which
     /// can come before the bar's own time.
-    #[cfg_attr(
-        not(any(feature = "widget", all(test, feature = "timezones"))),
-        expect(dead_code, reason = "only the chart widget replays order flow")
-    )]
     pub(crate) fn instant_start(&self, t: DateTime<Utc>) -> DateTime<Utc> {
         let open = self.instant_open(t);
         let Some(session) = self.date_session() else {
@@ -331,14 +327,16 @@ impl BarClock {
 
     /// Open of the first bar after the one opening at `open` that a trade inside this clock's
     /// windows can join: that of the first window instant from [`next_open`](Self::next_open)
-    /// on, which on a daily or longer clock with a session is the bar of the next trading date.
+    /// on, and on a daily or longer clock with a session the bar of the next trading date.
     pub(crate) fn next_trading_open(&self, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        let mut at = self.open_at_or_after(self.next_open(open)?)?;
-        if let Some(session) = self.date_session() {
-            // A window open across the calendar boundary still trades the date of `open`.
-            while self.instant_open(at) <= open {
-                at = self.open_at_or_after(session.session_close(at, true)?)?;
-            }
+        let Some(session) = self.date_session() else {
+            return Some(self.bar_open(self.open_at_or_after(self.next_open(open)?)?));
+        };
+        // A date's windows can close before its bar's time, as a Tokyo session's do on Los
+        // Angeles days, so the walk starts in the bar rather than at the next calendar boundary.
+        let mut at = self.open_at_or_after(self.instant_start(open))?;
+        while self.instant_open(at) <= open {
+            at = self.open_at_or_after(session.session_close(at, true)?)?;
         }
         Some(self.instant_open(at))
     }
@@ -733,6 +731,14 @@ mod tests {
                 ]),
             true,
         );
+        // A Tokyo session on Los Angeles days closes before its date begins there.
+        let tokyo = BarClock::new(Timeframe::Day1)
+            .with_timezone(TimezoneId::named("America/Los_Angeles").unwrap())
+            .with_session(
+                TimezoneId::named("Asia/Tokyo").unwrap(),
+                Session::new([SessionWindow::new(weekdays, hm(9, 0), hm(15, 0))]),
+                false,
+            );
         let day = futures(Timeframe::Day1);
         // The instant, its bar, the bar's first instant and the next bar with trading.
         #[rustfmt::skip]
@@ -753,6 +759,8 @@ mod tests {
             // Friday's post-market runs into Saturday UTC.
             (&equities, "2024-01-06T00:30:00Z", "2024-01-05T00:00:00Z", "2024-01-05T09:00:00Z", "2024-01-08T00:00:00Z"),
             (&equities, "2024-06-11T00:00:00Z", "2024-06-10T00:00:00Z", "2024-06-10T08:00:00Z", "2024-06-11T00:00:00Z"),
+            // The next bar is Friday's, whose session closes at 06:00 UTC, before the bar opens.
+            (&tokyo, "2024-01-04T00:30:00Z", "2024-01-04T08:00:00Z", "2024-01-04T00:00:00Z", "2024-01-05T08:00:00Z"),
             (&futures(Timeframe::Week1), "2024-01-08T00:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-15T06:00:00Z"),
             (&futures(Timeframe::Week1), "2024-01-11T16:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-15T06:00:00Z"),
             (&futures(Timeframe::Month1), "2024-02-01T00:00:00Z", "2024-02-01T06:00:00Z", "2024-01-31T23:00:00Z", "2024-03-01T06:00:00Z"),
