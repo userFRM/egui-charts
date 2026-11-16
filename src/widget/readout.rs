@@ -73,6 +73,7 @@ impl Chart {
 
     /// Whether `row` of the study `id` is a column of a volume study, whose value the data
     /// window's own volume row already shows. Its moving average is not.
+    #[cfg(feature = "ui")]
     pub(crate) fn is_volume_column(&self, id: SeriesId, row: &StudyValue) -> bool {
         self.study_ids
             .iter()

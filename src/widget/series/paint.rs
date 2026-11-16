@@ -413,6 +413,7 @@ impl Chart {
 
     /// Each visible added series in status line order, with its name, colour and the value its
     /// status row shows at `time`, or at its last bar without one.
+    #[cfg(feature = "ui")]
     pub(crate) fn series_readouts(
         &self,
         time: Option<chrono::DateTime<chrono::Utc>>,
