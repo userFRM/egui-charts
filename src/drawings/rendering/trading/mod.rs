@@ -14,3 +14,5 @@ mod ghost_feed;
 mod position;
 mod projection;
 mod volume_profile;
+
+pub(crate) use volume_profile::anchored_vwap_through;

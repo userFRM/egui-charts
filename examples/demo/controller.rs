@@ -1034,6 +1034,11 @@ impl DemoApp {
             .state
             .set_display_timezone(&self.chart.display_timezone());
         let clock_changed = self.timeframe_toolbar.state.timezone != clock;
+        self.follow_chart_symbol(clock_changed);
+    }
+
+    /// Loads the bars of the symbol and interval the chart shows after it changed them itself.
+    pub(super) fn follow_chart_symbol(&mut self, clock_changed: bool) {
         let symbol_changed = self.state.symbol != self.chart.symbol();
         if symbol_changed {
             self.sync_symbol();

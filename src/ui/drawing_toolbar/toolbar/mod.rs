@@ -1082,12 +1082,13 @@ mod tests {
                 toolbar.state.glyph_picker.size = 48.0;
                 let anchor = Rect::from_min_size(Pos2::new(10., 100.), Vec2::splat(40.));
                 let mut previous = "Search icons, emoji and stickers";
-                for (query, glyph) in [
-                    ("star", "icon:star"),
-                    ("etoile", "icon:star"),
-                    ("grinning", "😀"),
-                    ("idea", "sticker:idea"),
-                    ("", "sticker:idea"),
+                // Icons and emoji take the picker size, stickers their own 110 px default.
+                for (query, glyph, size) in [
+                    ("star", "icon:star", 48.0),
+                    ("etoile", "icon:star", 48.0),
+                    ("grinning", "😀", 48.0),
+                    ("idea", "sticker:idea", 110.0),
+                    ("", "sticker:idea", 110.0),
                 ] {
                     toolbar.toggle_category(&ctx, "Icons/Emojis", anchor);
                     frame(&mut toolbar, &ctx, vec![]);
@@ -1163,7 +1164,7 @@ mod tests {
                         action,
                         Some(DrawingToolbarAction::InsertGlyph {
                             icon_name: glyph,
-                            size: 48.0
+                            size
                         })
                     );
                     previous = query;
