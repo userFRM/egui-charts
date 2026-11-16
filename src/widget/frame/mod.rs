@@ -2095,6 +2095,10 @@ impl Chart {
                     );
                 }
             }
+            // A chart type that hides volume draws none, wherever the study is pinned.
+            if study.is_volume() && !self.chart_type.supports_volume() {
+                return;
+            }
             // TPO studies draw the chart type's profiles beside the bars.
             if let Some(config) = study
                 .tpo()
