@@ -88,6 +88,14 @@ impl Chart {
         }
     }
 
+    /// The signals of every connected source, hidden categories included.
+    #[cfg(feature = "alert-engine")]
+    pub(super) fn signals(&self) -> impl Iterator<Item = &Signal> {
+        self.signal_sources
+            .iter()
+            .flat_map(|source| &source.signals)
+    }
+
     pub(super) fn clear_source_signals(&mut self) {
         for source in &mut self.signal_sources {
             source.listener = None;

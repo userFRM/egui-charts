@@ -5,16 +5,23 @@ use crate::model::{Bar, math::Moments};
 use crate::scales::PriceScaleMode;
 
 impl Drawing {
-    /// [`Self::alert_levels`] with the main-series bars needed by a regression drawing. The
-    /// fitted median is level 0, upper band 1 and lower band 2. Regression uses the same closes,
-    /// residual deviation and axis interpolation between fitted endpoints as its painted lines.
-    /// Empty when the anchored range has fewer than two bars or invalid geometry.
+    /// [`Self::alert_levels`] with the main-series bars needed by a regression drawing or an
+    /// anchored VWAP. The fitted median is level 0, upper band 1 and lower band 2. Regression
+    /// uses the same closes, residual deviation and axis interpolation between fitted endpoints
+    /// as its painted lines, and is empty when the anchored range has fewer than two bars or
+    /// invalid geometry. The anchored VWAP is level 0 and the upper and lower lines of each
+    /// enabled band `n` (from zero) levels `2n + 1` and `2n + 2`, at the values the painted lines
+    /// have at `bar`; they are empty before the anchor, past the last bar and before volume
+    /// trades.
     pub fn alert_levels_with_bars(
         &self,
         bar: f64,
         scale: PriceScaleMode,
         bars: &[Bar],
     ) -> Vec<(usize, String, f64)> {
+        if self.tool_type == DrawingToolType::AnchoredVWAP {
+            return self.vwap_alert_levels(bar, bars);
+        }
         if self.tool_type != DrawingToolType::RegressionTrend {
             return self.alert_levels(bar, scale);
         }
@@ -56,6 +63,50 @@ impl Drawing {
             .map(|price| (level, name.to_owned(), price))
         })
         .collect()
+    }
+
+    fn vwap_alert_levels(&self, bar: f64, bars: &[Bar]) -> Vec<(usize, String, f64)> {
+        let Some(anchor) = self.chart_points.first() else {
+            return Vec::new();
+        };
+        // Painted lines start at the rounded anchor and have a value on each loaded bar.
+        let bar = bar.round();
+        if !(f64::from(anchor.bar_idx).round() <= bar && bar < bars.len() as f64) {
+            return Vec::new();
+        }
+        let Some((_, span)) =
+            crate::drawings::rendering::bars_between(bars, anchor.bar_idx, bar as f32)
+        else {
+            return Vec::new();
+        };
+        let config = self.vwap.unwrap_or_default();
+        let Some((vwap, unit)) = crate::drawings::rendering::anchored_vwap_through(span, &config)
+        else {
+            return Vec::new();
+        };
+        let bands = config
+            .bands
+            .iter()
+            .enumerate()
+            .filter(|(_, band)| band.enabled);
+        std::iter::once((0, "VWAP".to_owned(), vwap))
+            .chain(bands.flat_map(|(index, band)| {
+                let offset = band.multiplier() * unit;
+                [
+                    (
+                        2 * index + 1,
+                        format!("Upper band {}", index + 1),
+                        vwap + offset,
+                    ),
+                    (
+                        2 * index + 2,
+                        format!("Lower band {}", index + 1),
+                        vwap - offset,
+                    ),
+                ]
+            }))
+            .filter(|(.., price)| price.is_finite())
+            .collect()
     }
 
     pub(super) fn fork_alert_levels(

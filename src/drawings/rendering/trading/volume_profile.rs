@@ -306,7 +306,7 @@ impl Drawing {
             let mut sums = VwapSums::default();
             let (i, (vwap, _)) = bars.iter().enumerate().find_map(|(i, bar)| {
                 sums.add(bar, source);
-                sums.value().map(|value| (i, value))
+                sums.value(VwapBandMode::Deviation).map(|value| (i, value))
             })?;
             let x = (view.bar_to_x)((first + i) as f32);
             return Some(vec![Pos2::new(x, (view.price_to_y)(vwap))]);
@@ -416,15 +416,25 @@ impl VwapSums {
         self.square_volume += price * price * bar.volume;
     }
 
-    /// VWAP and the volume-weighted standard deviation around it; `None`
-    /// until volume trades.
-    fn value(&self) -> Option<(f64, f64)> {
+    /// VWAP and the unit of its bands in `mode`; `None` until volume trades.
+    fn value(&self, mode: VwapBandMode) -> Option<(f64, f64)> {
         (self.volume > 0.0).then(|| {
             let vwap = self.price_volume / self.volume;
             let variance = self.square_volume / self.volume - vwap * vwap;
-            (vwap, variance.max(0.0).sqrt())
+            match mode {
+                VwapBandMode::Deviation => (vwap, variance.max(0.0).sqrt()),
+                VwapBandMode::Percentage => (vwap, vwap.abs() / 100.0),
+            }
         })
     }
+}
+
+/// VWAP of `config`'s source over all of `bars`, from the anchor bar, with its band unit, as
+/// the painted line has it at the last of `bars`; `None` until volume trades.
+pub(crate) fn anchored_vwap_through(bars: &[Bar], config: &VwapConfig) -> Option<(f64, f64)> {
+    let mut sums = VwapSums::default();
+    bars.iter().for_each(|bar| sums.add(bar, config.source));
+    sums.value(config.band_mode)
 }
 
 /// The running sums at the start of the span and after every block of
@@ -472,11 +482,7 @@ fn anchored_vwap<'a>(
         .for_each(|bar| sums.add(bar, source));
     bars[range].iter().map(move |bar| {
         sums.add(bar, source);
-        let (vwap, sigma) = sums.value()?;
-        Some(match mode {
-            VwapBandMode::Deviation => (vwap, sigma),
-            VwapBandMode::Percentage => (vwap, vwap.abs() / 100.0),
-        })
+        sums.value(mode)
     })
 }
 
