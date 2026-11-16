@@ -1149,7 +1149,8 @@ mod tests {
                 loaded.apply_settings(&[], hidden).unwrap();
                 assert!(loaded.fills().is_empty());
                 assert_eq!(loaded.settings().fills[0].color, edited.fills[0].color);
-                // Older templates without band settings inherit the newly declared band.
+                // Older templates without band settings restore without the band they did not
+                // draw, which keeps the declared colour for when it is shown.
                 let mut old =
                     serde_json::to_value(StudyTemplate::from_study(loaded.as_ref())).unwrap();
                 old["settings"].as_object_mut().unwrap().remove("fills");
@@ -1157,7 +1158,8 @@ mod tests {
                     .unwrap()
                     .create()
                     .unwrap();
-                assert_eq!(restored.fills()[0].color, defaults.fills[0].color);
+                assert!(restored.fills().is_empty());
+                assert_eq!(restored.settings().fills[0].color, defaults.fills[0].color);
             } else {
                 assert_eq!(
                     loaded.drawings()[0]
@@ -1730,7 +1732,7 @@ mod tests {
     /// CRSI declares its guides so the shared editor can stage, cancel, save and undo them.
     #[test]
     fn crsi_bands_and_calculation_survive_edits_and_restore() {
-        use crate::studies::{ConnorsRSI, IndicatorFactory, StudyTemplate, palette};
+        use crate::studies::{IndicatorFactory, StudyTemplate, palette};
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut study =
@@ -1909,7 +1911,8 @@ mod tests {
         assert_eq!(study.settings(), defaults);
         study.restore_settings(&after).unwrap();
         assert_eq!(study.settings(), edited);
-        // A saved study without level fields inherits the declared guides on restore.
+        // A saved study without level fields restores without the guides and band it did not
+        // draw; shown, they are the declared ones.
         let mut older = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
         for key in ["levels", "fill_between_levels", "level_fill_color"] {
             older["settings"].as_object_mut().unwrap().remove(key);
@@ -1918,8 +1921,22 @@ mod tests {
             .unwrap()
             .create()
             .unwrap();
-        assert_eq!(older.pane().levels, ConnorsRSI::default().pane().levels);
-        assert!(older.pane().fill_between_levels);
+        let pane = older.pane();
+        assert!(
+            pane.levels
+                .iter()
+                .all(|level| level.1 == egui::Color32::TRANSPARENT)
+        );
+        assert!(!pane.fill_between_levels);
+        let mut shown = older.settings();
+        for level in &mut shown.levels {
+            level.visible = true;
+        }
+        shown.fill_between_levels = true;
+        assert_eq!(
+            (shown.levels, shown.level_fill_color),
+            (defaults.levels, defaults.level_fill_color)
+        );
     }
 
     #[test]

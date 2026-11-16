@@ -372,7 +372,9 @@ pub struct StudySettings {
     #[serde(default)]
     pub fills: Vec<FillStyle>,
     /// Independent styles for [`Indicator::gradients`], in declaration order.
-    /// Older settings inherit the study's declared ramps.
+    /// Missing styles take the study's declared ramps, shown. A
+    /// [`StudyTemplate`](super::StudyTemplate) of an SMI saved before it declared its shading
+    /// restores the ramps hidden.
     #[serde(default)]
     pub gradients: Vec<GradientStyle>,
 }
