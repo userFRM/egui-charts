@@ -8780,7 +8780,7 @@ mod tests {
             (Tool::ShortPos, "Entry price"),
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
-            (Tool::RegressionTrend, "Deviations"),
+            (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
             app.chart.drawings_mut().drawings.clear();
