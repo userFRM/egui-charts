@@ -1,6 +1,6 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{StudyDataRequest, VolumeProfile};
+use crate::data::{FootprintView, StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::domain::{VwapBandLine, VwapBandMode, VwapConfig, VwapPlotType};
@@ -370,7 +370,7 @@ impl Drawing {
     ) -> Rc<Option<VolumeProfile>> {
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
-            let complete = flow.span_is_complete(start.time, end.time);
+            let complete = FootprintView::from(flow).span_is_complete(start.time, end.time);
             if let Some(profile) = VolumeProfile::from_executions(
                 &executed,
                 flow.price_step(),

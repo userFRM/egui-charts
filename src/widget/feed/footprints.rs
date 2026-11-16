@@ -2,7 +2,7 @@
 
 use super::pump::non_progressing;
 use super::{FeedLink, MIN_SCROLL_BACK_PAGE, Request};
-use crate::data::{FeedError, Footprint, FootprintPage, FootprintRequest};
+use crate::data::{FeedError, FootprintPage, FootprintRequest, FootprintState};
 use crate::model::ChartType;
 use crate::widget::Chart;
 
@@ -34,8 +34,8 @@ impl Chart {
         let before = link
             .footprint
             .as_ref()
-            .filter(|flow| flow.prepared_before().is_some())
-            .and_then(|flow| flow.bars().first_key_value().map(|(time, _)| *time))
+            .filter(|flow| flow.live.prepared_before().is_some())
+            .and_then(|flow| flow.view().first_time())
             .into_iter()
             .chain(link.footprint_cursor)
             .min();
@@ -121,22 +121,21 @@ impl Chart {
                 "footprint page must cover through the requested boundary",
             ));
         }
-        let mut flow = Footprint::from_bars(
-            request.clock.clone(),
-            request.tick_size,
-            request.ticks_per_row,
-            page.bars,
-        )?;
+        let retain = link
+            .footprint
+            .as_ref()
+            .is_some_and(|flow| flow.owned().is_none());
+        let mut flow = FootprintState::from_page(request, page.bars, retain)?;
         if !empty {
             if let Some(held) = link
                 .footprint
                 .as_mut()
-                .filter(|flow| flow.prepared_before().is_some())
+                .filter(|flow| flow.live.prepared_before().is_some())
             {
                 held.prepend_prepared(flow);
             } else {
                 flow.prepare_history(page.complete_before, &link.trades, link.trades_from_start);
-                flow.rebuild_prepared(&link.trades);
+                flow.live.rebuild_prepared(&link.trades);
                 link.footprint = Some(flow);
             }
         }

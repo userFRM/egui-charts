@@ -1433,6 +1433,8 @@ mod tests {
                 .footprint
                 .as_ref()
                 .unwrap()
+                .owned()
+                .unwrap()
                 .bars()
                 .len(),
             1,
