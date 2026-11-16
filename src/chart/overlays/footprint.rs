@@ -3332,8 +3332,10 @@ mod tests {
                 false,
             ),
         );
+        // Fixed rows, so that `row_edges` gives the edges of every complete bar.
         let config = FootprintConfig {
             statistics_rows: vec![FootprintStatistic::CumulativeDelta],
+            auto_row_height: None,
             ..Default::default()
         };
         for (filled, expected) in [
@@ -3380,7 +3382,7 @@ mod tests {
                 .collect();
             assert_eq!(texts, expected);
             assert_eq!(
-                row_edges(&bars, (&flow).into(), |_| 1).count(),
+                row_edges(&bars, (&flow).into(), &config, |_| 1).count(),
                 if filled { 8 } else { 4 }
             );
         }
