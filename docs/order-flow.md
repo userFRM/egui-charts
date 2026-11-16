@@ -31,6 +31,10 @@ from the history bar in its slot, takes the place of the first live execution; a
 to the history bar in its slot changes nothing. Page executions without ids at the time of the
 first live execution cannot be told from the live ones, so the chart leaves them out; the bar
 before then counts as one the page does not reach, and bars only its end would prove draw candles.
+The chart keeps every instant where executions may be missing this way, or where a stream began
+before its trade page reached it, across interval changes and resumes: no grouping takes such an
+instant in, only the newest executions between two of them that prove bars draw cells, and the bar
+holding one draws a candle.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 

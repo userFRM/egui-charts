@@ -19,6 +19,7 @@ use crate::data::{
 use crate::model::{Bar, BarClock, Instrument, OrderBook, Tick, Timeframe};
 use crate::theme::ThemeExt;
 use egui::ViewportId;
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -237,8 +238,11 @@ impl FeedLink {
     /// open before the live executions, held ones or those the store kept apart at the first
     /// instant a page covers while the chart holds a bar at or before the oldest of them, or
     /// without them before the oldest pushed bar the history lacks or holds with other values,
-    /// and that they rebuild ([`Footprint::push_history`]). With `before`, includes only
-    /// executions strictly before that replay cutoff.
+    /// and that they rebuild ([`Footprint::push_history`]). No grouping takes in an instant at
+    /// which the held executions may lack some, as a page left them out or no page reached the
+    /// first instant of a stream, whatever subscriptions changed since: the newest executions
+    /// between such instants that prove a bar are kept. With `before`, includes only executions
+    /// strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -286,7 +290,35 @@ impl FeedLink {
                 .and_then(|(_, kept)| kept.first())
                 .map(|trade| trade.ts)
                 .filter(|at| history.first().is_some_and(|bar| bar.time <= *at));
-            flow.push_history(&paged, &history[..paged_bars], before, ended, stream_from);
+            // The held executions may lack some of an instant a page left out, or of the first
+            // instant of a stream no page reached, whatever subscriptions changed since: no
+            // grouping takes in such an instant between the oldest paged execution and the first
+            // live one. The executions after the newest are tried first, then those between each
+            // pair of older ones, and the first to prove a bar are kept. Before such an instant
+            // the bar that opens last may hold executions of it and proves nothing, nor does the
+            // end of those executions.
+            let oldest = paged.iter().map(|trade| trade.ts).min();
+            let splits: BTreeSet<_> = (self.trades.left_out().iter().copied())
+                .filter(|at| oldest < Some(*at) && live.is_none_or(|live| *at < live))
+                .collect();
+            let mut end = None;
+            for start in (splits.into_iter().rev().map(Some)).chain([None]) {
+                let part: Vec<_> = (paged.iter().copied())
+                    .filter(|trade| start.is_none_or(|at| trade.ts > at))
+                    .filter(|trade| end.is_none_or(|at| trade.ts < at))
+                    .collect();
+                let bars = end.map_or(paged_bars, |at| {
+                    (history.partition_point(|bar| bar.time < at))
+                        .saturating_sub(1)
+                        .min(paged_bars)
+                });
+                let ended = ended && end.is_none();
+                flow.push_history(&part, &history[..bars], before, ended, stream_from);
+                if !flow.bars().is_empty() {
+                    break;
+                }
+                end = start;
+            }
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
             // A stream can stamp its first trades before held ones: take them in time order.
             let mut ordered: Vec<_> = held()
