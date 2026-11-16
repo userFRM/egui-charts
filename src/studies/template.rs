@@ -345,15 +345,15 @@ impl StudyTemplate {
                 // draws two of the saved lines, so their number also bounds a corrupt band count.
                 template.settings.fills = (0..bands.min(self.settings.plots.len()))
                     .map(|band| crate::studies::FillStyle {
-                        color: self
-                            .settings
-                            .plots
-                            .get(1 + 2 * band)
-                            .map_or(egui::Color32::TRANSPARENT, |plot| {
-                                plot.color.gamma_multiply_u8(13)
-                            }),
-                        inverted_color: None,
                         visible: false,
+                        ..crate::studies::FillStyle::new(
+                            self.settings
+                                .plots
+                                .get(1 + 2 * band)
+                                .map_or(egui::Color32::TRANSPARENT, |plot| {
+                                    plot.color.gamma_multiply_u8(13)
+                                }),
+                        )
                     })
                     .collect();
             }
@@ -904,6 +904,7 @@ mod tests {
     /// defaults gained an average, bands, and an area with guides at its bounds restore with the
     /// plots and guides they had, and a Rank Correlation saved before it had an average, levels
     /// and a filled band, and a Majority Rule saved before its guide at 50, restore without them.
+    /// So does a band saved with its boundary plots hidden before it could be drawn without them.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -1079,6 +1080,26 @@ mod tests {
             drawn(&StudyTemplate::from_study(&direction)),
             (1, (0, 0), false)
         );
+        // Bollinger Bands as a release before bands ignored their boundary plots saved them, the
+        // upper and lower lines hidden and the band switch on: no band is drawn, and its switch
+        // is off. Saved since with the same lines hidden, the band stays drawn.
+        let saved = r#"{"name":"BB","inputs":[["period",{"Length":20}],["basis",{"Choice":0}],["std_dev",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BollingerBands.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let restored = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert!(restored.fills().is_empty());
+        assert!(!restored.settings().fills[0].visible);
+        let mut since = ConfiguredStudy::new(IndicatorFactory::new().create("BB").unwrap());
+        let mut settings = since.settings();
+        settings.plots[0].visible = false;
+        settings.plots[2].visible = false;
+        since.apply_settings(&[], settings).unwrap();
+        let again = StudyTemplate::from_study(&since).create().unwrap();
+        assert_eq!(again.fills().len(), 1);
+        let again = StudyTemplate::from_study(again.as_ref()).create().unwrap();
+        assert_eq!(again.fills().len(), 1);
+
         // A Technical Ratings as the release before its table inputs saved it, its fast length
         // edited to 20 and its summary to orange: it rates every vote, requests no other interval
         // and draws its table where and as it did.

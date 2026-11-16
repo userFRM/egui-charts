@@ -415,9 +415,8 @@ pub trait Indicator: Send {
                 .fills()
                 .iter()
                 .map(|fill| super::FillStyle {
-                    color: fill.color,
                     inverted_color: fill.inverted_color,
-                    visible: true,
+                    ..super::FillStyle::new(fill.color)
                 })
                 .collect(),
         }

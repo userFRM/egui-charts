@@ -132,6 +132,11 @@ pub struct FillStyle {
     pub inverted_color: Option<Color32>,
     /// Whether the band is drawn.
     pub visible: bool,
+    /// Whether `visible` alone decides that the band is drawn. Styles saved by earlier releases
+    /// lack it: their band was also hidden with a boundary plot, which applying them carries over
+    /// to `visible`.
+    #[serde(default)]
+    pub(super) independent: bool,
 }
 
 impl FillStyle {
@@ -141,6 +146,7 @@ impl FillStyle {
             color,
             inverted_color: None,
             visible: true,
+            independent: true,
         }
     }
 }
@@ -252,9 +258,8 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     settings
         .fills
         .extend(fills[saved..].iter().map(|fill| FillStyle {
-            color: fill.color,
             inverted_color: fill.inverted_color,
-            visible: true,
+            ..FillStyle::new(fill.color)
         }));
 }
 
@@ -361,7 +366,9 @@ pub struct StudySettings {
     pub background_visible: bool,
     /// One independent style per band returned by [`Indicator::fills`].
     /// Missing styles take the study's declared colours and visibility. Styles of bands the study
-    /// does not declare yet are kept for when it does.
+    /// does not declare yet are kept for when it does. A style saved before bands were drawn
+    /// whatever the visibility of their boundary plots restores hidden while one of those plots
+    /// is hidden, as it was drawn then.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
     /// Independent styles for [`Indicator::gradients`], in declaration order.
@@ -1417,6 +1424,25 @@ impl Indicator for ConfiguredStudy {
         let bands = edited.study.fills().len();
         if bands > 0 && bands < self.study.fills().len() {
             settings.fills.truncate(bands);
+        }
+        // A band saved before its style alone decided whether it is drawn was not drawn while
+        // a boundary plot was hidden, so it keeps that look with its own switch off.
+        let declared = edited.study.fills();
+        let hidden = |boundary| match boundary {
+            super::FillBoundary::Plot(line) => {
+                settings.plots.get(line).is_some_and(|plot| !plot.visible)
+            }
+            super::FillBoundary::Level(_) => false,
+        };
+        for (band, style) in settings.fills.iter_mut().enumerate() {
+            if !style.independent
+                && declared
+                    .get(band)
+                    .is_some_and(|fill| hidden(fill.first) || hidden(fill.second))
+            {
+                style.visible = false;
+            }
+            style.independent = true;
         }
         match_declared_styles(edited.study.as_ref(), &mut settings);
         if self.study.value_format() != edited.study.value_format() {
