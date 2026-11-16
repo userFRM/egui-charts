@@ -53,13 +53,28 @@ fn alignment_row<T: Copy + PartialEq, const N: usize>(
     ui.end_row();
 }
 
+/// Whether the tool is a chart pattern, whose renderer labels its points or ratios on boxes in the
+/// line colour.
+fn is_chart_pattern(tool: DrawingToolType) -> bool {
+    use DrawingToolType as T;
+    matches!(
+        tool,
+        T::XABCDPattern
+            | T::CypherPattern
+            | T::HeadAndShoulders
+            | T::ABCDPattern
+            | T::TrianglePattern
+            | T::ThreeDrivesPattern
+    )
+}
+
 /// Text tab renderer
 #[derive(Debug)]
 pub struct TextTab;
 
 impl TextTab {
-    /// Tools with text to write, and the trend angle, Fibonacci, Fibonacci time and position
-    /// tools, whose own labels have a font and a colour.
+    /// Tools with text to write, and the trend angle, Fibonacci, Fibonacci time, position and chart
+    /// pattern tools, whose own labels have a font and a colour.
     pub(crate) fn available(tool: DrawingToolType) -> bool {
         tool.supports_text()
             || matches!(
@@ -73,6 +88,7 @@ impl TextTab {
                     | DrawingToolType::LongPos
                     | DrawingToolType::ShortPos
             )
+            || is_chart_pattern(tool)
     }
 
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 3]) {
@@ -431,8 +447,10 @@ impl TextTab {
                 }
             }
             let boxed = has_text_box(settings.tool_type);
+            let pattern = is_chart_pattern(settings.tool_type);
             if !(boxed
                 || line_text
+                || pattern
                 || matches!(
                     settings.tool_type,
                     DrawingToolType::TrendLine
@@ -455,7 +473,13 @@ impl TextTab {
                     .unwrap_or(color.gamma_multiply(0.2))
                     .to_srgba_unmultiplied()
             });
-            let text = shown.text_box_colors(ui.ctx()).text;
+            // A pattern's labels sit on boxes in the line colour, in white or black until a
+            // colour is set.
+            let text = if pattern {
+                shown.pattern_label_colors().1
+            } else {
+                shown.text_box_colors(ui.ctx()).text
+            };
             // A box switched on this frame shows its colours at once.
             shown.background = true;
             shown.border = true;
@@ -569,7 +593,9 @@ mod tests {
 
     /// Line tools offer the text placement, colour and emphasis they draw, and a vertical line
     /// also offers the orientation of its text. A rectangle, circle or ellipse writes its text at
-    /// its centre, so it offers the colour and emphasis alone.
+    /// its centre, so it offers the colour and emphasis alone. A chart pattern styles its labels:
+    /// colour and emphasis alone, its colour swatch showing the white or black they take until a
+    /// colour is set.
     #[test]
     fn tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
@@ -583,6 +609,12 @@ mod tests {
             (DrawingToolType::Rect, false),
             (DrawingToolType::Circle, false),
             (DrawingToolType::Ellipse, false),
+            (DrawingToolType::XABCDPattern, false),
+            (DrawingToolType::CypherPattern, false),
+            (DrawingToolType::HeadAndShoulders, false),
+            (DrawingToolType::ABCDPattern, false),
+            (DrawingToolType::TrianglePattern, false),
+            (DrawingToolType::ThreeDrivesPattern, false),
         ] {
             let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
@@ -612,6 +644,24 @@ mod tests {
                 "{tool:?}"
             );
             output.drop_without_applying_deltas();
+        }
+        // White reads at 1.22:1 on this yellow, so a pattern's labels on it are black until a
+        // colour is set.
+        for (text_color, shown) in [
+            (None, egui::Color32::BLACK),
+            (Some([255, 0, 0, 255]), egui::Color32::RED),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::XABCDPattern);
+            drawing.color = [255, 235, 59, 255];
+            drawing.text_color = text_color;
+            let mut props = DrawingProps::from_drawing(&drawing, &chart);
+            let mut pickers = [(); 3].map(|_| ColorPickerState::new(props.color));
+            egui::Context::default()
+                .run_ui(Default::default(), |ui| {
+                    TextTab::show(ui, &mut props, &mut pickers);
+                })
+                .drop_without_applying_deltas();
+            assert_eq!(pickers[0].sel_color, shown, "{text_color:?}");
         }
     }
 
