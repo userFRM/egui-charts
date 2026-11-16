@@ -4,8 +4,8 @@
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
-use crate::model::Bar;
 use crate::model::math::{LinearFit, Moments};
+use crate::model::{Bar, PriceSource};
 use crate::painting::span_cache::SpanCache;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 thread_local! {
-    static MOMENTS: RefCell<SpanCache<Moments>> =
+    static MOMENTS: RefCell<SpanCache<Moments, PriceSource>> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
 }
 
@@ -109,9 +109,9 @@ impl Drawing {
         Some([p1 + offset, p2 + offset])
     }
 
-    /// Render Regression Trend - least-squares line through the closes of the
-    /// bars between the anchors, with bands the configured number of standard
-    /// deviations away
+    /// Render Regression Trend - least-squares line through the source prices of
+    /// the bars between the anchors, with each band the configured number of
+    /// standard deviations away or through that side's extreme price
     pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, view: &ChartView) {
         if let Some((first, len, fit)) = self.regression_fit(view) {
             self.draw_regression_channel(painter, view, first, len, &fit, self.color32());
@@ -125,7 +125,8 @@ impl Drawing {
             return None;
         };
         let (first, bars) = bars_between(view.bars, a.bar_idx, b.bar_idx)?;
-        let fit = span_moments(view, first, bars).fit()?;
+        let source = self.regression_trend.unwrap_or_default().source;
+        let fit = span_moments(view, source, first, bars).fit()?;
         (fit.intercept.is_finite()
             && fit.slope.is_finite()
             && fit.sigma.is_finite()
@@ -158,18 +159,19 @@ impl Drawing {
         color: Color32,
     ) {
         let last = len - 1;
-        let deviations = self.regression_trend.unwrap_or_default().deviations();
-        // The fitted line shifted by `k` standard deviations, from the first bar to the last
-        let line = |k: f64| {
+        let config = self.regression_trend.unwrap_or_default();
+        let [above, below] = fit.bounds(&view.bars[first..first + len], config.band_deviations());
+        // The fitted line shifted by `offset` in price, from the first bar to the last
+        let line = |offset: f64| {
             [0, last].map(|i| {
-                let price = fit.intercept + fit.slope * i as f64 + k * fit.sigma;
+                let price = fit.intercept + fit.slope * i as f64 + offset;
                 Pos2::new(
                     (view.bar_to_x)((first + i) as f32),
                     (view.price_to_y)(price),
                 )
             })
         };
-        let [upper, center, lower] = [deviations, 0.0, -deviations].map(line);
+        let [upper, center, lower] = [above, 0.0, -below].map(line);
         let fitted = center;
 
         let label_pos = lower[0] + egui::vec2(4.0, 4.0);
@@ -215,20 +217,22 @@ impl Drawing {
         for band in [upper, lower] {
             painter.line_segment(band, Stroke::new(self.stroke_width, band_color));
         }
-        super::utils::draw_dashed_line(
-            painter,
-            center[0],
-            center[1],
-            Stroke::new(self.stroke_width, color),
-            8.0,
-            4.0,
-        );
+        let stroke = Stroke::new(self.stroke_width, color);
+        match config.line_style.dash_pattern() {
+            None => {
+                painter.line_segment(center, stroke);
+            }
+            Some((dash, gap)) => {
+                super::utils::draw_dashed_line(painter, center[0], center[1], stroke, dash, gap)
+            }
+        }
+        let places = usize::from(config.precision().unwrap_or(2));
         painter.text(
             label_pos,
             egui::Align2::LEFT_TOP,
             fit.correlation.map_or_else(
                 || crate::localization::text(painter.ctx(), "n/a"),
-                |r| format!("{r:.2}"),
+                |r| format!("{r:.places$}"),
             ),
             egui::FontId::proportional(typography::XS),
             band_color,
@@ -294,14 +298,21 @@ impl Drawing {
     }
 }
 
-/// Moments of `bars`, the span that starts at bar `first`. A tick on the
-/// forming bar, or a new bar, adds one bar to the moments of the bars before
-/// it instead of refitting the span.
-fn span_moments(view: &ChartView, first: usize, bars: &[Bar]) -> Rc<Moments> {
+/// Moments of the `source` prices of `bars`, the span that starts at bar `first`. A tick on
+/// the forming bar, or a new bar, adds one bar to the moments of the bars before it instead
+/// of refitting the span.
+fn span_moments(view: &ChartView, source: PriceSource, first: usize, bars: &[Bar]) -> Rc<Moments> {
     MOMENTS.with_borrow_mut(|cache| {
-        view.cached(cache, (), first, bars, Moments::of, |moments, bar| {
-            Some(moments.with(bar.close))
-        })
+        view.cached(
+            cache,
+            source,
+            first,
+            bars,
+            |bars| Moments::of(bars, source),
+            |moments, bar| {
+                Some(moments.with(source.compute(bar.open, bar.high, bar.low, bar.close)))
+            },
+        )
     })
 }
 
@@ -529,8 +540,8 @@ mod tests {
         let streamed = bars
             .iter()
             .fold(Moments::default(), |moments, bar| moments.with(bar.close));
-        let extended = Moments::of(&bars[..5]).with(bars[5].close);
-        for moments in [Moments::of(bars), streamed, extended] {
+        let extended = Moments::of(&bars[..5], PriceSource::Close).with(bars[5].close);
+        for moments in [Moments::of(bars, PriceSource::Close), streamed, extended] {
             let fit = moments.fit().unwrap();
             for (got, want) in [
                 (fit.slope, 0.45714285714285713),
@@ -543,13 +554,16 @@ mod tests {
             }
         }
         // Flat closes whose mean does not round to the close are fitted exactly.
-        let flat = Moments::of(&vec![
-            Bar {
-                close: 0.1,
-                ..bars[0].clone()
-            };
-            100
-        ])
+        let flat = Moments::of(
+            &vec![
+                Bar {
+                    close: 0.1,
+                    ..bars[0].clone()
+                };
+                100
+            ],
+            PriceSource::Close,
+        )
         .fit()
         .unwrap();
         assert_eq!((flat.r_squared, flat.correlation), (1.0, None));
@@ -560,15 +574,56 @@ mod tests {
     #[test]
     fn regression_channel_respects_fill_extension_and_line_roles() {
         use crate::drawings::{ChartPoint, RegressionTrendConfig};
+        use crate::model::LineStyle;
         use egui::{Context, RawInput, Shape};
-        let bars: Vec<_> = [10.0, 14.0, 12.0]
+        // Highs 13, 15, 16 rise 2, 3, 3 above y = 11 + x and lows 9, 10, 12 fall 2, 2, 1 below.
+        let bars: Vec<_> = [(10.0, 13.0, 9.0), (14.0, 15.0, 10.0), (12.0, 16.0, 12.0)]
             .into_iter()
-            .map(|close| Bar {
+            .map(|(close, high, low)| Bar {
                 close,
+                high,
+                low,
                 ..sample_bars()[0].clone()
             })
             .collect();
         let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+        let paint = |drawing: &Drawing| {
+            let ctx = Context::default();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(pane),
+                    ..Default::default()
+                },
+                |ui| {
+                    drawing.render(
+                        ui.painter(),
+                        pane,
+                        &ChartView {
+                            price_formatter: None,
+                            time_formatter: None,
+                            bar_seconds: 0,
+                            instrument: None,
+                            bars: &bars,
+                            revision: 0,
+                            bar_to_x: &|b| 100.0 + b * 100.0,
+                            bar_spacing: 100.0,
+                            price_to_y: &|p| 500.0 - p as f32 * 10.0,
+                            y_to_price: &|y| f64::from((500.0 - y) / 10.0),
+                            time_axis: true,
+                            executions: None,
+                            timeframe: None,
+                            finer: &[],
+                        },
+                    );
+                },
+            );
+            let mut shapes = Vec::new();
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut shapes);
+            }
+            output.drop_without_applying_deltas();
+            shapes
+        };
         for reverse in [false, true] {
             for (left, right, xs) in [
                 (false, false, [100.0, 300.0]),
@@ -590,40 +645,7 @@ mod tests {
                     drawing.fill_color = filled.then_some([41, 98, 255, 51]);
                     drawing.extend_left = left;
                     drawing.extend_right = right;
-                    let ctx = Context::default();
-                    let output = ctx.run_ui(
-                        RawInput {
-                            screen_rect: Some(pane),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            drawing.render(
-                                ui.painter(),
-                                pane,
-                                &ChartView {
-                                    price_formatter: None,
-                                    time_formatter: None,
-                                    bar_seconds: 0,
-                                    instrument: None,
-                                    bars: &bars,
-                                    revision: 0,
-                                    bar_to_x: &|b| 100.0 + b * 100.0,
-                                    bar_spacing: 100.0,
-                                    price_to_y: &|p| 500.0 - p as f32 * 10.0,
-                                    y_to_price: &|y| f64::from((500.0 - y) / 10.0),
-                                    time_axis: true,
-                                    executions: None,
-                                    timeframe: None,
-                                    finer: &[],
-                                },
-                            );
-                        },
-                    );
-                    let mut shapes = Vec::new();
-                    for shape in &output.shapes {
-                        collect(&shape.shape, &mut shapes);
-                    }
-                    output.drop_without_applying_deltas();
+                    let shapes = paint(&drawing);
                     let fills: Vec<_> = shapes
                         .iter()
                         .filter_map(|s| match s {
@@ -710,6 +732,112 @@ mod tests {
                     );
                 }
             }
+        }
+
+        // Each side a deviation away or through its extreme price; the HL2 midpoints 11, 12.5, 14
+        // lie on y = 11 + 1.5x (r = 1), their highs and lows 2, 2.5, 2 away.
+        let sigma = 3f64.sqrt();
+        for (use_upper, use_lower, source, line_style, precision, slope, above, below, label) in [
+            (
+                true,
+                true,
+                PriceSource::Close,
+                LineStyle::Dashed,
+                None,
+                1.0,
+                sigma,
+                sigma,
+                "0.50",
+            ),
+            (
+                false,
+                true,
+                PriceSource::Close,
+                LineStyle::Solid,
+                Some(3),
+                1.0,
+                3.0,
+                sigma,
+                "0.500",
+            ),
+            (
+                true,
+                false,
+                PriceSource::Close,
+                LineStyle::Dotted,
+                None,
+                1.0,
+                sigma,
+                2.0,
+                "0.50",
+            ),
+            (
+                false,
+                false,
+                PriceSource::HL2,
+                LineStyle::Dashed,
+                Some(3),
+                1.5,
+                2.5,
+                2.5,
+                "1.000",
+            ),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::RegressionTrend);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 30.0), ChartPoint::new(2.0, 5.0)];
+            drawing.update_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+            let mut config = RegressionTrendConfig::new(1.0)
+                .and_then(|config| config.with_precision(precision))
+                .unwrap();
+            config.use_upper = use_upper;
+            config.use_lower = use_lower;
+            config.source = source;
+            config.line_style = line_style;
+            drawing.regression_trend = Some(config);
+            let shapes = paint(&drawing);
+            let y = |i: f64, offset: f64| 500.0 - ((11.0 + slope * i + offset) * 10.0) as f32;
+            let lines: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::LineSegment { points, stroke } => Some((*points, stroke.color)),
+                    _ => None,
+                })
+                .collect();
+            for offset in [above, -below] {
+                let band = [
+                    Pos2::new(100.0, y(0.0, offset)),
+                    Pos2::new(300.0, y(2.0, offset)),
+                ];
+                assert!(
+                    lines
+                        .iter()
+                        .any(|(p, color)| *color == Color32::from_rgb(41, 98, 255)
+                            && p[0].distance(band[0]) < 1e-3
+                            && p[1].distance(band[1]) < 1e-3),
+                    "{label}: missing band {band:?}"
+                );
+            }
+            let center: Vec<_> = lines
+                .iter()
+                .filter(|(_, color)| *color == drawing.color32())
+                .map(|(p, _)| *p)
+                .collect();
+            let longest = center
+                .iter()
+                .map(|p| p[0].distance(p[1]))
+                .fold(0.0, f32::max);
+            match line_style.dash_pattern() {
+                None => assert_eq!(center.len(), 1, "{label}: solid line"),
+                Some((dash, _)) => assert!((longest - dash).abs() < 1e-3, "{label}: {longest}"),
+            }
+            for p in center.iter().flatten() {
+                assert!((p.y - y(f64::from((p.x - 100.0) / 100.0), 0.0)).abs() < 1e-3);
+            }
+            assert!(
+                shapes
+                    .iter()
+                    .any(|s| matches!(s, Shape::Text(t) if t.galley.job.text == label))
+            );
         }
     }
 }
