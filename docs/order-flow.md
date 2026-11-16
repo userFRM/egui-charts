@@ -34,7 +34,10 @@ before then counts as one the page does not reach, and bars only its end would p
 The chart keeps every instant where executions may be missing this way, or where a stream began
 before its trade page reached it, across interval changes and resumes: no grouping takes such an
 instant in, only the newest executions between two of them that prove bars draw cells, and the bar
-holding one draws a candle.
+holding one draws a candle. When the interval changes again before the trade page answers, that
+page fills the time of both changes, and until it answers no grouping crosses the time of the
+first. After three or more such changes the time of those in between stays without executions, and
+no grouping crosses it.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 

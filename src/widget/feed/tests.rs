@@ -4214,6 +4214,97 @@ fn an_interval_change_page_draws_only_a_bars_own_executions() {
     assert!(failures.is_empty(), "{failures:?}");
 }
 
+/// When the interval changes again before the trade page answers, the executions held from before
+/// the first change and those streamed since follow a time no page has filled: until one does, no
+/// grouping across it proves a bar. Executions of 1 at 100 a second apart from 00:00:00, with ids,
+/// all buys but one sell, on a 2 tick chart. With two changes, the streams send those at 00:00:00
+/// to 00:00:04, at 00:00:07 to 00:00:09 and at 00:00:11, and the sell at 00:00:05 is never
+/// received. Grouped from 00:00:00 the executions match the bars at 00:00:00, 00:00:02 and
+/// 00:00:04, the last with the buy at 00:00:07 in place of its own sell, so that bar draws a
+/// candle and the two before it their own (100, 0, 2). With three changes, the streams send those
+/// at 00:00:00 and 00:00:01, at 00:00:03 to 00:00:10, at 00:00:12 and 00:00:13, and at 00:00:15:
+/// the page will fill the time of the first and the last change only, so the time of the second,
+/// with the sell at 00:00:11, stays missing. The bars at 00:00:04 and 00:00:06 draw their own
+/// (100, 0, 2), and the bar at 00:00:10 a candle, where the buy at 00:00:12 in place of its sell
+/// would match it.
+#[test]
+fn interval_changes_before_the_trade_page_prove_no_bar_across_their_time() {
+    use crate::model::OrderSide::{Buy, Sell};
+    let start = bars(1)[0].time;
+    // The intervals in order with the seconds of the executions each stream sends, the second of
+    // the sell, the bars of the history page and the cells of the bars drawn.
+    type Row<'a> = (
+        &'a str,
+        &'a [(&'a str, std::ops::Range<i64>)],
+        i64,
+        usize,
+        &'a [&'a [(i64, f64, f64)]],
+    );
+    let buys: &[(i64, f64, f64)] = &[(100, 0.0, 2.0)];
+    let rows: [Row; 2] = [
+        (
+            "two changes",
+            &[("3t", 0..5), ("4t", 7..10), ("2t", 11..12)],
+            5,
+            5,
+            &[buys, buys],
+        ),
+        (
+            "three changes",
+            &[("3t", 0..2), ("4t", 3..11), ("5t", 12..14), ("2t", 15..16)],
+            11,
+            7,
+            &[buys, buys],
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, streams, sell, paged, cells) in rows {
+        let seconds = 0..streams.last().unwrap().1.end;
+        let tape: Vec<Tick> = (seconds.zip(1..))
+            .map(|(second, id)| {
+                let side = if second == sell { Sell } else { Buy };
+                Tick::new(start + TimeDelta::seconds(second), 100.0, 1.0, Some(side)).with_id(id)
+            })
+            .collect();
+        let timeframe: Timeframe = "2t".parse().unwrap();
+        let candles =
+            crate::data::aggregate_trades_with_tick_size(&tape, timeframe, Some(1.0)).unwrap();
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        for (interval, streamed) in streams {
+            chart.set_timeframe(interval.parse().unwrap());
+            frames.run(&mut chart);
+            feed.resolve()
+                .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+            frames.run(&mut chart);
+            for trade in &tape[streamed.start as usize..streamed.end as usize] {
+                feed.sink().push_tick(trade.clone());
+            }
+            frames.run(&mut chart);
+        }
+        (feed.pages.lock().unwrap().pop().unwrap()).send(page(candles[..paged].to_vec(), true));
+        frames.run(&mut chart);
+        let link = chart.feed_link.as_ref().unwrap();
+        let flow = link.footprint.as_ref().unwrap().owned().unwrap();
+        let complete = flow.complete_from();
+        let drawn: Vec<Vec<_>> = (candles[..paged].iter())
+            .filter(|bar| complete.is_some_and(|from| bar.time >= from))
+            .filter_map(|bar| flow.bar_at(bar.time))
+            .map(|cells| {
+                (cells.levels.values())
+                    .map(|level| (level.level, level.bid, level.ask))
+                    .collect()
+            })
+            .collect();
+        if drawn != cells {
+            failures.push(format!("{label}: drawn {drawn:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
 /// Evicted trades leave the footprint: its bars equal those summed from the held trades, delta
 /// extrema included, and the bar the eviction cut is not offered as complete.
 #[test]

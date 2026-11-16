@@ -298,7 +298,16 @@ impl FeedLink {
             // the bar that opens last may hold executions of it and proves nothing, nor does the
             // end of those executions.
             let oldest = paged.iter().map(|trade| trade.ts).min();
+            // Until a page fills the time after the executions the first of several subscription
+            // changes retained, the first held instant after them, that of a later stream,
+            // follows a time that may lack all of its executions.
+            let pending = (self.trades.first_retained_until()).and_then(|until| {
+                (paged.iter().map(|trade| trade.ts))
+                    .filter(|at| *at > until)
+                    .min()
+            });
             let splits: BTreeSet<_> = (self.trades.left_out().iter().copied())
+                .chain(pending)
                 .filter(|at| oldest < Some(*at) && live.is_none_or(|live| *at < live))
                 .collect();
             let mut end = None;
