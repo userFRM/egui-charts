@@ -8,7 +8,7 @@ use egui::Color32;
 /// TRIX - Triple Exponential Avg
 /// A momentum oscillator that shows the rate of change of a triple-smoothed EMA
 /// Filters out insignificant price movements
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TRIX {
     period: usize,
     signal_period: usize,
@@ -19,7 +19,7 @@ pub struct TRIX {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     ema: [Smoothing; 3],
     signal: Smoothing,

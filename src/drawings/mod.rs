@@ -42,7 +42,7 @@ pub use domain::{
     LineMeasurements, LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign,
     NoteTextStyle, ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionReadout,
     PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
-    VwapBand, VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
+    VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
 };
 
 // Re-export manager types

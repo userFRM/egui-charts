@@ -28,7 +28,7 @@ pub enum ReplayStartAction {
 }
 
 /// Date entry dialog shared by hosts of the replay controller.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ReplayStartPicker {
     /// Whether the dialog is open.
     pub is_open: bool,

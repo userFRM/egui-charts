@@ -22,7 +22,7 @@ use std::ops::Range;
 ///
 /// [`Indicator::candles`] exposes period OHLCV and source ranges. The two output columns contain
 /// each period's close on its source bars, in the up or down column; unchanged closes count as up.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HigherIntervalCandles {
     interval: Timeframe,
     automatic: bool,

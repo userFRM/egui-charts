@@ -26,6 +26,7 @@ pub(crate) mod utils {
 }
 
 pub(crate) use outline::Outline;
+pub(crate) use trading::anchored_vwap_through;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};

@@ -9,6 +9,7 @@ use crate::ui::drawing_toolbar::components::draw_tool_button;
 use egui::Ui;
 
 /// Keep Drawing / Stay in Drawing Mode button.
+#[derive(Debug)]
 pub struct StayInDrawingButton;
 
 impl StayInDrawingButton {

@@ -51,7 +51,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use egui::Color32;
 
 /// Intraday Pivot Points: levels for each block of a trading session from the block before it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IntradayPivotPoints {
     method: PivotMethod,
     minutes: usize,
@@ -70,7 +70,7 @@ pub struct IntradayPivotPoints {
     labels: Vec<StudyLabel>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct State {
     session: Option<NaiveDate>,
     origin: DateTime<Utc>,

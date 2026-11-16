@@ -7,7 +7,7 @@ use egui::Color32;
 /// Chaikin Volatility
 /// Measures the rate of change of the trading range
 /// High values indicate increased volatility
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChaikinVolatility {
     /// EMA period (typically 10)
     ema_period: usize,

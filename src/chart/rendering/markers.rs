@@ -290,13 +290,16 @@ pub(crate) fn render_event_badges<'a>(
                 color,
             );
         }
-        let label = event
+        let label: std::borrow::Cow<'_, str> = event
             .tooltip
             .as_deref()
             .or(event.text.as_deref())
-            .unwrap_or("Event");
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-        if response.on_hover_text(label).clicked() {
+            .map_or_else(
+                || crate::localization::text(ui.ctx(), "Event").into(),
+                Into::into,
+            );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &*label));
+        if response.on_hover_text(&*label).clicked() {
             clicked.clone_from(&event.id);
         }
     }

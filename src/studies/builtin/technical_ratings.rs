@@ -97,13 +97,13 @@ impl RatingBasis {
 }
 
 /// Group of a component, in the order of the score outputs.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Group {
     MovingAverage,
     Oscillator,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Rule {
     Average,
     Rsi,
@@ -155,8 +155,18 @@ struct Component {
     study: Box<dyn Indicator>,
 }
 
+impl std::fmt::Debug for Component {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Component")
+            .field("group", &self.group)
+            .field("rule", &self.rule)
+            .field("warmup", &self.warmup)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Moving-average, oscillator and summary ratings from the votes of their components.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TechnicalRatings {
     fast: usize,
     medium: usize,

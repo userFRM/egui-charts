@@ -93,6 +93,21 @@ pub struct CalendarPanel {
     request: u64,
 }
 
+impl std::fmt::Debug for CalendarPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CalendarPanel")
+            .field("kind", &self.kind)
+            .field("range", &self.range)
+            .field("importance", &self.importance)
+            .field("countries", &self.countries)
+            .field("events", &self.events)
+            .field("error", &self.error)
+            .field("loading", &self.loading)
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for CalendarPanel {
     fn default() -> Self {
         Self::new()

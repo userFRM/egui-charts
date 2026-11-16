@@ -497,6 +497,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `SettingsStore` saves settings that hold fractional drawing defaults once instead of on every poll, and `flush` returns `true` again: serde_json's `float_roundtrip` feature is now enabled, so numbers read back exactly as written. Cargo enables the feature for every crate in the build that uses serde_json. ([#2953](https://github.com/userFRM/egui-charts/issues/2953))
+
 - `FootprintBar::empty` is public, so hosts can populate prepared rows and totals after the type became non-exhaustive. `Footprint::from_bars` still validates the completed aggregate. ([#3059](https://github.com/userFRM/egui-charts/issues/3059))
 
 - Footprint annotations reuse cached studies without comparing every price row on unchanged repaints, and recalculation no longer copies ungrouped rows first. ([#2569](https://github.com/userFRM/egui-charts/issues/2569))
@@ -1384,6 +1386,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `FootprintPage::bars` is now `FootprintBars`, with owned and shared variants. `FootprintPage::new` keeps the owned constructor; `from_shared` retains an immutable `FootprintSource`. Its borrowed `FootprintBarView` and `FootprintRows` let feeds keep native slices or compatible encoded row buffers without rebuilding completed price-level trees. Migration: code that reads `page.bars` as a `Vec` reads it with `page.bars.iter()`, which yields a `FootprintBarView` for either form; `FootprintPage::new` is unchanged. Built-in footprints, their statistics and annotations, and session-profile readers share the completeness rules. Profile drawings keep their labelled bar estimate for shared history; replay and independent trade studies still use raw executions. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `FootprintLevel` now has a documented `repr(C, align(8))` layout with compile-time checks for its size, alignment and field offsets. Hosts can use this contract when borrowing rows from compatible encoded buffers; byte conversion remains outside the library. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 

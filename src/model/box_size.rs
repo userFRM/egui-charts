@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Resolve from the loaded history when selecting the method, then keep the result while
 /// bars stream in. Reapply the parameters to explicitly recalculate from newer history.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum BoxSizeMethod {
     /// Use the chart type's explicit size in price units.
     #[default]
@@ -72,6 +73,7 @@ impl BoxSizeMethod {
 
 /// Input used to build Renko, Kagi and Line Break charts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum PriceBasedSource {
     /// Use each bar's close, including for Renko wick extremes.
     #[default]

@@ -79,6 +79,40 @@ pub struct AlertDialog {
     error: Option<String>,
 }
 
+impl std::fmt::Debug for AlertDialog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertDialog")
+            .field("config", &self.config)
+            .field("is_open", &self.is_open)
+            .field("alert", &self.alert)
+            .field("sources", &self.sources)
+            .field("watchlists", &self.watchlists)
+            .field("timezone", &self.timezone)
+            .field("account_timezone", &self.account_timezone)
+            .field("starts", &self.starts)
+            .field("start_date", &self.start_date)
+            .field("start_time", &self.start_time)
+            .field("expires", &self.expires)
+            .field("expiry_date", &self.expiry_date)
+            .field("expiry_time", &self.expiry_time)
+            .field("scheduled", &self.scheduled)
+            .field("schedule_zone", &self.schedule_zone)
+            .field("schedule_days", &self.schedule_days)
+            .field("schedule_windows", &self.schedule_windows)
+            .field("last_schedule", &self.last_schedule)
+            .field("editing_condition", &self.editing_condition)
+            .field("preset_name", &self.preset_name)
+            .field("preset_fields", &self.preset_fields)
+            .field("presets", &self.presets)
+            .field("unsaved_presets", &self.unsaved_presets)
+            .field("initial", &self.initial)
+            .field("pending", &self.pending)
+            .field("loaded", &self.loaded)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for AlertDialog {
     fn default() -> Self {
         Self::new()
@@ -647,7 +681,7 @@ impl AlertDialog {
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
                         (AlertFrequency::OncePerMinute, "Once per minute"),
                     ] {
-                        if matches!(self.alert.condition, AlertCondition::StrategyFills(_))
+                        if self.alert.condition.is_event()
                             && !matches!(value, AlertFrequency::Once | AlertFrequency::EveryTime)
                         {
                             continue;
@@ -819,8 +853,8 @@ impl AlertDialog {
             ui.end_row();
         });
         ui.separator();
-        let fills = matches!(self.alert.condition, AlertCondition::StrategyFills(_));
-        if !fills && !self.alert.additional_conditions.is_empty() {
+        let events = self.alert.condition.is_event();
+        if !events && !self.alert.additional_conditions.is_empty() {
             ui.label(l10n::text(
                 ui.ctx(),
                 "Every condition must be true together",
@@ -849,7 +883,7 @@ impl AlertDialog {
             .min(self.alert.additional_conditions.len());
         ui.push_id(("rule", self.editing_condition), |ui| {
             if self.editing_condition == 0 {
-                if !fills {
+                if !events {
                     let source_interval = self.alert.timeframe;
                     interval_picker(ui, &mut self.alert.timeframe, "Chart interval");
                     if self.alert.timeframe != source_interval
@@ -887,7 +921,7 @@ impl AlertDialog {
                 }
             }
         });
-        if !fills
+        if !events
             && ui
                 .add_enabled(
                     self.alert.additional_conditions.len() < 4,
@@ -1167,10 +1201,7 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
 ) {
     ui.add_enabled_ui(
-        !matches!(
-            condition,
-            AlertCondition::VolumeAboveAverage { .. } | AlertCondition::StrategyFills(_)
-        ),
+        !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
         |ui| source_picker(ui, "source", source, sources),
     );
     let level = condition.level().unwrap_or(0.0);
@@ -1245,10 +1276,11 @@ pub(crate) fn rule_form(
         .iter()
         .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
         .map(|(_, name)| *name)
-        .unwrap_or(if matches!(condition, AlertCondition::StrategyFills(_)) {
-            "Strategy fills"
-        } else {
-            "Condition"
+        .unwrap_or(match condition {
+            AlertCondition::StrategyFills(_) => "Strategy fills",
+            AlertCondition::DetectorSignals(_) => "Detector signals",
+            AlertCondition::CustomEvents(_) => "Custom events",
+            _ => "Condition",
         });
     egui::ComboBox::from_id_salt("condition")
         .selected_text(l10n::text(ui.ctx(), selected))
@@ -1272,6 +1304,14 @@ pub(crate) fn rule_form(
         AlertCondition::StrategyFills(run) => {
             ui.text_edit_singleline(run)
                 .accessible_name(l10n::text(ui.ctx(), "Strategy run"));
+        }
+        AlertCondition::DetectorSignals(detector) => {
+            ui.text_edit_singleline(detector)
+                .accessible_name(l10n::text(ui.ctx(), "Detector"));
+        }
+        AlertCondition::CustomEvents(source) => {
+            ui.text_edit_singleline(source)
+                .accessible_name(l10n::text(ui.ctx(), "Event source"));
         }
         AlertCondition::Crossing(v)
         | AlertCondition::CrossingUp(v)

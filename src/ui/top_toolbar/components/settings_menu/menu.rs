@@ -18,6 +18,7 @@ use egui::{Align2, Context, Id, Pos2, Rect, Response, Ui};
 // ============================================================================
 
 /// Quick settings popup menu for chart configuration
+#[derive(Debug)]
 pub struct SettingsMenu {
     /// Current chart settings
     pub settings: ChartSettings,

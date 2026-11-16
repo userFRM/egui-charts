@@ -193,6 +193,7 @@ pub enum TimeframeAction {
 /// Host-owned interval settings. Save with the user's settings and restore with
 /// [`TimeframeSelector::set_preferences`]. The selector owns no storage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct TimeframePreferences {
     /// Pinned intervals, including those temporarily unavailable from a source.
     #[serde(default)]
@@ -206,6 +207,7 @@ pub struct TimeframePreferences {
 }
 
 /// Timeframe selector
+#[derive(Debug)]
 pub struct TimeframeSelector {
     /// Currently selected timeframe
     pub current: Timeframe,

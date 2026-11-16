@@ -11,7 +11,7 @@ use egui::Color32;
 /// Annualisation takes the bars per year, 252 by default (daily bars), from the trading days
 /// input.
 /// A full `period` of returns from positive closes is required before a value exists.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ZeroTrendVol {
     period: usize,
     /// Trading days per year the result is annualized over, one bar per day (252 for stocks, 365

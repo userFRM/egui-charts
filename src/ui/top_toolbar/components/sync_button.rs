@@ -11,6 +11,7 @@ use crate::ui::multi_chart::ChartSyncOptions;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 /// Sync options button widget
+#[derive(Debug)]
 pub struct SyncButton {
     /// Is dropdown open
     is_open: bool,

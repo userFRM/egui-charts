@@ -10,7 +10,7 @@ use crate::theme::Theme;
 use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
 use crate::widget::SeriesId;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum Tab {
     #[default]
     Inputs,
@@ -19,7 +19,8 @@ enum Tab {
 }
 
 /// A complete edit for the host to apply to the original study id.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StudyEdit {
     /// Stable id of the applied study.
     pub id: SeriesId,
@@ -31,7 +32,7 @@ pub struct StudyEdit {
 
 /// Inputs, Style and Visibility editor for an applied study. Closing or cancelling discards
 /// staged values. Chart-aware previews retain an opening settings snapshot for restoration.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IndicatorSettingsDialog {
     edit: Option<StudyEdit>,
     inputs: Vec<StudyInput>,

@@ -54,7 +54,7 @@ const COMPONENTS: [(usize, usize, f64); 12] = [
 ];
 
 /// Pring's Special K and its doubly smoothed signal line, in a separate pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PringsSpecialK {
     signal_lengths: [usize; 2],
     values: IndicatorValues,

@@ -53,6 +53,23 @@ pub enum FolderSync {
 /// completion state are left out, since the anchors are stored as
 /// timestamps by [`persistence`](crate::drawings::persistence). A field added
 /// later needs `#[serde(default)]`, so that saved version 2 files still load.
+///
+/// ```
+/// use egui_charts::drawings::{
+///     ArrowStyle, Drawing, DrawingToolType, FibonacciLevel, GhostFeedConfig,
+/// };
+///
+/// let mut arrow = Drawing::new(1, DrawingToolType::TrendLine);
+/// arrow.arrow_end_style = ArrowStyle::Arrow;
+/// let mut feed = GhostFeedConfig::default();
+/// feed.noise_ticks = 2.0;
+/// let mut ghost = Drawing::new(2, DrawingToolType::GhostFeed);
+/// ghost.ghost_feed = Some(feed);
+/// let mut fib = Drawing::new(3, DrawingToolType::FibonacciRetracement);
+/// if let Some(config) = &mut fib.fib_config {
+///     config.levels.push(FibonacciLevel::new(1.272, "1.272", [41, 98, 255, 255]));
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // The trait impls below wrap the derived ones.
 #[serde(remote = "Self")]
@@ -805,7 +822,7 @@ impl Drawing {
     /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
     /// they are linear in price except on a logarithmic scale.
     /// Fork levels use two stable slots per configured level (first and second line), with
-    /// only the first slot used by a median. Regression levels require
+    /// only the first slot used by a median. Regression and anchored VWAP levels require
     /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
     /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
     /// non-positive price on a logarithmic scale.

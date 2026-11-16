@@ -44,6 +44,7 @@ pub enum ButtonStyle {
 /// }
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct ButtonContent<'a> {
     icon: &'a Icon,
     label: Option<String>,

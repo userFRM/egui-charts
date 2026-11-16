@@ -58,7 +58,7 @@ mod watchlist;
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
     AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertSourceName, AlertStatus,
-    AlertStudy, NotificationSchedule, NotificationWindow,
+    AlertStudy, CustomAlertEvent, NotificationSchedule, NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
@@ -143,7 +143,7 @@ pub use trading::{
     TimeInForce, TradingRules,
 };
 
-pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};
+pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
 mod tests {
