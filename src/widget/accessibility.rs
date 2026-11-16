@@ -44,8 +44,10 @@ impl Chart {
             .filter(|index| index.is_finite() && *index >= 0.0)
             .map(|index| index.round() as usize)
             .filter(|index| *index < bars.len());
-        if let Some(index) = hovered.or_else(|| bars.iter().rposition(|bar| !bar.is_whitespace())) {
-            let bar = &bars[index];
+        // The values the status line shows: the drawn candle on a Heikin Ashi chart.
+        if let Some(index) = hovered.or_else(|| bars.iter().rposition(|bar| !bar.is_whitespace()))
+            && let Some((bar, _)) = self.readout_bar_at(index)
+        {
             let _ = write!(
                 text,
                 ". {}: {}",
@@ -323,5 +325,37 @@ mod tests {
                 l10n::clear_translator(&harness.ctx);
             }
         }
+    }
+
+    /// The summary reads the candle a Heikin Ashi chart draws, as its status line does, and no
+    /// volume on a chart type that hides it.
+    #[test]
+    fn summary_reads_the_drawn_values() {
+        use super::super::test_frames::{chart, frame};
+        use crate::model::ChartType;
+        let ctx = egui::Context::default();
+        let summary = |lows: &[f64], highs: &[f64], kind| {
+            let mut chart = chart(lows, highs);
+            chart.set_chart_type(kind);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+                .accessibility_info(&ctx, true)
+                .current_text_value
+                .unwrap()
+        };
+        // Bars alternate 150 to 151 and 146.5 to 147.5, so the averaged close of bar 99 is
+        // (146.5 + 147.5 + 146.5 + 147.5) / 4 = 147 and its open, its high, settles at
+        // (444.5 / 3 + 150.5) / 2 = 149.33.
+        let heikin = summary(&[150.0, 146.5], &[151.0, 147.5], ChartType::Heikin);
+        assert!(
+            heikin.contains(". Open 149.33, high 149.33, low 146.50, close 147.00, volume 1"),
+            "{heikin}"
+        );
+        // Closes of 100, 103, 106 and 109 in turn build bricks, which hide volume.
+        let renko = summary(&[100.0], &[100.0, 103.0, 106.0, 109.0], ChartType::Renko);
+        assert!(
+            renko.contains(". Open ") && !renko.contains("volume"),
+            "{renko}"
+        );
     }
 }
