@@ -5989,6 +5989,94 @@ fn market_replay_order_flow_studies_follow_the_cursor() {
     );
 }
 
+/// Leaving a market replay gives order-flow studies the executions the live feed delivered, also
+/// while the feed stays paused or a candle replay starts before the next frame, and leaves a chart
+/// without a feed none of the recording's. The per-bar delta is each buy's size. The feed bought 2
+/// at 10 s and 3 at 70 s: [2, 3] on one-minute bars opening at 0 and 60 s, and on one-trade bars.
+/// The recording bought 1 at 70 s: [1] over its one bar. A candle replay at 90 s shows the one
+/// completed minute, [2]. Rows are (chart, feed paused by the host before the replay, candle
+/// replay started right after leaving). On one-trade bars the replay's sink allocated what the
+/// studies hold, and the live executions replace that too.
+#[cfg(feature = "studies")]
+#[test]
+fn leaving_a_market_replay_restores_the_live_executions() {
+    use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+    use crate::model::OrderSide::Buy;
+    use crate::studies::OrderFlowStudy;
+    let start = DateTime::UNIX_EPOCH;
+    let second = |seconds| start + TimeDelta::seconds(seconds);
+    // A paused driver at 75 s over buys of `size` at `seconds`.
+    let driver = |buys: &[(i64, f64)]| {
+        let events = buys
+            .iter()
+            .enumerate()
+            .map(|(at, &(seconds, size))| {
+                let fill = Tick::new(second(seconds), 100.0, size, Some(Buy)).with_id(at as u64);
+                ReplayEvent::new("A", second(seconds), at as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let instruments = vec![Instrument::new("A").with_tick_size(1.0)];
+        let replay = ReplayDriver::new(events, instruments).unwrap();
+        replay.set_speed(0.0).unwrap();
+        replay.seek(second(75));
+        Arc::new(replay)
+    };
+    let fed_live = |timeframe: Timeframe| {
+        ChartBuilder::new()
+            .with_feed(driver(&[(10, 2.0), (70, 3.0)]))
+            .with_symbol("A")
+            .with_timeframe(timeframe)
+            .build()
+    };
+    let without_feed = || {
+        let bar = |seconds| Bar::new(second(seconds), 100.0, 100.0, 100.0, 100.0, 1.0);
+        let mut chart = Chart::new(BarData::from_bars(vec![bar(0), bar(60)]));
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart
+    };
+    let mut observed = Vec::new();
+    for (mut chart, paused, candle) in [
+        (fed_live(Timeframe::Min1), true, false),
+        (fed_live("1t".parse().unwrap()), true, false),
+        (fed_live(Timeframe::Min1), false, true),
+        (without_feed(), false, false),
+    ] {
+        chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+        let mut frames = Frames::new();
+        let mut deltas = |chart: &mut Chart| {
+            for _ in 0..8 {
+                frames.run(chart);
+            }
+            let bars = chart.bars(SeriesId::MAIN).len();
+            let study = chart.indicators().next().unwrap().1;
+            (0..bars)
+                .map(|bar| study.values().value(0, bar))
+                .collect::<Vec<_>>()
+        };
+        let before = deltas(&mut chart);
+        chart.set_feed_paused(paused);
+        chart.set_market_replay(Some(driver(&[(70, 1.0)])));
+        let replayed = deltas(&mut chart);
+        chart.set_market_replay(None);
+        if candle {
+            chart.set_replay_time(Some(second(90)));
+        }
+        observed.push((before, replayed, deltas(&mut chart)));
+    }
+    let live = vec![Some(2.0), Some(3.0)];
+    let replayed = vec![Some(1.0)];
+    assert_eq!(
+        observed,
+        [
+            (live.clone(), replayed.clone(), live.clone()),
+            (live.clone(), replayed.clone(), live.clone()),
+            (live, replayed.clone(), vec![Some(2.0)]),
+            (vec![None, None], replayed, vec![None, None]),
+        ]
+    );
+}
+
 /// Answers every request at once with bars closing at the symbol's base plus their index:
 /// AAPL from 100, MSFT from 40. It records the history requests.
 #[derive(Default)]
