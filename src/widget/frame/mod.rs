@@ -3338,11 +3338,11 @@ impl Chart {
                     .rposition(|bar| !bar.is_whitespace())
                     .unwrap_or(shown.len().saturating_sub(1))
             });
-            if let Some(bar) = self.state.shown().get(selected) {
+            if let Some((bar, previous_close)) = self.readout_bar_at(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]
                 let order_quantity = self.order_quantity.take();
-                let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
+                let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
                     .iter()
@@ -3401,9 +3401,7 @@ impl Chart {
                 legend.background = Some(&background);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
-                legend.previous_close =
-                    crate::model::last_with_value(&self.state.shown()[..selected])
-                        .map(|bar| bar.close);
+                legend.previous_close = previous_close;
                 legend.bar_index = selected;
                 legend.studies = self.rendered_studies().indicators();
                 legend.show_volume =
@@ -3704,8 +3702,9 @@ impl Chart {
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                     && Some(visible_data[local_idx].time) == crosshair_time
                     && !visible_data[local_idx].is_whitespace()
+                    && let Some((candle, previous_close)) =
+                        self.readout_bar_at(start_idx + local_idx)
                 {
-                    let candle = &visible_data[local_idx];
                     if tooltip_options.on_long_press {
                         let x = coords.idx_to_x(start_idx + local_idx);
                         rendering::draw_dashed_line(
@@ -3746,9 +3745,8 @@ impl Chart {
                     rendering::render_tooltip_with_options(
                         &price_ctx,
                         hover_pos,
-                        candle,
-                        crate::model::last_with_value(&self.state.shown()[..start_idx + local_idx])
-                            .map(|bar| bar.close),
+                        &candle,
+                        previous_close,
                         &tooltip_options,
                         &colors,
                         &price_map,

@@ -36,13 +36,11 @@ impl DataWindowInfo {
         if let Some(instrument) = chart.instrument() {
             info = info.with_instrument(instrument);
         }
-        if let Some(bar) = bars.get(index) {
+        if let Some((bar, previous_close)) = chart.readout_bar_at(index) {
             info = info
                 .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
                 .with_timestamp(chart.format_time(bar.time))
-                .with_prev_close(
-                    crate::model::last_with_value(&bars[..index]).map_or(bar.open, |bar| bar.close),
-                );
+                .with_prev_close(previous_close.unwrap_or(bar.open));
             info.studies = chart.study_values_at(index);
         }
         info.with_chart_formatters(chart)

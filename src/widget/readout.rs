@@ -49,6 +49,28 @@ impl Chart {
         self.indicator_source_request.take()
     }
 
+    /// The bar the status line, tooltip and data window describe at a rendered index, with the
+    /// close of the bar with a value before it: the drawn candle on a Heikin Ashi chart, whose
+    /// change is measured between averaged closes, else the rendered bar.
+    pub(crate) fn readout_bar_at(&self, index: usize) -> Option<(crate::model::Bar, Option<f64>)> {
+        let readout = |bars: &[crate::model::Bar]| {
+            let bar = bars.get(index)?.clone();
+            Some((
+                bar,
+                crate::model::last_with_value(&bars[..index]).map(|bar| bar.close),
+            ))
+        };
+        if self.chart_type == crate::model::ChartType::Heikin && !self.state.data().is_empty() {
+            readout(
+                &self
+                    .heikin_ashi
+                    .bars(&self.state.data().bars, self.state.revision()),
+            )
+        } else {
+            readout(self.state.shown())
+        }
+    }
+
     /// The first visible output with a value at a displayed bar index. Price-based charts
     /// read element study values, as the legend does. The output number is stable within
     /// the study and can be used by host alert services.

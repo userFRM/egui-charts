@@ -1151,6 +1151,54 @@ fn added_series_row_follows_the_held_readout() {
     }
 }
 
+/// On a Heikin Ashi chart the status line, tooltip and data window describe the drawn candle.
+/// Bars alternate between open 150, close 151 and open 146.5, close 147.5, with lows at the opens
+/// and highs at the closes, so the averaged closes alternate between 150.5 and 147. The averaged
+/// opens settle where e = (o + 147) / 2 and o = (e + 150.5) / 2: bar 50 opens at
+/// 444.5 / 3 = 148.17, its low, and closes at 150.50, 3.50 or 2.38% above the averaged 147 before
+/// it. Studies keep the source closes: SMA(2) at bar 50 is (147.5 + 151) / 2 = 149.25.
+#[test]
+fn heikin_ashi_readouts_describe_the_drawn_candle() {
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[150.0, 146.5], &[151.0, 147.5]);
+    chart.set_chart_type(crate::model::ChartType::Heikin);
+    #[cfg(feature = "studies")]
+    let average = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let map = chart.get_chart_mapping();
+    let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+    let texts: Vec<_> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+        .into_iter()
+        .filter_map(|shape| match shape {
+            Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    for expected in [
+        "O 148.17",
+        "H 151.00",
+        "L 148.17",
+        "C 150.50",
+        "+3.50 (+2.38%)",
+        // The tooltip's open and close.
+        "148.17",
+        "150.50",
+    ] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "{expected}: {texts:?}"
+        );
+    }
+    #[cfg(feature = "studies")]
+    assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
+    #[cfg(feature = "ui")]
+    {
+        let data = crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(&chart);
+        assert_eq!((data.close, data.prev_close), (150.5, 147.0));
+        assert!((data.open - 444.5 / 3.0).abs() < 1e-9);
+    }
+}
+
 /// Touch holds respect their delay, move without panning, and exit by release or a later tap.
 /// Short taps, cancelled contacts and a pan started before the delay cannot latch a readout.
 #[test]
