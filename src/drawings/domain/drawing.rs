@@ -279,7 +279,7 @@ pub struct Drawing {
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
-    /// Band width of the regression trend tool
+    /// Source, bounds, line pattern and correlation precision of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
     /// Bands of the anchored VWAP. Older drawings use the defaults.
     #[serde(default)]
