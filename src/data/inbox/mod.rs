@@ -16,7 +16,7 @@ use super::depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig, Sample
 use super::merge::Origin;
 use super::trades::Trades;
 use super::{FeedError, FeedStatus, OrderQueue, SubscriptionId};
-use crate::model::{Bar, BarClock, Level1Quote, OrderBook};
+use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Placement};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -53,6 +53,8 @@ struct State {
 struct Live {
     symbol: String,
     clock: BarClock,
+    /// The bar of the last trade, quote or heartbeat placed, kept while later ones share its date.
+    placement: Placement,
     /// Open of the newest slot pushed, kept across drains: trades of older slots are late.
     forming: Option<DateTime<Utc>>,
     /// Feed clock minus system clock, as last reported; zero until then.

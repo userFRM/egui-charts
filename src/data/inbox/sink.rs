@@ -7,7 +7,7 @@ use crate::data::depth_history::Sampler;
 use crate::data::merge::{Origin, fold, valid};
 use crate::data::trades::{self, Trades};
 use crate::data::{FeedError, FeedStatus, OrderEvent, OrderQueue, RestingOrder, SubscriptionId};
-use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Tick};
+use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Placement, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::btree_map::Entry;
 use std::collections::{HashSet, VecDeque};
@@ -117,6 +117,7 @@ impl Inbox {
         let live = Live {
             symbol,
             clock,
+            placement: Placement::default(),
             forming: None,
             offset: TimeDelta::zero(),
             count_bar: None,
@@ -361,7 +362,7 @@ impl Sink {
             {
                 return sampled;
             }
-            let open = live.clock.instant_open(now);
+            let open = live.placement.open(&live.clock, now);
             if live.ahead(open, system) {
                 return false;
             }
@@ -467,13 +468,14 @@ impl Sink {
             if quote.symbol != live.symbol {
                 return;
             }
+            let open = live.placement.open(&live.clock, quote.ts);
             if !quote.bid.is_finite()
                 || !quote.ask.is_finite()
                 || !quote.bid_size.is_finite()
                 || !quote.ask_size.is_finite()
                 || quote.bid_size < 0.0
                 || quote.ask_size < 0.0
-                || live.ahead(live.clock.instant_open(quote.ts), system)
+                || live.ahead(open, system)
             {
                 live.updates.error =
                     Some(FeedError::InvalidData("invalid best bid/ask quote".into()));
@@ -737,7 +739,7 @@ impl Live {
         {
             return false;
         }
-        let target = self.clock.instant_open(now);
+        let target = self.placement.open(&self.clock, now);
         let limit = MAX_PENDING_BARS
             .saturating_add(self.rebuilt_bars)
             .min(MAX_QUIET_BARS);
@@ -811,7 +813,7 @@ impl Live {
             }
             return;
         }
-        let (open, price) = (live.clock.instant_open(tick.ts), tick.price);
+        let (open, price) = (live.placement.open(&live.clock, tick.ts), tick.price);
         let ticks = Bar::new(open, price, price, price, price, tick.size);
         let ahead = live.ahead(open, system);
         let updates = &mut live.updates;

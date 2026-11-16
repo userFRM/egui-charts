@@ -2,7 +2,7 @@
 
 use super::OrderFilter;
 use super::footprint::{Footprint, FootprintBar};
-use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, OrderSide, Tick};
+use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, OrderSide, Placement, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -363,6 +363,8 @@ struct State {
     book_rows: usize,
     tick_size: Option<f64>,
     replay: Option<Replay>,
+    /// The bar of the last update placed by time, kept while later ones share its date.
+    placement: Placement,
 }
 
 /// A bounded, thread-safe source shared by a stream study and its feed subscription.
@@ -709,7 +711,8 @@ impl OrderFlowInput {
                 state.add_trade(trade, bar.time, size, i == 0);
             }
         } else {
-            state.add_trade(trade, clock.instant_open(trade.ts), trade.size, true);
+            let open = state.placement.open(clock, trade.ts);
+            state.add_trade(trade, open, trade.size, true);
         }
     }
 
@@ -1291,11 +1294,11 @@ impl State {
         self.reset_revision.max(self.dropped_revision)
     }
 
-    fn open(&self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    fn open(&mut self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
         if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             self.trade_bars.forming
         } else {
-            Some(clock.instant_open(time))
+            Some(self.placement.open(clock, time))
         }
     }
 
@@ -1414,6 +1417,7 @@ impl State {
             book_rows: 0,
             tick_size: None,
             replay: None,
+            placement: Placement::default(),
         }
     }
 
@@ -1538,7 +1542,7 @@ impl State {
         if !time_based(clock) || self.last.is_some_and(|last| time < last) {
             return;
         }
-        let open = clock.instant_open(time);
+        let open = self.placement.open(clock, time);
         let old = match levels {
             None => self.books.remove(&open),
             Some(levels) => {

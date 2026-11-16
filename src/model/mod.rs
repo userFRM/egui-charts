@@ -78,6 +78,7 @@ pub use chart_type::{
     ProfileSession, TradeProfileSettings,
 };
 pub use clock::BarClock;
+pub(crate) use clock::Placement;
 pub use color::ColorType;
 pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings"))]

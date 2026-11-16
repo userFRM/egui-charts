@@ -4,6 +4,7 @@ use super::{Timeframe, TimezoneId};
 use chrono::{
     DateTime, Datelike, LocalResult, NaiveDate, NaiveTime, Offset, TimeDelta, TimeZone, Utc,
 };
+use std::ops::Range;
 
 const DAY_MS: i64 = 86_400_000;
 /// 1970-01-05, the first Monday after the Unix epoch.
@@ -303,6 +304,19 @@ impl BarClock {
             .unwrap_or_else(|| self.bar_open(t))
     }
 
+    /// The instants around `t` that share its trading date on a daily or longer clock with a
+    /// session, and the open of their bar: from the date's open to the next date's, at most to
+    /// the end of `t`'s UTC day, through which the session lists every open. `None` elsewhere
+    /// and before the first open listed.
+    fn trading_span(&self, t: DateTime<Utc>) -> Option<(Range<DateTime<Utc>>, DateTime<Utc>)> {
+        let opens = self.date_session()?.opens([t]);
+        let n = opens.partition_point(|(open, _)| *open <= t);
+        let (from, date) = *opens.get(n.checked_sub(1)?)?;
+        let day_end = DateTime::from_timestamp((t.timestamp().div_euclid(86_400) + 1) * 86_400, 0)?;
+        let until = opens.get(n).map_or(day_end, |(next, _)| day_end.min(*next));
+        Some((from..until, self.open_on_date(date)?))
+    }
+
     /// First instant of the bar that `t` joins by [`instant_open`](Self::instant_open). On a
     /// daily or longer clock with a session it is the open of the bar's first trading date, which
     /// can come before the bar's own time.
@@ -383,6 +397,32 @@ impl BarClock {
     /// inside it.
     pub fn same_bar(&self, a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
         self.bar_open(a) == self.bar_open(b)
+    }
+}
+
+/// The bar that [`BarClock::instant_open`] gave a recent update, with its clock and the instants
+/// that share the update's trading date, so that a stream of trades, quotes and heartbeats finds
+/// the session once per date rather than once per update.
+#[derive(Default)]
+pub(crate) struct Placement(Option<(BarClock, Range<DateTime<Utc>>, DateTime<Utc>)>);
+
+impl Placement {
+    /// [`BarClock::instant_open`] of `t` on `clock`.
+    pub(crate) fn open(&mut self, clock: &BarClock, t: DateTime<Utc>) -> DateTime<Utc> {
+        if clock.date_session().is_none() {
+            return clock.bar_open(t);
+        }
+        if let Some((placed, span, open)) = &self.0
+            && span.contains(&t)
+            && placed == clock
+        {
+            return *open;
+        }
+        let Some((span, open)) = clock.trading_span(t) else {
+            return clock.instant_open(t);
+        };
+        self.0 = Some((clock.clone(), span, open));
+        open
     }
 }
 
