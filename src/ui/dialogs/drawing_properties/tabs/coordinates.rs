@@ -22,6 +22,9 @@ pub struct CoordinatePoint {
     /// Fractional bar index, used when no timestamp is available.
     pub bar_index: String,
     original: Option<(ChartPoint, Option<DateTime<Utc>>)>,
+    /// The drawing's line is fitted to the bars between its points, so their prices do not
+    /// move it.
+    fitted: bool,
 }
 
 /// Coordinates staged independently of the live drawing until Apply.
@@ -30,9 +33,6 @@ pub struct CoordinatesState {
     /// One entry for every anchor of the selected drawing; none for a freehand stroke, which
     /// moves only as a whole.
     pub points: Vec<CoordinatePoint>,
-    /// The drawing's line is fitted to the bars between its points, so their prices do not
-    /// move it.
-    fitted: bool,
 }
 
 impl CoordinatesState {
@@ -55,10 +55,10 @@ impl CoordinatesState {
                         time: time
                             .map_or_else(String::new, |t| t.format("%H:%M:%S%.f").to_string()),
                         original: Some((original, time)),
+                        fitted: drawing.tool_type == DrawingToolType::RegressionTrend,
                     }
                 })
                 .collect(),
-            fitted: drawing.tool_type == DrawingToolType::RegressionTrend,
         }
     }
 
@@ -141,7 +141,7 @@ impl CoordinatesTab {
                 "Open a drawing to edit its coordinates.",
             ));
         }
-        if state.fitted {
+        if state.points.first().is_some_and(|point| point.fitted) {
             ui.label(l10n::text(
                 ui.ctx(),
                 "The line is fitted to the bars between the points; their prices do not move it.",
