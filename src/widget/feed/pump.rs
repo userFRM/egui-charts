@@ -344,6 +344,7 @@ impl Chart {
             let clock = &link.clock;
             let lost_before = link.trades.lost_until();
             let mut evicted = false;
+            let mut unplaced = false;
             let fold = &mut |trade: &Tick, added| {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                 evicted |= !added;
@@ -355,7 +356,7 @@ impl Chart {
                             .prepared_before()
                             .is_none_or(|before| trade.ts >= before)
                     {
-                        let _ = flow.live.push(trade);
+                        unplaced |= flow.live.push(trade).is_err();
                     }
                     if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
                         for (input, _) in inputs {
@@ -371,11 +372,20 @@ impl Chart {
             {
                 flow.live.drop_through(lost, link.trades.iter());
             }
-            // Trades before the oldest held one may never have arrived.
+            // Trades before the oldest held one may never have arrived, and a streamed trade
+            // stamped before held ones joins its bar in time order.
             if let Some(flow) = &mut link.footprint
                 && flow.live.prepared_before().is_some()
             {
-                flow.live.refresh_prepared_gap(&link.trades);
+                if unplaced {
+                    flow.live.rebuild_prepared(&link.trades);
+                } else {
+                    flow.live.refresh_prepared_gap(&link.trades);
+                }
+            } else if unplaced {
+                link.footprint = link
+                    .footprint(None, &self.state.data().bars)
+                    .map(crate::data::FootprintState::new);
             } else if let (Some(first), Some(flow)) =
                 (link.unconfirmed_start(), &mut link.footprint)
             {
@@ -896,23 +906,14 @@ impl Chart {
                     .before
                     .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
                 until(link.trades.iter().next().map(|t| t.ts)),
-                until(link.trades.live().next().map(|t| t.ts)),
+                // A live trade stamped inside the retained tape marks no boundary.
+                until(
+                    (link.trades.live())
+                        .find(|t| unproven.1.is_none_or(|tape| t.ts >= tape))
+                        .map(|t| t.ts),
+                ),
             ))
         });
-        let ambiguous_retained = link
-            .trades
-            .retained_until()
-            .filter(|at| prepared_before.is_some_and(|before| *at >= before))
-            .filter(|at| {
-                let ids = link
-                    .trades
-                    .iter()
-                    .filter(|t| t.ts == *at)
-                    .all(|t| t.id.is_some());
-                page.trades
-                    .iter()
-                    .any(|t| t.ts == *at && !(ids && t.id.is_some()))
-            });
         let mut tail_changed = false;
         let mut changed = false;
         let fold = &mut |trade: &Tick, added| {
@@ -945,12 +946,6 @@ impl Chart {
                     flow.live
                         .cover_missing(from.max(retained), end.min(live.unwrap_or(end)));
                 }
-            }
-            if let Some(at) = ambiguous_retained {
-                let after = at
-                    .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
-                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
-                flow.live.add_missing(at, after);
             }
             if tail_changed {
                 flow.live.rebuild_prepared(&link.trades);
