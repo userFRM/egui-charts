@@ -224,6 +224,36 @@ impl Chart {
         Ok(())
     }
 
+    /// Replace a regression trend's settings (source, upper and lower bounds and whether each is
+    /// a deviation or the extreme price, fitted line pattern and correlation precision) as one
+    /// undoable edit. Unknown ids, locked drawings and other tools change nothing.
+    pub fn set_regression_trend_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::RegressionTrendConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::RegressionTrend {
+            return Err(DrawingError::Invalid("Drawing is not a regression trend"));
+        }
+        if drawing.regression_trend.unwrap_or_default() != config {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.regression_trend = Some(config));
+            });
+        }
+        Ok(())
+    }
+
     /// Replace a position drawing's statistics, account currency and quantity precision in
     /// one undoable edit. A different currency needs a host-supplied conversion rate before
     /// monetary statistics can be calculated. Invalid settings and locked drawings change nothing.
@@ -1037,6 +1067,62 @@ mod tests {
         assert!(chart.set_vwap_config(7, VwapConfig::default()).is_err());
         chart.drawings_mut().drawings[0].tool_type = DrawingToolType::AnchoredVWAP;
         assert_eq!(chart.drawings().drawings[0].vwap, Some(edited));
+        assert!(chart.undo());
+        assert!(!chart.can_undo());
+    }
+
+    /// Hosts set a regression trend's source, bounds, line pattern and precision in one history
+    /// entry, which templates and saved drawings carry; locked, missing and other drawings
+    /// change nothing.
+    #[test]
+    fn regression_trend_settings_are_undoable_and_saved() {
+        use crate::drawings::{DrawingTemplate, RegressionTrendConfig};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        let mut drawing = Drawing::new(7, DrawingToolType::RegressionTrend);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        let mut edited = RegressionTrendConfig::default()
+            .with_deviations(1.5, 3.0)
+            .and_then(|config| config.with_precision(Some(4)))
+            .unwrap();
+        edited.use_upper = false;
+        edited.source = crate::model::PriceSource::HL2;
+        edited.line_style = crate::model::LineStyle::Dotted;
+        chart.set_regression_trend_config(7, edited).unwrap();
+        assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].regression_trend, None);
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        // An unchanged assignment does not create a second history entry.
+        chart.set_regression_trend_config(7, edited).unwrap();
+        let template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
+        let mut peer = Drawing::new(8, DrawingToolType::RegressionTrend);
+        template.apply_to(&mut peer).unwrap();
+        assert_eq!(peer.regression_trend, Some(edited));
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        let mut restored = Chart::new(BarData::default());
+        restored.load_drawings(&saved).unwrap();
+        assert_eq!(
+            restored.drawings().drawings[0].regression_trend,
+            Some(edited)
+        );
+        let default = RegressionTrendConfig::default();
+        chart.drawings_mut().drawings[0].locked = true;
+        assert_eq!(
+            chart.set_regression_trend_config(7, default),
+            Err(DrawingError::Locked(7))
+        );
+        assert_eq!(
+            chart.set_regression_trend_config(77, default),
+            Err(DrawingError::UnknownDrawing(77))
+        );
+        chart.drawings_mut().drawings[0].locked = false;
+        chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
+        assert!(chart.set_regression_trend_config(7, default).is_err());
+        chart.drawings_mut().drawings[0].tool_type = DrawingToolType::RegressionTrend;
+        assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());
         assert!(!chart.can_undo());
     }
