@@ -1783,7 +1783,9 @@ fn bars_across_resumes_and_interval_changes_complete_with_every_execution() {
                         let link = chart.feed_link.as_ref().unwrap();
                         let flow = link.footprint.as_ref().unwrap();
                         assert_eq!(
-                            flow.view().complete_bar_at(at(*second)).map(|bar| bar.unknown),
+                            flow.view()
+                                .complete_bar_at(at(*second))
+                                .map(|bar| bar.unknown),
                             if ids { *with } else { *without },
                             "{label}, ids {ids}, {second} s"
                         );
