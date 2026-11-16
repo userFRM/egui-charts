@@ -2145,6 +2145,11 @@ mod tests {
                     "extend_left":false,"extend_right":false,"reverse":false,
                     "levels_as_percent":false,"show_prices":false,"level_width":3.0
                 })).unwrap());
+                if tool == Tool::FibonacciSpeedFan {
+                    // A fan placed now has its own time levels; older fans keep their saved look.
+                    let config = drawing.fib_config.as_mut().unwrap();
+                    config.time_levels = Some(config.levels.clone());
+                }
                 let mut output =
                     egui::Context::default().run_ui(egui::RawInput::default(), |ui| match tool {
                         Tool::FibonacciTimeZones => {
