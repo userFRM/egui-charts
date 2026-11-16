@@ -11,6 +11,7 @@ use crate::icons::{Icon, icons};
 use crate::ui::drawing_toolbar::icons as toolbar_icons;
 
 /// Patterns category implementation
+#[derive(Debug)]
 pub struct PatternsCategory;
 
 impl ToolCategory for PatternsCategory {

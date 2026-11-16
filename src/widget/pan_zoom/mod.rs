@@ -130,7 +130,14 @@ impl Chart {
             && !contacts
             && let Some(origin) = origin
         {
-            gestures.zooms[1] = Some((response.drag_delta().y, origin.y));
+            // The axis also senses clicks, so the movement until the drag is recognised comes
+            // with its first frame.
+            let delta = if response.drag_started() {
+                response.total_drag_delta().unwrap_or_default()
+            } else {
+                response.drag_delta()
+            };
+            gestures.zooms[1] = Some((delta.y, origin.y));
         }
         gestures.reset = options.axis_double_click_reset.price
             && response.double_clicked()
@@ -526,7 +533,12 @@ impl Chart {
                     && !self.in_other_pane(origin)
                 {
                     let map = self.last_price_map;
-                    let dy = response.drag_delta().y;
+                    // The chart also senses clicks, as on the price axis.
+                    let dy = if response.drag_started() {
+                        response.total_drag_delta().unwrap_or_default().y
+                    } else {
+                        response.drag_delta().y
+                    };
                     let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);
                     let range = self.state.price_scale().range();
                     self.state
@@ -1973,23 +1985,24 @@ mod tests {
     }
 
     /// Zoom speed must not depend on how many frames a drag spans, and the price that was
-    /// grabbed stays at its height.
+    /// grabbed stays at its height. In 20 frames of 5 points the first stays within the 6 point
+    /// click distance, so the drag is recognised only on the second.
     #[test]
     fn price_axis_drag_zoom_is_frame_independent() {
         for left in [false, true] {
-            let (one, ten) = (drag_price_axis(1, left), drag_price_axis(10, left));
+            let (one, slow) = (drag_price_axis(1, left), drag_price_axis(20, left));
             let span = one.1 - one.0;
             // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
             assert!(span > 18.0, "1 frame: {one:?}");
             assert!(
-                (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
-                "1 frame: {one:?}, 10 frames: {ten:?}"
+                (one.0 - slow.0).abs() < span * 1e-9 && (one.1 - slow.1).abs() < span * 1e-9,
+                "1 frame: {one:?}, 20 frames: {slow:?}"
             );
         }
         // The axis of an added series showing 90..110, grabbed a quarter of the way down at 105:
         // 100 points down widen the range by e^(100 / height), a quarter of it above 105.
         let key = crate::model::SeriesScale::Separate(1);
-        for steps in [1, 10] {
+        for steps in [1, 20] {
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
             let series = chart.add_series(crate::widget::SeriesOptions {
                 scale: key,
@@ -2012,6 +2025,105 @@ mod tests {
                 "{steps} frames: {range:?}, expected a span of {span}"
             );
         }
+    }
+
+    /// A bar appended while a drag on the time axis or on the plot is held leaves a view
+    /// scrolled back on its bars: one bar less of right offset than the same drag without it, and
+    /// two on a Renko chart of 10-point bricks, where the bar adds two bricks. Removing the 80
+    /// oldest bars, the ones in view, stops the view at a right offset of 0, with the 20 bars left
+    /// in view as the plot holds more, and the last frame of the drag moves it from there as far
+    /// as it moves the same drag without the removal.
+    #[test]
+    fn bar_appended_during_a_drag_keeps_a_scrolled_back_view_on_its_bars() {
+        use crate::model::{Bar, ChartType, ChartTypeParams};
+        use crate::widget::SeriesId;
+        use chrono::TimeZone as _;
+        // Daily closes rising by 20: on the Renko chart every bar after the first adds two bricks.
+        let closes: Vec<_> = (0..=100).map(|day| 120.0 + 20.0 * f64::from(day)).collect();
+        let mut moved = Vec::new();
+        for (renko, changes) in [
+            (false, &["none", "append", "remove"][..]),
+            (true, &["none", "append"]),
+        ] {
+            for time_axis in [true, false] {
+                // The right offset before and after the last frame of the drag.
+                let mut offsets = Vec::new();
+                for &change in changes {
+                    let ctx = egui::Context::default();
+                    let mut chart = if renko {
+                        let mut chart = chart(&closes[..100], &closes[..100]);
+                        chart.set_chart_type(ChartType::Renko);
+                        chart.set_chart_type_params(ChartTypeParams {
+                            renko_brick_size: 10.0,
+                            ..Default::default()
+                        });
+                        chart
+                    } else {
+                        chart(&[95.0, 100.0], &[105.0, 110.0])
+                    };
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    chart.state.time_scale_mut().set_right_offset(-30.0);
+                    let rect = chart.last_rendered_price_rect;
+                    let start = Pos2::new(
+                        rect.left() + rect.width() * 0.25,
+                        if time_axis {
+                            rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0
+                        } else {
+                            rect.center().y
+                        },
+                    );
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    };
+                    let moved = |dx| vec![Event::PointerMoved(start + egui::vec2(dx, 0.0))];
+                    frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                    frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                    frame(&ctx, &mut chart, 0.06, moved(50.0));
+                    let before = chart.state.time_scale().right_offset_precise();
+                    match change {
+                        "append" => {
+                            // Bar 100 opens a day after the last of the 100 daily bars.
+                            let open = chrono::Utc
+                                .timestamp_opt(1_700_000_000 + 100 * 86_400, 0)
+                                .unwrap();
+                            let (low, high) = if renko {
+                                (closes[100], closes[100])
+                            } else {
+                                (95.0, 105.0)
+                            };
+                            let bar = Bar::new(open, low, high, low, high, 1.0);
+                            assert!(chart.update(SeriesId::MAIN, bar));
+                        }
+                        "remove" => {
+                            assert_eq!(chart.remove_oldest_bars(SeriesId::MAIN, 80).len(), 80);
+                        }
+                        _ => {}
+                    }
+                    frame(&ctx, &mut chart, 0.08, moved(60.0));
+                    let after = chart.state.time_scale().right_offset_precise();
+                    offsets.push((change, before, after));
+                }
+                let (_, before, after) = offsets[0];
+                for &(change, _, end) in &offsets[1..] {
+                    // The end of the drag without a change, moved as far as the change moves the
+                    // view: by the bar or the bricks appended, or to the stop at 0.
+                    let expected = match change {
+                        "append" if renko => after - 2.0,
+                        "append" => after - 1.0,
+                        _ => after - before,
+                    };
+                    moved.push((renko, time_axis, change, end - expected));
+                }
+            }
+        }
+        assert!(
+            moved.iter().all(|(.., by)| by.abs() < 1e-9),
+            "right offset against the drag without the change, on candles and on Renko bricks, on \
+             the time axis and on the plot: {moved:?}"
+        );
     }
 
     /// A drag on the time axis scales the bar spacing by e per 1000 points of its whole movement
@@ -2074,7 +2186,8 @@ mod tests {
     }
 
     /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the
-    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale.
+    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale. The drag
+    /// takes 20 frames of 5 points, so its first frame stays within the 6 point click distance.
     #[test]
     fn chart_drag_pans_a_manual_price_range() {
         for (invert_scale, sign) in [(false, 1.0), (true, -1.0)] {
@@ -2098,7 +2211,7 @@ mod tests {
                 chart.chart_options.handle_scroll.horz_touch_drag = false;
                 chart.chart_options.kinetic_scroll.enabled = false;
                 chart.state.price_scale_mut().set_range(90.0, 110.0);
-                drag_down(&mut chart, |rect| rect.center(), 10, touch);
+                drag_down(&mut chart, |rect| rect.center(), 20, touch);
                 let enabled = group_enabled && if touch { vertical } else { mouse };
                 let shift = if enabled {
                     sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64

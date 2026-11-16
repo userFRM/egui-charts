@@ -21,6 +21,8 @@ use super::TopToolbarAction;
 /// ]));
 /// // toolbar.show_with_state(ui, app_state) returns TopToolbarAction::Host(id).
 /// ```
+#[derive(Debug)]
+#[non_exhaustive]
 pub struct ToolbarEntry {
     /// Stable id returned when this entry is chosen.
     pub id: String,

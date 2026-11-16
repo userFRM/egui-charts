@@ -254,7 +254,19 @@ impl Default for ButtonsSettings {
 }
 
 /// Canvas tab: Margins settings
+///
+/// Built from [`Default`] or [`ChartSettingsState::from_chart`], then filled field by field:
+///
+/// ```
+/// use egui_charts::widget::settings::{ChartSettingsState, MarginsSettings};
+///
+/// let mut margins = MarginsSettings::default();
+/// margins.right_pixels = Some(60.0);
+/// let mut settings = ChartSettingsState::default();
+/// settings.margins = margins;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct MarginsSettings {
     /// Empty space above prices, as a percentage of pane height.
     pub top_percent: f32,
@@ -265,6 +277,14 @@ pub struct MarginsSettings {
     /// [`ScalesAppearanceSettings::font_family`], as saved when this held whole bars, keep the
     /// chart's margin when this equals its whole bars.
     pub right_bars: f32,
+    /// Empty space after the latest bar in pixels, for a chart that keeps its margin in pixels.
+    /// It has priority over `right_bars`, as
+    /// [`TimeScaleOptions::right_offset_pixels`](crate::config::TimeScaleOptions::right_offset_pixels)
+    /// has over `right_offset`, so that every chart the settings reach keeps the same pixels at
+    /// its own bar spacing. `None` applies `right_bars`; the settings dialog clears it when the
+    /// margin is edited, and settings saved without it hold `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_pixels: Option<f32>,
 }
 
 impl Default for MarginsSettings {
@@ -275,12 +295,14 @@ impl Default for MarginsSettings {
             top_percent: (price.top * 100.0) as f32,
             bottom_percent: (price.bottom * 100.0) as f32,
             right_bars: crate::config::TimeScaleOptions::default().right_offset,
+            right_pixels: None,
         }
     }
 }
 
 /// The character that groups the thousands of the built-in price labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ThousandsSeparator {
     /// Plain digits: `42541.77`.
     Off,
@@ -479,6 +501,7 @@ impl Default for TradingSettings {
 
 /// Which trading events raise a notification: the levels of the toasts they use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum TradingNotifications {
     /// Fills, partial fills, rejections and refused orders.
     #[default]
@@ -503,7 +526,16 @@ impl TradingNotifications {
     }
 }
 
-/// Alerts tab settings
+/// Alerts tab settings. Missing saved fields keep their defaults: toasts close after 20 seconds
+/// and alerts stay off the desktop.
+///
+/// ```
+/// use egui_charts::widget::settings::AlertsSettings;
+///
+/// let mut settings = AlertsSettings::default();
+/// settings.desktop_notifications = true;
+/// settings.close_toasts = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -522,8 +554,15 @@ pub struct AlertsSettings {
     pub alert_color: Color32,
     /// Draw only active alerts; otherwise triggered, disabled and expired alerts are drawn dimmed.
     pub show_active_only: bool,
-    /// Seconds an alert notification stays on screen.
+    /// Seconds an alert notification stays on screen while [`close_toasts`](Self::close_toasts)
+    /// holds.
     pub notification_seconds: u32,
+    /// Close each alert toast after [`notification_seconds`](Self::notification_seconds);
+    /// otherwise it stays until the user dismisses it.
+    pub close_toasts: bool,
+    /// Also show alert popups as desktop notifications, through the host's
+    /// [`Notifications`](crate::services::Notifications) service.
+    pub desktop_notifications: bool,
 }
 
 impl Default for AlertsSettings {
@@ -536,14 +575,24 @@ impl Default for AlertsSettings {
             show_alert_labels: true,
             alert_color: crate::studies::palette::WARM_ORANGE,
             show_active_only: true,
-            notification_seconds: 5,
+            notification_seconds: 20,
+            close_toasts: true,
+            desktop_notifications: false,
         }
     }
 }
 
 /// Independent order-flow layers and their appearance. Missing saved fields keep layers off.
+///
+/// ```
+/// use egui_charts::widget::settings::OrderFlowSettings;
+///
+/// let mut settings = OrderFlowSettings::default();
+/// settings.show_heatmap = true;
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct OrderFlowSettings {
     /// Draw sampled resting liquidity behind the price series.
     pub show_heatmap: bool,
@@ -560,6 +609,16 @@ pub struct OrderFlowSettings {
 }
 
 /// Serializable display settings shared by the chart and its settings dialog.
+///
+/// ```
+/// use egui_charts::widget::settings::ChartSettingsState;
+///
+/// let mut settings = ChartSettingsState::default();
+/// settings.candle_colors.show_wick = false;
+/// settings.status_line.show_logo = false;
+/// settings.trading.instant_orders = true;
+/// settings.alerts.play_sound = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 // The trait impls below wrap the derived ones.
@@ -693,6 +752,35 @@ impl Default for ChartSettingsState {
 
             events: crate::model::EventVisibility::default(),
             show_session_breaks: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AlertsSettings;
+
+    /// Alerts settings saved before the toast and desktop choices keep their lifetime, close
+    /// their toasts and stay off the desktop; only a save without a lifetime takes 20 seconds.
+    #[test]
+    fn alerts_saved_before_the_toast_choices_keep_closing_toasts_in_the_app() {
+        for (saved, seconds) in [
+            (
+                r#"{"play_sound":false,"sound":"","sound_volume":1.0,"show_alerts":true,"show_alert_labels":true,"alert_color":[255,152,0,255],"show_active_only":true,"notification_seconds":5}"#,
+                5,
+            ),
+            (r#"{"play_sound":true,"show_active_only":false}"#, 20),
+        ] {
+            let alerts: AlertsSettings = serde_json::from_str(saved).unwrap();
+            assert_eq!(
+                (
+                    alerts.notification_seconds,
+                    alerts.close_toasts,
+                    alerts.desktop_notifications
+                ),
+                (seconds, true, false),
+                "{saved}"
+            );
         }
     }
 }

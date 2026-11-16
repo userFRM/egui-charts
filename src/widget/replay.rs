@@ -8,6 +8,7 @@ use crate::data::merge::{Origin, fold, merge};
 use crate::model::{Bar, BarClock, Timeframe};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 use std::sync::Arc;
 
 pub(super) struct ReplayWindow {
@@ -16,6 +17,11 @@ pub(super) struct ReplayWindow {
     source: Option<(Vec<Bar>, BarClock)>,
     /// The pause last set with `set_feed_paused` before the replay, which its exit sets again.
     feed_paused: bool,
+    /// The live ATR and percentage sizes in Renko, Kagi, Range, Point and Figure order, with
+    /// whether each waited for history, which the exit gives back. `None` for a fixed size, and
+    /// for one armed by its parameters or by new main history during the session, which
+    /// resolves from the restored history instead.
+    pub(super) live_sizes: [Option<(f64, bool)>; 4],
     pub quote: Option<crate::model::Level1Quote>,
     pub session_quote: Option<crate::model::quote::SessionQuote>,
 }
@@ -37,10 +43,15 @@ impl ReplayWindow {
         let count = count.min(bars.len());
         if id == SeriesId::MAIN
             && count > 0
-            && let Some((source, _)) = &mut self.source
+            && let Some((source, source_clock)) = &mut self.source
         {
             let through = clock.bar_open(bars[count - 1].time);
-            let end = source.partition_point(|bar| clock.bar_open(bar.time) <= through);
+            let end = match trading_dates(source, source_clock, clock) {
+                // Source bars that join no chart bar before the first date kept leave too.
+                Some(runs) => (runs.iter().find(|(slot, _)| *slot > through))
+                    .map_or(source.len(), |(_, run)| run.start),
+                None => source.partition_point(|bar| clock.bar_open(bar.time) <= through),
+            };
             source.drain(..end);
             super::series::shrink_bars(source);
         }
@@ -71,8 +82,10 @@ impl Chart {
     }
 
     /// Replaces the live feed with a shared recording-backed driver, or restores it with `None`.
-    /// Retains the live bars, quotes, pause state and feed configuration for exit. Recorded trades
+    /// Retains the live bars, quotes, pause state and feed configuration for exit, which gives
+    /// back the ATR and percentage sizes as [`Self::set_replay_time`] describes. Recorded trades
     /// build partial bars through the normal feed path, alongside quotes, orders and depth.
+    /// Analyst targets come from the driver, which answers none, and from the live feed on exit.
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
     /// nanosecond later. An interval change resubscribes at the same shared position. On exit,
@@ -89,6 +102,8 @@ impl Chart {
     pub fn set_market_replay(&mut self, driver: Option<Arc<ReplayDriver>>) {
         if let Some(replay) = self.market_replay.take() {
             self.feed_link = replay.feed;
+            // The targets held are the driver's: ask the live feed again.
+            self.reload_price_targets();
             self.replay = Some(replay.window);
             self.set_replay_time(None);
             // The studies' order-flow inputs hold what the driver delivered, and a paused feed
@@ -181,19 +196,27 @@ impl Chart {
     /// Enters or seeks replay, retaining the full history inside the chart. Only bars completed
     /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
     /// that studies request for other symbols and intervals. A bar closes at its next open on
-    /// [`Self::bar_clock`]; without a timeframe or on numeric and custom horizontal axes, keys
-    /// strictly before `time` are available. Supply finer bars with `set_replay_source` to build
-    /// the unfinished chart bar. No future OHLC is inferred from a completed coarse bar.
+    /// [`Self::bar_clock`], and a daily, weekly or monthly bar of an instrument with a session
+    /// when its last trading window closes, extended hours included when
+    /// [`Self::set_extended_hours`] selects them; without a timeframe or on numeric and custom
+    /// horizontal axes, keys strictly before `time` are available. Supply finer bars with
+    /// `set_replay_source` to build the unfinished chart bar. No future OHLC is inferred from a
+    /// completed coarse bar. ATR and percentage sizes resolve from the bars before the cursor when
+    /// the session starts and after a step back, and stay while the cursor moves forward.
     ///
     /// The main feed is suspended and current quotes and book views are hidden. Use
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
     /// `set_data` and `update` retain
-    /// host corrections behind the window. `None` exits, restores all retained bars and quotes,
-    /// and restores the feed's previous pause state; a feed that resumes keeps the restored bars
-    /// and depth history as [`Self::set_feed_paused`] describes. Hosts own source data and session
-    /// storage.
+    /// host corrections behind the window. `None` exits, restores all retained bars and quotes
+    /// and the sizes from before the session, and restores the feed's previous pause state; a
+    /// feed that resumes keeps the restored bars and depth history as [`Self::set_feed_paused`]
+    /// describes. Sizes whose parameters were set during the session, and all of them once its
+    /// main history was replaced, resolve from the restored history instead. Hosts own source
+    /// data and session storage.
     /// With a market driver attached this dispatches a seek; call outside egui context locks,
-    /// as with [`ReplayDriver::seek`].
+    /// as with [`ReplayDriver::seek`]. The rebuilt bars arrive on the next frame, and the view
+    /// follows them as it follows playback: near the live edge it follows the cursor, and a view
+    /// scrolled back keeps the bars it shows in place.
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {
         if let Some(replay) = &self.market_replay {
             if let Some(time) = time {
@@ -219,6 +242,16 @@ impl Chart {
                         item.revision = crate::model::next_revision();
                     }
                 }
+                // The sizes come back with the bars, as the session found them.
+                let sizes = self.chart_type_params.sizes_mut().into_iter();
+                for ((size, pending), live) in sizes
+                    .zip(&mut self.pending_box_sizes)
+                    .zip(replay.live_sizes)
+                {
+                    if let Some(live) = live {
+                        (*size, *pending) = live;
+                    }
+                }
                 self.quote = replay.quote;
                 self.session_quote = replay.session_quote;
                 self.set_feed_paused(replay.feed_paused);
@@ -242,23 +275,31 @@ impl Chart {
                 .collect();
             bars.insert(SeriesId::MAIN, self.state.data().bars.clone());
             let feed_paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
+            let methods = self.chart_type_params.size_methods();
+            let sizes = self.chart_type_params.sizes_mut().map(|size| *size);
+            let pending = self.pending_box_sizes;
+            let live_sizes = std::array::from_fn(|i| {
+                (methods[i] != crate::model::BoxSizeMethod::Fixed).then_some((sizes[i], pending[i]))
+            });
             self.replay = Some(ReplayWindow {
                 time,
                 bars,
                 source: None,
                 feed_paused,
+                live_sizes,
                 quote: self.quote.take(),
                 session_quote: self.session_quote.take(),
             });
             self.set_feed_paused(true);
-            // The session resolves its sizes from the bars before the cursor.
-            self.arm_box_sizes();
         }
         self.apply_replay_window();
         self.replay_order_flow(previous.map_or(time, |previous| previous.min(time)));
         // Studies on other histories see the bars completed by the new cursor.
         self.invalidate_study_data();
         if rewind {
+            // No size may come from a bar after the cursor: they resolve from the bars before
+            // it, as at the start of the session.
+            self.arm_box_sizes();
             // A cached value at the cursor may have used the candle's later high or close.
             for study in self.studies.indicators_mut() {
                 study.update(&[], 0);
@@ -275,6 +316,16 @@ impl Chart {
     /// bars build the partial chart bar using first open, maximum high, minimum low, last close
     /// and summed volume. Earlier chart history stays available. The host must supply all finer
     /// bars in the covered chart slots; missing bars are treated as periods without trades.
+    ///
+    /// A source bar joins the chart bar that holds its open on [`bar_clock`](Self::bar_clock).
+    /// On a daily or longer chart whose instrument has a session, intraday bars and trades join
+    /// the bar of their trading date instead, as
+    /// [`data::resample_with_session`](crate::data::resample_with_session) dates it: a bar
+    /// belongs to the selected window that holds its first instant inside the selected hours,
+    /// and to that window's date, which starts at the date's earliest window. Post-market hours
+    /// after 00:00 UTC and a session that opens the evening before stay with their date. Bars
+    /// that reach no selected window join no chart bar, and the source replaces the chart bars
+    /// of the dates it covers.
     ///
     /// Recorded trades replay one at a time as bars of one trade each under a clock of
     /// `Timeframe::Ticks` one, as [`data::aggregate_trades`](crate::data::aggregate_trades) builds
@@ -384,13 +435,10 @@ impl Chart {
         };
         let mut visible = completed(bars, &clock, time).to_vec();
         if let Some((source, source_clock)) = &replay.source
-            && let Some(first) = source.first()
-            && let Some(last) = source.last()
+            && let Some((start, end)) = covered(source, source_clock, &clock)
             && let Some(partial) =
                 fold_source(completed(source, source_clock, time), source_clock, &clock)
         {
-            let start = clock.bar_open(first.time);
-            let end = clock.bar_open(last.time);
             visible.retain(|bar| {
                 let slot = clock.bar_open(bar.time);
                 slot < start || slot > end
@@ -402,7 +450,7 @@ impl Chart {
                 partial.into_iter().map(|bar| (bar, Origin::Live)).collect(),
             );
         }
-        // A step keeps the sizes resolved for the session, as bars streaming in do.
+        // A step forward keeps the sizes resolved for the session, as bars streaming in do.
         let (replay, pending) = (self.replay.take(), self.pending_box_sizes);
         self.replace_main_data(visible);
         (self.replay, self.pending_box_sizes) = (replay, pending);
@@ -415,9 +463,14 @@ impl Chart {
         };
         let (bars, rejected) = super::series::clean(bars, &clock);
         replay.bars.insert(id, bars);
-        self.count_replay_rejections(id, rejected);
-        // New history resolves the sizes again, as `set_data` does outside replay.
         if id == SeriesId::MAIN {
+            // The exit resolves the sizes from the new history.
+            replay.live_sizes = [None; 4];
+        }
+        self.count_replay_rejections(id, rejected);
+        // In bar replay new main history resolves the sizes again from the bars before the
+        // cursor, as `set_data` does outside replay. In market replay it changes no bar on show.
+        if id == SeriesId::MAIN && self.market_replay.is_none() {
             self.arm_box_sizes();
         }
         self.apply_replay_window();
@@ -495,20 +548,50 @@ impl Chart {
 
 pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Utc>) -> &'a [Bar] {
     let end = bars.partition_point(|bar| {
-        clock
-            .next_open(clock.bar_open(bar.time))
-            .map_or(bar.time < time, |end| end <= time)
+        bar_close(clock, clock.bar_open(bar.time)).map_or(bar.time < time, |end| end <= time)
     });
     &bars[..end]
 }
 
+/// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
+/// daily, weekly or monthly bar of a clock with an exchange session when its last trading window
+/// closes. A bar without a trading window closes at its next open. `ReplayController::cutoff`
+/// and `seek_cutoff` close bars here too.
+pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    (clock.timeframe())
+        .filter(|timeframe| {
+            clock.has_session() && timeframe.duration_ms() >= Timeframe::Day1.duration_ms()
+        })
+        .and_then(|timeframe| clock.sessions().bar_session_close(open, timeframe, true))
+        .or_else(|| clock.next_open(open))
+}
+
 /// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do
-/// not nest in them. A bar of one trade is an instant and falls in the chart bar that holds it;
-/// other sources go through `data::resample`, which refuses the other trade-based intervals,
-/// whose bars are stamped at their first trade. Replay folds the completed trades on every step,
-/// so they are folded per chart bar, bisecting for its last trade, instead of a clock lookup per
-/// trade: a session clock's lookup is not cheap. `bar_open` is ordered, as `completed` assumes.
+/// not nest in them. On a daily or longer chart with a session, intraday bars and trades build
+/// the bars of their trading dates, as `trading_dates` places them. Elsewhere a bar of one
+/// trade is an instant and falls in the chart bar that holds it; other sources go through
+/// `data::resample`, which refuses the other trade-based intervals, whose bars are stamped at
+/// their first trade. Replay folds the completed trades on every step, so they are folded per
+/// chart bar, bisecting for its last trade, instead of a clock lookup per trade: a session
+/// clock's lookup is not cheap. `bar_open` is ordered, as `completed` assumes.
 fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<Bar>> {
+    if let Some(runs) = trading_dates(bars, source, chart) {
+        let mut folded: Vec<Bar> = Vec::new();
+        for (slot, run) in runs {
+            for bar in &bars[run] {
+                match folded.last_mut() {
+                    Some(last) if last.time == slot => *last = fold(last, bar)?,
+                    _ => folded.push(Bar {
+                        time: slot,
+                        colors: None,
+                        payload: None,
+                        ..bar.clone()
+                    }),
+                }
+            }
+        }
+        return Some(folded);
+    }
     let instants = matches!(source.timeframe(), Some(Timeframe::Ticks(count)) if count.get() == 1)
         && chart
             .timeframe()
@@ -540,6 +623,78 @@ fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<
     // shortcut: every step refolds all trades before the cutoff; keep the folded complete chart
     // bars if long trade sources make playback slow.
     Some(folded)
+}
+
+/// The opens of the first and last chart bars that `bars` of the `source` clock join under
+/// `chart`, `None` when they join none.
+fn covered(
+    bars: &[Bar],
+    source: &BarClock,
+    chart: &BarClock,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    match trading_dates(bars, source, chart) {
+        Some(runs) => Some((runs.first()?.0, runs.last()?.0)),
+        None => Some((
+            chart.bar_open(bars.first()?.time),
+            chart.bar_open(bars.last()?.time),
+        )),
+    }
+}
+
+/// The chart bars that intraday bars or trades of the `source` clock join on a daily or longer
+/// `chart` with a session, by trading date as `data::resample_with_session` dates them. A bar
+/// joins the selected window that holds its first instant inside the selected hours, which for
+/// a bar that opens before a window and ends inside it is the window's open, and the chart bar
+/// of that window's trading date, which starts at the date's earliest window. Bars that reach
+/// no window join no chart bar. Returns one entry per window holding bars, with the chart bar's
+/// open and the range of those bars, in order, and `None` for other charts and sources, which
+/// `bar_open` places. The lookups follow the windows, not the bars.
+fn trading_dates(
+    bars: &[Bar],
+    source: &BarClock,
+    chart: &BarClock,
+) -> Option<Vec<(DateTime<Utc>, Range<usize>)>> {
+    let timeframe = source.timeframe()?;
+    let intraday = match timeframe {
+        Timeframe::Ticks(count) => count.get() == 1,
+        _ => !timeframe.is_trade_based() && timeframe.duration_ms() < Timeframe::Day1.duration_ms(),
+    };
+    let daily = (chart.timeframe())
+        .is_some_and(|interval| interval.duration_ms() >= Timeframe::Day1.duration_ms());
+    if !(intraday && daily && chart.has_session()) {
+        return None;
+    }
+    // On an intraday interval an instant takes the date of the last session open at or before it.
+    let sessions = chart.sessions().with_timeframe(Timeframe::Min1);
+    // Zero for a trade, which is an instant.
+    let span = timeframe.duration();
+    let mut runs = Vec::new();
+    let mut at = 0;
+    while let Some(bar) = bars.get(at) {
+        // The window holding the bar's open or the next one; none within a year ends the walk.
+        let Some(open) = sessions.open_at_or_after(bar.time) else {
+            break;
+        };
+        let Some(close) = sessions.session_close(open, true) else {
+            break;
+        };
+        // Bars that end by the window's open hold none of its trades.
+        let start = at
+            + bars[at..].partition_point(|bar| {
+                bar.time < open
+                    && (bar.time.checked_add_signed(span)).is_some_and(|end| end <= open)
+            });
+        let end = start + bars[start..].partition_point(|bar| bar.time < close);
+        if start < end
+            && let Some(slot) = chart.open_on_date(sessions.trading_date(open))
+        {
+            runs.push((slot, start..end));
+        }
+        // The bar at `at` either reaches the window, which closes after it opens, or ends before
+        // it, so each pass moves past at least one bar.
+        at = end;
+    }
+    Some(runs)
 }
 
 impl ChartLayout {
@@ -847,18 +1002,22 @@ mod tests {
         );
     }
 
-    /// A session resolves ATR and percentage sizes from the bars before the cursor when it starts,
-    /// or once the cursor passes enough bars, and keeps them while the cursor moves, as bars
-    /// streaming in do; applying the parameters again recalculates. ATR(14) of 14 true ranges of
-    /// 2 is 2, and the 15th bar's true range of 16 makes it (13 * 2 + 16) / 14 = 3.
+    /// A session resolves ATR and percentage sizes from the bars before the cursor when it starts
+    /// and after a step back, or once the cursor passes enough bars, and keeps them while the
+    /// cursor moves forward, as bars streaming in do. Parameters set and main history supplied
+    /// during the session resolve from the bars before the cursor. The end gives back the live
+    /// sizes, or resolves from the restored history those set or supplied during the session.
+    /// ATR(14) of 14 true ranges of 2 is 2, a 15th of max(16, 15, 1) = 16 makes it
+    /// (13 * 2 + 16) / 14 = 3 and one of max(30, 29, 1) = 30 makes it (13 * 2 + 30) / 14 = 4; 1%
+    /// of the closes 100, 110 and 120 is 1, 1.1 and 1.2.
     #[test]
     fn replay_steps_keep_history_derived_sizes() {
         use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams};
-        let mut bars: Vec<_> = (0..14)
-            .map(|i| bar(i, [100.0, 101.0, 99.0, 100.0, 1.0]))
-            .collect();
-        bars.push(bar(14, [100.0, 115.0, 99.0, 100.0, 1.0]));
-        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..14)
+                .map(|i| bar(i, [100.0, 101.0, 99.0, 100.0, 1.0]))
+                .collect(),
+        ));
         chart.set_timeframe(Timeframe::Min1);
         chart.set_chart_type(ChartType::Renko);
         chart.set_chart_type_params(ChartTypeParams {
@@ -866,24 +1025,105 @@ mod tests {
                 period: 14,
                 multiplier: 1.0,
             },
+            kagi_size_method: BoxSizeMethod::Percentage(1.0),
             ..Default::default()
         });
-        let size_at = |chart: &mut Chart, cursor: Option<i64>| {
-            chart.set_replay_time(cursor.map(time));
+        // The live sizes stay [2, 1] through the streamed bar.
+        chart.update(SeriesId::MAIN, bar(14, [100.0, 115.0, 99.0, 110.0, 1.0]));
+        let mut other: Vec<_> = chart.bars(SeriesId::MAIN).to_vec();
+        other[14] = bar(14, [100.0, 129.0, 99.0, 120.0, 1.0]);
+        #[derive(Debug)]
+        enum Step {
+            At(i64),
+            End,
+            Params,
+            History,
+        }
+        use Step::*;
+        for (step, want) in [
+            (At(5), [0.0, 1.0]),
+            (At(14), [2.0, 1.0]),
+            (At(15), [2.0, 1.0]),
+            (End, [2.0, 1.0]),
+            (At(15), [3.0, 1.1]),
+            (At(14), [2.0, 1.0]),
+            (At(15), [2.0, 1.0]),
+            (Params, [3.0, 1.1]),
+            (At(14), [2.0, 1.0]),
+            (End, [3.0, 1.1]),
+            (At(15), [3.0, 1.1]),
+            (History, [4.0, 1.2]),
+            (End, [4.0, 1.2]),
+        ] {
+            match step {
+                At(minute) => chart.set_replay_time(Some(time(minute))),
+                End => chart.set_replay_time(None),
+                Params => chart.set_chart_type_params(chart.chart_type_params().clone()),
+                History => assert!(chart.set_data(SeriesId::MAIN, other.clone())),
+            }
             chart.show_elements();
-            chart.chart_type_params().renko_brick_size
-        };
-        let steps = [(Some(5), 0.0), (Some(14), 2.0), (Some(15), 2.0)];
-        for (cursor, size) in steps {
-            let got = size_at(&mut chart, cursor);
-            assert!((got - size).abs() < 1e-12, "{cursor:?}: {got}");
+            let params = chart.chart_type_params();
+            let got = [params.renko_brick_size, params.kagi_reversal];
+            assert!(
+                got.iter()
+                    .zip(want)
+                    .all(|(got, want)| (got - want).abs() < 1e-12),
+                "{step:?}: {got:?}"
+            );
         }
-        chart.set_chart_type_params(chart.chart_type_params().clone());
-        assert!((chart.chart_type_params().renko_brick_size - 3.0).abs() < 1e-12);
-        for (cursor, size) in [(None, 3.0), (Some(14), 2.0)] {
-            let got = size_at(&mut chart, cursor);
-            assert!((got - size).abs() < 1e-12, "{cursor:?}: {got}");
+    }
+
+    /// During market replay the host's main history goes to the retained bars while the driver
+    /// keeps building the bars on show, so the sizes the session resolved stay. 1% of the close of
+    /// 100 at entry is 1, and playback's trade at 200 keeps it, as bars streaming in do.
+    #[test]
+    fn market_replay_host_history_keeps_the_session_sizes() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{BoxSizeMethod, ChartType, ChartTypeParams, Instrument, Tick};
+        let events = (0..7)
+            .map(|minute| {
+                let price = if minute < 6 { 100.0 } else { 200.0 };
+                let fill = Tick::new(time(minute), price, 1.0, None);
+                ReplayEvent::new("A", time(minute), minute as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let driver = Arc::new(
+            ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap(),
+        );
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time(5));
+        let mut chart = Chart::new(BarData::new());
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Percentage(1.0),
+            ..Default::default()
+        });
+        chart.set_market_replay(Some(driver.clone()));
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            chart.pump(&ctx);
         }
+        chart.show_elements();
+        let entry = chart.chart_type_params().renko_brick_size;
+        driver.set_speed(1.0).unwrap();
+        driver.advance(std::time::Duration::from_secs(60)).unwrap();
+        chart.pump(&ctx);
+        chart.show_elements();
+        assert_eq!(
+            chart.bars(SeriesId::MAIN).last().map(|bar| bar.close),
+            Some(200.0),
+            "playback shows the trade at 00:06"
+        );
+        let played = chart.chart_type_params().renko_brick_size;
+        chart.set_data(
+            SeriesId::MAIN,
+            (0..5).map(|minute| bar(minute, [100.0; 5])).collect(),
+        );
+        chart.show_elements();
+        let after = chart.chart_type_params().renko_brick_size;
+        assert_eq!([entry, played, after], [1.0; 3]);
     }
 
     /// Bar replay over recorded trades: one-trade bars build the unfinished chart bar from the
@@ -956,6 +1196,148 @@ mod tests {
         let pairs = crate::data::aggregate_trades(&trades, two_trades.clone()).unwrap();
         assert!(!chart.set_replay_source(pairs, two_trades));
         assert_eq!(chart.bars(SeriesId::MAIN), shown);
+    }
+
+    /// With an exchange session, a finer replay source forms the bar of each source bar's
+    /// trading date, which opens at the earliest window of that date, and replaces only the
+    /// dates it covers. In winter the New York post-market hour from 19:00 to 20:00 opens at
+    /// 00:00 UTC of the next date, and the Chicago session of Tuesday 6 February opens at 23:00
+    /// UTC on Monday. In the break before it, the hour from 16:00 joins no bar, and a 4-hour bar
+    /// from 16:00 holds the session's first hours. Evicting the dates before the source's keeps
+    /// all of its bars. Bar replay completes the bar of 5 February when its last window closes,
+    /// at 01:00 UTC on 6 February in New York and at 22:00 UTC on 5 February in Chicago, and a
+    /// replay controller over the daily bars on the chart's clock seeks and cuts off there too.
+    /// Daily bars carry volume 100 and source bars volume 1.
+    #[cfg(all(feature = "timezones", feature = "ui"))]
+    #[test]
+    fn replay_folds_post_market_bars_into_their_trading_date() {
+        use crate::model::{Instrument, Session, SessionWindow, TimezoneId};
+        use crate::scales::TimezoneMode;
+        use crate::ui::replay::ReplayController;
+        use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
+        use chrono::{Duration, NaiveTime, TimeZone};
+        let at = |day, hour| Utc.with_ymd_and_hms(2024, 2, day, hour, 0, 0).unwrap();
+        let hm = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        // `count` bars of volume 1, `step` hours apart from `first`.
+        let bars = |first: DateTime<Utc>, step: i64, count: i64| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let time = first + Duration::hours(step * i);
+                    Bar::new(time, 100.0, 110.0, 100.0, 110.0, 1.0)
+                })
+                .collect()
+        };
+        let four_hours =
+            |zone: &TimezoneId| BarClock::new(Timeframe::Hour4).with_timezone(zone.clone());
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let chicago = TimezoneId::named("America/Chicago").unwrap();
+        let daily: Vec<_> = [1, 2, 5, 6, 7]
+            .into_iter()
+            .map(|day| Bar::new(at(day, 0), 100.0, 110.0, 100.0, 110.0, 100.0))
+            .collect();
+        let dated = |days: &[(u32, f64)]| -> Vec<_> {
+            (days.iter())
+                .map(|&(day, volume)| (format!("Feb {day:02}, 2024"), volume))
+                .collect()
+        };
+        // The close of 5 February and, at the cursor, each source with the dates and volumes
+        // the chart shows once it is set.
+        for (zone, session, close, cursor, sources, evict) in [
+            (
+                new_york.clone(),
+                Session::new([SessionWindow::new(weekdays, hm(9, 30), hm(16, 0))])
+                    .with_extended_windows([
+                        SessionWindow::new(weekdays, hm(4, 0), hm(9, 30)),
+                        SessionWindow::new(weekdays, hm(16, 0), hm(20, 0)),
+                    ]),
+                // 20:00 on Monday 5 February in New York, when its post-market closes.
+                at(6, 1),
+                // 21:00 on Monday 5 February in New York, an hour after its post-market closed.
+                at(6, 2),
+                vec![
+                    // The 16 hours from 04:00; the last, 19:00 to 20:00, opens at 00:00 UTC.
+                    (
+                        bars(at(5, 9), 1, 16),
+                        BarClock::new(Timeframe::Hour1),
+                        vec![(1, 100.0), (2, 100.0), (5, 16.0)],
+                    ),
+                    // The four 4-hour bars from 04:00; the last ends at 01:00 UTC.
+                    (
+                        bars(at(5, 9), 4, 4),
+                        four_hours(&new_york),
+                        vec![(1, 100.0), (2, 100.0), (5, 4.0)],
+                    ),
+                ],
+                2,
+            ),
+            (
+                chicago.clone(),
+                Session::new([SessionWindow::new(weekdays, hm(17, 0), hm(16, 0))]),
+                // 16:00 on Monday 5 February in Chicago, when its session closes.
+                at(5, 22),
+                // 09:00 on Tuesday 6 February in Chicago, 16 hours into its session.
+                at(6, 15),
+                vec![
+                    // The hour from 16:00 on Monday, in the break, and the 23 of the session.
+                    (
+                        bars(at(5, 22), 1, 24),
+                        BarClock::new(Timeframe::Hour1),
+                        vec![(1, 100.0), (2, 100.0), (5, 100.0), (6, 16.0)],
+                    ),
+                    // The six 4-hour bars from 16:00 on Monday; four have ended.
+                    (
+                        bars(at(5, 22), 4, 6),
+                        four_hours(&chicago),
+                        vec![(1, 100.0), (2, 100.0), (5, 100.0), (6, 4.0)],
+                    ),
+                ],
+                3,
+            ),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(daily.clone()));
+            chart.set_timeframe(Timeframe::Day1);
+            chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(zone.clone());
+            let instrument = Instrument::new("XYZ").with_time_zone(zone.clone());
+            chart.set_instrument(Some(instrument.with_session(session)));
+            chart.set_extended_hours(true);
+            let shown = |chart: &Chart| -> Vec<_> {
+                (chart.bars(SeriesId::MAIN).iter())
+                    .map(|bar| (chart.format_time(bar.time), bar.volume))
+                    .collect()
+            };
+            let clock = chart.bar_clock();
+            let mut controller = ReplayController::new(daily.clone(), Vec::new());
+            for (time, days) in [
+                (
+                    close - Duration::nanoseconds(1),
+                    vec![(1, 100.0), (2, 100.0)],
+                ),
+                (close, vec![(1, 100.0), (2, 100.0), (5, 100.0)]),
+            ] {
+                chart.set_replay_time(Some(time));
+                assert!(controller.seek_cutoff(time, &clock));
+                assert_eq!(
+                    (shown(&chart), controller.curr_ts().copied()),
+                    (dated(&days), days.last().map(|&(day, _)| at(day, 0))),
+                    "{zone:?}"
+                );
+            }
+            assert_eq!(controller.cutoff(&clock), Some(close), "{zone:?}");
+            chart.set_replay_time(Some(cursor));
+            let mut expected = Vec::new();
+            for (source, clock, days) in sources {
+                expected = dated(&days);
+                let accepted = chart.set_replay_source(source, clock);
+                assert_eq!(
+                    (accepted, shown(&chart)),
+                    (true, expected.clone()),
+                    "{zone:?}"
+                );
+            }
+            chart.remove_oldest_bars(SeriesId::MAIN, evict);
+            assert_eq!(shown(&chart), expected[expected.len() - 1..], "{zone:?}");
+        }
     }
 
     #[test]
@@ -1064,6 +1446,8 @@ mod tests {
                 .unwrap()
                 .footprint
                 .as_ref()
+                .unwrap()
+                .owned()
                 .unwrap()
                 .bars()
                 .len(),
@@ -1299,5 +1683,84 @@ mod tests {
         crate::widget::test_frames::frame(&ctx, &mut chart, 3.0, vec![]);
         assert_eq!(chart.bars(comparison).len(), 6);
         assert_eq!(changes.load(Ordering::Relaxed), seen + 1);
+    }
+
+    /// A market replay seek leaves the view where playback to the same position does. With
+    /// minutes 0..=69 shown at a right offset of -30, minute 39 is at the right edge; with the
+    /// last bar at minute m it stays there at 39 - m, and a seek that no longer holds it stops
+    /// with the oldest bar in view. A view near the live edge follows the cursor to its default
+    /// margin of 2.5 bars. A candle replay seek agrees.
+    #[test]
+    fn market_replay_seek_keeps_a_scrolled_back_view_on_its_bars() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        use crate::widget::test_frames::frame;
+        let ns = chrono::TimeDelta::nanoseconds(1);
+        let ctx = egui::Context::default();
+        let market = |offset: f32| {
+            let events = (0..100)
+                .map(|minute| {
+                    let fill = Tick::new(time(minute), 10.0, 1.0, None).with_id(minute as u64);
+                    ReplayEvent::new("A", time(minute), minute as u64, MarketEvent::Trade(fill))
+                })
+                .collect();
+            let instrument = Instrument::new("A").with_tick_size(1.0);
+            let driver = Arc::new(ReplayDriver::new(events, vec![instrument]).unwrap());
+            driver.set_speed(0.0).unwrap();
+            driver.seek(time(69));
+            let mut chart = Chart::new(BarData::new());
+            chart.set_symbol("A");
+            chart.set_timeframe(Timeframe::Min1);
+            chart.set_market_replay(Some(driver.clone()));
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(chart.bars(SeriesId::MAIN).len(), 70, "entry");
+            chart.scroll_to_position(offset, false);
+            (chart, driver)
+        };
+        let settle = |chart: &mut Chart| {
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            frame(&ctx, chart, 1.0, vec![]);
+            let last = chart.bars(SeriesId::MAIN).last().unwrap().time;
+            (last, chart.state.time_scale().right_offset())
+        };
+        let mut rows = Vec::new();
+        let (mut chart, driver) = market(-30.0);
+        driver.set_speed(1.0).unwrap();
+        driver.advance(std::time::Duration::from_secs(600)).unwrap();
+        rows.push(("playback to 79", settle(&mut chart)));
+        for (name, offset, minute) in [
+            ("seek to 79", -30.0, 79),
+            ("seek to 59", -30.0, 59),
+            ("seek to 20", -30.0, 20),
+            ("near the live edge, seek to 79", 0.0, 79),
+        ] {
+            let (mut chart, _driver) = market(offset);
+            chart.set_replay_time(Some(time(minute) + ns));
+            rows.push((name, settle(&mut chart)));
+        }
+        let minutes: Vec<_> = (0..100).map(|m| bar(m, [10.0; 5])).collect();
+        let mut chart = Chart::new(BarData::from_bars(minutes));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_replay_time(Some(time(70)));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.scroll_to_position(-30.0, false);
+        chart.set_replay_time(Some(time(80)));
+        rows.push(("candle seek to 79", settle(&mut chart)));
+        assert_eq!(
+            rows,
+            [
+                ("playback to 79", (time(79), -40.0)),
+                ("seek to 79", (time(79), -40.0)),
+                ("seek to 59", (time(59), -20.0)),
+                ("seek to 20", (time(20), 0.0)),
+                ("near the live edge, seek to 79", (time(79), 2.5)),
+                ("candle seek to 79", (time(79), -40.0)),
+            ]
+        );
     }
 }

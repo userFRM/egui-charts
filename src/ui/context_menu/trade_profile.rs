@@ -48,6 +48,7 @@ pub fn trade_profile_menu(
     false
 }
 
+#[derive(Debug)]
 pub(super) struct TradeProfileMenu {
     ranges: Vec<Range<DateTime<Utc>>>,
     index: usize,

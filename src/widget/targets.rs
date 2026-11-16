@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub(super) struct TargetState {
     inbox: Arc<Inbox>,
     symbol: Option<String>,
+    /// The conversion `symbol` was asked in.
+    conversion: Option<String>,
     values: Option<PriceTargets>,
     error: Option<FeedError>,
 }
@@ -21,6 +23,7 @@ pub(super) struct TargetState {
 impl Chart {
     /// Show or hide the host's analyst estimates. Hidden by default; hiding retains the answer.
     /// Leave future whitespace in the visible logical range to see the supplied horizon date.
+    /// A replay draws them only once its time has passed their publication date in UTC.
     pub fn set_price_targets_visible(&mut self, visible: bool) {
         self.show_price_targets = visible;
     }
@@ -30,7 +33,7 @@ impl Chart {
         self.show_price_targets
     }
 
-    /// The accepted targets for the current symbol, once answered by the feed.
+    /// The accepted targets for the current symbol and conversion, once answered by the feed.
     pub fn price_targets(&self) -> Option<&PriceTargets> {
         self.targets.values.as_ref()
     }
@@ -52,9 +55,12 @@ impl Chart {
         let Some(link) = &self.feed_link else {
             return;
         };
-        if self.targets.symbol.as_deref() != Some(&self.symbol) {
+        if self.targets.symbol.as_deref() != Some(&self.symbol)
+            || self.targets.conversion != self.conversion
+        {
             self.targets = TargetState {
                 symbol: Some(self.symbol.clone()),
+                conversion: self.conversion.clone(),
                 ..Default::default()
             };
             let repaint = ctx.clone();
@@ -62,8 +68,11 @@ impl Chart {
             self.targets
                 .inbox
                 .set_waker(move || repaint.request_repaint_of(viewport));
-            link.feed
-                .price_targets(&self.symbol, self.targets.inbox.reply(0));
+            let (symbol, reply) = (&self.symbol, self.targets.inbox.reply(0));
+            match self.conversion.as_deref() {
+                Some(conversion) => link.feed.price_targets_converted(symbol, conversion, reply),
+                None => link.feed.price_targets(symbol, reply),
+            }
         }
         for (_, answer) in self.targets.inbox.drain().answers {
             match *answer
@@ -91,6 +100,13 @@ impl Chart {
             && !self.chart_type.is_time_independent())
         .then_some(())?;
         let targets = self.price_targets()?;
+        // A replay knows the estimates once its exclusive cutoff has passed their publication day.
+        if self
+            .replay_time()
+            .is_some_and(|cutoff| targets.published >= cutoff.date_naive())
+        {
+            return None;
+        }
         let last = crate::model::last_with_value(self.state.shown())?;
         let horizon = targets.horizon.and_hms_opt(0, 0, 0)?.and_utc();
         let range = self.visible_time_range()?;
@@ -181,9 +197,9 @@ impl Chart {
             let change = percent_change(last.close, price)
                 .map(|change| format!(" ({change:+.2}%)"))
                 .unwrap_or_default();
-            let text = format!("{name} {price_text}{change}");
+            let shown = l10n::text(ui.ctx(), name);
             let galley = painter.layout_no_wrap(
-                l10n::text(ui.ctx(), text),
+                format!("{shown} {price_text}{change}"),
                 FontId::proportional(12.0),
                 color,
             );
@@ -223,7 +239,7 @@ impl Chart {
                 ui.ctx(),
                 "{name}: {price_text}{change}\n{0} analysts\nPublished: {1}\nHorizon: {2}",
                 &[
-                    ("name", name.to_string()),
+                    ("name", shown),
                     ("price_text", price_text.to_string()),
                     ("change", change.to_string()),
                     ("0", format!("{}", targets.analysts)),
@@ -271,6 +287,15 @@ mod tests {
         fn price_targets(&self, symbol: &str, reply: Reply<PriceTargets>) {
             self.0.lock().unwrap().push((symbol.into(), reply));
         }
+        fn price_targets_converted(
+            &self,
+            symbol: &str,
+            conversion: &str,
+            reply: Reply<PriceTargets>,
+        ) {
+            let asked = format!("{symbol} in {conversion}");
+            self.0.lock().unwrap().push((asked, reply));
+        }
     }
     fn targets() -> PriceTargets {
         let published = chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap();
@@ -286,6 +311,7 @@ mod tests {
 
     #[test]
     fn target_labels_use_the_last_close_and_clear_on_symbol_changes() {
+        use chrono::{TimeZone, Utc};
         let ctx = egui::Context::default();
         let feed = Arc::new(Feed::default());
         let mut chart = crate::widget::ChartBuilder::new()
@@ -335,6 +361,20 @@ mod tests {
                 "missing {label}"
             );
         }
+        // A bar replay draws and fits the estimates, published on 2024-02-01, only once its
+        // cutoff has passed that day.
+        let at = |day, hour| Utc.with_ymd_and_hms(2024, 2, day, hour, 0, 0).unwrap();
+        for (time, cutoff, drawn) in [(0.1003, at(2, 0), true), (0.1006, at(1, 12), false)] {
+            chart.set_replay_time(Some(cutoff));
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+            let shapes = test_frames::shapes(&ctx, &mut chart, time, vec![]);
+            let label = shapes.iter().any(
+                |s| matches!(s, egui::Shape::Text(t) if t.galley.text() == "High 120.00 (+20.00%)"),
+            );
+            let fitted = !chart.target_prices().is_empty();
+            assert_eq!((label, fitted), (drawn, drawn), "replay to {cutoff}");
+        }
+        chart.set_replay_time(None);
         chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 40.0));
         let shapes = test_frames::shapes(&ctx, &mut chart, 0.101, vec![]);
         assert!(
@@ -519,5 +559,113 @@ mod tests {
         ] {
             assert_eq!(percent_change(close, target), expected);
         }
+    }
+
+    /// A market replay draws only the targets its driver answers, which are none, and leaving
+    /// it asks the live feed again.
+    #[test]
+    fn market_replay_draws_no_live_feed_targets() {
+        use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        use chrono::{TimeZone, Utc};
+        let ctx = egui::Context::default();
+        let feed = Arc::new(Feed::default());
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("A")
+            .build();
+        chart.set_timeframe(crate::model::Timeframe::Day1);
+        chart.set_price_targets_visible(true);
+        chart.pump_targets(&ctx);
+        let (_, reply) = feed.0.lock().unwrap().pop().unwrap();
+        reply.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        assert_eq!(chart.price_targets(), Some(&targets()), "live targets held");
+        // Two sessions recorded at 100 in March 2024, after the estimates were published, so
+        // that only the replay's own feed decides what is drawn.
+        let days = [
+            Utc.with_ymd_and_hms(2024, 3, 4, 14, 30, 0).unwrap(),
+            Utc.with_ymd_and_hms(2024, 3, 5, 14, 30, 0).unwrap(),
+        ];
+        let events = days
+            .into_iter()
+            .enumerate()
+            .map(|(id, time)| {
+                let fill = Tick::new(time, 100.0, 1.0, None).with_id(id as u64);
+                ReplayEvent::new("A", time, id as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let instruments = vec![Instrument::new("A").with_tick_size(0.01)];
+        let driver = Arc::new(ReplayDriver::new(events, instruments).unwrap());
+        driver.set_speed(0.0).unwrap();
+        driver.seek(days[1]);
+        chart.set_market_replay(Some(driver));
+        for time in [0.0, 0.1, 0.2, 0.3] {
+            test_frames::frame(&ctx, &mut chart, time, vec![]);
+        }
+        assert!(!chart.bars(SeriesId::MAIN).is_empty(), "replay bars");
+        let horizon = chart
+            .time_to_index(targets().horizon.and_hms_opt(0, 0, 0).unwrap().and_utc())
+            .unwrap() as f32;
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.4, vec![]);
+        assert!(
+            !shapes.iter().any(
+                |s| matches!(s, egui::Shape::Text(t) if t.galley.text().starts_with("High 120"))
+            ),
+            "live feed targets over the replay"
+        );
+        assert!(
+            chart.target_prices().is_empty(),
+            "live targets fit the scale"
+        );
+        assert_eq!(chart.price_targets(), None, "the driver answers none");
+        chart.set_market_replay(None);
+        chart.pump_targets(&ctx);
+        let (asked, reply) = feed.0.lock().unwrap().pop().expect("live feed asked again");
+        assert_eq!(asked, "A");
+        reply.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        assert_eq!(
+            chart.price_targets(),
+            Some(&targets()),
+            "live targets after the replay"
+        );
+    }
+
+    /// A changed conversion drops the targets and the late reply of the previous choice, as it
+    /// drops the bars, and asks the feed in the chosen currency.
+    #[test]
+    fn conversion_drops_targets_of_the_previous_currency() {
+        let ctx = egui::Context::default();
+        let feed = Arc::new(Feed::default());
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("A")
+            .build();
+        chart.set_price_targets_visible(true);
+        chart.pump_targets(&ctx);
+        let (_, late) = feed.0.lock().unwrap().pop().unwrap();
+        chart.set_conversion(Some("EUR".into()));
+        late.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        assert_eq!(
+            chart.price_targets(),
+            None,
+            "a reply to the previous choice"
+        );
+        let (asked, reply) = feed.0.lock().unwrap().pop().unwrap();
+        assert_eq!(asked, "A in EUR");
+        reply.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        assert_eq!(chart.price_targets(), Some(&targets()), "answered in EUR");
+        chart.set_conversion(None);
+        assert_eq!(
+            chart.price_targets(),
+            None,
+            "EUR targets in the own currency"
+        );
+        chart.pump_targets(&ctx);
+        assert_eq!(feed.0.lock().unwrap().pop().unwrap().0, "A");
     }
 }

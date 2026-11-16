@@ -13,6 +13,7 @@ struct Document<T> {
     template: T,
 }
 
+#[derive(Debug)]
 enum Pending {
     List,
     Load(String),
@@ -36,8 +37,32 @@ pub struct TemplateStore<T> {
     pub error: Option<String>,
 }
 
+impl<T> std::fmt::Debug for TemplateStore<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemplateStore")
+            .field("kind", &self.kind)
+            .field("remaining", &self.remaining)
+            .field("loaded", &self.loaded)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {
     /// An empty catalog in the supplied namespace, initially kept only in memory.
+    ///
+    /// ```
+    /// use egui_charts::model::Timeframe;
+    /// use egui_charts::services::StoreKind;
+    /// use egui_charts::studies::StudyTemplateSet;
+    /// use egui_charts::ui::dialogs::templates::TemplateStore;
+    ///
+    /// let mut store = TemplateStore::new(StoreKind::StudyTemplates);
+    /// let mut set = StudyTemplateSet::default();
+    /// set.interval = Some(Timeframe::Day1);
+    /// store.save("Daily", set).unwrap();
+    /// assert_eq!(store.entries()["Daily"].interval, Some(Timeframe::Day1));
+    /// ```
     pub fn new(kind: StoreKind) -> Self {
         Self {
             entries: BTreeMap::new(),

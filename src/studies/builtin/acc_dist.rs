@@ -28,7 +28,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Accumulation/Distribution Line indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AccumulationDistribution {
     values: IndicatorValues,
     stepper: Stepper<f64>,

@@ -20,7 +20,7 @@ pub(super) fn volatility_smile() -> Chart {
     };
     let mut chart = Chart::new(BarData::from_bars(smile(30.0)));
     chart.set_chart_type(ChartType::Line);
-    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale { precision: 0 })));
+    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::new(0))));
     chart.set_symbol("30-day IV, %");
     chart.config_mut().show_volume = false;
     chart.config_mut().show_legend_volume = false;

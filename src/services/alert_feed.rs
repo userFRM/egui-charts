@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 /// Loaded live bars a host can lend to alerts with the same feed view.
 /// Supply only current, unpaused data, never replay bars or incomplete history.
+#[non_exhaustive]
 pub struct AlertData<'a> {
     /// The symbol, interval, calendar, session and conversion of these bars.
     pub request: crate::data::HistoryRequest,
@@ -18,6 +19,10 @@ pub struct AlertData<'a> {
     /// Current drawings in the same bar coordinates, including edits not yet stored.
     #[cfg(feature = "ui")]
     pub drawings: &'a [crate::drawings::Drawing],
+    /// The signals the host's analytics pushed for these bars, which detector alerts follow.
+    pub signals: Vec<&'a crate::model::Signal>,
+    /// The exchange the feed reports for the symbol, for the messages of detector alerts.
+    pub exchange: Option<&'a str>,
 }
 
 impl std::fmt::Debug for AlertData<'_> {

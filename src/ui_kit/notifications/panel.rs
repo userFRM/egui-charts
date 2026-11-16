@@ -49,6 +49,7 @@ impl NotificationPosition {
 }
 
 /// Configuration for the notification panel
+#[derive(Debug)]
 pub struct NotificationPanelConfig {
     /// Position on screen
     pub position: NotificationPosition,
@@ -81,6 +82,7 @@ enum StackAction {
 ///
 /// Two or more toasts collapse into a stack showing the newest; a pill expands it and a button
 /// beside it dismisses every dismissible toast.
+#[derive(Debug)]
 pub struct NotificationPanel {
     config: NotificationPanelConfig,
 }

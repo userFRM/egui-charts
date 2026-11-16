@@ -182,7 +182,7 @@ pub(super) fn refresh_level_labels(
 /// direct callers set them with [`Indicator::set_timeframe`] (one minute until then) and
 /// [`Indicator::set_instrument`] (UTC until then). The levels come from the chart's own bars, or
 /// with [`with_daily_bars`](Self::with_daily_bars) from the feed's daily bars. Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PivotPoints {
     method: PivotMethod,
     timeframe: PivotTimeframe,
@@ -206,9 +206,12 @@ pub struct PivotPoints {
     /// The feed's daily bars by period, once the host has supplied them.
     daily: Option<Vec<((i32, u32), Bar)>>,
     labels: Vec<StudyLabel>,
+    /// The start `data_start` states, UTC midnight opening the daily-bar group before the oldest
+    /// retained period, kept while the chart empties the study to wait for its full recompute.
+    held_start: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Period {
     key: (i32, u32),
     start: usize,
@@ -216,7 +219,7 @@ struct Period {
     levels: [f64; 11],
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     index: usize,
     previous_date: Option<chrono::NaiveDate>,
@@ -249,6 +252,7 @@ impl PivotPoints {
             label_precision: None,
             daily: None,
             labels: Vec::new(),
+            held_start: None,
         }
     }
 
@@ -424,6 +428,35 @@ impl PivotPoints {
                 })
     }
 
+    /// UTC midnight opening the daily-bar group before the oldest retained period, whose levels
+    /// it supplies; `None` without a period.
+    fn oldest_period_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        // The oldest retained period needs the whole preceding daily-bar group, in UTC.
+        let (year, part) = self.stepper.state().periods.front()?.key;
+        let start = match self.period() {
+            Some(AnchorPeriod::Session) => NaiveDate::from_yo_opt(year, part)?.pred_opt()?,
+            Some(AnchorPeriod::Week) => {
+                NaiveDate::from_isoywd_opt(year, part, chrono::Weekday::Mon)?
+                    .checked_sub_days(chrono::Days::new(7))?
+            }
+            Some(AnchorPeriod::Month) => NaiveDate::from_ymd_opt(year, part, 1)?
+                .checked_sub_months(chrono::Months::new(1))?,
+            Some(AnchorPeriod::Quarter) => NaiveDate::from_ymd_opt(year, part * 3 + 1, 1)?
+                .checked_sub_months(chrono::Months::new(3))?,
+            period => {
+                let years = match (period, self.timeframe) {
+                    (Some(AnchorPeriod::Decade), _) => 10,
+                    (None, PivotTimeframe::TwoYears) => 2,
+                    (None, PivotTimeframe::ThreeYears) => 3,
+                    (None, PivotTimeframe::FiveYears) => 5,
+                    _ => 1,
+                };
+                NaiveDate::from_ymd_opt((year - 1) * years, 1, 1)?
+            }
+        };
+        Some(start.and_time(chrono::NaiveTime::MIN).and_utc())
+    }
+
     fn run(&mut self, data: &[Bar], mut from: usize) {
         let (period, timeframe) = (self.period(), self.timeframe);
         let method = self.method;
@@ -483,6 +516,11 @@ impl PivotPoints {
             self.intraday = self.stepper.state().intraday;
             self.shown_start = 0;
             from = 0;
+        }
+        // Stated until a recompute yields a period again, so paging keeps it while the chart
+        // holds the study empty.
+        if let Some(start) = self.oldest_period_start() {
+            self.held_start = Some(start);
         }
         let periods = &self.stepper.state().periods;
         let start = periods.front().map_or(data.len(), |period| period.start);
@@ -641,7 +679,12 @@ impl Indicator for PivotPoints {
         show_prices: toggle("Show Prices"),
         label_side: choice("Labels Position", [PivotLabelSide::Left, PivotLabelSide::Right]),
         daily_bars: toggle("Use Daily Bars")
-    ; {});
+    ; changed => {
+        // A start for another period or count would page the wrong history meanwhile.
+        if matches!(changed, "timeframe" | "pivots_back") {
+            self.held_start = None;
+        }
+    });
 
     fn name(&self) -> &str {
         "Pivot Points Standard"
@@ -676,30 +719,7 @@ impl Indicator for PivotPoints {
         if !self.daily_bars || self.interval.duration_ms() >= Timeframe::Day1.duration_ms() {
             return None;
         }
-        // The oldest retained period needs the whole preceding daily-bar group, in UTC.
-        let (year, part) = self.stepper.state().periods.front()?.key;
-        let start = match self.period() {
-            Some(AnchorPeriod::Session) => NaiveDate::from_yo_opt(year, part)?.pred_opt()?,
-            Some(AnchorPeriod::Week) => {
-                NaiveDate::from_isoywd_opt(year, part, chrono::Weekday::Mon)?
-                    .checked_sub_days(chrono::Days::new(7))?
-            }
-            Some(AnchorPeriod::Month) => NaiveDate::from_ymd_opt(year, part, 1)?
-                .checked_sub_months(chrono::Months::new(1))?,
-            Some(AnchorPeriod::Quarter) => NaiveDate::from_ymd_opt(year, part * 3 + 1, 1)?
-                .checked_sub_months(chrono::Months::new(3))?,
-            period => {
-                let years = match (period, self.timeframe) {
-                    (Some(AnchorPeriod::Decade), _) => 10,
-                    (None, PivotTimeframe::TwoYears) => 2,
-                    (None, PivotTimeframe::ThreeYears) => 3,
-                    (None, PivotTimeframe::FiveYears) => 5,
-                    _ => 1,
-                };
-                NaiveDate::from_ymd_opt((year - 1) * years, 1, 1)?
-            }
-        };
-        Some(start.and_time(chrono::NaiveTime::MIN).and_utc())
+        self.held_start
     }
 
     fn update_data(

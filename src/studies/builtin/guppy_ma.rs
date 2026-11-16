@@ -8,7 +8,7 @@ use egui::Color32;
 ///
 /// The lengths default to 3, 5, 8, 10, 12 and 15 for the short group and 30, 35, 40, 45, 50 and 60
 /// for the long group; each one is an input.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GuppyMA {
     periods: [usize; 12],
     values: IndicatorValues,

@@ -26,7 +26,7 @@ const KEPT: usize = 5_000;
 /// Inbox key of the answers to [`Chats::send`]; streams and other requests use keys from 1.
 const SENT: u64 = 0;
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum View {
     #[default]
     Room,
@@ -34,6 +34,7 @@ enum View {
     Members,
 }
 
+#[derive(Debug)]
 struct Composer {
     kind: NewChatRoomKind,
     name: String,
@@ -93,6 +94,28 @@ pub struct ChatsPanel {
     /// A room to select once the service pushes it.
     open: Option<String>,
     action_error: Option<FeedError>,
+}
+
+impl std::fmt::Debug for ChatsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatsPanel")
+            .field("keys", &self.keys)
+            .field("generation", &self.generation)
+            .field("rooms", &self.rooms)
+            .field("room", &self.room)
+            .field("messages", &self.messages)
+            .field("members", &self.members)
+            .field("draft", &self.draft)
+            .field("error", &self.error)
+            .field("search", &self.search)
+            .field("found", &self.found)
+            .field("search_key", &self.search_key)
+            .field("create_key", &self.create_key)
+            .field("member_key", &self.member_key)
+            .field("open", &self.open)
+            .field("action_error", &self.action_error)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ChatsPanel {

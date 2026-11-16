@@ -226,8 +226,10 @@ impl Drawing {
         painter.text(
             label_pos,
             egui::Align2::LEFT_TOP,
-            fit.correlation
-                .map_or_else(|| "n/a".to_owned(), |r| format!("{r:.2}")),
+            fit.correlation.map_or_else(
+                || crate::localization::text(painter.ctx(), "n/a"),
+                |r| format!("{r:.2}"),
+            ),
             egui::FontId::proportional(typography::XS),
             band_color,
         );

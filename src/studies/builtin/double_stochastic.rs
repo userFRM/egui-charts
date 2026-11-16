@@ -9,7 +9,7 @@ use egui::Color32;
 /// Double Stochastic
 /// Applies the stochastic formula twice for smoother signals
 /// More responsive to overbought/oversold conditions
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DoubleStochastic {
     /// Period for stochastic calculation
     period: usize,

@@ -11,6 +11,7 @@ use crate::icons::{Icon, icons};
 use crate::ui::drawing_toolbar::icons as toolbar_icons;
 
 /// Brushes & Shapes category implementation
+#[derive(Debug)]
 pub struct ShapesCategory;
 
 impl ToolCategory for ShapesCategory {

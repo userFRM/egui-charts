@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use egui::Pos2;
 use std::ops::RangeInclusive;
 
+#[derive(Debug)]
 pub(super) struct TpoMenu {
     params: ChartTypeParams,
     clock: BarClock,
@@ -125,6 +126,6 @@ impl TpoMenu {
                 .retain(|r| r.end() < range.start() || r.start() > range.end());
             params.tpo_composites.push(range.clone());
         }
-        chart.set_chart_type_params(params);
+        chart.apply_chart_type_params(params);
     }
 }

@@ -9,7 +9,7 @@ use egui::Color32;
 /// Know Sure Thing (KST) Oscillator
 /// Developed by Martin Pring
 /// Combines multiple ROC values with different smoothing periods
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KnowSureThing {
     /// ROC periods (typically 10, 15, 20, 30)
     roc_periods: [usize; 4],

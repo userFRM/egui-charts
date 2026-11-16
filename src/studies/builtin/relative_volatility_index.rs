@@ -38,7 +38,7 @@ use egui::Color32;
 const SMOOTHING: f64 = 14.0;
 
 /// Relative Volatility Index, a 0 to 100 oscillator in a separate pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RelativeVolatilityIndex {
     length: usize,
     values: IndicatorValues,
@@ -48,7 +48,7 @@ pub struct RelativeVolatilityIndex {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     closes: std::collections::VecDeque<f64>,
     previous: Option<f64>,
