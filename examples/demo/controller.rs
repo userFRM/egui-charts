@@ -1001,8 +1001,6 @@ impl DemoApp {
                     .error(format!("Could not restore detectors: {error}")),
             }
         }
-        // A live run ends with its session, so the alerts it left active stop with it.
-        app.stop_live_strategy();
         app
     }
 
