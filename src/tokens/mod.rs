@@ -96,8 +96,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             submenu_item_height: 38.0,
             color_picker_width: 160.0,
             color_picker_height: 150.0,
-            menu_settings_width: 220.0,
-            menu_settings_height: 400.0,
             default_width: 400.0,
             default_height: 300.0,
             default_min_height: 100.0,

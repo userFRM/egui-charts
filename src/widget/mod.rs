@@ -466,7 +466,8 @@ pub struct Chart {
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
     synced_crosshair_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    /// Price of the external crosshair in its target's units; `None` centres its horizontal line.
+    /// Price of the external crosshair in its target's units; `None` draws the vertical guide
+    /// alone.
     synced_crosshair_price: Option<f64>,
     /// Target bar series of a programmatic position; `None` uses the main scale.
     synced_crosshair_series: Option<SeriesId>,
@@ -476,6 +477,8 @@ pub struct Chart {
     last_crosshair_series: Option<SeriesId>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
+    /// Time of the hovered whitespace slot after the last bar, sent to linked charts.
+    pub(crate) last_hover_whitespace: Option<DateTime<Utc>>,
 
     // =========================================================================
     // Marks (Widget API)

@@ -3,8 +3,8 @@
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
     BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig,
-    GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize,
-    RegressionTrendConfig, VwapBand, VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
+    GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, VwapBand,
+    VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -575,13 +575,68 @@ impl InputsTab {
                 }
             }
             Tool::RegressionTrend => {
-                let config = drawing.regression_trend.unwrap_or_default();
-                let mut deviations = config.deviations();
+                let original = drawing.regression_trend.unwrap_or_default();
+                let mut config = original;
+                let mut upper = config.upper_deviation();
+                let mut lower = config.lower_deviation();
+                let mut precision = config.precision();
+                for (name, used, deviations) in [
+                    ("Upper deviation", &mut config.use_upper, &mut upper),
+                    ("Lower deviation", &mut config.use_lower, &mut lower),
+                ] {
+                    ui.horizontal(|ui| {
+                        let name = l10n::text(ui.ctx(), name);
+                        ui.checkbox(used, &name);
+                        ui.add(
+                            egui::DragValue::new(deviations)
+                                .range(f64::MIN_POSITIVE..=10.0)
+                                .speed(0.1),
+                        )
+                        .accessible_name(name);
+                    });
+                }
                 FormGrid::new("regression_inputs").show(ui, |ui| {
-                    number(ui, "Deviations", &mut deviations, f64::MIN_POSITIVE..=10.0)
+                    let ctx = ui.ctx().clone();
+                    let label = ui.label(l10n::text(&ctx, "Source"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "regression_source",
+                            &mut config.source,
+                            PriceSource::all(),
+                            |s| s.label().into(),
+                        );
+                    });
+                    ui.end_row();
+                    let label = ui.label(l10n::text(&ctx, "Line style"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "regression_line_style",
+                            &mut config.line_style,
+                            LineStyle::all().iter().copied(),
+                            |style| l10n::text(&ctx, style.name()),
+                        );
+                    });
+                    ui.end_row();
+                    let label = ui.label(l10n::text(&ctx, "Precision"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "regression_precision",
+                            &mut precision,
+                            std::iter::once(None).chain((0..=8).map(Some)),
+                            |places| {
+                                places
+                                    .map_or_else(|| l10n::text(&ctx, "Default"), |p| p.to_string())
+                            },
+                        );
+                    });
+                    ui.end_row();
                 });
-                if deviations != config.deviations() {
-                    drawing.regression_trend = RegressionTrendConfig::new(deviations);
+                if let Some(updated) = config
+                    .with_deviations(upper, lower)
+                    .and_then(|config| config.with_precision(precision))
+                    && updated != original
+                {
+                    drawing.regression_trend = Some(updated);
                 }
             }
             Tool::ElliottImpulse

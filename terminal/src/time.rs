@@ -806,13 +806,16 @@ mod tests {
             );
             terminal.wire_slot(1);
             terminal.layout.mode = egui_charts::widget::ChartLayoutMode::TwoHorizontal;
+            // The layout reads its switches from the menu each frame.
             terminal.layout.sync.sync_time_axis = false;
+            terminal.top_toolbar.chart_grid_selector.sync = terminal.layout.sync.clone();
             for _ in 0..3 {
                 frame(&mut terminal, size, vec![]);
             }
             let day = NaiveDate::from_ymd_opt(2025, 12, 29).unwrap();
             for sync in [false, true] {
                 terminal.layout.sync.sync_date_range = sync;
+                terminal.top_toolbar.chart_grid_selector.sync = terminal.layout.sync.clone();
                 let before = terminal.charts[1].get_time_scale_state();
                 terminal.run(Action::DatePicker(DatePickerAction::SetRange(day, day)));
                 frame(&mut terminal, size, vec![]);

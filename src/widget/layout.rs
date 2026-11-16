@@ -955,7 +955,9 @@ pub struct ChartSyncOptions {
     /// Synchronize interval changes for fields following the layout setting.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
     pub sync_timeframe: bool,
-    /// Apply host date-range selections to the group, independently of scrolling and zooming.
+    /// Pass chosen date ranges, as given to [`ChartLayout::apply_date_range`], on to the group.
+    /// Later scrolling and zooming stay on each chart. A group that synchronizes scrolling and
+    /// zooming receives chosen ranges whether this is on or off.
     pub sync_date_range: bool,
 }
 
@@ -1566,21 +1568,24 @@ impl ChartLayout {
         self.detached.get(index).copied().unwrap_or(false)
     }
 
-    /// Fits an explicit date selection to the active chart, or its synchronization group
-    /// when `sync_date_range` is enabled. Call after the charts have rendered at their sizes.
+    /// Fits an explicit date selection to the active chart. With `sync_time_axis` on, the other
+    /// charts of its synchronization group then show the active chart's new span, as after a
+    /// scroll or zoom; otherwise they fit the selection itself when `sync_date_range` is on, and
+    /// keep their view with both off. Call after the charts have rendered at their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
         let Some(active) = charts.get_mut(self.active) else {
             return;
         };
-        let source = active
-            .fit_time_range(range, f64::INFINITY)
-            .then(|| active.sync_source())
-            .flatten();
+        let fitted = active.fit_time_range(range, f64::INFINITY);
+        let source = fitted.then(|| active.sync_source()).flatten();
+        let span = active
+            .visible_time_range()
+            .filter(|_| fitted && self.sync.sync_time_axis);
+        let Some(range) = span.or(self.sync.sync_date_range.then_some(range)) else {
+            return;
+        };
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
-            if index != self.active
-                && self.sync.sync_date_range
-                && self.same_group(index, self.active)
-            {
+            if index != self.active && self.same_group(index, self.active) {
                 chart.apply_synced_time_range_from(range, source);
             }
         }
@@ -1744,6 +1749,7 @@ impl ChartLayout {
         }
         for chart in charts.iter_mut() {
             chart.last_hover_bar_idx = None;
+            chart.last_hover_whitespace = None;
         }
         let mut pointer_down = ui.input(|i| i.pointer.any_down());
         let before_range = charts[self.active].visible_time_range();
@@ -3920,6 +3926,126 @@ mod tests {
         }
     }
 
+    /// Linked charts mark a time the pointer reaches after the last bar at the slot holding it:
+    /// eight one-minute slots after bar 99, opened 22:13:20 on Tuesday 14 November 2023, open
+    /// at 00:00:20 the next day. One-minute bars from 22:13:00 hold it in their slot 107, opened
+    /// at midnight, and twenty five-minute bars from 22:13:00 in their slot 21, opened at 23:58.
+    #[test]
+    fn linked_crosshair_marks_a_time_after_the_last_bar() {
+        let start = DateTime::from_timestamp(1_699_999_980, 0).unwrap();
+        let whole_minutes = |count: i64, minutes: i64, timeframe| {
+            let mut chart = Chart::new(BarData::from_bars(
+                (0..count)
+                    .map(|i| {
+                        let time = start + Duration::minutes(minutes * i);
+                        Bar::new(time, 10.0, 11.0, 9.0, 10.0, 1.0)
+                    })
+                    .collect(),
+            ));
+            chart.set_symbol("SAMPLE");
+            chart.set_timeframe(timeframe);
+            chart
+        };
+        let (one, five) = (
+            whole_minutes(100, 1, Timeframe::Min1),
+            whole_minutes(20, 5, Timeframe::Min5),
+        );
+        for (receiver, slot, label) in [
+            (one, 107.0, "Wed 15 Nov '23 00:00"),
+            (five, 21.0, "Tue 14 Nov '23 23:58"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), receiver];
+            let size = vec2(1440.0, 900.0);
+            frame_texts(&ctx, &mut layout, &mut charts, size, 0.0, vec![]);
+            // Twenty empty slots after the last bar of each chart, at a spacing whose slots do not
+            // fall on whole screen points.
+            for chart in &mut charts {
+                chart.apply_synced_time_scale(6.7, 20.0);
+            }
+            frame_texts(&ctx, &mut layout, &mut charts, size, 0.1, vec![]);
+            let pointer = pos2(
+                charts[0].index_to_x(107.0).unwrap(),
+                charts[0].last_rendered_price_rect.center().y,
+            );
+            let marked = |texts: &[(String, Rect, Pos2)], chart: &Chart| {
+                let x = chart.index_to_x(slot).unwrap();
+                let bottom = chart.last_rendered_price_rect.bottom();
+                texts.iter().any(|(text, _, centre)| {
+                    text == label && (centre.x - x).abs() < 2.0 && (centre.y - bottom).abs() < 30.0
+                })
+            };
+            let mut texts = Vec::new();
+            for time in [0.2, 0.3] {
+                let events = vec![Event::PointerMoved(pointer)];
+                texts = frame_texts(&ctx, &mut layout, &mut charts, size, time, events);
+            }
+            assert!(marked(&texts, &charts[1]), "{label}");
+            for time in [0.4, 0.5] {
+                let events = vec![Event::PointerGone];
+                texts = frame_texts(&ctx, &mut layout, &mut charts, size, time, events);
+            }
+            assert!(
+                !marked(&texts, &charts[1]),
+                "{label} after the pointer left"
+            );
+        }
+    }
+
+    /// A time sent without a price, from a pointer over a study pane, draws the vertical guide
+    /// and the time label alone, with no price label in the normal or magnet crosshair mode.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn time_only_crosshair_draws_no_price_guide() {
+        for mode in [
+            crate::config::CrosshairMode::Normal,
+            crate::config::CrosshairMode::Magnet,
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60)];
+            for chart in &mut charts {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
+            charts[1].set_crosshair_mode(mode);
+            let size = vec2(1440.0, 900.0);
+            frame_texts(&ctx, &mut layout, &mut charts, size, 0.0, vec![]);
+            // The texts painted on the receiver's price axis, beside its price pane.
+            let axis = |texts: &[(String, Rect, Pos2)], chart: &Chart| -> Vec<String> {
+                let plot = chart.last_rendered_price_rect;
+                texts
+                    .iter()
+                    .filter(|(_, _, centre)| {
+                        centre.x > plot.right() && plot.y_range().contains(centre.y)
+                    })
+                    .map(|(text, ..)| text.clone())
+                    .collect()
+            };
+            let idle = frame_texts(&ctx, &mut layout, &mut charts, size, 0.1, vec![]);
+            let pane = charts[0].get_rendered_indicator_panes()[0].panel_rect;
+            let pointer = pos2(charts[0].index_to_x(40.0).unwrap(), pane.center().y);
+            let mut texts = Vec::new();
+            for time in [0.2, 0.3] {
+                let events = vec![Event::PointerMoved(pointer)];
+                texts = frame_texts(&ctx, &mut layout, &mut charts, size, time, events);
+            }
+            assert_eq!(charts[1].synced_crosshair_bar_idx, Some(40.0), "{mode:?}");
+            assert_eq!(charts[1].last_crosshair.map(|(_, price)| price), Some(None));
+            assert_eq!(
+                axis(&texts, &charts[1]),
+                axis(&idle, &charts[1]),
+                "{mode:?}"
+            );
+        }
+    }
+
     #[test]
     fn sync_switches_and_groups_isolate_changes() {
         let mut layout = ChartLayout {
@@ -3965,14 +4091,27 @@ mod tests {
             from: refs[0].state.shown()[10].time,
             to: refs[0].state.shown()[30].time,
         };
+        // Shared scrolling and zooming passes a chosen range on; without it only "Date range"
+        // does, and other groups keep their view either way.
         let before = refs[1].get_time_scale_state();
-        layout.apply_date_range(&mut refs, range);
-        assert_eq!(refs[1].get_time_scale_state(), before);
-        layout.sync.sync_date_range = true;
         let isolated = refs[2].get_time_scale_state();
-        layout.apply_date_range(&mut refs, range);
-        assert_ne!(refs[1].get_time_scale_state(), before);
-        assert_eq!(refs[2].get_time_scale_state(), isolated);
+        for (sync_time_axis, sync_date_range, moves) in [
+            (true, false, true),
+            (false, false, false),
+            (false, true, true),
+        ] {
+            layout.sync.sync_time_axis = sync_time_axis;
+            layout.sync.sync_date_range = sync_date_range;
+            refs[1].apply_synced_time_scale(before.0, before.1);
+            layout.apply_date_range(&mut refs, range);
+            assert_eq!(
+                refs[1].get_time_scale_state() != before,
+                moves,
+                "{sync_time_axis} {sync_date_range}"
+            );
+            assert_eq!(refs[2].get_time_scale_state(), isolated);
+        }
+        layout.sync.sync_time_axis = true;
 
         // Clearing the legacy picker must exclude a chart, rather than joining unnamed charts.
         {

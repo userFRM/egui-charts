@@ -218,8 +218,11 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut middle = levels[2];
         middle.visible = false;
         settings.levels.push(middle);
-    } else if study.name() == "KST" && settings.levels.is_empty() && levels.len() == 1 {
-        // Saved before it had a zero guide, a KST keeps drawing none until the guide is shown.
+    } else if matches!(study.name(), "KST" | "CMF" | "Force Index")
+        && settings.levels.is_empty()
+        && levels.len() == 1
+    {
+        // Saved before it had a zero guide, the study keeps drawing none until the guide is shown.
         let mut zero = levels[0];
         zero.visible = false;
         settings.levels.push(zero);
@@ -334,7 +337,7 @@ pub struct StudySettings {
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
-    /// Know Sure Thing saved with none.
+    /// Know Sure Thing, Chaikin Money Flow or Force Index saved with none.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
     /// Whether the band between the boundary levels is filled.
