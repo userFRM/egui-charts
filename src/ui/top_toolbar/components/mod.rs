@@ -36,9 +36,7 @@ pub use sync_button::SyncButton;
 pub use layout_menu::{LayoutAction, LayoutMenu, LayoutMenuConfig};
 
 // From settings_menu (ChartType comes from chart_type_selector - single source of truth)
-pub use settings_menu::{
-    ChartSettings, SettingsAction, SettingsDialog, SettingsDialogConfig, SettingsMenu, SettingsTab,
-};
+pub use settings_menu::{SettingsAction, SettingsDialog, SettingsDialogConfig, SettingsTab};
 
 // From symbol_search
 pub use symbol_search::{
