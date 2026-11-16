@@ -88,7 +88,10 @@ impl Chart {
     /// Analyst targets come from the driver, which answers none, and from the live feed on exit.
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
-    /// nanosecond later. An interval change resubscribes at the same shared position.
+    /// nanosecond later. An interval change resubscribes at the same shared position. On exit,
+    /// the order-flow inputs of the studies are rebuilt from the executions the live feed kept,
+    /// also while it stays paused; without a feed they are emptied, and a host that fills them
+    /// itself pushes its events again.
     ///
     /// Other series that the host supplies are windowed as in [`Self::set_replay_time`]: they
     /// show only the bars completed by [`Self::replay_time`] and follow seeks, playback,
@@ -103,6 +106,18 @@ impl Chart {
             self.reload_price_targets();
             self.replay = Some(replay.window);
             self.set_replay_time(None);
+            // The studies' order-flow inputs hold what the driver delivered, and a paused feed
+            // reloads nothing: rebuild them from the restored feed, or empty them without one.
+            // Clearing first also drops the recorded quotes and books and the driver's
+            // allocations to trade-based bars, which a rebuild keeps.
+            for study in self.studies.indicators() {
+                for input in study.order_flow_inputs() {
+                    input.clear();
+                    if let Some(link) = &self.feed_link {
+                        link.rebuild_study_input(input, &self.state.data().bars);
+                    }
+                }
+            }
         }
         let Some(driver) = driver else { return };
         let history = self

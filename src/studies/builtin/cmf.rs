@@ -189,6 +189,13 @@ impl Indicator for ChaikinMoneyFlow {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(0.0, palette::GRAY, "Zero")],
+            ..Default::default()
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // CMF is a separate oscillator pane
     }

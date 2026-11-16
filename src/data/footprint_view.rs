@@ -1,6 +1,6 @@
 //! Borrowed rows of an immutable prepared page.
 
-use super::footprint::meets_threshold;
+use super::footprint::{meets_threshold, side_delta};
 use super::{FootprintBar, FootprintLevel};
 use chrono::{DateTime, Utc};
 use std::{collections::BTreeMap, fmt, sync::Arc};
@@ -181,9 +181,9 @@ impl<'a> FootprintBarView<'a> {
             max_delta: 0.0,
         }
     }
-    /// Buy volume minus sell volume.
+    /// Buy volume minus sell volume; zero for sides equal up to the rounding of their sums.
     pub fn delta(&self) -> f64 {
-        self.ask - self.bid
+        side_delta(self.ask, self.bid)
     }
 
     /// Total executed volume.
@@ -290,9 +290,10 @@ impl<'a> FootprintBarView<'a> {
 
     /// (bid, ask) dominance at `level`, comparing horizontally or to the adjacent price.
     /// Missing adjacent prices and the outer diagonals do not signal an imbalance.
-    /// A positive side against a zero opposite side is imbalanced. The dominant side needs at
-    /// least `min_volume`, inclusive and with the ratio's rounding tolerance; zero keeps every
-    /// ratio signal. Ratios below 1, negative minima or non-finite values produce no signals.
+    /// A positive side against a zero opposite side is imbalanced; sides equal within the ratio's
+    /// rounding tolerance are not, at any ratio. The dominant side needs at least `min_volume`,
+    /// inclusive and with the ratio's rounding tolerance; zero keeps every ratio signal. Ratios
+    /// below 1, negative minima or non-finite values produce no signals.
     pub fn imbalance(
         &self,
         level: i64,
@@ -307,7 +308,9 @@ impl<'a> FootprintBarView<'a> {
             return (false, false);
         }
         let dominant = |a: f64, b: f64| {
-            a > b && meets_threshold(a, min_volume) && meets_threshold(a / ratio, b)
+            !meets_threshold(b, a)
+                && meets_threshold(a, min_volume)
+                && meets_threshold(a / ratio, b)
         };
         if !diagonal {
             return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
