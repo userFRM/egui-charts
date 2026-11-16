@@ -794,7 +794,7 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.position_style.font_size, 16.0);
             assert_eq!(saved.marker, marker);
-            assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
+            assert_eq!(saved.regression_trend.unwrap().upper_deviation(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.line_measurements, measurements);
             assert!(saved.bars_pattern.unwrap().mirrored);

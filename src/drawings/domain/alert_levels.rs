@@ -6,8 +6,8 @@ use crate::scales::PriceScaleMode;
 
 impl Drawing {
     /// [`Self::alert_levels`] with the main-series bars needed by a regression drawing. The
-    /// fitted median is level 0, upper band 1 and lower band 2. Regression uses the same closes,
-    /// residual deviation and axis interpolation between fitted endpoints as its painted lines.
+    /// fitted median is level 0, upper band 1 and lower band 2. Regression uses the same source
+    /// prices, bounds and axis interpolation between fitted endpoints as its painted lines.
     /// Empty when the anchored range has fewer than two bars or invalid geometry.
     pub fn alert_levels_with_bars(
         &self,
@@ -29,33 +29,30 @@ impl Drawing {
         else {
             return Vec::new();
         };
-        let Some(fit) = Moments::of(bars).fit() else {
+        let config = self.regression_trend.unwrap_or_default();
+        let Some(fit) = Moments::of(bars, config.source).fit() else {
             return Vec::new();
         };
         if !fit.intercept.is_finite() || !fit.slope.is_finite() || !fit.sigma.is_finite() {
             return Vec::new();
         }
-        let deviations = self.regression_trend.unwrap_or_default().deviations();
+        let [above, below] = fit.bounds(bars, config.band_deviations());
         let last = (bars.len() - 1) as f64;
-        [
-            ("Median", 0.0),
-            ("Upper", deviations),
-            ("Lower", -deviations),
-        ]
-        .into_iter()
-        .enumerate()
-        .filter_map(|(level, (name, k))| {
-            let start = fit.intercept + k * fit.sigma;
-            let end = start + fit.slope * last;
-            axis_line(
-                [first as f64, start],
-                [first as f64 + last, end],
-                bar,
-                scale,
-            )
-            .map(|price| (level, name.to_owned(), price))
-        })
-        .collect()
+        [("Median", 0.0), ("Upper", above), ("Lower", -below)]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(level, (name, offset))| {
+                let start = fit.intercept + offset;
+                let end = start + fit.slope * last;
+                axis_line(
+                    [first as f64, start],
+                    [first as f64 + last, end],
+                    bar,
+                    scale,
+                )
+                .map(|price| (level, name.to_owned(), price))
+            })
+            .collect()
     }
 
     pub(super) fn fork_alert_levels(

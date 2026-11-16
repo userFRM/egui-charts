@@ -9191,7 +9191,7 @@ mod tests {
             );
             assert_eq!(saved.volume_profile.unwrap().rows(), 48);
             assert_eq!(saved.position_sizing, sizing);
-            assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
+            assert_eq!(saved.regression_trend.unwrap().upper_deviation(), 3.0);
             assert!(saved.channel_midline);
             assert!(app.chart.drawings().drawings[1].fib_config.is_none());
             assert_eq!(app.chart.drawings().drawings[1].chart_points[0].price, 75.0);

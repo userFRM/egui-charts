@@ -421,6 +421,20 @@ mod tests {
                 "regression {level}: {got} != {expected}"
             );
         }
+        // Without their deviations the bands pass through the residuals 1.6 above and 2.6 below.
+        let mut config = crate::drawings::RegressionTrendConfig::default();
+        config.use_upper = false;
+        config.use_lower = false;
+        chart.drawings_mut().drawings[0].regression_trend = Some(config);
+        for (level, expected) in [(1, 108.4), (2, 104.2)] {
+            let source = chart.drawings().drawings[0].alert_source(level);
+            let got = chart.alert_value(&source, 3).unwrap();
+            assert!(
+                (got - expected).abs() < 1e-9,
+                "{level}: {got} != {expected}"
+            );
+        }
+        chart.drawings_mut().drawings[0].regression_trend = None;
         #[cfg(feature = "ui")]
         {
             let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
