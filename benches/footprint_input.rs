@@ -3,6 +3,8 @@
 //! Snapshot CSV: bars, rows per bar, range, p50 us, p95 us, allocation calls,
 //! allocated bytes, copied price rows. Writer CSV: queries enabled, samples,
 //! p50 us, p95 us, p99 us, max us. Ingestion CSV: fixture, elapsed ms, allocations, bytes.
+//! `--prepared` uses a shared page admitted by an actual candle chart with a profile study
+//! (requires `widget,studies`); fixture construction and admission are outside capture timing.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::OrderFlowInput;
@@ -47,6 +49,94 @@ fn percentile(values: &mut [f64], fraction: f64) -> f64 {
     values[((values.len() - 1) as f64 * fraction) as usize]
 }
 
+#[cfg(all(feature = "widget", feature = "studies"))]
+fn prepared_input(start: DateTime<Utc>, bars: i64, rows: i64) -> OrderFlowInput {
+    use egui_charts::data::{
+        Datafeed, Footprint, FootprintBar, FootprintPage, FootprintRequest, HistoryPage,
+        HistoryRequest, Reply, Subscription, TradePage, TradeRequest,
+    };
+    use egui_charts::model::{Bar, Instrument};
+    use egui_charts::studies::IndicatorFactory;
+    use egui_charts::widget::ChartBuilder;
+
+    struct Feed {
+        bars: Vec<Bar>,
+        rows: Arc<Vec<FootprintBar>>,
+        boundary: Tick,
+    }
+    impl Datafeed for Feed {
+        fn resolve(&self, _: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new("SAMPLE").with_tick_size(0.25)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::new(self.bars.clone(), true)));
+        }
+        fn subscribe(&self, subscription: Subscription) {
+            subscription.sink.push_tick(self.boundary.clone());
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            reply.send(Ok(TradePage::new(vec![self.boundary.clone()], false)));
+        }
+        fn footprints(&self, _: FootprintRequest, reply: Reply<FootprintPage>) {
+            reply.send(Ok(FootprintPage::from_shared(
+                self.rows.clone(),
+                self.boundary.ts,
+                true,
+            )));
+        }
+    }
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+    let mut candles = Vec::new();
+    for bar in 0..bars {
+        let time = start + TimeDelta::minutes(bar);
+        let high = 100.0 + (rows - 1) as f64 * 0.25;
+        candles.push(Bar::new(time, 100.0, high, 100.0, high, rows as f64));
+        for row in 0..rows {
+            flow.push(&Tick::new(
+                time + TimeDelta::microseconds(row),
+                100.0 + row as f64 * 0.25,
+                1.0,
+                None,
+            ))
+            .unwrap();
+        }
+    }
+    let feed = Arc::new(Feed {
+        bars: candles,
+        rows: Arc::new(flow.bars().values().cloned().collect()),
+        boundary: Tick::new(
+            start + TimeDelta::minutes(bars - 1) + TimeDelta::seconds(30),
+            100.0,
+            1.0,
+            None,
+        )
+        .with_id(1),
+    });
+    let mut chart = ChartBuilder::new()
+        .with_feed(feed)
+        .with_symbol("SAMPLE")
+        .with_initial_bars(bars as usize)
+        .build();
+    let study = IndicatorFactory::new().create("Vol Profile FR").unwrap();
+    let input = study.order_flow_inputs()[0].clone();
+    chart.add_indicator(study);
+    let ctx = egui::Context::default();
+    for _ in 0..6 {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            chart.show(ui);
+        });
+    }
+    assert_eq!(
+        input
+            .footprint_snapshot(start)
+            .bars(..)
+            .map(|bar| bar.volume())
+            .sum::<f64>(),
+        (bars * rows + 1) as f64
+    );
+    input
+}
+
 fn record_short_bars() {
     let start: DateTime<Utc> = "2026-01-05T00:00:00Z".parse().unwrap();
     for timeframe in [Timeframe::Min1, "1t".parse().unwrap()] {
@@ -88,14 +178,24 @@ fn main() {
         return;
     }
     let clock = BarClock::new(Timeframe::Min1);
+    let prepared = std::env::args().any(|arg| arg == "--prepared");
     let start: DateTime<Utc> = "2026-01-05T00:00:00Z".parse().unwrap();
     for (bars, rows) in [(64, 16), (480, 64), (1_500, 64)] {
-        let input = OrderFlowInput::footprint();
+        let input = if prepared {
+            #[cfg(all(feature = "widget", feature = "studies"))]
+            {
+                prepared_input(start, bars, rows)
+            }
+            #[cfg(not(all(feature = "widget", feature = "studies")))]
+            panic!("--prepared requires widget,studies");
+        } else {
+            OrderFlowInput::footprint()
+        };
         input.set_tick_size(Some(0.25));
         CALLS.store(0, Ordering::Relaxed);
         BYTES.store(0, Ordering::Relaxed);
         let begin = Instant::now();
-        for bar in 0..bars {
+        for bar in 0..if prepared { 0 } else { bars } {
             for row in 0..rows {
                 input.push_trade(
                     &clock,
@@ -111,7 +211,9 @@ fn main() {
         let recording_ms = begin.elapsed().as_secs_f64() * 1e3;
         let calls = CALLS.load(Ordering::Relaxed);
         let bytes = BYTES.load(Ordering::Relaxed);
-        println!("recording,{bars},{rows},{recording_ms:.3},{calls},{bytes}");
+        if !prepared {
+            println!("recording,{bars},{rows},{recording_ms:.3},{calls},{bytes}");
+        }
         for (name, from, expected) in [
             ("all", start, bars * rows),
             ("last_bar", start + TimeDelta::minutes(bars - 1), rows),
@@ -150,7 +252,7 @@ fn main() {
             let producer = input.clone();
             let clock = clock.clone();
             let trade = Tick::new(
-                start + TimeDelta::minutes(bars - 1) + TimeDelta::seconds(1),
+                start + TimeDelta::minutes(bars - 1) + TimeDelta::seconds(31),
                 100.0,
                 1.0,
                 None,
@@ -187,9 +289,9 @@ fn main() {
         }
         assert_eq!(
             retained.bars(..).map(|bar| bar.volume()).sum::<f64>(),
-            (bars * rows) as f64
+            (bars * rows + i64::from(prepared)) as f64
         );
-        let latest = start + TimeDelta::minutes(bars - 1) + TimeDelta::seconds(2);
+        let latest = start + TimeDelta::minutes(bars - 1) + TimeDelta::seconds(32);
         for (name, time) in [
             ("current", latest),
             ("rollover", start + TimeDelta::minutes(bars)),
