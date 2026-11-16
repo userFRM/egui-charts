@@ -7,6 +7,11 @@ use crate::localization as l10n;
 use egui::{Rect, Ui, Vec2};
 
 /// Session state for the drawing glyph picker.
+///
+/// ```
+/// let mut picker = egui_charts::ui::drawing_toolbar::GlyphPicker::default();
+/// picker.sticker_size = 96.0;
+/// ```
 #[derive(Clone, Debug)]
 pub struct GlyphPicker {
     /// Search by glyph name across icons, emoji and stickers.
