@@ -10,7 +10,11 @@
 //! the tape and the live stream, from the instant of the newest retained trade through that of the
 //! next live trade, each under the same rule. A page's trades at the stream's first instant may
 //! have traded before the subscription, so the live trades left to a page there are kept apart:
-//! they, not the page's, are what the stream sent at that instant.
+//! they, not the page's, are what the stream sent at that instant. A loss of older trades to stay
+//! within capacity leaves the page's trades there held, so the live ones stay apart until the loss
+//! reaches that instant. The sink drops live trades from the oldest it holds, at or after that
+//! instant, so once it drops any, no more are kept apart, and the kept ones go when its drop
+//! reaches their instant.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -165,10 +169,16 @@ pub(crate) struct Trades {
     /// arrival order, each id once, with that instant: the time of the paged trade holding a
     /// trade's id, which a page may stamp apart from the stream, or else the trade's own. The
     /// instant is that of the first live trade so left, the only one at which a page's trades can
-    /// include some that the stream never sent.
+    /// include some that the stream never sent. Live trades are kept only while every trade dropped
+    /// to stay within capacity is older than that instant, as the page's trades of it are then all
+    /// held, and until the sink drops live trades, which are at or after it. The list goes when the
+    /// store evicts, or the sink drops, a trade of that instant or a later one.
     unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
+    /// Whether the sink dropped live trades since the subscription began, after which no more are
+    /// kept apart.
+    live_lost: bool,
 }
 
 impl Trades {
@@ -188,6 +198,7 @@ impl Trades {
             left_out_at: None,
             unheld_live: None,
             revision: next_revision(),
+            live_lost: false,
         }
     }
 
@@ -243,7 +254,9 @@ impl Trades {
     /// The first instant, as the page stamps it, where a live trade was left to a page's trades,
     /// and the live trades left to the page's trades of that instant, in arrival order: with the
     /// held live trades of that instant they are all the stream sent at it, while the page's
-    /// trades there may include some it never sent.
+    /// trades there may include some it never sent. They survive the loss of older trades and end
+    /// with that of a trade of that instant or a later one, and no more are kept after the sink
+    /// drops live trades.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -288,6 +301,7 @@ impl Trades {
         // The trades it compared are no longer the live ones.
         self.left_out_at = None;
         self.unheld_live = None;
+        self.live_lost = false;
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -354,8 +368,11 @@ impl Trades {
             if self.left_out_at == Some(evicted.ts) {
                 self.left_out_at = None;
             }
-            // After a loss the paged trades stand in for no live one.
-            self.unheld_live = None;
+            // Paged trades through the loss fill no bar, so once it reaches the kept instant the
+            // kept trades guard nothing.
+            if (self.unheld_live.as_ref()).is_some_and(|(at, _)| evicted.ts >= *at) {
+                self.unheld_live = None;
+            }
             changed(&evicted, false);
         }
     }
@@ -376,6 +393,14 @@ impl Trades {
     /// `changed` with each trade added (`true`) or evicted (`false`).
     pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
         self.lost_until = self.lost_until.max(newer.lost_until);
+        // The sink drops its oldest live trades, at or after the stream's first instant: kept
+        // trades the loss reaches guard nothing, and no later instant is the stream's first.
+        if let Some(lost) = newer.lost_until {
+            self.live_lost = true;
+            if (self.unheld_live.as_ref()).is_some_and(|(at, _)| lost >= *at) {
+                self.unheld_live = None;
+            }
+        }
         for trade in newer.trades {
             let paged_until = match trade.id {
                 Some(_) => self.paged_without_id_until,
@@ -387,9 +412,10 @@ impl Trades {
                 Some(at) => at >= self.paged,
                 None => paged_until.is_none_or(|until| trade.ts > until),
             };
-            if !live && self.lost_until.is_none() {
-                // A page may stamp its copy of a trade with an id apart from the stream.
-                let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+            // A page may stamp its copy of a trade with an id apart from the stream.
+            let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+            // A loss of older trades leaves the page's trades of this instant held.
+            if !live && !self.live_lost && self.lost_until.is_none_or(|lost| lost < time) {
                 let (kept_at, kept) = self.unheld_live.get_or_insert_with(|| (time, Vec::new()));
                 // shortcut: a scan per trade with an id at this one instant; index the ids if a
                 // feed stamps thousands of trades with one time.
