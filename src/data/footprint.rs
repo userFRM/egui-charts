@@ -19,6 +19,16 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
     value >= threshold * (1.0 - 1e-9)
 }
 
+/// Buy volume `ask` minus sell volume `bid`, or zero when each side meets the other as a
+/// [`meets_threshold`]: sides that differ only by the rounding of their sums are balanced.
+pub(crate) fn side_delta(ask: f64, bid: f64) -> f64 {
+    if meets_threshold(ask, bid) && meets_threshold(bid, ask) {
+        0.0
+    } else {
+        ask - bid
+    }
+}
+
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
 ///
 /// # Layout
@@ -82,9 +92,9 @@ impl FootprintLevel {
         (trades > 0).then(|| self.volume() / trades as f64)
     }
 
-    /// Buy volume minus sell volume.
+    /// Buy volume minus sell volume; zero for sides equal up to the rounding of their sums.
     pub fn delta(&self) -> f64 {
-        self.ask - self.bid
+        side_delta(self.ask, self.bid)
     }
 
     /// Total executed volume, including unclassified trades.
@@ -165,9 +175,12 @@ impl FootprintBar {
     /// row keyed by their quotient.
     pub(crate) fn absorb_grouped<'a>(&mut self, next: impl Into<FootprintBarView<'a>>, group: i64) {
         let next = next.into();
-        let open = self.delta();
-        self.min_delta = self.min_delta.min(open + next.min_delta);
-        self.max_delta = self.max_delta.max(open + next.max_delta);
+        // An extreme of `next` adds its excess of buys or sells to one side so far, so the merged
+        // point balances as `delta` does, and a bar absorbed into an empty one keeps its path.
+        let low = side_delta(self.ask, self.bid - next.min_delta);
+        let high = side_delta(self.ask + next.max_delta, self.bid);
+        self.min_delta = self.min_delta.min(low);
+        self.max_delta = self.max_delta.max(high);
         self.bid += next.bid;
         self.ask += next.ask;
         self.unknown += next.unknown;
@@ -181,7 +194,7 @@ impl FootprintBar {
         }
     }
 
-    /// Buy volume minus sell volume.
+    /// Buy volume minus sell volume; zero for sides equal up to the rounding of their sums.
     pub fn delta(&self) -> f64 {
         FootprintBarView::from(self).delta()
     }
@@ -222,9 +235,10 @@ impl FootprintBar {
 
     /// (bid, ask) dominance at `level`, comparing horizontally or to the adjacent price.
     /// Missing adjacent prices and the outer diagonals do not signal an imbalance.
-    /// A positive side against a zero opposite side is imbalanced. The dominant side needs at
-    /// least `min_volume`, inclusive and with the ratio's rounding tolerance; zero keeps every
-    /// ratio signal. Ratios below 1, negative minima or non-finite values produce no signals.
+    /// A positive side against a zero opposite side is imbalanced; sides equal within the ratio's
+    /// rounding tolerance are not, at any ratio. The dominant side needs at least `min_volume`,
+    /// inclusive and with the ratio's rounding tolerance; zero keeps every ratio signal. Ratios
+    /// below 1, negative minima or non-finite values produce no signals.
     pub fn imbalance(
         &self,
         level: i64,
@@ -407,7 +421,8 @@ impl Footprint {
             .map(|(_, bar)| bar)
     }
 
-    fn complete_at(&self, open: DateTime<Utc>) -> bool {
+    /// Whether the bar slot opening at `open` holds all its executions, if it has any.
+    pub(crate) fn complete_at(&self, open: DateTime<Utc>) -> bool {
         self.incomplete_through.is_none_or(|cut| open > cut)
             && self
                 .missing
@@ -1598,9 +1613,10 @@ mod tests {
             Some(&decimal)
         );
         let mut cancellation = aggregate_bar(start);
-        (cancellation.bid, cancellation.ask, cancellation.unknown) =
-            (50.12345677, 50.12345678, 0.0);
-        (cancellation.min_delta, cancellation.max_delta) = (-cancellation.bid, 1e-8);
+        // 1e-7 apart is 2e-9 of the sides, so they are not balanced, and the delta of
+        // 1.0000000116860974e-7 is above the maximum by far less than the slack.
+        (cancellation.bid, cancellation.ask, cancellation.unknown) = (50.1234567, 50.1234568, 0.0);
+        (cancellation.min_delta, cancellation.max_delta) = (-cancellation.bid, 1e-7);
         let row = cancellation.levels.get_mut(&200).unwrap();
         (row.bid, row.ask, row.unknown) = (cancellation.bid, cancellation.ask, 0.0);
         (row.bid_trades, row.ask_trades, row.unknown_trades) = (1, 1, 0);
@@ -2173,6 +2189,72 @@ mod tests {
         assert_eq!(bar.levels[&50].trades(), 3);
         assert_eq!(FootprintLevel::default().average_size(), None);
         assert_eq!(FootprintBar::empty(start).average_size(), None);
+    }
+
+    #[test]
+    fn sides_equal_up_to_rounding_have_no_imbalance() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        // Sells of 0.1 and 0.2 at 100 sum to 0.30000000000000004, then one buy.
+        for (buy, price, delta, at_100, at_101) in [
+            (0.3, 100.0, 0.0, (false, false), (false, false)),
+            (
+                0.31,
+                100.0,
+                0.009999999999999953,
+                (false, true),
+                (false, false),
+            ),
+            (0.3, 101.0, 0.0, (false, false), (false, false)),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (price, size, side) in [
+                (100.0, 0.1, OrderSide::Sell),
+                (100.0, 0.2, OrderSide::Sell),
+                (price, buy, OrderSide::Buy),
+            ] {
+                flow.push(&Tick::new(start, price, size, Some(side)))
+                    .unwrap();
+            }
+            let bar = &flow.bars()[&start];
+            let diagonal = price != 100.0;
+            let at = |level| bar.imbalance(level, 1.0, diagonal, 0.0);
+            assert_eq!(bar.delta(), delta, "{buy} at {price}");
+            assert_eq!((at(100), at(101)), (at_100, at_101), "{buy} at {price}");
+            if !diagonal {
+                assert_eq!(bar.levels[&100].delta(), delta, "{buy} at {price}");
+            }
+        }
+    }
+
+    #[test]
+    fn profile_path_is_balanced_only_where_its_sides_are() {
+        use OrderSide::{Buy, Sell};
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        // A buy of 0.3 is balanced by sells of 0.1 and 0.2 in the next bar, which sum to
+        // 0.30000000000000004. A first buy of 1e-8 is the high of a bar that then sells 100: its
+        // sides there are 1e-8 and 0, so the profile keeps it.
+        for (trades, path) in [
+            (
+                &[(0, 0.3, Buy), (1, 0.1, Sell), (1, 0.2, Sell)][..],
+                (0.0, 0.0, 0.3),
+            ),
+            (
+                &[(0, 1e-8, Buy), (0, 100.0, Sell)],
+                (-99.99999999, -99.99999999, 1e-8),
+            ),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for &(minutes, size, side) in trades {
+                let at = start + TimeDelta::minutes(minutes);
+                flow.push(&Tick::new(at, 100.0, size, Some(side))).unwrap();
+            }
+            let profile = flow.profile(start, start + TimeDelta::minutes(1));
+            assert_eq!(
+                (profile.delta(), profile.min_delta, profile.max_delta),
+                path,
+                "{trades:?}"
+            );
+        }
     }
 
     #[test]
