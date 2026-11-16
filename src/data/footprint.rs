@@ -613,9 +613,9 @@ impl Footprint {
         };
         let mut changed = None;
         let mut missing = |this: &mut Self, from: DateTime<Utc>, end| {
-            let revision = this.revision;
+            let revision = this.revision();
             this.add_missing(from, end);
-            if this.revision != revision {
+            if this.revision() != revision {
                 changed = Some(changed.map_or(from, |first: DateTime<Utc>| first.min(from)));
             }
         };
@@ -649,9 +649,9 @@ impl Footprint {
             && let Some(first) = stream
         {
             let from = first.max(from);
-            let revision = self.revision;
+            let revision = self.revision();
             self.cover_missing(from, end);
-            if self.revision != revision {
+            if self.revision() != revision {
                 changed = Some(changed.map_or(from, |first| first.min(from)));
             }
         }
