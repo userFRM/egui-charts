@@ -267,7 +267,7 @@ pub(crate) fn footprint_studies_on_rows(
             add(first, last, kind, false);
         }
         if let Some(ratio) = config.ratio.filter(|r| *r >= 1.0) {
-            let dominant = |a: f64, b: f64| a > b && meets_threshold(a, b * ratio);
+            let dominant = |a: f64, b: f64| !meets_threshold(b, a) && meets_threshold(a, b * ratio);
             if dominant(bar.ask, bar.bid) {
                 add(first, last, FootprintStudyKind::RatioAsk, false);
             }
@@ -597,6 +597,18 @@ mod tests {
         ));
         assert!(!marked(&[(0, 100.0, 5.0, None)], &ratio(1.0), RatioAsk));
         assert!(!marked(&flat, &ratio(1.0), RatioAsk) && !marked(&flat, &ratio(1.0), RatioBid));
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 and balance a buy of 0.3.
+        let rounded = [
+            (0, 100.0, 0.1, sell),
+            (1, 100.0, 0.2, sell),
+            (2, 100.0, 0.3, buy),
+        ];
+        for kind in [DeltaAsk, DeltaBid] {
+            assert!(!marked(&rounded, &delta(0.0), kind), "{kind:?}");
+        }
+        for kind in [RatioAsk, RatioBid] {
+            assert!(!marked(&rounded, &ratio(1.0), kind), "{kind:?}");
+        }
         // 29 of 100 is 29%, 33 against 30 and 55 against 50 are 1.1, also with fractional sizes.
         for scale in [1.0, 0.1] {
             for (side, other, delta_kind, ratio_kind) in [

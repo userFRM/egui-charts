@@ -922,6 +922,7 @@ impl Chart {
 
         if self.state.data().is_empty() && self.state.shown().is_empty() {
             self.last_hover_bar_idx = None;
+            self.last_hover_whitespace = None;
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
@@ -3540,10 +3541,15 @@ impl Chart {
             self.last_crosshair = None;
         }
         if let Some(hover_pos) = hover_pos {
+            // After the last bar the time continues into whitespace, for the label and linked charts.
+            let whitespace_time = crosshair_point
+                .filter(|(time, _)| time.is_none())
+                .and_then(|(_, index)| self.whitespace_time(index));
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = crosshair_point
                 .filter(|(time, _)| time.is_some())
                 .map(|(_, index)| index);
+            self.last_hover_whitespace = whitespace_time;
 
             if !menu_open {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
@@ -3575,7 +3581,7 @@ impl Chart {
                 } else {
                     hover_pos
                 };
-                self.last_crosshair = crosshair_time.map(|time| {
+                self.last_crosshair = crosshair_time.or(whitespace_time).map(|time| {
                     let main = price_rect.contains(hover_pos) && !volume_rect.contains(hover_pos);
                     (time, main.then(|| price_map.y_to_price(snapped.y)))
                 });
@@ -3592,7 +3598,7 @@ impl Chart {
                 crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
-                    crosshair_time,
+                    crosshair_time.or(whitespace_time),
                     &price_map,
                     &main_options,
                     time_axis_top,
@@ -3764,6 +3770,7 @@ impl Chart {
         } else {
             // Clear hover bar index when not hovering locally
             self.last_hover_bar_idx = None;
+            self.last_hover_whitespace = None;
             if touch_readout.touch_input {
                 self.last_crosshair = None;
             }
@@ -3782,8 +3789,7 @@ impl Chart {
                     // Convert bar index to screen x coordinate
                     let x = coords.index_to_x(bar_idx);
                     if coords.is_x_visible(x) {
-                        // At the host's price, or a synthetic position at the centre of the
-                        // price range for a time alone
+                        // At the sent price; a time alone has no horizontal guide or price label
                         let target = self.synced_crosshair_series;
                         let main_target = target.is_none_or(|id| {
                             self.series_pane(id) == Some(main_pane) && self.is_series_visible(id)
@@ -3793,7 +3799,7 @@ impl Chart {
                             .and_then(|id| self.series_price_map(id))
                             .unwrap_or(price_map);
                         let mut options = self.chart_options.crosshair;
-                        if !main_target {
+                        if !main_target || self.synced_crosshair_price.is_none() {
                             options.horz_line_visible = false;
                             options.horz_label_visible = false;
                             if options.style == crate::config::CrosshairStyle::Dot {
@@ -3807,29 +3813,11 @@ impl Chart {
                             }
                             None => price_rect.center().y,
                         };
+                        // A whitespace slot by its whole index: `bar_idx` went through screen
+                        // points and can fall short of the slot's start.
                         let time = self
                             .pointer_time(Pos2::new(x, y))
-                            .and_then(|(time, _)| time);
-                        let y = if self.synced_crosshair_price.is_none() && options.mode.snaps() {
-                            self.state
-                                .shown()
-                                .get(bar_idx.round() as usize)
-                                .filter(|bar| Some(bar.time) == time && !bar.is_whitespace())
-                                .and_then(|bar| {
-                                    let prices = [bar.open, bar.high, bar.low, bar.close];
-                                    let values = if options.mode
-                                        == crate::config::CrosshairMode::MagnetClose
-                                    {
-                                        &prices[3..]
-                                    } else {
-                                        &prices[..]
-                                    };
-                                    rendering::snap_to_values(y, &map, values.iter().copied())
-                                })
-                                .map_or(y, |price| map.price_to_y(price))
-                        } else {
-                            y
-                        };
+                            .and_then(|(time, index)| time.or_else(|| self.whitespace_time(index)));
                         self.last_crosshair = time.map(|time| (time, self.synced_crosshair_price));
                         self.last_crosshair_series = target;
                         let target_axis = target.and_then(|id| {
