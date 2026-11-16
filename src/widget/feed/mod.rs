@@ -169,7 +169,7 @@ impl FeedLink {
     /// trade-based interval a source the sink has allocated to, as they are.
     pub(super) fn rebuild_study_input(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
         input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
-        input.replace_trades(&self.clock, &self.trades, history);
+        input.replace_trades(&self.clock, &self.trades, history, self.footprint.as_ref());
         if let Some(now) = self.time {
             input.advance_time(&self.clock, now);
         }

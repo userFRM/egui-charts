@@ -230,8 +230,9 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
-    /// Prepared execution rows for the time-based volume footprint chart. OHLC still comes
-    /// from [`history`](Self::history); both replies must use the same request context.
+    /// Prepared execution rows for time-based volume footprint charts and studies declaring
+    /// an [`OrderFlowInput::footprint`] source, including studies on candle charts. OHLC still
+    /// comes from [`history`](Self::history); both replies must use the same request context.
     /// Held and live trades at or after [`FootprintPage::complete_before`] continue the page.
     /// Prepared rows survive raw-trade eviction; a changed request context or feed reset clears them.
     /// The default answers [`FeedError::NotSupported`] and keeps the trade-based loading path.

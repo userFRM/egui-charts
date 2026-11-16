@@ -128,6 +128,11 @@ impl Chart {
                 .zip(&link.study_inputs)
                 .any(|(a, (b, _))| !a.same_source(b))
         {
+            if inputs.iter().any(|input| input.is_footprint())
+                && let Some(flow) = &mut link.footprint
+            {
+                flow.share_prepared();
+            }
             let previous = std::mem::take(&mut link.study_inputs);
             link.study_inputs = inputs
                 .iter()
@@ -386,6 +391,24 @@ impl Chart {
                 (link.unconfirmed_start(), &mut link.footprint)
             {
                 flow.live.received_from(first);
+            }
+            if link
+                .footprint
+                .as_ref()
+                .is_some_and(|flow| flow.live.prepared_before().is_some())
+            {
+                for (input, _) in &link.study_inputs {
+                    if unplaced && input.is_footprint() {
+                        input.replace_trades(
+                            &link.clock,
+                            &link.trades,
+                            &self.state.data().bars,
+                            link.footprint.as_ref(),
+                        );
+                    } else {
+                        input.refresh_footprint_coverage(&link.trades);
+                    }
+                }
             }
             link.time = link.time.max(updates.time);
             if let Some(now) = link.time {
@@ -919,11 +942,6 @@ impl Chart {
         };
         let rejected = link.trades.prepend(page.trades, fold);
         self.feed.rejected_bars += rejected;
-        if changed {
-            for (input, _) in &link.study_inputs {
-                input.replace_trades(&link.clock, &link.trades, &self.state.data().bars);
-            }
-        }
         // A page that only leaves executions out, or fills the time after the retained ones with
         // none, adds none, yet the held ones then prove less or more.
         let cut = (link.trades.left_out_at(), link.trades.retained_until()) != unproven;
@@ -952,6 +970,16 @@ impl Chart {
             link.footprint = link
                 .footprint(None, &self.state.data().bars)
                 .map(crate::data::FootprintState::new);
+        }
+        for (input, _) in &link.study_inputs {
+            if changed || (prepared_before.is_some() && input.is_footprint()) {
+                input.replace_trades(
+                    &link.clock,
+                    &link.trades,
+                    &self.state.data().bars,
+                    link.footprint.as_ref(),
+                );
+            }
         }
         link.trade_cursor = continuation;
         link.trades_complete |=

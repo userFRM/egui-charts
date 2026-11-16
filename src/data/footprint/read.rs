@@ -295,6 +295,56 @@ impl FootprintState {
         }
     }
 
+    /// Move an owned prepared prefix into a shared owner when another consumer attaches.
+    #[cfg(feature = "widget")]
+    pub(crate) fn share_prepared(&mut self) {
+        let Some(before) = self.live.prepared_before() else {
+            return;
+        };
+        let open = self.live.clock.bar_open(before);
+        if self
+            .live
+            .bars
+            .first_key_value()
+            .is_none_or(|(at, _)| *at >= open)
+        {
+            return;
+        }
+        let tail = self.live.bars.split_off(&open);
+        let bars: Vec<_> = std::mem::replace(&mut self.live.bars, tail)
+            .into_values()
+            .collect();
+        self.live.rows -= bars.iter().map(|bar| bar.levels.len()).sum::<usize>();
+        self.pages.push(PreparedPage {
+            first: bars[0].time,
+            end: bars.len(),
+            start: 0,
+            source: Arc::new(bars),
+        });
+    }
+
+    /// Share admitted history and its boundary seed, without copying the live suffix.
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepared_snapshot(&self) -> Option<Self> {
+        self.live.prepared_before()?;
+        let live = Footprint {
+            clock: self.live.clock.clone(),
+            bars: Default::default(),
+            trade_bars: Default::default(),
+            trade_starts: Default::default(),
+            rows: 0,
+            missing: self.live.missing.clone(),
+            prepared: self.live.prepared.clone(),
+            ..self.live
+        };
+        Some(Self {
+            live,
+            pages: self.pages.clone(),
+            closed: Vec::new(),
+            closed_rows: 0,
+        })
+    }
+
     /// Move finished source bars without copying price rows; only the newest can change.
     pub(crate) fn seal(&mut self) {
         while self.live.bars.len() > 1 {

@@ -3151,58 +3151,85 @@ mod rendering_tests {
                 .map(|level| (level.kind, level.price, level.bars))
                 .collect::<Vec<_>>()
         };
-        for first_read in 0..3 {
-            let mut study = ConfiguredStudy::new(Box::new(VolProfileSession::new(24)));
-            study.set_timeframe(Timeframe::Hour1);
-            study
-                .set_input("row_size", InputValue::Number(2.0))
-                .unwrap();
-            study
-                .set_input("extend_poc", InputValue::Toggle(true))
-                .unwrap();
-            let input = study.order_flow_inputs()[0].clone();
-            input.set_tick_size(Some(1.0));
-            let clock = BarClock::new(Timeframe::Hour1);
-            for bar in &bars {
-                input.push_trade(
-                    &clock,
-                    &crate::model::Tick::new(bar.time, bar.close, bar.volume, None),
+        for prepared in [false, true] {
+            if prepared && !cfg!(feature = "widget") {
+                continue;
+            }
+            for first_read in 0..3 {
+                let mut study = ConfiguredStudy::new(Box::new(VolProfileSession::new(24)));
+                study.set_timeframe(Timeframe::Hour1);
+                study
+                    .set_input("row_size", InputValue::Number(2.0))
+                    .unwrap();
+                study
+                    .set_input("extend_poc", InputValue::Toggle(true))
+                    .unwrap();
+                let input = study.order_flow_inputs()[0].clone();
+                input.set_tick_size(Some(1.0));
+                let clock = BarClock::new(Timeframe::Hour1);
+                if prepared {
+                    #[cfg(feature = "widget")]
+                    {
+                        let mut rows = crate::data::Footprint::new(clock.clone(), 1.0, 1).unwrap();
+                        for bar in &bars {
+                            rows.push(&crate::model::Tick::new(
+                                bar.time, bar.close, bar.volume, None,
+                            ))
+                            .unwrap();
+                        }
+                        let trades = crate::data::trades::Trades::new(1);
+                        let mut history = crate::data::FootprintState::new(rows);
+                        history.prepare_history(
+                            bars.last().unwrap().time + chrono::TimeDelta::hours(1),
+                            &trades,
+                            true,
+                        );
+                        history.share_prepared();
+                        input.replace_trades(&clock, &trades, &bars, Some(&history));
+                    }
+                } else {
+                    for bar in &bars {
+                        input.push_trade(
+                            &clock,
+                            &crate::model::Tick::new(bar.time, bar.close, bar.volume, None),
+                        );
+                    }
+                }
+                study.calculate(&bars);
+                let expected_profiles = profiles(&study);
+                let expected_levels = levels(&study);
+                assert!(!expected_levels.is_empty());
+                let expected_scale = fit_study_mapping(&study, &coords, None).price.range();
+                let mut frozen = study.clone_for_export();
+                frozen.calculate(&bars);
+                input.clear();
+                study.calculate(&bars);
+                assert_ne!(profiles(&study), expected_profiles);
+                match first_read {
+                    0 => {
+                        assert_eq!(profiles(frozen.as_ref()), expected_profiles);
+                    }
+                    1 => {
+                        assert_eq!(levels(frozen.as_ref()), expected_levels);
+                    }
+                    _ => {
+                        assert_eq!(
+                            fit_study_mapping(frozen.as_ref(), &coords, None)
+                                .price
+                                .range(),
+                            expected_scale
+                        );
+                    }
+                }
+                assert_eq!(profiles(frozen.as_ref()), expected_profiles);
+                assert_eq!(levels(frozen.as_ref()), expected_levels);
+                assert_eq!(
+                    fit_study_mapping(frozen.as_ref(), &coords, None)
+                        .price
+                        .range(),
+                    expected_scale
                 );
             }
-            study.calculate(&bars);
-            let expected_profiles = profiles(&study);
-            let expected_levels = levels(&study);
-            assert!(!expected_levels.is_empty());
-            let expected_scale = fit_study_mapping(&study, &coords, None).price.range();
-            let mut frozen = study.clone_for_export();
-            frozen.calculate(&bars);
-            input.clear();
-            study.calculate(&bars);
-            assert_ne!(profiles(&study), expected_profiles);
-            match first_read {
-                0 => {
-                    assert_eq!(profiles(frozen.as_ref()), expected_profiles);
-                }
-                1 => {
-                    assert_eq!(levels(frozen.as_ref()), expected_levels);
-                }
-                _ => {
-                    assert_eq!(
-                        fit_study_mapping(frozen.as_ref(), &coords, None)
-                            .price
-                            .range(),
-                        expected_scale
-                    );
-                }
-            }
-            assert_eq!(profiles(frozen.as_ref()), expected_profiles);
-            assert_eq!(levels(frozen.as_ref()), expected_levels);
-            assert_eq!(
-                fit_study_mapping(frozen.as_ref(), &coords, None)
-                    .price
-                    .range(),
-                expected_scale
-            );
         }
     }
 

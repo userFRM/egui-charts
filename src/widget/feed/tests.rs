@@ -720,6 +720,22 @@ fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
 #[test]
 fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
     let (feed, mut chart, mut frames) = prepared_chart();
+    #[cfg(feature = "studies")]
+    let input = {
+        let id = chart.add_indicator(
+            crate::studies::IndicatorFactory::new()
+                .create("Vol Profile FR")
+                .unwrap(),
+        );
+        frames.run(&mut chart);
+        chart
+            .indicators()
+            .find(|(seen, _)| *seen == id)
+            .unwrap()
+            .1
+            .order_flow_inputs()[0]
+            .clone()
+    };
     let start = bars(1)[0].time;
     let cutoff = start + TimeDelta::minutes(2);
     let saved = [Tick::new(start, 100.0, 5.0, None)];
@@ -738,8 +754,7 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
             .footprint
             .as_ref()
             .unwrap()
-            .owned()
-            .unwrap()
+            .view()
             .bar_at(start)
             .unwrap()
             .levels
@@ -773,9 +788,32 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
         .footprint
         .as_ref()
         .unwrap()
-        .owned()
-        .unwrap();
+        .view();
     assert_eq!(flow.bar_at(start).unwrap().unknown, 5.0);
+    #[cfg(feature = "studies")]
+    {
+        let read = input.footprint_snapshot(start);
+        assert_eq!(
+            read.bars(..)
+                .map(|bar| (bar.time, bar.volume()))
+                .collect::<Vec<_>>(),
+            [
+                (start, 5.0),
+                (start + TimeDelta::minutes(4), 1.0),
+                (start + TimeDelta::minutes(5), 1.0)
+            ]
+        );
+        assert_eq!(
+            read.bars(..)
+                .next()
+                .unwrap()
+                .levels
+                .values()
+                .next()
+                .unwrap() as *const _ as usize,
+            original
+        );
+    }
     assert_eq!(
         flow.complete_bars(..)
             .map(|bar| bar.time)
@@ -791,6 +829,22 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
 #[test]
 fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
     let (feed, mut chart, mut frames) = prepared_chart();
+    #[cfg(feature = "studies")]
+    let input = {
+        let id = chart.add_indicator(
+            crate::studies::IndicatorFactory::new()
+                .create("Vol Profile FR")
+                .unwrap(),
+        );
+        frames.run(&mut chart);
+        chart
+            .indicators()
+            .find(|(seen, _)| *seen == id)
+            .unwrap()
+            .1
+            .order_flow_inputs()[0]
+            .clone()
+    };
     let start = bars(1)[0].time;
     let cutoff = start + TimeDelta::seconds(90);
     let saved = [
@@ -816,8 +870,7 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
         .footprint
         .as_ref()
         .unwrap()
-        .owned()
-        .unwrap();
+        .view();
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(3)));
     assert_eq!(
         flow.complete_bars(..)
@@ -826,6 +879,17 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
         vec![start, start + TimeDelta::minutes(3)]
     );
     assert!(FootprintView::from(flow).complete_bar_at(cutoff).is_none());
+    #[cfg(feature = "studies")]
+    {
+        let read = input.footprint_snapshot(start);
+        assert_eq!(
+            read.bars(..)
+                .map(|bar| (bar.time, bar.volume()))
+                .collect::<Vec<_>>(),
+            [(start, 5.0), (start + TimeDelta::minutes(3), 13.0)]
+        );
+        assert!(!read.span_is_complete(start, start + TimeDelta::minutes(3)));
+    }
     feed.trades
         .lock()
         .unwrap()
@@ -842,11 +906,19 @@ fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
         .footprint
         .as_ref()
         .unwrap()
-        .owned()
-        .unwrap();
+        .view();
     assert!(!flow.span_has_gap(start, None));
     assert_eq!(flow.complete_from(), Some(start));
     assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 9.0);
+    #[cfg(feature = "studies")]
+    {
+        let read = input.footprint_snapshot(start);
+        assert_eq!(
+            read.bars(..).map(|bar| bar.volume()).collect::<Vec<_>>(),
+            [5.0, 9.0, 11.0, 13.0]
+        );
+        assert!(read.span_is_complete(start, start + TimeDelta::minutes(3)));
+    }
 }
 
 #[test]
@@ -967,6 +1039,22 @@ fn prepared_pages_continue_backwards_without_bridging_disjoint_coverage() {
     let start = bars(1)[0].time;
     for disjoint in [false, true] {
         let (feed, mut chart, mut frames) = prepared_chart();
+        #[cfg(feature = "studies")]
+        let input = {
+            let id = chart.add_indicator(
+                crate::studies::IndicatorFactory::new()
+                    .create("Vol Profile FR")
+                    .unwrap(),
+            );
+            frames.run(&mut chart);
+            chart
+                .indicators()
+                .find(|(seen, _)| *seen == id)
+                .unwrap()
+                .1
+                .order_flow_inputs()[0]
+                .clone()
+        };
         let boundary = start + TimeDelta::minutes(2);
         feed.footprints
             .lock()
@@ -1022,10 +1110,23 @@ fn prepared_pages_continue_backwards_without_bridging_disjoint_coverage() {
             .footprint
             .as_ref()
             .unwrap()
-            .owned()
-            .unwrap();
+            .view();
         assert_eq!(flow.bar_at(start).is_none(), disjoint);
         assert_eq!(flow.bar_at(boundary).unwrap().unknown, 5.0);
+        #[cfg(feature = "studies")]
+        {
+            let read = input.footprint_snapshot(start);
+            assert_eq!(
+                read.bars(..)
+                    .map(|bar| (bar.time, bar.volume()))
+                    .collect::<Vec<_>>(),
+                if disjoint {
+                    vec![(boundary, 5.0)]
+                } else {
+                    vec![(start, 7.0), (boundary, 5.0)]
+                }
+            );
+        }
         assert_eq!(
             matches!(chart.feed.last_error, Some(FeedError::InvalidData(_))),
             disjoint
@@ -7168,6 +7269,191 @@ fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
             [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
             "adjusted {adjusted}"
         );
+    }
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn prepared_history_reaches_profile_studies_without_copying_rows() {
+    use crate::data::{FootprintBars, FootprintLevel, ProfileSource};
+    use crate::model::OrderSide::{Buy, Sell};
+
+    for shared in [false, true] {
+        for late_study in [false, true] {
+            for delivery in 0..3 {
+                let feed = Arc::new(Script::default());
+                feed.prepared_footprints.store(true, Ordering::Relaxed);
+                let mut chart = fed(&feed, Some("A"));
+                let add = |chart: &mut Chart| {
+                    chart.add_indicator(
+                        crate::studies::IndicatorFactory::new()
+                            .create("Vol Profile FR")
+                            .unwrap(),
+                    )
+                };
+                let mut id = if late_study {
+                    chart.set_chart_type(ChartType::VolumeFootprint);
+                    None
+                } else {
+                    Some(add(&mut chart))
+                };
+                let mut frames = Frames::new();
+                frames.run(&mut chart);
+                feed.resolve()
+                    .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+                feed.page().send(page(bars(5), true));
+                frames.run(&mut chart);
+                frames.run(&mut chart);
+                let mut reply = Some(
+                    feed.footprints
+                        .lock()
+                        .unwrap()
+                        .pop()
+                        .expect("a profile on candles must request prepared history"),
+                );
+                let start = bars(1)[0].time;
+                let at = |second| start + TimeDelta::seconds(second);
+                let saved = [
+                    Tick::new(at(0), 100.0, 2.0, Some(Buy)),
+                    Tick::new(at(60), 101.0, 3.0, Some(Sell)),
+                    Tick::new(at(120), 102.0, 5.0, None),
+                ];
+                let mut page = prepared_page(&saved, at(150), true);
+                let FootprintBars::Owned(prepared) = page.bars else {
+                    unreachable!()
+                };
+                let row = prepared[0].levels.values().next().unwrap() as *const FootprintLevel;
+                page.bars = if shared {
+                    FootprintBars::Shared(Arc::new(prepared))
+                } else {
+                    FootprintBars::Owned(prepared)
+                };
+                let mut page = Some(page);
+                if delivery == 1 {
+                    reply.take().unwrap().send(Ok(page.take().unwrap()));
+                    frames.run(&mut chart);
+                }
+                let live = [
+                    Tick::new(at(150), 102.0, 7.0, Some(Buy)).with_id(99),
+                    Tick::new(at(150), 102.0, 11.0, None).with_id(7),
+                    Tick::new(at(151), 102.0, 13.0, Some(Sell)).with_id(42),
+                ];
+                let sink = feed.sink();
+                sink.push_tick(Tick::new(at(149), 102.0, 999.0, None));
+                for trade in &live {
+                    sink.push_tick(trade.clone());
+                }
+                if delivery == 2 {
+                    reply.take().unwrap().send(Ok(page.take().unwrap()));
+                }
+                frames.run(&mut chart);
+                if delivery == 0 {
+                    reply.take().unwrap().send(Ok(page.take().unwrap()));
+                    frames.run(&mut chart);
+                }
+                if late_study {
+                    id = Some(add(&mut chart));
+                    chart.set_chart_type(ChartType::Candles);
+                    frames.run(&mut chart);
+                }
+                let input = chart
+                    .indicators()
+                    .find(|(seen, _)| Some(*seen) == id)
+                    .unwrap()
+                    .1
+                    .order_flow_inputs()[0]
+                    .clone();
+                assert_eq!(
+                    input
+                        .footprint_snapshot(start)
+                        .bars(start..at(120))
+                        .map(|bar| bar.volume())
+                        .collect::<Vec<_>>(),
+                    [2.0, 3.0],
+                    "prepared bars must be available before a raw-history reply"
+                );
+                feed.trades
+                    .lock()
+                    .unwrap()
+                    .remove(0)
+                    .send(Ok(TradePage::new(
+                        saved.iter().chain(&live).cloned().collect(),
+                        true,
+                    )));
+                frames.run(&mut chart);
+                sink.push_tick(live[2].clone());
+                frames.run(&mut chart);
+                frames.time += 1.0;
+                frames.run(&mut chart);
+                let (_, study) = chart
+                    .indicators()
+                    .find(|(seen, _)| Some(*seen) == id)
+                    .unwrap();
+                let plots = study.volume_profiles(0..5);
+                let profile = &plots.first().expect("profile has executed rows").profile;
+                assert_eq!(
+                    profile.source(),
+                    ProfileSource::Executions { complete: true },
+                    "shared={shared}, late_study={late_study}, delivery={delivery}"
+                );
+                assert_eq!(profile.volume(), [2.0, 3.0, 36.0]);
+                assert_eq!(profile.up(), [2.0, 0.0, 7.0]);
+                assert_eq!(profile.down(), [0.0, 3.0, 13.0]);
+                let read = study.order_flow_inputs()[0].footprint_snapshot(start);
+                let first = read.bars(..).next().unwrap();
+                assert_eq!(
+                    first.levels.values().next().unwrap() as *const FootprintLevel,
+                    row,
+                    "completed prepared rows must keep their owner"
+                );
+                assert_eq!(
+                    input
+                        .footprints_from(start)
+                        .bars
+                        .values()
+                        .map(|bar| bar.volume())
+                        .collect::<Vec<_>>(),
+                    [2.0, 3.0, 36.0]
+                );
+                assert!(
+                    input
+                        .footprint_snapshot_for_clock(start, &BarClock::new(Timeframe::Min5))
+                        .is_none()
+                );
+
+                let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+                let frozen_bars = frozen.bars(SeriesId::MAIN).to_vec();
+                frozen
+                    .indicator_mut(id.unwrap())
+                    .unwrap()
+                    .calculate(&frozen_bars);
+                sink.push_tick(Tick::new(at(152), 500.0, 17.0, None).with_id(100));
+                frames.run(&mut chart);
+                assert_eq!(
+                    input
+                        .footprint_snapshot(start)
+                        .bars(..)
+                        .map(|bar| bar.volume())
+                        .sum::<f64>(),
+                    58.0
+                );
+                let (_, saved) = frozen
+                    .indicators()
+                    .find(|(seen, _)| Some(*seen) == id)
+                    .unwrap();
+                assert_eq!(
+                    saved.volume_profiles(0..5)[0].profile.volume(),
+                    [2.0, 3.0, 36.0],
+                    "a first query after a live update must still use the export's data"
+                );
+                feed.calls();
+                frames.run(&mut frozen);
+                assert!(
+                    feed.calls().is_empty(),
+                    "frozen profiles must not request data"
+                );
+            }
+        }
     }
 }
 
