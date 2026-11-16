@@ -166,10 +166,6 @@ pub struct DialogSizingTokens {
     pub color_picker_width: f32,
     /// Color picker height, in egui logical points.
     pub color_picker_height: f32,
-    /// Menu settings width, in egui logical points.
-    pub menu_settings_width: f32,
-    /// Menu settings height, in egui logical points.
-    pub menu_settings_height: f32,
     // Extended dialog sizing tokens
     /// Default width, in egui logical points.
     pub default_width: f32,
