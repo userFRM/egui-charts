@@ -36,6 +36,7 @@ impl TabLabel for Page<'_> {
 /// reports the user's request: a pill per page, a column chart of the chosen row over the page's
 /// periods, and the table of all its rows. Clicking a row's name charts it. Without figures it
 /// says that none are available. Its Back to chart button ends it.
+#[derive(Debug)]
 pub struct FinancialsPanel {
     title: String,
     financials: Option<CompanyFinancials>,

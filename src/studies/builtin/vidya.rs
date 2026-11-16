@@ -8,7 +8,7 @@ use egui::Color32;
 /// VIDYA - Variable Index Dynamic Avg
 /// Adaptive moving avg that adjusts based on volatility
 /// Uses Chande Momentum Oscillator for volatility measurement
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VIDYA {
     /// Period for calculation
     period: usize,
@@ -141,7 +141,7 @@ impl Indicator for VIDYA {
 
 /// Zero Lag EMA
 /// Reduces lag in EMA by using error correction
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ZLEMA {
     period: usize,
     values: IndicatorValues,

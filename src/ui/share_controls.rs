@@ -16,6 +16,7 @@ enum Operation {
 }
 
 /// What the last operation came to, for the document it was made on.
+#[derive(Debug)]
 enum Outcome {
     Link(ShareLink),
     Copy(String),
@@ -30,6 +31,12 @@ pub(crate) struct ShareControls {
     inbox: Arc<Inbox>,
     pending: Option<Operation>,
     last: Option<(Operation, Outcome)>,
+}
+
+impl std::fmt::Debug for ShareControls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShareControls").finish_non_exhaustive()
+    }
 }
 
 impl ShareControls {

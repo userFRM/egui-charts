@@ -49,6 +49,41 @@ The spot market data Binance publishes for everyone:
   and sales, the footprint and the order-flow studies with its side: Binance's `m` is `true`
   when the buyer was the maker, a sell, and `false` for a buy.
 
+### Coinbase Exchange (public)
+
+The market data Coinbase Exchange publishes for everyone:
+
+- **Symbols.** BTC-USD, ETH-USD, SOL-USD, BTC-EUR and ETH-EUR, with a price step of 0.01.
+- **Intervals.** 1m, 5m, 15m, 1h, 6h and 1d, the six Coinbase serves. The interval menu lists
+  6h once *Custom interval…* adds it.
+- **History.** `https://api.exchange.coinbase.com/products/{symbol}/candles`, up to 300 bars a
+  request, back to the first bar Coinbase holds for the symbol. Coinbase lists the newest bar
+  first and counts both ends of the range; the demo sorts the bars and drops the one at the end
+  of the range, which the chart already holds.
+- **Live data.** One connection to `wss://ws-feed.exchange.coinbase.com` subscribes to the
+  symbol's `matches` channel. Each match continues the bar in progress and reaches time and
+  sales, the footprint and the order-flow studies with its side. Coinbase's `side` is the side
+  of the resting order, so a `sell` match is a buy and a `buy` match is a sell. The
+  `last_match` Coinbase sends first happened before the subscription and is left out.
+
+### Kraken (public)
+
+The spot market data Kraken publishes for everyone:
+
+- **Symbols.** BTC/USD, ETH/USD, BTC/EUR, ETH/EUR and BTC/CHF, with a price step of 0.01, the
+  step of the ETH pairs; the BTC pairs trade in steps of 0.1.
+- **Intervals.** 1m, 5m, 15m, 30m, 1h, 4h and 1d. Kraken also serves 1w, but its weekly bars
+  open on Thursday, not on the Monday the chart's weeks open on.
+- **History.** `https://api.kraken.com/0/public/OHLC`, the 720 most recent bars of the interval
+  in one request and no older ones: 12 hours at 1m, about two years at 1d. Kraken files the
+  rows under the pair's name, which the profile reads through the path
+  `["result", "{symbol}"]`.
+- **Live data.** One connection to `wss://ws.kraken.com/v2` subscribes to the pair's `trade`
+  channel and sends a ping every 30 seconds. Each trade continues the bar in progress and
+  reaches time and sales, the footprint and the order-flow studies with the side Kraken
+  reports, the taker's. Kraken's answers to the subscription and to each ping name no
+  channel, so the profile leaves them out through a route without a value.
+
 A ready profile is read-only. *Connect* uses it as the demo ships it and stores no copy, so a
 later version of the demo updates it. To start a profile of your own from it, give it another
 name and *Save*. Where Binance refuses your region, the dialog and the chart show its answer as
@@ -276,8 +311,9 @@ that place is itself the record.
 The `route by` slot is the field that tells the kinds of message apart. It is looked up in
 the record and then in the message. Each route has a value of that field and is one of
 *Ignore*, *Bars* or *Trades*. A message that is not JSON, such as a plain `pong`, is routed
-by its own text. For a stream with one kind of message, *Route every message here* makes a
-route that takes every record.
+by its own text. A route whose value is empty takes the records that have no such field, such
+as a service's answers to its subscribe and keep-alive messages. For a stream with one kind of
+message, *Route every message here* makes a route that takes every record.
 
 Binary messages that are not text, as a stream that compresses its messages itself sends,
 cannot be mapped.

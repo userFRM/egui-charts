@@ -158,7 +158,7 @@ impl AlertPreset {
     /// Set the selected groups on `alert`, whose subject, levels, drawings, compared plots and
     /// webhook address stay. A rule stays whole where its stored operator would drop the drawings
     /// or plots it tests or needs levels it lacks. A stored study that `sources` does not offer
-    /// under its stored name is not reused, and a strategy fill alert keeps its condition, interval
+    /// under its stored name is not reused, and an alert on host events keeps its condition, interval
     /// and any frequency it cannot use.
     pub(super) fn apply(
         &self,
@@ -166,8 +166,8 @@ impl AlertPreset {
         sources: &[(AlertSource, AlertSourceName)],
         now: DateTime<Utc>,
     ) {
-        let fills = matches!(alert.condition, AlertCondition::StrategyFills(_));
-        if self.fields.condition && !fills && !self.rules.is_empty() {
+        let events = alert.condition.is_event();
+        if self.fields.condition && !events && !self.rules.is_empty() {
             let first = AlertRule {
                 source: alert.source.clone(),
                 condition: alert.condition.clone(),
@@ -206,7 +206,7 @@ impl AlertPreset {
             }
             alert.additional_conditions = additional;
         }
-        if self.fields.interval && !fills {
+        if self.fields.interval && !events {
             if alert.timeframe != self.timeframe
                 && let Some(inputs) = &mut alert.inputs
             {
@@ -223,7 +223,7 @@ impl AlertPreset {
             .additional_timeframes
             .truncate(alert.additional_conditions.len());
         if self.fields.frequency
-            && (!fills
+            && (!events
                 || matches!(
                     self.frequency,
                     AlertFrequency::Once | AlertFrequency::EveryTime
@@ -259,7 +259,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
-        C::StrategyFills(_) => return None,
+        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) => return None,
         C::Crossing(_) => C::Crossing(0.0),
         C::CrossingUp(_) => C::CrossingUp(0.0),
         C::CrossingDown(_) => C::CrossingDown(0.0),
@@ -336,7 +336,9 @@ fn restored_condition(
         _ => 1.0,
     };
     Some(match stored {
-        C::StrategyFills(_) | C::Channel { .. } => return None,
+        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Channel { .. } => {
+            return None;
+        }
         C::MovingBy { .. } | C::MovingByPercent { .. } | C::VolumeAboveAverage { .. }
             if compares =>
         {

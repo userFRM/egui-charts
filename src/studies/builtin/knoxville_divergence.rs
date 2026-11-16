@@ -31,7 +31,7 @@ use egui::Color32;
 use std::collections::VecDeque;
 
 /// Knoxville Divergence: price and momentum swings that disagree at an RSI extreme.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KnoxvilleDivergence {
     momentum_period: usize,
     rsi_period: usize,
@@ -46,7 +46,7 @@ pub struct KnoxvilleDivergence {
     visible: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Pivot {
     position: usize,
     high: f64,
@@ -55,7 +55,7 @@ struct Pivot {
     rsi: f64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     position: usize,
     rsi: RsiState,

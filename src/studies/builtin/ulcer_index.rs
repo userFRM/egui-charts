@@ -33,7 +33,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Root mean square drawdown from the rolling highest close.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UlcerIndex {
     period: usize,
     values: IndicatorValues,

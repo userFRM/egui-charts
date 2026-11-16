@@ -55,10 +55,11 @@ impl Chart {
                 && link
                     .footprint
                     .as_ref()
-                    .is_none_or(|flow| flow.prepared_before().is_none())
+                    .is_none_or(|flow| flow.live.prepared_before().is_none())
         }) {
             link.footprint = if executions {
                 link.footprint(None, history)
+                    .map(crate::data::FootprintState::new)
             } else {
                 None
             };
@@ -253,6 +254,9 @@ impl Chart {
             if link.subscription != Some(id) {
                 continue;
             }
+            // A seek empties the bars and rebuilds them through its position: the view follows
+            // the bars it showed before the reset to the rebuilt ones, as playback would.
+            let before = updates.reset.then(|| self.edge());
             if updates.reset {
                 link.time = None;
                 self.bar_close_time = None;
@@ -271,7 +275,9 @@ impl Chart {
                 link.retries
                     .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
                 if link.footprint.is_some() {
-                    link.footprint = link.footprint(None, &[]);
+                    link.footprint = link
+                        .footprint(None, &[])
+                        .map(crate::data::FootprintState::new);
                 }
                 link.order_book = None;
                 link.order_queue = None;
@@ -314,6 +320,9 @@ impl Chart {
                     self.data_updated(SeriesId::MAIN);
                 }
             }
+            if let Some(before) = before {
+                self.follow_live_edge(before, &link.clock);
+            }
             if let Some(quote) = updates.quote
                 && self.quote.as_ref().is_none_or(|old| quote.ts >= old.ts)
             {
@@ -342,10 +351,11 @@ impl Chart {
                     if let Some(flow) = footprint
                         && clock.timeframe().is_none_or(|tf| !tf.is_trade_based())
                         && flow
+                            .live
                             .prepared_before()
                             .is_none_or(|before| trade.ts >= before)
                     {
-                        let _ = flow.push(trade);
+                        let _ = flow.live.push(trade);
                     }
                     if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
                         for (input, _) in inputs {
@@ -359,17 +369,17 @@ impl Chart {
             if let (Some(flow), Some(lost)) = (&mut link.footprint, link.trades.lost_until())
                 && (evicted || Some(lost) != lost_before)
             {
-                flow.drop_through(lost, link.trades.iter());
+                flow.live.drop_through(lost, link.trades.iter());
             }
             // Trades before the oldest held one may never have arrived.
             if let Some(flow) = &mut link.footprint
-                && flow.prepared_before().is_some()
+                && flow.live.prepared_before().is_some()
             {
-                flow.refresh_prepared_gap(&link.trades);
+                flow.live.refresh_prepared_gap(&link.trades);
             } else if let (Some(first), Some(flow)) =
                 (link.unconfirmed_start(), &mut link.footprint)
             {
-                flow.received_from(first);
+                flow.live.received_from(first);
             }
             link.time = link.time.max(updates.time);
             if let Some(now) = link.time {
@@ -476,9 +486,9 @@ impl Chart {
         }
         if let (Some((input, seen)), Some(flow)) = (&mut link.footprint_input, &mut link.footprint)
         {
-            *seen = input.copy_footprint(flow, *seen);
+            *seen = input.copy_footprint(&mut flow.live, *seen);
             if let Some(lost) = link.trades.lost_until() {
-                flow.drop_through(lost, link.trades.iter());
+                flow.live.drop_through(lost, link.trades.iter());
             }
         }
         self.scroll_back(&mut link);
@@ -560,7 +570,9 @@ impl Chart {
         if !resume {
             link.footprints_complete = false;
             link.footprint_cursor = None;
-            link.footprint = link.footprint(None, &[]);
+            link.footprint = link
+                .footprint(None, &[])
+                .map(crate::data::FootprintState::new);
         }
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
@@ -645,10 +657,12 @@ impl Chart {
         link.instrument = Some(instrument);
         self.readout_revision = crate::model::next_revision();
         if link.footprint.as_ref().is_some_and(|flow| {
-            flow.prepared_before().is_some()
-                && Some(flow.tick_size()) != link.instrument.as_ref().and_then(|i| i.tick_size)
+            flow.live.prepared_before().is_some()
+                && Some(flow.live.tick_size()) != link.instrument.as_ref().and_then(|i| i.tick_size)
         }) {
-            link.footprint = link.footprint(None, &self.state.data().bars);
+            link.footprint = link
+                .footprint(None, &self.state.data().bars)
+                .map(crate::data::FootprintState::new);
             link.footprints_complete = false;
             link.footprint_cursor = None;
         }
@@ -779,7 +793,9 @@ impl Chart {
         // Paged executions on a trade-based interval fill the bars they rebuild.
         if link.footprint.is_some() && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
         {
-            link.footprint = link.footprint(None, &self.state.data().bars);
+            link.footprint = link
+                .footprint(None, &self.state.data().bars)
+                .map(crate::data::FootprintState::new);
         }
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A nonempty page with no valid bar older than the oldest held would be requested
@@ -850,7 +866,7 @@ impl Chart {
         let prepared_before = link
             .footprint
             .as_ref()
-            .and_then(|flow| flow.prepared_before());
+            .and_then(|flow| flow.live.prepared_before());
         let coverage = prepared_before.and_then(|_| {
             let from = if end {
                 Some(chrono::DateTime::<chrono::Utc>::MIN_UTC)
@@ -917,30 +933,34 @@ impl Chart {
         if let Some(flow) = link
             .footprint
             .as_mut()
-            .filter(|flow| flow.prepared_before().is_some())
+            .filter(|flow| flow.live.prepared_before().is_some())
         {
             if rejected == 0
                 && let Some((from, end, oldest, live)) = coverage
             {
                 // Prepend admits older trades and the latest reconnect; it discards other overlaps.
-                flow.cover_missing(from, end.min(oldest.unwrap_or(end)));
+                flow.live
+                    .cover_missing(from, end.min(oldest.unwrap_or(end)));
                 if let Some(retained) = unproven.1 {
-                    flow.cover_missing(from.max(retained), end.min(live.unwrap_or(end)));
+                    flow.live
+                        .cover_missing(from.max(retained), end.min(live.unwrap_or(end)));
                 }
             }
             if let Some(at) = ambiguous_retained {
                 let after = at
                     .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
                     .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
-                flow.add_missing(at, after);
+                flow.live.add_missing(at, after);
             }
             if tail_changed {
-                flow.rebuild_prepared(&link.trades);
+                flow.live.rebuild_prepared(&link.trades);
             } else {
-                flow.refresh_prepared_gap(&link.trades);
+                flow.live.refresh_prepared_gap(&link.trades);
             }
         } else if (changed || reached_start || cut) && link.footprint.is_some() {
-            link.footprint = link.footprint(None, &self.state.data().bars);
+            link.footprint = link
+                .footprint(None, &self.state.data().bars)
+                .map(crate::data::FootprintState::new);
         }
         link.trade_cursor = continuation;
         link.trades_complete |=

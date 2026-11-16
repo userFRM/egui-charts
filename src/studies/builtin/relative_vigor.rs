@@ -7,7 +7,7 @@ use egui::Color32;
 /// Relative Vigor Index (RVI)
 /// Measures conviction of price movement
 /// Uses the relationship between close-open vs high-low
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RelativeVigorIndex {
     /// Period for smoothing (typically 10)
     period: usize,

@@ -529,6 +529,7 @@ enum Tracks {
 /// Relative sizes of one preset's splits, in depth-first order. Each split contains one positive
 /// weight per child, from the top or left. Obtain the shape with [`ChartLayout::sizes`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartLayoutSizing {
     /// The arrangement these weights belong to.
     pub mode: ChartLayoutMode,
@@ -536,11 +537,21 @@ pub struct ChartLayoutSizing {
     pub weights: Vec<Vec<f32>>,
 }
 
+impl ChartLayoutSizing {
+    /// The `weights` of the splits of `mode`, in the shape [`ChartLayout::sizes`] gives them.
+    pub fn new(mode: ChartLayoutMode, weights: Vec<Vec<f32>>) -> Self {
+        Self { mode, weights }
+    }
+}
+
 #[derive(Default)]
 struct SizingState {
     sizes: Vec<ChartLayoutSizing>,
     pending: Vec<SizeChange>,
     drag: Option<DividerDrag>,
+    /// Held from the press on a divider until the release, so that an undo a host dispatches
+    /// before `show` cannot run in the frame egui starts the drag.
+    pressed: Option<Arc<()>>,
     selected: Option<(usize, usize)>,
 }
 
@@ -832,6 +843,7 @@ impl Tracks {
 
 /// Membership for one linked chart field.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ChartLink {
     /// Follow the layout-wide switch and legacy group. No individual marker is shown.
     #[default]
@@ -844,6 +856,7 @@ pub enum ChartLink {
 
 /// Independent symbol and interval memberships, suitable for host serialization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartLinkGroups {
     /// Symbol membership.
     pub symbol: ChartLink,
@@ -855,6 +868,9 @@ pub struct ChartLinkGroups {
 struct LinkState {
     groups: [ChartLinkGroups; 16],
     pending: Vec<LinkChange>,
+    /// The steps recorded on chart histories, renumbered by `swap_slots`. A clone shares the
+    /// entries recorded before it, so a replacement layout keeps them in step.
+    recorded: Vec<std::sync::Weak<Mutex<LinkChange>>>,
 }
 
 /// A link membership step, applied like a [`SizeChange`] by the layout that shows the chart.
@@ -978,6 +994,7 @@ impl Default for ChartSyncOptions {
 /// let mut b = Chart::new(egui_charts::model::BarData::new());
 /// let mut layout = ChartLayout::default();
 /// layout.mode = ChartLayoutMode::TwoHorizontal;
+/// layout.sync.sync_crosshair = true;
 /// layout.show(ui, &mut [&mut a, &mut b]);
 /// # }
 /// ```
@@ -1201,7 +1218,7 @@ impl ChartLayout {
     }
 
     fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
-        let mut stepped = false;
+        let mut stepped = [false; 16];
         loop {
             let step = {
                 let mut steps = self.edits.steps.lock().unwrap();
@@ -1221,13 +1238,23 @@ impl ChartLayout {
                 at.map(|at| steps.remove(at))
             };
             let Some((id, redo)) = step else {
-                return stepped;
+                break;
             };
-            stepped = true;
-            for chart in charts.iter_mut() {
+            for (index, chart) in charts.iter_mut().enumerate() {
+                stepped[index] |= chart.history.holds_layout_edit(id);
                 chart.step_layout_edit(id, redo);
             }
         }
+        let any = stepped.contains(&true);
+        // A symbol or interval an edit's step restored reaches the linked charts, as after an
+        // undo on the active chart; the active chart's goes first, then the lowest slot.
+        let count = charts.len();
+        for index in std::iter::once(self.active).chain(0..count) {
+            if std::mem::take(&mut stepped[index]) {
+                self.send_state(charts, count, index);
+            }
+        }
+        any
     }
 
     /// Active chart slot, clamped to supplied charts by [`Self::show`].
@@ -1244,13 +1271,32 @@ impl ChartLayout {
     }
 
     /// Moves the sync memberships, detached state and drawing links of two slots with their
-    /// charts, for a host that exchanges those charts. Invalid indices are ignored.
+    /// charts, for a host that exchanges those charts. Undo and redo of a membership change then
+    /// apply to the slot its chart moved to. Invalid indices are ignored.
     pub fn swap_slots(&mut self, a: usize, b: usize) {
         if a.max(b) >= self.groups.len() {
             return;
         }
         self.groups.swap(a, b);
         self.links.groups.swap(a, b);
+        let moved = |index: &mut usize| {
+            if *index == a {
+                *index = b;
+            } else if *index == b {
+                *index = a;
+            }
+        };
+        for change in &mut self.links.pending {
+            moved(&mut change.index);
+        }
+        for step in self
+            .links
+            .recorded
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            moved(&mut step.lock().unwrap().index);
+        }
         self.detached.swap(a, b);
         #[cfg(feature = "drawings")]
         self.drawings.swap_slots(a, b);
@@ -1322,7 +1368,14 @@ impl ChartLayout {
     }
 
     fn record_links(&mut self, chart: &mut Chart) {
-        for change in self.links.pending.drain(..) {
+        let links = &mut self.links;
+        if !links.pending.is_empty() {
+            // Steps no history holds any more cannot be undone and need no renumbering.
+            links.recorded.retain(|step| step.strong_count() > 0);
+        }
+        for change in links.pending.drain(..) {
+            let change = Arc::new(Mutex::new(change));
+            links.recorded.push(Arc::downgrade(&change));
             chart.history.record_links(change);
         }
     }
@@ -1577,11 +1630,11 @@ impl ChartLayout {
         let known = self.previous_charts;
         for (index, chart) in charts.iter().enumerate() {
             if self.previous_charts[index] != chart.layout_identity {
-                // A chart new to the layout brings drawings new to it, while one that
-                // `swap_slots` moved keeps its links.
+                // A chart new to the layout brings drawings new to it, except those of a restored
+                // chart that it held before, while one that `swap_slots` moved keeps its links.
                 #[cfg(feature = "drawings")]
                 if !known.contains(&chart.layout_identity) {
-                    self.drawings.forget_slot(index);
+                    self.drawings.forget_slot(index, chart);
                 }
                 self.previous_charts[index] = chart.layout_identity;
                 self.previous[index] = None;
@@ -1634,12 +1687,17 @@ impl ChartLayout {
                     && (self.sizing.selected == Some(key) || !ui.input(|input| input.any_touches()))
             });
         let resize_start = starting_resize.then(|| Arc::new(()));
+        // A release in this frame ends the press, so an undo in it reaches the drag it ends.
+        if !ui.input(|input| input.pointer.primary_down()) {
+            self.sizing.pressed = None;
+        }
         let resizing = self
             .sizing
             .drag
             .as_ref()
             .map(|drag| &drag.history_guard)
-            .or(resize_start.as_ref());
+            .or(resize_start.as_ref())
+            .or(self.sizing.pressed.as_ref());
         for chart in charts.iter_mut() {
             chart.history.resizing = resizing.map(Arc::downgrade).unwrap_or_default();
         }
@@ -1863,7 +1921,9 @@ impl ChartLayout {
                 .sizing
                 .drag
                 .as_ref()
-                .map(|drag| Arc::downgrade(&drag.history_guard))
+                .map(|drag| &drag.history_guard)
+                .or(self.sizing.pressed.as_ref())
+                .map(Arc::downgrade)
                 .unwrap_or_default();
         }
         if self.apply_history_steps(charts) {
@@ -1986,8 +2046,14 @@ impl ChartLayout {
     }
 
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
-        let source = &charts[self.active];
-        let Some(previous) = &self.previous[self.active] else {
+        self.send_state(charts, count, self.active);
+    }
+
+    /// Sends the symbol and interval of chart `from`, where they differ from its recorded state,
+    /// to the charts linked to it.
+    fn send_state(&mut self, charts: &mut [&mut Chart], count: usize, from: usize) {
+        let source = &charts[from];
+        let Some(previous) = &self.previous[from] else {
             return;
         };
         let symbol_changed = previous.0 != source.symbol();
@@ -1998,13 +2064,13 @@ impl ChartLayout {
         let symbol = source.symbol().to_owned();
         let timeframe = source.timeframe();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            if index == self.active {
+            if index == from {
                 continue;
             }
-            if self.linked(index, self.active, false) && symbol_changed {
+            if self.linked(index, from, false) && symbol_changed {
                 chart.set_symbol(&symbol);
             }
-            if self.linked(index, self.active, true)
+            if self.linked(index, from, true)
                 && timeframe_changed
                 && let Some(tf) = timeframe
             {
@@ -2167,6 +2233,7 @@ impl ChartLayout {
 
     fn show_dividers(&mut self, ui: &mut Ui, dividers: &[Divider], count: usize) -> bool {
         let mut interacted = false;
+        let mut pressed = false;
         let apply_input = !ui.ctx().will_discard();
         for divider in dividers {
             let key = (divider.group, divider.at);
@@ -2186,6 +2253,8 @@ impl ChartLayout {
                 egui::WidgetInfo::labeled(egui::Role::Splitter, response.enabled(), &name)
             });
             interacted |= apply_input && (response.clicked() || response.drag_stopped());
+            pressed |= response.is_pointer_button_down_on()
+                && (self.sizing.selected == Some(key) || !ui.input(|input| input.any_touches()));
             if apply_input && response.double_clicked() {
                 self.finish_resize();
                 self.reset_sizes(false);
@@ -2226,6 +2295,11 @@ impl ChartLayout {
                 ui.painter()
                     .rect_filled(line, 0.0, ui.active_theme().ui.accent);
             }
+        }
+        if pressed && ui.input(|input| input.pointer.primary_down()) {
+            self.sizing.pressed.get_or_insert_default();
+        } else {
+            self.sizing.pressed = None;
         }
         if ui.input(|input| input.pointer.any_pressed())
             && !dividers
@@ -2970,6 +3044,108 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A host dispatches the active chart's shortcuts before it shows the layout, as the demo
+    /// does, and Ctrl+Z comes in the frame a divider drag starts. The undo is ignored as it is
+    /// when `show` dispatches, so the drag neither starts from undone sizes nor drops a step.
+    #[test]
+    fn undo_dispatched_before_the_layout_at_drag_start_keeps_size_steps() {
+        let bounds = Rect::from_min_size(pos2(10.0, 10.0), vec2(1440.0, 720.0));
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::ThreeHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+            time += 0.1;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(bounds.expand(10.0)),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    charts[layout.active()].dispatch_shortcuts(ui.ctx());
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let widths = |layout: &ChartLayout| -> Vec<f32> {
+            layout
+                .rects(bounds, 3)
+                .iter()
+                .map(|rect| rect.width().round())
+                .collect()
+        };
+        for _ in 0..2 {
+            frame(&mut layout, &mut charts, vec![]);
+        }
+        let start = pos2(bounds.left() + 480.0, bounds.center().y);
+        let first = start + vec2(120.0, 0.0);
+        let second = first + vec2(60.0, 0.0);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(start), button(start, true)],
+        );
+        for pos in [start + vec2(4.0, 0.0), first] {
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(pos)]);
+        }
+        frame(&mut layout, &mut charts, vec![button(first, false)]);
+        assert_eq!(widths(&layout), [600.0, 360.0, 480.0]);
+        let edits = charts[0].edit_count();
+        frame(&mut layout, &mut charts, vec![button(first, true)]);
+        // The pointer passes egui's click distance, so the drag starts in this frame.
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::PointerMoved(first + vec2(12.0, 0.0)),
+                Event::ModifiersChanged(command),
+                Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: command,
+                },
+            ],
+        );
+        let at_start = (charts[0].edit_count() - edits, widths(&layout));
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(second)]);
+        frame(&mut layout, &mut charts, vec![button(second, false)]);
+        let released = widths(&layout);
+        let mut undone = Vec::new();
+        while charts[0].undo() {
+            layout.apply_history_steps(&mut charts.each_mut());
+            undone.push(widths(&layout));
+        }
+        assert_eq!(
+            (at_start, released, undone),
+            (
+                (0, vec![600.0, 360.0, 480.0]),
+                vec![660.0, 300.0, 480.0],
+                vec![vec![600.0, 360.0, 480.0], vec![480.0, 480.0, 480.0]],
+            )
+        );
     }
 
     /// Only the active and hovered charts expose their scale settings in a layout.
@@ -4575,6 +4751,63 @@ mod tests {
             [original.clone(), original],
             "the undone symbol, then the undone interval, reaches the linked chart"
         );
+    }
+
+    /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset
+    /// would hide the active chart, between a group change of the moved chart and its undo. The
+    /// undo and the redo reach the chart in its new slot and leave the chart now in its old slot
+    /// alone, whether the change was recorded before the exchange or at the next frame.
+    #[test]
+    fn link_undo_follows_a_chart_moved_by_swap_slots() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let group = |name: &str| ChartLinkGroups {
+            symbol: ChartLink::Group(name.to_owned()),
+            ..Default::default()
+        };
+        for recorded in [true, false] {
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::Four,
+                ..Default::default()
+            };
+            layout.set_link_groups(0, group("B"), true);
+            layout.set_active(3);
+            show(&mut layout, &mut charts);
+            layout.set_link_groups(3, group("A"), false);
+            if recorded {
+                show(&mut layout, &mut charts);
+            }
+            charts.swap(0, 3);
+            layout.swap_slots(0, 3);
+            layout.set_active(0);
+            if !recorded {
+                show(&mut layout, &mut charts);
+            }
+            let mut seen = Vec::new();
+            for undo in [true, false] {
+                assert!(if undo {
+                    charts[0].undo()
+                } else {
+                    charts[0].redo()
+                });
+                show(&mut layout, &mut charts);
+                seen.push((layout.link_groups(0), layout.link_groups(3)));
+            }
+            assert_eq!(
+                seen,
+                [
+                    (Some(ChartLinkGroups::default()), Some(group("B"))),
+                    (Some(group("A")), Some(group("B"))),
+                ],
+                "recorded before the exchange: {recorded}"
+            );
+        }
     }
 
     /// A host opens a saved layout by supplying its charts in the same slots or restoring

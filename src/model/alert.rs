@@ -151,7 +151,16 @@ impl AlertDelivery {
 
 /// The source view and study definitions captured when an alert is created. The alert's
 /// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
+///
+/// ```
+/// use egui_charts::model::{AlertCalendar, AlertInputs, AlertStudy};
+///
+/// let mut inputs = AlertInputs::default();
+/// inputs.calendar = Some(AlertCalendar::new("BTCUSD", None, None));
+/// inputs.studies = vec![AlertStudy::new(0, "RSI", Vec::new())];
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertInputs {
     /// Calendar zone; `None` follows the system's local calendar.
     pub timezone: Option<TimezoneId>,
@@ -215,6 +224,7 @@ impl AlertInputs {
 
 /// The creation symbol's exchange calendar, including an explicitly continuous session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertCalendar {
     /// Symbol whose calendar was captured.
     pub symbol: String,
@@ -224,8 +234,32 @@ pub struct AlertCalendar {
     pub session: Option<super::Session>,
 }
 
+impl AlertCalendar {
+    /// The calendar of `symbol`: its exchange `timezone` and trading `session`, continuous when
+    /// `session` is `None`.
+    ///
+    /// ```
+    /// use egui_charts::model::AlertCalendar;
+    ///
+    /// let calendar = AlertCalendar::new("BTCUSD", None, None);
+    /// assert_eq!(calendar.session, None);
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        timezone: Option<TimezoneId>,
+        session: Option<super::Session>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timezone,
+            session,
+        }
+    }
+}
+
 /// Serializable calculation inputs of a study, without computed values or shared stream state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertStudy {
     /// Identifier used by the alert sources and by dependent studies.
     pub id: usize,
@@ -235,9 +269,31 @@ pub struct AlertStudy {
     pub inputs: Vec<(String, super::InputValue)>,
 }
 
+impl AlertStudy {
+    /// The study `name`, known to the alert sources as `id`, calculated with `inputs`.
+    ///
+    /// ```
+    /// use egui_charts::model::{AlertStudy, InputValue};
+    ///
+    /// let study = AlertStudy::new(0, "RSI", vec![("length".into(), InputValue::Length(14))]);
+    /// assert_eq!(study.name, "RSI");
+    /// ```
+    pub fn new(
+        id: usize,
+        name: impl Into<String>,
+        inputs: Vec<(String, super::InputValue)>,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            inputs,
+        }
+    }
+}
+
 impl Alert {
     /// An active alert on `symbol` with no id, no expiry and no message. Frequency is `Once`
-    /// for bar conditions and `EveryTime` for strategy fills.
+    /// for bar conditions and `EveryTime` for strategy fills, detector signals and custom events.
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
@@ -253,7 +309,7 @@ impl Alert {
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             additional_timeframes: Vec::new(),
-            frequency: if matches!(condition, AlertCondition::StrategyFills(_)) {
+            frequency: if condition.is_event() {
                 AlertFrequency::EveryTime
             } else {
                 AlertFrequency::default()
@@ -475,6 +531,16 @@ pub enum AlertCondition {
     /// `AlertEngine::strategy_fills` with the same run id. Uses the price source, no additional
     /// rules, and frequency `EveryTime` (the constructor default) or `Once`. No bars evaluate it.
     StrategyFills(String),
+    /// Each new formation or target of the host's detector named here: every
+    /// [`Signal`](super::Signal) of the symbol whose category is this name, once per signal id.
+    /// `AlertEngine::detector_signals` takes the signals, and `AlertEvaluator` feeds it the
+    /// signals of the charts it is lent. Same source, rules and frequencies as `StrategyFills`.
+    DetectorSignals(String),
+    /// Each [`CustomAlertEvent`] the host's event source named here raises, from its own logic,
+    /// a Rust custom study or a strategy's alert call. Feed them to `AlertEngine::custom_events`
+    /// with the same source name; `AlertEngine` saves the alert only once the host connects that
+    /// source. Same source, rules and frequencies as `StrategyFills`.
+    CustomEvents(String),
     /// The previous value was strictly below or above the level and the current value reaches
     /// or passes it, in either direction.
     Crossing(f64),
@@ -560,6 +626,7 @@ pub enum AlertCondition {
 
 /// A host-resolved value on a bar. Identifiers remain meaningful to the host across sessions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertSource {
     /// The symbol's closing or latest price.
     #[default]
@@ -693,6 +760,7 @@ impl Eq for AlertSourceName {}
 
 /// Comparison of two outputs. Crossings require a strict previous side and include equality now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertComparison {
     /// Cross in either direction.
     Crossing,
@@ -708,6 +776,7 @@ pub enum AlertComparison {
 
 /// Relationship of a value to two inclusive, independently resolved boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertChannelComparison {
     /// Previously outside, currently inside.
     Entering,
@@ -732,11 +801,19 @@ impl std::fmt::Display for AlertChannelComparison {
 
 /// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertRule {
     /// The value to test.
     pub source: AlertSource,
     /// The required relationship.
     pub condition: AlertCondition,
+}
+
+impl AlertRule {
+    /// The rule that `source` meets `condition`.
+    pub fn new(source: AlertSource, condition: AlertCondition) -> Self {
+        Self { source, condition }
+    }
 }
 
 impl AlertSource {
@@ -758,10 +835,20 @@ impl AlertCondition {
         }
     }
 
+    /// Whether the host raises the condition's events, which no bars evaluate.
+    pub(crate) fn is_event(&self) -> bool {
+        matches!(
+            self,
+            Self::StrategyFills(_) | Self::DetectorSignals(_) | Self::CustomEvents(_)
+        )
+    }
+
     /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
-            Self::StrategyFills(run) => !run.trim().is_empty(),
+            Self::StrategyFills(name) | Self::DetectorSignals(name) | Self::CustomEvents(name) => {
+                !name.trim().is_empty()
+            }
             Self::Crossing(v)
             | Self::CrossingUp(v)
             | Self::CrossingDown(v)
@@ -804,6 +891,8 @@ impl std::fmt::Display for AlertCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
+            Self::DetectorSignals(detector) => write!(f, "Signals of detector {detector}"),
+            Self::CustomEvents(source) => write!(f, "Events of {source}"),
             Self::Crossing(v) => write!(f, "Crossing {v}"),
             Self::CrossingUp(v) => write!(f, "Crossing up {v}"),
             Self::CrossingDown(v) => write!(f, "Crossing down {v}"),
@@ -841,7 +930,7 @@ impl Alert {
                 .watchlist
                 .as_ref()
                 .is_none_or(|id| !id.trim().is_empty())
-            && (!matches!(self.condition, AlertCondition::StrategyFills(_))
+            && (!self.condition.is_event()
                 || (self.source == AlertSource::Price
                     && self.additional_conditions.is_empty()
                     && matches!(
@@ -851,7 +940,7 @@ impl Alert {
             && self
                 .additional_conditions
                 .iter()
-                .all(|rule| !matches!(rule.condition, AlertCondition::StrategyFills(_)))
+                .all(|rule| !rule.condition.is_event())
             && self.additional_conditions.len() < 5
             && self.additional_timeframes.len() <= self.additional_conditions.len()
             && {
@@ -880,6 +969,7 @@ impl Alert {
 /// windows, both read on the clock of `timezone`, so a daylight-saving change moves the windows
 /// with the local clock.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationSchedule {
     /// The zone whose weekday and clock decide.
     pub timezone: TimezoneId,
@@ -894,6 +984,7 @@ pub struct NotificationSchedule {
 /// window whose `end` equals `start` covers the 24 hours from `start`, ending at `start` of the
 /// next day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationWindow {
     /// First clock time inside the window.
     pub start: NaiveTime,
@@ -901,7 +992,36 @@ pub struct NotificationWindow {
     pub end: NaiveTime,
 }
 
+impl NotificationWindow {
+    /// The window from `start` up to but excluding `end`.
+    pub fn new(start: NaiveTime, end: NaiveTime) -> Self {
+        Self { start, end }
+    }
+}
+
 impl NotificationSchedule {
+    /// Delivery on `days` inside `windows`, both read on the clock of `timezone`;
+    /// [`is_valid`](Self::is_valid) asks for at least one of each.
+    ///
+    /// ```
+    /// use chrono::{NaiveTime, Weekday};
+    /// use egui_charts::model::{NotificationSchedule, NotificationWindow, TimezoneId};
+    ///
+    /// let window = NotificationWindow::new(
+    ///     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+    ///     NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+    /// );
+    /// let schedule = NotificationSchedule::new(TimezoneId::utc(), vec![Weekday::Mon], vec![window]);
+    /// assert!(schedule.is_valid());
+    /// ```
+    pub fn new(timezone: TimezoneId, days: Vec<Weekday>, windows: Vec<NotificationWindow>) -> Self {
+        Self {
+            timezone,
+            days,
+            windows,
+        }
+    }
+
     /// Whether at least one weekday and one window are selected.
     pub fn is_valid(&self) -> bool {
         !self.days.is_empty() && !self.windows.is_empty()
@@ -962,6 +1082,43 @@ impl std::fmt::Display for AlertComparison {
             Self::Above => "Greater than",
             Self::Below => "Less than",
         })
+    }
+}
+
+/// An event a host's event source raises for its
+/// [`CustomEvents`](AlertCondition::CustomEvents) alerts: the host's own logic, a Rust custom
+/// study or a strategy's alert call decides when.
+///
+/// ```
+/// use egui_charts::model::CustomAlertEvent;
+///
+/// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
+/// let mut event = CustomAlertEvent::new(1, time, "RSI divergence confirmed");
+/// event.price = Some(101.5);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CustomAlertEvent {
+    /// Increasing number within the source, from one. An event numbered at or below one an
+    /// alert already received is a repeat and ignored.
+    pub sequence: u64,
+    /// When the event happened, which the trigger reports.
+    pub time: DateTime<Utc>,
+    /// The price the event refers to, finite, when it has one.
+    pub price: Option<f64>,
+    /// The text a trigger shows when the alert has no message of its own.
+    pub message: String,
+}
+
+impl CustomAlertEvent {
+    /// The event numbered `sequence` at `time` with `message` and no price.
+    pub fn new(sequence: u64, time: DateTime<Utc>, message: impl Into<String>) -> Self {
+        Self {
+            sequence,
+            time,
+            price: None,
+            message: message.into(),
+        }
     }
 }
 
@@ -1137,7 +1294,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 33] = [
+        let rows: [(Edit, bool); 35] = [
             (
                 |a| {
                     a.delivery.webhook = true;
@@ -1172,6 +1329,17 @@ mod tests {
             ),
             (
                 |a| a.condition = AlertCondition::StrategyFills(" ".into()),
+                false,
+            ),
+            (
+                |a| a.condition = AlertCondition::CustomEvents(" ".into()),
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::DetectorSignals("Big trades".into());
+                    a.frequency = AlertFrequency::OncePerBarClose;
+                },
                 false,
             ),
             (
@@ -1426,6 +1594,16 @@ mod tests {
                 status: AlertStatus::Active,
             }
         );
+        // A stored alert on a strategy run's fills loads as saved and stays armed.
+        let fills: Alert = serde_json::from_str(
+            r#"{"symbol":"AAPL","condition":{"StrategyFills":"run-1"},"frequency":"EveryTime"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            fills.condition,
+            AlertCondition::StrategyFills("run-1".into())
+        );
+        assert!(fills.is_valid());
     }
 
     #[cfg(feature = "timezones")]

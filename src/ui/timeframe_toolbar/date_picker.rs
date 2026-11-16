@@ -51,6 +51,7 @@ pub enum DatePickerAction {
 }
 
 /// Date picker component
+#[derive(Debug)]
 pub struct DatePicker {
     /// Is dialog open
     pub is_open: bool,

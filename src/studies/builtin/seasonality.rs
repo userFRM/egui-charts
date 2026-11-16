@@ -58,7 +58,7 @@ use std::collections::BTreeMap;
 
 /// Monthly projection from the average change of the same month in earlier years, drawn
 /// on the price chart.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Seasonality {
     start_year: i32,
     values: IndicatorValues,
@@ -76,7 +76,7 @@ pub struct Seasonality {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct State {
     source: usize,
     latest_source: Option<usize>,

@@ -68,6 +68,7 @@ impl AlertKind {
 }
 
 /// Response from showing an Alert
+#[derive(Debug)]
 pub struct AlertResponse {
     /// The underlying egui Response
     pub response: Response,
@@ -76,6 +77,7 @@ pub struct AlertResponse {
 }
 
 /// A semantic message box for displaying status information
+#[derive(Debug)]
 pub struct Alert {
     kind: AlertKind,
     title: Option<String>,

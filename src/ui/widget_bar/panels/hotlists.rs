@@ -45,6 +45,18 @@ pub struct HotlistsPanel {
     request: u64,
 }
 
+impl std::fmt::Debug for HotlistsPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HotlistsPanel")
+            .field("lists", &self.lists)
+            .field("list", &self.list)
+            .field("error", &self.error)
+            .field("loading", &self.loading)
+            .field("request", &self.request)
+            .finish_non_exhaustive()
+    }
+}
+
 impl HotlistsPanel {
     /// A panel of the hotlists named `lists`, showing the first, without a feed.
     pub fn new(lists: Vec<String>) -> Self {

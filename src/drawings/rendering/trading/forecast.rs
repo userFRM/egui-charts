@@ -93,7 +93,14 @@ impl Drawing {
             }
         });
         let badge = |align, pos, status: &str, color| {
-            boxed_label(painter, align, pos, status.to_owned(), color, chart.bg_axis)
+            boxed_label(
+                painter,
+                align,
+                pos,
+                l10n::text(painter.ctx(), status),
+                color,
+                chart.bg_axis,
+            )
         };
         let mut target_pos = end + egui::vec2(0.0, if up { -gap } else { gap });
         if up && let Some((status, color)) = outcome {
@@ -239,6 +246,7 @@ mod tests {
                             bars: &bars,
                             revision: 0,
                             bar_to_x: &|b| b,
+                            bar_spacing: 1.0,
                             price_to_y: &|p| p as f32,
                             y_to_price: &f64::from,
                             time_axis,

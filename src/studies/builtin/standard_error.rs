@@ -5,7 +5,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Standard Error of the linear regression of close prices over a rolling window.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StandardError {
     period: usize,
     values: IndicatorValues,

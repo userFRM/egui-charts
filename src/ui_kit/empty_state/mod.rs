@@ -25,6 +25,7 @@ const ICON_SIZE: f32 = 32.0;
 
 /// A horizontally centred empty-state placeholder: optional icon, message, optional
 /// description and optional primary action.
+#[derive(Debug)]
 pub struct EmptyState<'a> {
     message: &'a str,
     description: Option<&'a str>,

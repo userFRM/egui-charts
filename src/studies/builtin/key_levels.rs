@@ -34,7 +34,7 @@ use std::collections::VecDeque;
 const MAX_PIVOTS: usize = 1000;
 
 /// Key Levels: prices at which swing highs and lows repeatedly formed.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KeyLevels {
     left: usize,
     right: usize,
@@ -49,7 +49,7 @@ pub struct KeyLevels {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     swings: Swings,

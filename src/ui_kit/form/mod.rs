@@ -32,6 +32,7 @@ use egui::{Align, Layout, RichText, Ui, vec2};
 pub use grid::FormGrid;
 
 /// A two-column form row: fixed-width label area + remainder widget area.
+#[derive(Debug)]
 pub struct FormRow<'a> {
     label: &'a str,
     description: Option<&'a str>,

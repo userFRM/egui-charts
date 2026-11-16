@@ -123,7 +123,7 @@ pub fn hit_test_volume(
         return None;
     }
 
-    let bar_width = coords.bar_spacing_for_width() * 0.8;
+    let bar_width = coords.volume_bar_width();
 
     // Check each visible bar
     for i in visible_range {

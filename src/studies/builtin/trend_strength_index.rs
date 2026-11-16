@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 /// taken against true bar positions. The latest value equals
 /// [`LinearRegressionChannel::correlation`](super::LinearRegressionChannel::correlation) of
 /// the same period.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrendStrengthIndex {
     period: usize,
     source: PriceSource,

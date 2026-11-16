@@ -22,7 +22,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Weighted Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WMA {
     period: usize,
     values: IndicatorValues,

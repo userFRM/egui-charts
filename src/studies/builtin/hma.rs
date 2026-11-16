@@ -23,7 +23,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Hull Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HMA {
     period: usize,
     values: IndicatorValues,

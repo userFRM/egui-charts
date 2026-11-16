@@ -134,6 +134,7 @@ pub(super) fn render(
             ctx.visible_data,
             ctx.start_idx,
             params.max_volume(),
+            params.volume_width(),
             ctx.colors,
             params.chart_rect_min_x(),
             &idx_to_coord,
