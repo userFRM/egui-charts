@@ -359,6 +359,14 @@ impl FootprintState {
         self.closed.len() + self.live.bars.len() > bars || self.closed_rows + self.live.rows > rows
     }
 
+    /// Source retention must not follow the independently retained prepared pages.
+    pub(crate) fn first_source_time(&self) -> Option<DateTime<Utc>> {
+        self.closed
+            .first()
+            .map(|bar| bar.time)
+            .or_else(|| self.live.bars.first_key_value().map(|(time, _)| *time))
+    }
+
     /// The mutable source has the same retention as before; prepared owners are independent.
     pub(crate) fn retain(&mut self, bars: usize, rows: usize) -> bool {
         let mut count = 0;

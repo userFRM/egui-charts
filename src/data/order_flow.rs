@@ -1677,7 +1677,7 @@ impl State {
         }
         flow.seal();
         let dropped = flow.over_budget(MAX_BARS, MAX_ROWS) && flow.retain(KEPT_BARS, KEPT_ROWS);
-        let first = flow.view().first_time();
+        let first = flow.first_source_time();
         let latest = self.last.map_or(trade.ts, |last| last.max(trade.ts));
         let open = flow
             .live
@@ -1973,6 +1973,78 @@ mod tests {
             5,
             "retention does not mutate an older snapshot"
         );
+    }
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn prepared_history_keeps_raw_change_records_bounded() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |minute: usize| start + TimeDelta::minutes(minute as i64);
+        let clock = BarClock::new(Timeframe::Min1);
+        let mut history = Footprint::new(clock.clone(), 1.0, 1).unwrap();
+        history.push(&Tick::new(start, 100.0, 7.0, None)).unwrap();
+        let mut history = FootprintState::new(history);
+        let tape = crate::data::trades::Trades::new(100_000);
+        history.prepare_history(at(1), &tape, true);
+        history.share_prepared();
+        let input = OrderFlowInput::footprint();
+        input.set_tick_size(Some(1.0));
+        input.replace_trades(&clock, &tape, &[], Some(&history));
+        let saved = input.footprint_snapshot(start);
+        let row = |snapshot: &OrderFlowFootprints| {
+            snapshot
+                .bars(..)
+                .next()
+                .unwrap()
+                .levels
+                .values()
+                .next()
+                .unwrap() as *const _
+        };
+        let mut next = 1;
+        for end in [MAX_BARS + 1, MAX_BARS + 1 + (MAX_BARS - KEPT_BARS + 1)] {
+            for minute in next..=end {
+                input.push_trade(&clock, &Tick::new(at(minute), 100.0, 1.0, None));
+            }
+            let revision = {
+                let state = input.state();
+                assert_eq!(
+                    state
+                        .footprint
+                        .as_ref()
+                        .unwrap()
+                        .view()
+                        .bars(at(1)..)
+                        .count(),
+                    KEPT_BARS
+                );
+                assert_eq!(
+                    state.changes.len(),
+                    KEPT_BARS,
+                    "prepared owners must not retain change records of evicted raw bars"
+                );
+                assert_eq!(
+                    state.changes.first_key_value().unwrap().0,
+                    &at(end - KEPT_BARS + 1)
+                );
+                state.revision
+            };
+            assert_eq!(
+                input.changed_since(revision - 1),
+                None,
+                "eviction requires recalculation"
+            );
+            let current = input.footprint_snapshot(start);
+            assert_eq!(
+                row(&saved),
+                row(&current),
+                "prepared rows stay shared across eviction"
+            );
+            assert_eq!(current.bars(..).next().unwrap().volume(), 7.0);
+            input.push_trade(&clock, &Tick::new(at(end), 100.0, 1.0, None));
+            assert_eq!(input.changed_since(revision), Some(at(end)));
+            next = end + 1;
+        }
     }
 
     #[test]
