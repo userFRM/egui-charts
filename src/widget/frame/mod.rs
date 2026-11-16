@@ -3813,10 +3813,11 @@ impl Chart {
                             }
                             None => price_rect.center().y,
                         };
+                        // A whitespace slot by its whole index: `bar_idx` went through screen
+                        // points and can fall short of the slot's start.
                         let time = self
                             .pointer_time(Pos2::new(x, y))
-                            .and_then(|(time, _)| time)
-                            .or_else(|| self.whitespace_time(bar_idx));
+                            .and_then(|(time, index)| time.or_else(|| self.whitespace_time(index)));
                         self.last_crosshair = time.map(|time| (time, self.synced_crosshair_price));
                         self.last_crosshair_series = target;
                         let target_axis = target.and_then(|id| {

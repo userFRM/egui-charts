@@ -3928,20 +3928,30 @@ mod tests {
 
     /// Linked charts mark a time the pointer reaches after the last bar at the slot holding it:
     /// eight one-minute slots after bar 99, opened 22:13:20 on Tuesday 14 November 2023, open
-    /// at 00:00:20 the next day, which a chart of twenty five-minute bars holds in its slot 21,
-    /// opened at 23:58:20.
+    /// at 00:00:20 the next day. One-minute bars from 22:13:00 hold it in their slot 107, opened
+    /// at midnight, and twenty five-minute bars from 22:13:00 in their slot 21, opened at 23:58.
     #[test]
     fn linked_crosshair_marks_a_time_after_the_last_bar() {
-        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-        let mut five = Chart::new(BarData::from_bars(
-            (0..20)
-                .map(|i| Bar::new(start + Duration::minutes(5 * i), 10.0, 11.0, 9.0, 10.0, 1.0))
-                .collect(),
-        ));
-        five.set_symbol("SAMPLE");
-        five.set_timeframe(Timeframe::Min5);
+        let start = DateTime::from_timestamp(1_699_999_980, 0).unwrap();
+        let whole_minutes = |count: i64, minutes: i64, timeframe| {
+            let mut chart = Chart::new(BarData::from_bars(
+                (0..count)
+                    .map(|i| {
+                        let time = start + Duration::minutes(minutes * i);
+                        Bar::new(time, 10.0, 11.0, 9.0, 10.0, 1.0)
+                    })
+                    .collect(),
+            ));
+            chart.set_symbol("SAMPLE");
+            chart.set_timeframe(timeframe);
+            chart
+        };
+        let (one, five) = (
+            whole_minutes(100, 1, Timeframe::Min1),
+            whole_minutes(20, 5, Timeframe::Min5),
+        );
         for (receiver, slot, label) in [
-            (chart(60), 107.0, "Wed 15 Nov '23 00:00"),
+            (one, 107.0, "Wed 15 Nov '23 00:00"),
             (five, 21.0, "Tue 14 Nov '23 23:58"),
         ] {
             let ctx = egui::Context::default();
@@ -3952,9 +3962,10 @@ mod tests {
             let mut charts = [chart(60), receiver];
             let size = vec2(1440.0, 900.0);
             frame_texts(&ctx, &mut layout, &mut charts, size, 0.0, vec![]);
-            // Twenty empty slots after the last bar of each chart.
+            // Twenty empty slots after the last bar of each chart, at a spacing whose slots do not
+            // fall on whole screen points.
             for chart in &mut charts {
-                chart.apply_synced_time_scale(8.0, 20.0);
+                chart.apply_synced_time_scale(6.7, 20.0);
             }
             frame_texts(&ctx, &mut layout, &mut charts, size, 0.1, vec![]);
             let pointer = pos2(
