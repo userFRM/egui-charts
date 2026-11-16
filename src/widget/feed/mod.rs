@@ -14,7 +14,7 @@ use crate::data::inbox::Inbox;
 use crate::data::trades::Trades;
 use crate::data::{
     Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, FootprintRequest,
-    HistoryRequest, Reply, SubscriptionId, TradeRequest,
+    FootprintState, HistoryRequest, Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{Bar, BarClock, Instrument, OrderBook, Tick, Timeframe};
 use crate::theme::ThemeExt;
@@ -83,7 +83,7 @@ pub(crate) struct FeedLink {
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
     /// profile drawing reads them. Raw-only history uses [`FOOTPRINT_BARS`] and
     /// [`FOOTPRINT_ROWS`]; prepared pages outlive those budgets and the raw tape.
-    pub(super) footprint: Option<Footprint>,
+    pub(super) footprint: Option<FootprintState>,
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
     /// The footprint of the trades before the cutoff, while a candle replay runs under a visible
@@ -155,11 +155,11 @@ impl FeedLink {
         if let Some(flow) = self
             .footprint
             .as_mut()
-            .filter(|flow| flow.prepared_before().is_some())
+            .filter(|flow| flow.live.prepared_before().is_some())
         {
-            flow.rebuild_prepared(&self.trades);
+            flow.live.rebuild_prepared(&self.trades);
         } else if self.footprint.is_some() {
-            self.footprint = self.footprint(None, history);
+            self.footprint = self.footprint(None, history).map(FootprintState::new);
         }
     }
 
@@ -350,8 +350,10 @@ impl Chart {
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
-        // The previous feed's histories, and the bars filled from them, are another request's.
+        // The previous feed's histories, and the bars filled from them, are another request's,
+        // as are the analyst targets it answered.
         self.study_data.clear_feed();
+        self.reload_price_targets();
         let timeframe = self.timeframe.unwrap_or_default();
         self.readout_revision = crate::model::next_revision();
         self.feed_link = Some(FeedLink {
@@ -645,15 +647,18 @@ impl Chart {
     /// Asks the feed for data in a currency or unit the host chose, such as `"EUR"` or `"oz"`,
     /// or in the instrument's own with `None`. The library converts nothing: the feed does, and
     /// labels the resolved instrument's currency and unit, which the legend and scale headers
-    /// show. A changed choice drops the bars, trades and depth held, ignores the replies to the
-    /// previous choice and reloads, resolving through [`Datafeed::resolve_converted`] and
-    /// carrying the choice in every history, trade and depth request and subscription,
-    /// including those of studies on other symbols. A feed that cannot convert answers
-    /// [`FeedError::NotSupported`] and the chart shows no data. A feed attached later uses it.
+    /// show. A changed choice drops the bars, trades, depth and analyst targets held, ignores the
+    /// replies to the previous choice and reloads, resolving through
+    /// [`Datafeed::resolve_converted`], asking for targets through
+    /// [`Datafeed::price_targets_converted`] and carrying the choice in every history, trade,
+    /// footprint and depth request and subscription, including those of studies on other
+    /// symbols. A feed that cannot convert answers [`FeedError::NotSupported`] and the chart shows
+    /// no data. A feed attached later uses it.
     pub fn set_conversion(&mut self, conversion: Option<String>) {
         if self.conversion != conversion {
             self.conversion = conversion;
             self.study_data.clear_feed();
+            self.reload_price_targets();
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
                 // The headers must not keep the previous choice's currency while loading.

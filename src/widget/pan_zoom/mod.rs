@@ -2027,6 +2027,105 @@ mod tests {
         }
     }
 
+    /// A bar appended while a drag on the time axis or on the plot is held leaves a view
+    /// scrolled back on its bars: one bar less of right offset than the same drag without it, and
+    /// two on a Renko chart of 10-point bricks, where the bar adds two bricks. Removing the 80
+    /// oldest bars, the ones in view, stops the view at a right offset of 0, with the 20 bars left
+    /// in view as the plot holds more, and the last frame of the drag moves it from there as far
+    /// as it moves the same drag without the removal.
+    #[test]
+    fn bar_appended_during_a_drag_keeps_a_scrolled_back_view_on_its_bars() {
+        use crate::model::{Bar, ChartType, ChartTypeParams};
+        use crate::widget::SeriesId;
+        use chrono::TimeZone as _;
+        // Daily closes rising by 20: on the Renko chart every bar after the first adds two bricks.
+        let closes: Vec<_> = (0..=100).map(|day| 120.0 + 20.0 * f64::from(day)).collect();
+        let mut moved = Vec::new();
+        for (renko, changes) in [
+            (false, &["none", "append", "remove"][..]),
+            (true, &["none", "append"]),
+        ] {
+            for time_axis in [true, false] {
+                // The right offset before and after the last frame of the drag.
+                let mut offsets = Vec::new();
+                for &change in changes {
+                    let ctx = egui::Context::default();
+                    let mut chart = if renko {
+                        let mut chart = chart(&closes[..100], &closes[..100]);
+                        chart.set_chart_type(ChartType::Renko);
+                        chart.set_chart_type_params(ChartTypeParams {
+                            renko_brick_size: 10.0,
+                            ..Default::default()
+                        });
+                        chart
+                    } else {
+                        chart(&[95.0, 100.0], &[105.0, 110.0])
+                    };
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    chart.state.time_scale_mut().set_right_offset(-30.0);
+                    let rect = chart.last_rendered_price_rect;
+                    let start = Pos2::new(
+                        rect.left() + rect.width() * 0.25,
+                        if time_axis {
+                            rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0
+                        } else {
+                            rect.center().y
+                        },
+                    );
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    };
+                    let moved = |dx| vec![Event::PointerMoved(start + egui::vec2(dx, 0.0))];
+                    frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                    frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                    frame(&ctx, &mut chart, 0.06, moved(50.0));
+                    let before = chart.state.time_scale().right_offset_precise();
+                    match change {
+                        "append" => {
+                            // Bar 100 opens a day after the last of the 100 daily bars.
+                            let open = chrono::Utc
+                                .timestamp_opt(1_700_000_000 + 100 * 86_400, 0)
+                                .unwrap();
+                            let (low, high) = if renko {
+                                (closes[100], closes[100])
+                            } else {
+                                (95.0, 105.0)
+                            };
+                            let bar = Bar::new(open, low, high, low, high, 1.0);
+                            assert!(chart.update(SeriesId::MAIN, bar));
+                        }
+                        "remove" => {
+                            assert_eq!(chart.remove_oldest_bars(SeriesId::MAIN, 80).len(), 80);
+                        }
+                        _ => {}
+                    }
+                    frame(&ctx, &mut chart, 0.08, moved(60.0));
+                    let after = chart.state.time_scale().right_offset_precise();
+                    offsets.push((change, before, after));
+                }
+                let (_, before, after) = offsets[0];
+                for &(change, _, end) in &offsets[1..] {
+                    // The end of the drag without a change, moved as far as the change moves the
+                    // view: by the bar or the bricks appended, or to the stop at 0.
+                    let expected = match change {
+                        "append" if renko => after - 2.0,
+                        "append" => after - 1.0,
+                        _ => after - before,
+                    };
+                    moved.push((renko, time_axis, change, end - expected));
+                }
+            }
+        }
+        assert!(
+            moved.iter().all(|(.., by)| by.abs() < 1e-9),
+            "right offset against the drag without the change, on candles and on Renko bricks, on \
+             the time axis and on the plot: {moved:?}"
+        );
+    }
+
     /// A drag on the time axis scales the bar spacing by e per 1000 points of its whole movement
     /// around the bar that was pressed, however many frames it spans, and returning restores the view.
     #[test]

@@ -899,8 +899,12 @@ fn draw_session_profile(
             if !show || !price_rect.y_range().contains(y) || anchor_x - price_rect.left() < 32.0 {
                 continue;
             }
-            let galley =
-                painter.layout_no_wrap(text.into(), FontId::proportional(typography::XS), color);
+            let caption_text = l10n::text(painter.ctx(), text);
+            let galley = painter.layout_no_wrap(
+                caption_text.clone(),
+                FontId::proportional(typography::XS),
+                color,
+            );
             let half_height = galley.size().y * 0.5;
             if price_rect.height() < galley.size().y {
                 continue;
@@ -952,7 +956,7 @@ fn draw_session_profile(
                 .show(|ui| {
                     // A midpoint can lie halfway between instrument ticks.
                     let decimals = crate::scales::decimals(profile.instrument_tick * 0.5);
-                    ui.label(format!("{text} {price:.decimals$}"));
+                    ui.label(format!("{caption_text} {price:.decimals$}"));
                 });
             }
             painter.add(Shape::convex_polygon(

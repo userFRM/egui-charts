@@ -1372,7 +1372,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
                 .as_ref()
                 .unwrap();
             assert_eq!(
-                flow.price_step(),
+                flow.live.price_step(),
                 1.0,
                 "display grouping keeps the source executions"
             );

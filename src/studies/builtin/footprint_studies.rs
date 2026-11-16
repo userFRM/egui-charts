@@ -1,6 +1,6 @@
 //! Levels and zones derived only from executed volume.
 
-use crate::data::{Footprint, FootprintBar, meets_threshold};
+use crate::data::{Footprint, FootprintBarView, FootprintView, meets_threshold};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -145,15 +145,16 @@ impl Default for FootprintStudyConfig {
 /// their `state` tells which. Call after trades change, not every paint: extending old zones
 /// scans subsequent bars.
 pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec<FootprintStudy> {
+    let flow = FootprintView::from(flow);
     let bars: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
     footprint_studies_on_rows(&bars, config, flow)
 }
 
 /// Each bar's row keys are in multiples of its display grouping; output keys use input rows.
 pub(crate) fn footprint_studies_on_rows(
-    bars: &[(&FootprintBar, i64)],
+    bars: &[(FootprintBarView<'_>, i64)],
     config: &FootprintStudyConfig,
-    flow: &Footprint,
+    flow: FootprintView<'_>,
 ) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
     for (index, &(bar, group)) in bars.iter().enumerate() {
@@ -347,12 +348,12 @@ mod tests {
                 ))
                 .unwrap();
             }
-            let rows: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
+            let rows: Vec<_> = flow.complete_bars(..).map(|bar| (bar.into(), 1)).collect();
             let config = FootprintStudyConfig {
                 extend_bars: expiry,
                 ..Default::default()
             };
-            let all = footprint_studies_on_rows(&rows, &config, &flow);
+            let all = footprint_studies_on_rows(&rows, &config, (&flow).into());
             flow.add_missing(start + TimeDelta::minutes(2), start + TimeDelta::minutes(4));
             let certain = footprint_studies(&flow, &config);
             assert!(all.iter().any(|s| s.start == start + TimeDelta::minutes(1)

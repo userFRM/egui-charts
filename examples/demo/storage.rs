@@ -1,6 +1,7 @@
 //! The demo's storage service: every document in one map that eframe keeps, in a file natively
 //! and in the browser's local storage on the web, written out as soon as a document changes.
 
+use crate::sampledata::DemoSymbol;
 use egui_charts::data::Reply;
 use egui_charts::services::{Storage, StoreKind};
 use egui_charts::ui_kit::notifications::Toast;
@@ -242,6 +243,38 @@ impl DemoStorage {
             documents
                 .entry(key(StoreKind::Drawings, &symbol))
                 .or_insert(json);
+        }
+        // Documents named by a ticker of an earlier release move to the current ticker, and
+        // recent searches drop the former instruments, whose names and exchanges were real.
+        for (former, current) in DemoSymbol::FORMER {
+            for kind in [StoreKind::Drawings, StoreKind::SymbolNotes] {
+                if let Some(mut document) = documents.remove(&key(kind, former)) {
+                    if kind == StoreKind::Drawings
+                        && let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&document)
+                        && let Some(fields) = json.as_object_mut()
+                    {
+                        fields.insert("symbol".into(), current.into());
+                        document = json.to_string();
+                    }
+                    documents.entry(key(kind, current)).or_insert(document);
+                }
+            }
+        }
+        if let Some(document) = documents.get_mut(&key(StoreKind::RecentSymbols, "recent"))
+            && let Ok(mut json) = serde_json::from_str::<serde_json::Value>(document)
+            && let Some(rows) = json
+                .get_mut("template")
+                .and_then(serde_json::Value::as_array_mut)
+        {
+            let count = rows.len();
+            rows.retain(|row| {
+                row.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|name| DemoSymbol::current(name) == name)
+            });
+            if rows.len() != count {
+                *document = json.to_string();
+            }
         }
         Self {
             documents: Mutex::new(documents),
@@ -531,7 +564,10 @@ mod tests {
             let pane = app.chart.series_pane(rsi).unwrap();
             app.chart.move_pane(pane, 0);
             app.chart.set_pane_stretch_factor(pane, 2.25);
-            app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+            app.handle_comparison(CompareAction::AddSymbol(
+                "STOCKA".into(),
+                Default::default(),
+            ));
             app.chart.price_scale_mut().options_mut().mode = PriceScaleMode::Logarithmic;
             app.chart.price_scale_mut().reset();
             show_charts(&mut app, &ctx);
@@ -720,6 +756,101 @@ mod tests {
         assert_eq!(app.layout.sync_group(0), None);
         assert!(!app.layout.is_detached(0));
         assert!(app.layout.sync == Default::default());
+    }
+
+    /// State an earlier release saved under the former tickers opens on the renamed instruments,
+    /// and the next save keeps none of the former tickers.
+    #[test]
+    fn state_saved_under_former_tickers_opens_on_the_renamed_instruments() {
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        let mut app = restart(&ctx, &storage);
+        app.switch_symbol("STOCKA");
+        super::super::tests::settle(&mut app, &ctx);
+        app.handle_comparison(super::super::CompareAction::AddSymbol(
+            "STOCKB".into(),
+            Default::default(),
+        ));
+        app.add_spread("STOCKA-STOCKB");
+        super::super::tests::finish_spreads(&mut app.chart, &mut app.spreads);
+        let mut drawing = egui_charts::drawings::Drawing::new(
+            7,
+            egui_charts::drawings::DrawingToolType::HorizontalLine,
+        );
+        drawing.completed = true;
+        drawing
+            .chart_points
+            .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
+        app.chart
+            .user_action(|chart| chart.drawings_mut().add_synced_drawing(drawing).unwrap());
+        assert!(app.chart.flush_stored_drawings());
+        app.save(&mut storage);
+        for value in storage.0.values_mut() {
+            for (former, current) in DemoSymbol::FORMER {
+                *value = value.replace(current, former);
+            }
+        }
+        assert!(storage.0[KEY].contains("Drawings/AAPL"));
+        assert!(storage.0["watchlists"].contains("AAPL"));
+        // Notes and a recent search of the earlier release, which the workspace above does not
+        // write: the notes move, the former row is dropped and the other row stays.
+        let mut documents: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+        let notes = r#"{"version":1,"notes":"Watch the open"}"#;
+        documents.insert("SymbolNotes/MSFT".into(), notes.into());
+        let sample = serde_json::json!({
+            "name": "SAMPLE",
+            "description": "Synthetic ETF sample",
+            "exchange": "Synthetic",
+            "kind": "Fund",
+        });
+        let former = serde_json::json!({
+            "name": "AAPL",
+            "description": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "kind": "Stock",
+        });
+        documents.insert(
+            "RecentSymbols/recent".into(),
+            serde_json::json!({ "version": 1, "template": [former, sample] }).to_string(),
+        );
+        eframe::set_value(&mut storage, KEY, &documents);
+
+        let mut app = restart(&ctx, &storage);
+        assert!(!app.workspace_recovery.unreadable);
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert_eq!(app.state.symbol, "STOCKA");
+        assert_eq!(
+            app.comparisons
+                .iter()
+                .map(|(symbol, ..)| symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["STOCKB"]
+        );
+        assert!(
+            app.chart
+                .series()
+                .any(|(_, series)| series.name == "STOCKA-STOCKB")
+        );
+        assert_eq!(app.chart.drawings().drawings.len(), 1);
+        assert_eq!(
+            app.watchlist.symbols().collect::<Vec<_>>(),
+            [
+                "TOKENA", "TOKENB", "STOCKA", "STOCKB", "STOCKC", "STOCKD", "INDEXA", "FOREXA",
+                "SAMPLE"
+            ]
+        );
+        app.save(&mut storage);
+        let documents: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+        assert_eq!(documents["SymbolNotes/STOCKB"], notes);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&documents["RecentSymbols/recent"]).unwrap(),
+            serde_json::json!({ "version": 1, "template": [sample] })
+        );
+        assert!(storage.0.values().all(|value| {
+            DemoSymbol::FORMER
+                .iter()
+                .all(|(former, _)| !value.contains(former))
+        }));
     }
 
     /// The first-visit choice is on screen at the first start, each way of answering it is
