@@ -159,20 +159,6 @@ pub(crate) fn footprint_studies_on_rows(
     let mut result = Vec::new();
     for (index, &(bar, group)) in bars.iter().enumerate() {
         let mut add = |low: i64, high: i64, kind, extended| {
-            let enabled = match kind {
-                FootprintStudyKind::StackedBid | FootprintStudyKind::StackedAsk => {
-                    config.stacked_imbalances
-                }
-                FootprintStudyKind::NakedPoc => config.naked_poc,
-                FootprintStudyKind::DeltaPoc => config.delta_poc,
-                FootprintStudyKind::UnfinishedHigh | FootprintStudyKind::UnfinishedLow => {
-                    config.unfinished_auctions
-                }
-                _ => true,
-            };
-            if !enabled {
-                return;
-            }
             let low = low.saturating_mul(group);
             let high = high.saturating_mul(group).saturating_add(group - 1);
             let (end, state) = if extended {
@@ -216,26 +202,29 @@ pub(crate) fn footprint_studies_on_rows(
         else {
             continue;
         };
-        if let Some(poc) = bar.poc() {
+        if config.naked_poc
+            && let Some(poc) = bar.poc()
+        {
             add(poc, poc, FootprintStudyKind::NakedPoc, true);
         }
-        if let Some(row) = bar
-            .levels
-            .values()
-            .max_by(|a, b| {
-                a.delta()
-                    .abs()
-                    .total_cmp(&b.delta().abs())
-                    .then_with(|| b.level.cmp(&a.level))
-            })
-            .filter(|row| row.delta().abs() >= config.min_delta)
+        if config.delta_poc
+            && let Some(row) = bar
+                .levels
+                .values()
+                .max_by(|a, b| {
+                    a.delta()
+                        .abs()
+                        .total_cmp(&b.delta().abs())
+                        .then_with(|| b.level.cmp(&a.level))
+                })
+                .filter(|row| row.delta().abs() >= config.min_delta)
         {
             add(row.level, row.level, FootprintStudyKind::DeltaPoc, false);
         }
-        if last_row.bid > 0.0 {
+        if last_row.bid > 0.0 && config.unfinished_auctions {
             add(last, last, FootprintStudyKind::UnfinishedHigh, true);
         }
-        if first_row.ask > 0.0 {
+        if first_row.ask > 0.0 && config.unfinished_auctions {
             add(first, first, FootprintStudyKind::UnfinishedLow, true);
         }
         if let Some(max) = config.single_print_max.filter(|max| max.is_finite()) {
@@ -278,13 +267,16 @@ pub(crate) fn footprint_studies_on_rows(
             add(first, last, kind, false);
         }
         if let Some(ratio) = config.ratio.filter(|r| *r >= 1.0) {
-            let dominant = |a: f64, b: f64| a > b && meets_threshold(a, b * ratio);
+            let dominant = |a: f64, b: f64| !meets_threshold(b, a) && meets_threshold(a, b * ratio);
             if dominant(bar.ask, bar.bid) {
                 add(first, last, FootprintStudyKind::RatioAsk, false);
             }
             if dominant(bar.bid, bar.ask) {
                 add(first, last, FootprintStudyKind::RatioBid, false);
             }
+        }
+        if !config.stacked_imbalances {
+            continue;
         }
         for (side, kind) in [
             (0, FootprintStudyKind::StackedBid),
@@ -489,6 +481,70 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn annotation_switches_preserve_other_kinds_and_order() {
+        use FootprintStudyKind::*;
+        use FootprintStudyState::*;
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let flow = flow(&[
+            (0, 100.0, 1.0, sell),
+            (1, 100.0, 1.0, buy),
+            (2, 101.0, 1.0, sell),
+            (3, 101.0, 4.0, buy),
+            (4, 102.0, 1.0, sell),
+            (5, 102.0, 4.0, buy),
+            (6, 103.0, 1.0, sell),
+            (7, 103.0, 4.0, buy),
+            (8, 103.0, 4.0, None),
+            (60, 110.0, 1.0, buy),
+            (120, 102.0, 1.0, sell),
+        ]);
+        let start = flow.bars().first_key_value().unwrap().0;
+        for mask in 0..16 {
+            let config = FootprintStudyConfig {
+                naked_poc: mask & 1 != 0,
+                delta_poc: mask & 2 != 0,
+                unfinished_auctions: mask & 4 != 0,
+                stacked_imbalances: mask & 8 != 0,
+                single_print_max: Some(2.0),
+                cluster_share: Some(0.3),
+                delta_percent: Some(40.0),
+                ratio: Some(3.0),
+                ..Default::default()
+            };
+            let actual: Vec<_> = footprint_studies(&flow, &config)
+                .into_iter()
+                .filter(|s| s.start == *start)
+                .map(|s| {
+                    (
+                        s.kind,
+                        s.low,
+                        s.high,
+                        s.end.map(|end| (end - *start).num_minutes()),
+                        s.state,
+                    )
+                })
+                .collect();
+            // Unknown volume makes 103 the volume POC; equal deltas at 101..103 pick 101.
+            let expected: Vec<_> = [
+                (mask & 1 != 0, NakedPoc, 103, 103, None, Unvisited),
+                (mask & 2 != 0, DeltaPoc, 101, 101, Some(0), Local),
+                (mask & 4 != 0, UnfinishedHigh, 103, 103, None, Unvisited),
+                (mask & 4 != 0, UnfinishedLow, 100, 100, None, Unvisited),
+                (true, SinglePrint, 100, 100, Some(0), Local),
+                (true, VolumeCluster, 103, 103, Some(0), Local),
+                (true, DeltaAsk, 100, 103, Some(0), Local),
+                (true, RatioAsk, 100, 103, Some(0), Local),
+                (mask & 8 != 0, StackedAsk, 101, 103, Some(2), Revisited),
+            ]
+            .into_iter()
+            .filter(|row| row.0)
+            .map(|(_, kind, low, high, end, state)| (kind, low, high, end, state))
+            .collect();
+            assert_eq!(actual, expected, "enabled mask {mask}");
+        }
+    }
+
     /// Guards the level rules against hand-worked bars: the thresholds include equality and count
     /// unknown volume only in the delta percentage's denominator, a side against an empty one
     /// meets any ratio, the delta POC needs its minimum and breaks ties toward the lower price,
@@ -541,6 +597,18 @@ mod tests {
         ));
         assert!(!marked(&[(0, 100.0, 5.0, None)], &ratio(1.0), RatioAsk));
         assert!(!marked(&flat, &ratio(1.0), RatioAsk) && !marked(&flat, &ratio(1.0), RatioBid));
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 and balance a buy of 0.3.
+        let rounded = [
+            (0, 100.0, 0.1, sell),
+            (1, 100.0, 0.2, sell),
+            (2, 100.0, 0.3, buy),
+        ];
+        for kind in [DeltaAsk, DeltaBid] {
+            assert!(!marked(&rounded, &delta(0.0), kind), "{kind:?}");
+        }
+        for kind in [RatioAsk, RatioBid] {
+            assert!(!marked(&rounded, &ratio(1.0), kind), "{kind:?}");
+        }
         // 29 of 100 is 29%, 33 against 30 and 55 against 50 are 1.1, also with fractional sizes.
         for scale in [1.0, 0.1] {
             for (side, other, delta_kind, ratio_kind) in [

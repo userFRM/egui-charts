@@ -2,8 +2,6 @@ use super::*;
 #[cfg(feature = "drawings")]
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
 use crate::studies::{Indicator, IndicatorValue, SMA};
-#[cfg(all(test, feature = "ui"))]
-use crate::ui::top_toolbar::SettingsMenu;
 use crate::widget::test_frames::frame;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::time::Duration;
@@ -147,16 +145,7 @@ fn autoscale_includes_only_visible_overlay_values() {
             );
             chart.set_main_series_visible(case != "main_hidden");
             if case.starts_with("price_only") {
-                #[cfg(feature = "ui")]
-                {
-                    let mut menu = SettingsMenu::new();
-                    menu.settings.scale_price_chart_only = true;
-                    chart.update_config(menu.apply_to_config(chart.config().clone()));
-                }
-                #[cfg(not(feature = "ui"))]
-                {
-                    chart.config_mut().scale_price_chart_only = true;
-                }
+                chart.config_mut().scale_price_chart_only = true;
                 if matches!(case, "price_only_restored" | "price_only_excluded") {
                     frame(&ctx, &mut chart, 0.03, Vec::new());
                     chart.config_mut().scale_price_chart_only = false;

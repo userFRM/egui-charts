@@ -279,7 +279,7 @@ pub struct Drawing {
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
-    /// Band width of the regression trend tool
+    /// Source, bounds, line pattern and correlation precision of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
     /// Bands of the anchored VWAP. Older drawings use the defaults.
     #[serde(default)]
@@ -295,6 +295,12 @@ pub struct Drawing {
     /// Whether a rectangle or parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
+    /// Whether the tool's default line, level and text colours are drawn in the nearest shade
+    /// that keeps 4:1 contrast on the active theme's chart and panel. New drawings start with
+    /// it on; drawings and saved defaults stored without it load with it off and draw in their
+    /// stored colours.
+    #[serde(default)]
+    pub theme_shade: bool,
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
@@ -342,6 +348,19 @@ const WHITE: [u8; 4] = [255, 255, 255, 255];
 /// `color` at `alpha` of 255.
 const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
+}
+
+/// Where a colour that rendering may shade for the theme sits in a drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ColorSlot {
+    /// The line colour.
+    Line,
+    /// The text colour, while it is the tool's default line colour, as on lines and shapes.
+    Text,
+    /// A level by list and value: Fibonacci levels (0) and time levels (1), pitchfork levels
+    /// (2), Gann price levels (3), time levels (4), fan lines (5) and arcs (6), and the upper (7)
+    /// and lower (8) lines of the anchored VWAP bands by index.
+    Level(u8, f32),
 }
 
 /// Line, fill and text defaults of a new drawing, before any default the user saved for its tool.
@@ -633,6 +652,7 @@ impl Drawing {
             .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            theme_shade: true,
             image: None,
             closed: false,
             gann: None,
@@ -714,6 +734,55 @@ impl Drawing {
     /// the theme, rather than one chosen for this drawing.
     pub(crate) fn has_default_color(&self) -> bool {
         self.color == default_style(self.tool_type).color
+    }
+
+    /// Calls `visit` with each line, text and level colour that rendering may shade for the
+    /// theme. A Gann drawing or an anchored VWAP without a stored configuration first takes the
+    /// defaults it draws. Volume profile drawings have none: their colour tints an area.
+    pub(crate) fn visit_theme_colors(&mut self, mut visit: impl FnMut(ColorSlot, &mut [u8; 4])) {
+        use DrawingToolType as T;
+        let tool = self.tool_type;
+        if matches!(tool, T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile) {
+            return;
+        }
+        let line = default_style(tool).color;
+        if let Some(text) = self.text_color.as_mut().filter(|text| **text == line) {
+            visit(ColorSlot::Text, text);
+        }
+        visit(ColorSlot::Line, &mut self.color);
+        if let Some(config) = &mut self.fib_config {
+            for level in &mut config.levels {
+                visit(ColorSlot::Level(0, level.value), &mut level.color);
+            }
+            for level in config.time_levels.iter_mut().flatten() {
+                visit(ColorSlot::Level(1, level.value), &mut level.color);
+            }
+        }
+        if let Some(config) = &mut self.pitchfork {
+            for level in &mut config.levels {
+                visit(ColorSlot::Level(2, level.value), &mut level.color);
+            }
+        }
+        if matches!(tool, T::GannBox | T::GannSquare | T::GannFixed | T::GannFan) {
+            let config = self.gann.get_or_insert_with(|| GannConfig::for_tool(tool));
+            for (list, levels) in [
+                (3, &mut config.price_levels),
+                (4, &mut config.time_levels),
+                (5, &mut config.fan_ratios),
+                (6, &mut config.arc_ratios),
+            ] {
+                for level in levels {
+                    visit(ColorSlot::Level(list, level.value), &mut level.color);
+                }
+            }
+        }
+        if tool == T::AnchoredVWAP {
+            let config = self.vwap.get_or_insert_with(VwapConfig::default);
+            for (index, band) in config.bands.iter_mut().enumerate() {
+                visit(ColorSlot::Level(7, index as f32), &mut band.upper.color);
+                visit(ColorSlot::Level(8, index as f32), &mut band.lower.color);
+            }
+        }
     }
 
     /// Update screen coordinates from chart_points using current transforms

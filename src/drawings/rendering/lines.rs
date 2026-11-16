@@ -1424,6 +1424,8 @@ mod tests {
             drawing.color = [200, 0, 0, 255];
             drawing.italic = true;
             drawing.text = Some("note".into());
+            // The text's own colour as stored, not its shade on the default dark theme.
+            drawing.theme_shade = false;
             let shapes = super::super::tests::paint(&drawing);
             let format = shapes
                 .iter()
@@ -1677,6 +1679,8 @@ mod tests {
                 drawing.extend_left = left;
                 drawing.extend_right = right;
                 drawing.channel_midline = middle;
+                // The middle line in the stored purple, not its shade on the default dark theme.
+                drawing.theme_shade = false;
                 drawing.stroke_width = 5.;
                 drawing.fill_color = Some([10, 20, 30, 40]);
                 let expected = Rect::from_min_max(Pos2::new(min, 100.), Pos2::new(max, 300.));

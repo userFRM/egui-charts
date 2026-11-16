@@ -163,6 +163,18 @@ impl FeedLink {
         }
     }
 
+    /// Rebuilds a study's order-flow `input` from the held trades along `history`, the chart's
+    /// bars, at the instrument's tick size and as of the latest time the feed sent, as connecting
+    /// it does. Like `OrderFlowInput::replace_trades`, it keeps quote and book sources, and on a
+    /// trade-based interval a source the sink has allocated to, as they are.
+    pub(super) fn rebuild_study_input(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
+        input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
+        input.replace_trades(&self.clock, &self.trades, history);
+        if let Some(now) = self.time {
+            input.advance_time(&self.clock, now);
+        }
+    }
+
     /// A paused link for an offscreen image: it holds the visuals the feed built, the footprint,
     /// bubbles, order book and depth, and never talks to the feed or the live link's inbox.
     pub(super) fn frozen(&self) -> Self {
@@ -217,9 +229,10 @@ impl FeedLink {
         }
     }
 
-    /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
-    /// older than the one before it is left out, as it is when it arrives live. The bar of the
-    /// oldest held trade is incomplete until a trade page reports the start of trade history.
+    /// The held trades as a footprint, or `None` without the instrument's tick size. The held
+    /// trades are taken in time order, as a stream can stamp its first trades before held ones.
+    /// The bar of the oldest held trade is incomplete until a trade page reports the start of
+    /// trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
     /// open before the live executions, held ones or those the store kept apart at the first
     /// instant a page covers while the chart holds a bar at or before the oldest of them, or
@@ -275,7 +288,12 @@ impl FeedLink {
                 .filter(|at| history.first().is_some_and(|bar| bar.time <= *at));
             flow.push_history(&paged, &history[..paged_bars], before, ended, stream_from);
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
-            for trade in trades() {
+            // A stream can stamp its first trades before held ones: take them in time order.
+            let mut ordered: Vec<_> = held()
+                .filter(|trade| before.is_none_or(|time| trade.ts < time))
+                .collect();
+            ordered.sort_by_key(|trade| trade.ts);
+            for trade in ordered {
                 let _ = flow.push(trade);
             }
         }

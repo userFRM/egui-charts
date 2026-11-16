@@ -2,7 +2,7 @@
 
 use crate::widget::settings::ChartSettingsState;
 
-/// Settings action (emitted by both SettingsMenu and SettingsDialog)
+/// Settings action emitted by the [`SettingsDialog`](super::SettingsDialog)
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum SettingsAction {

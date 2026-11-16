@@ -922,6 +922,7 @@ impl Chart {
 
         if self.state.data().is_empty() && self.state.shown().is_empty() {
             self.last_hover_bar_idx = None;
+            self.last_hover_whitespace = None;
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
@@ -1064,44 +1065,41 @@ impl Chart {
         let drawn_as_cells = move |config: &FootprintConfig| {
             crate::chart::overlays::footprint_column_width(spacing, config).is_some()
         };
-        // Rows fit the edges of their minimum group, which automatic grouping can only raise; the
-        // rows zoom groups above it are fitted once the scale is, below. A usable automatic
-        // height on single-tick rows sizes them by zoom alone, so those keep the candle fit.
-        let fixed_footprint = match footprint {
-            Some((flow, config)) => (drawn_as_cells(config)
-                && (config.row_ticks > 1
-                    || crate::chart::overlays::automatic_row_height(config).is_none()))
-            .then_some((flow, config.row_ticks)),
-            None => self
-                .feed_link
-                .as_ref()
-                .and_then(|link| link.footprint.as_ref())
-                .map(|flow| flow.view())
-                .filter(|_| self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint)
-                .filter(|_| {
-                    // The cell width does not depend on the colours.
-                    let colors = [egui::Color32::TRANSPARENT; 4];
-                    drawn_as_cells(&FootprintConfig::from_chart_params(
-                        &self.chart_type_params,
-                        colors,
-                        feed_row_ticks,
-                    ))
-                })
-                .map(|flow| (flow, feed_row_ticks)),
-        }
-        .filter(|&(_, row_ticks)| self.main_series_visible && time_based && row_ticks > 0);
-        let footprint_prices = fixed_footprint
+        // A Volume Footprint chart draws the feed's executions with its own settings; the cell
+        // width and the rows do not depend on the colours.
+        let feed_fit_config = (footprint.is_none()
+            && self.replay.is_none()
+            && self.chart_type == ChartType::VolumeFootprint)
+            .then(|| {
+                let colors = [egui::Color32::TRANSPARENT; 4];
+                FootprintConfig::from_chart_params(&self.chart_type_params, colors, feed_row_ticks)
+            });
+        // The rows the renderer paints decide the fit, whatever `row_ticks` is: the edges of
+        // their minimum group are fitted here, and those of the groups zoom raises above it
+        // once the scale is fitted, below. `row_edges` leaves out rows zoom keeps one tick tall.
+        let painted_rows = footprint
+            .or_else(|| {
+                self.feed_link
+                    .as_ref()?
+                    .footprint
+                    .as_ref()
+                    .map(|flow| flow.view())
+                    .zip(feed_fit_config.as_ref())
+            })
+            .filter(|&(_, config)| {
+                self.main_series_visible && time_based && drawn_as_cells(config)
+            });
+        let footprint_prices = painted_rows
             .into_iter()
-            .flat_map(|(flow, row_ticks)| {
-                let group = crate::chart::overlays::fixed_row_group(flow, row_ticks);
+            .flat_map(|(flow, config)| {
+                let group = crate::chart::overlays::fixed_row_group(flow, config.row_ticks);
                 let bars = &self.state.shown()[start_idx..end_idx];
-                crate::chart::overlays::row_edges(bars, flow, move |_| group)
+                crate::chart::overlays::row_edges(bars, flow, config, move |_| group)
             })
             .filter(|price| price.is_finite())
             .map(|price| [price, price])
             .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])]);
-        // Only a host's rows can have both a tick minimum and an automatic height.
-        let zoomed_rows = footprint.filter(|_| fixed_footprint.is_some());
+        let zoomed_rows = painted_rows.map(|(_, config)| config);
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
@@ -1340,7 +1338,7 @@ impl Chart {
             }
         }
         self.fit_marker_scales(&painter, price_rect, &margins);
-        if let Some((flow, config)) = zoomed_rows
+        if let Some(config) = zoomed_rows
             && let Some(height) = crate::chart::overlays::automatic_row_height(config)
             && !self.state.price_scale().is_manual()
         {
@@ -1371,8 +1369,15 @@ impl Chart {
                 if span.abs() <= 2.0 * height {
                     break;
                 }
+                // A feed's flow is looked up each round, as fitting the scale borrows the chart.
+                let Some(flow) = footprint
+                    .map(|(flow, _)| flow)
+                    .or_else(|| Some(self.feed_link.as_ref()?.footprint.as_ref()?.view()))
+                else {
+                    break;
+                };
                 let bars = &self.state.shown()[start_idx..end_idx];
-                let edges = crate::chart::overlays::row_edges(bars, flow, |bar| {
+                let edges = crate::chart::overlays::row_edges(bars, flow, config, |bar| {
                     crate::chart::overlays::row_group(&mapping, bar, flow, config)
                 })
                 .map(|price| transform.to_scale(price))
@@ -3536,10 +3541,15 @@ impl Chart {
             self.last_crosshair = None;
         }
         if let Some(hover_pos) = hover_pos {
+            // After the last bar the time continues into whitespace, for the label and linked charts.
+            let whitespace_time = crosshair_point
+                .filter(|(time, _)| time.is_none())
+                .and_then(|(_, index)| self.whitespace_time(index));
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = crosshair_point
                 .filter(|(time, _)| time.is_some())
                 .map(|(_, index)| index);
+            self.last_hover_whitespace = whitespace_time;
 
             if !menu_open {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
@@ -3571,7 +3581,7 @@ impl Chart {
                 } else {
                     hover_pos
                 };
-                self.last_crosshair = crosshair_time.map(|time| {
+                self.last_crosshair = crosshair_time.or(whitespace_time).map(|time| {
                     let main = price_rect.contains(hover_pos) && !volume_rect.contains(hover_pos);
                     (time, main.then(|| price_map.y_to_price(snapped.y)))
                 });
@@ -3588,7 +3598,7 @@ impl Chart {
                 crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
-                    crosshair_time,
+                    crosshair_time.or(whitespace_time),
                     &price_map,
                     &main_options,
                     time_axis_top,
@@ -3760,6 +3770,7 @@ impl Chart {
         } else {
             // Clear hover bar index when not hovering locally
             self.last_hover_bar_idx = None;
+            self.last_hover_whitespace = None;
             if touch_readout.touch_input {
                 self.last_crosshair = None;
             }
@@ -3778,8 +3789,7 @@ impl Chart {
                     // Convert bar index to screen x coordinate
                     let x = coords.index_to_x(bar_idx);
                     if coords.is_x_visible(x) {
-                        // At the host's price, or a synthetic position at the centre of the
-                        // price range for a time alone
+                        // At the sent price; a time alone has no horizontal guide or price label
                         let target = self.synced_crosshair_series;
                         let main_target = target.is_none_or(|id| {
                             self.series_pane(id) == Some(main_pane) && self.is_series_visible(id)
@@ -3789,7 +3799,7 @@ impl Chart {
                             .and_then(|id| self.series_price_map(id))
                             .unwrap_or(price_map);
                         let mut options = self.chart_options.crosshair;
-                        if !main_target {
+                        if !main_target || self.synced_crosshair_price.is_none() {
                             options.horz_line_visible = false;
                             options.horz_label_visible = false;
                             if options.style == crate::config::CrosshairStyle::Dot {
@@ -3803,29 +3813,11 @@ impl Chart {
                             }
                             None => price_rect.center().y,
                         };
+                        // A whitespace slot by its whole index: `bar_idx` went through screen
+                        // points and can fall short of the slot's start.
                         let time = self
                             .pointer_time(Pos2::new(x, y))
-                            .and_then(|(time, _)| time);
-                        let y = if self.synced_crosshair_price.is_none() && options.mode.snaps() {
-                            self.state
-                                .shown()
-                                .get(bar_idx.round() as usize)
-                                .filter(|bar| Some(bar.time) == time && !bar.is_whitespace())
-                                .and_then(|bar| {
-                                    let prices = [bar.open, bar.high, bar.low, bar.close];
-                                    let values = if options.mode
-                                        == crate::config::CrosshairMode::MagnetClose
-                                    {
-                                        &prices[3..]
-                                    } else {
-                                        &prices[..]
-                                    };
-                                    rendering::snap_to_values(y, &map, values.iter().copied())
-                                })
-                                .map_or(y, |price| map.price_to_y(price))
-                        } else {
-                            y
-                        };
+                            .and_then(|(time, index)| time.or_else(|| self.whitespace_time(index)));
                         self.last_crosshair = time.map(|time| (time, self.synced_crosshair_price));
                         self.last_crosshair_series = target;
                         let target_axis = target.and_then(|id| {

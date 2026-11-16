@@ -595,12 +595,11 @@ fn crosshair_skips_ineligible_indices_without_removing_data() {
                 "{pane} {index}: {lines:?}"
             );
             assert!(
-                painted.iter().any(|shape| matches!(shape,
+                !painted.iter().any(|shape| matches!(shape,
                     Shape::LineSegment { points, stroke }
                         if stroke.color == egui::Color32::MAGENTA && points[0].y == points[1].y
-                            && points[0].y.is_finite()
                 )),
-                "a synchronized whitespace slot keeps the horizontal crosshair"
+                "a synchronized position without a price has no horizontal guide"
             );
         }
         // Replacing history fills a gap immediately; replacing all values clears the cursor.
