@@ -592,9 +592,13 @@ impl ChartSettingsState {
         config.show_indicator_labels = self.status_line.show_indicator_titles;
         config.show_indicator_inputs = self.status_line.show_indicator_inputs;
         config.show_indicator_last_val = self.status_line.show_indicator_values;
-        if axis_layout.side.is_none() {
-            config.show_right_axis = !self.scales_and_lines.price_scale_left;
-            config.show_left_axis = self.scales_and_lines.price_scale_left;
+        // The placement reads both axes hidden or both shown as right, which an unedited Ok
+        // keeps.
+        let left = self.scales_and_lines.price_scale_left;
+        let chart_left = config.show_left_axis && !config.show_right_axis;
+        if axis_layout.side.is_none() && left != chart_left {
+            config.show_right_axis = !left;
+            config.show_left_axis = left;
         }
         config.show_currency = self.scales_and_lines.show_currency;
         config.show_unit = self.scales_and_lines.show_unit;
@@ -1352,6 +1356,32 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // Hidden and doubled price axes read as a right placement, which keeps them as they are.
+        for (left, right) in [(false, false), (true, true)] {
+            let mut chart = Chart::new(bars());
+            chart.config_mut().show_left_axis = left;
+            chart.config_mut().show_right_axis = right;
+            chart.user_action(|chart| {
+                ChartSettingsState::from_chart(chart)
+                    .apply_to_chart(chart)
+                    .unwrap();
+            });
+            let config = chart.config();
+            assert_eq!(
+                (config.show_left_axis, config.show_right_axis),
+                (left, right)
+            );
+            assert!(!chart.can_undo(), "axes {left} {right}");
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.scales_and_lines.price_scale_left = true;
+            settings.apply_to_chart(&mut chart).unwrap();
+            let config = chart.config();
+            assert_eq!(
+                (config.show_left_axis, config.show_right_axis),
+                (true, false)
+            );
+        }
 
         // An ATR(14) reversal of 2 on 14 bars with a true range of 2 stays through a streamed
         // bar with a true range of 16 and an unedited apply, which would make it
