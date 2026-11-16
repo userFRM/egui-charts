@@ -614,53 +614,53 @@ Studies,Indicators,Candlestick pattern: Doji Star - Bullish,unverified,library,s
 Studies,Indicators,Candlestick pattern: Downside Tasuki Gap - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Candlestick pattern: Dragonfly Doji - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Candlestick pattern: Engulfing - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Engulfing - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Evening Doji Star - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Evening Star - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Candlestick pattern: Engulfing - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Evening Doji Star - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Evening Star - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Falling Three Methods - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Falling Window - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Gravestone Doji - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Hammer - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Candlestick pattern: Falling Window - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Gravestone Doji - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Hammer - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Hanging Man - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Harami - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Harami - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Harami Cross - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Harami Cross - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Inverted Hammer - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Kicking - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Kicking - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Long Lower Shadow - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Long Upper Shadow - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Marubozu Black - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Marubozu White - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Morning Doji Star - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Morning Star - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: On Neck - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Piercing - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Rising Three Methods - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Candlestick pattern: Harami - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Harami - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Harami Cross - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Harami Cross - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Inverted Hammer - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Kicking - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Kicking - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Long Lower Shadow - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Long Upper Shadow - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Marubozu Black - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Marubozu White - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Morning Doji Star - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Morning Star - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: On Neck - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Piercing - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Rising Three Methods - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Rising Window - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Shooting Star - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Spinning Top Black,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Spinning Top White,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Three Black Crows - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Three White Soldiers - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Tri Star - Bearish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Tri Star - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Tweezer Bottom - Bullish,unverified,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Candlestick pattern: Shooting Star - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Spinning Top Black,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Spinning Top White,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Three Black Crows - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Three White Soldiers - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Tri Star - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Tri Star - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Tweezer Bottom - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Tweezer Top - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Candlestick pattern: Upside Tasuki Gap - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chaikin Money Flow,unverified,library,src/studies/builtin/cmf.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2648
 Studies,Indicators,Chaikin Oscillator,unverified,library,src/studies/builtin/chaikin_oscillator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2648
-Studies,Indicators,Chaikin Volatility,unverified,library,src/studies/builtin/chaikin_volatility.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chande Kroll Stop,unverified,library,src/studies/builtin/chande_kroll_stop.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chande Momentum Oscillator,unverified,library,src/studies/builtin/chande_momentum.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chandelier Exit,unverified,library,src/studies/builtin/chandelier_exit.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Bearish Flag,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Bearish Pennant,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Bullish Flag,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Bullish Pennant,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Cup and Handle,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Double Bottom,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Chaikin Volatility,verified,library,src/studies/builtin/chaikin_volatility.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Chande Kroll Stop,verified,library,src/studies/builtin/chande_kroll_stop.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Chande Momentum Oscillator,verified,library,src/studies/builtin/chande_momentum.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Chandelier Exit,verified,library,src/studies/builtin/chandelier_exit.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Chart Pattern Bearish Flag,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3173;3250;3172
+Studies,Indicators,Chart Pattern Bearish Pennant,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3173;3250;3172
+Studies,Indicators,Chart Pattern Bullish Flag,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3173;3250;3172
+Studies,Indicators,Chart Pattern Bullish Pennant,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3173;3250;3172
+Studies,Indicators,Chart Pattern Cup and Handle,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3173;3250;3172
+Studies,Indicators,Chart Pattern Double Bottom,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3173;3250;3172
 Studies,Indicators,Chart Pattern Double Top,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Elliott Wave,incomplete,library,;src/studies/builtin/elliott_wave.rs,1117;3175
 Order flow,Order flow,Session volume profile session hours and row size,incomplete,library,src/model/chart_type.rs;src/model/instrument.rs;src/studies/builtin/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs;src/chart/overlays/trade_profile.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/data/footprint.rs;src/model/session/exchange.rs,2054;3060;3176
