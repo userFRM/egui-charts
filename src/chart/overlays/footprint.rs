@@ -1014,12 +1014,15 @@ pub(crate) fn row_group(
 }
 
 /// The prices of the bottom edge of the lowest row and the top edge of the highest row of each
-/// complete bar of `bars`, its rows holding `group(bar)` input rows.
+/// complete bar of `bars`, its rows holding `group(bar)` input rows. A bar whose rows a usable
+/// automatic height of `config` keeps one tick tall has none: it keeps the candles' fit.
 pub(crate) fn row_edges<'a>(
     bars: &'a [Bar],
     flow: FootprintView<'a>,
+    config: &FootprintConfig,
     group: impl Fn(&Bar) -> i64 + 'a,
 ) -> impl Iterator<Item = f64> + 'a {
+    let zoomed = automatic_row_height(config).is_some();
     bars.iter()
         .filter_map(move |bar| {
             let rows = &flow.complete_bar_at(bar.time)?.levels;
@@ -1027,6 +1030,10 @@ pub(crate) fn row_edges<'a>(
             let (&high, _) = rows.last_key_value()?;
             let group = group(bar);
             let step = flow.price_step() * group as f64;
+            // A price step is a whole number of ticks, so one tick is exactly `tick_size`.
+            if zoomed && step <= flow.tick_size() {
+                return None;
+            }
             Some(
                 [
                     low.div_euclid(group) as f64,
@@ -3432,8 +3439,10 @@ mod tests {
                 false,
             ),
         );
+        // Fixed rows, so that `row_edges` gives the edges of every complete bar.
         let config = FootprintConfig {
             statistics_rows: vec![FootprintStatistic::CumulativeDelta],
+            auto_row_height: None,
             ..Default::default()
         };
         for (filled, expected) in [
@@ -3480,7 +3489,7 @@ mod tests {
                 .collect();
             assert_eq!(texts, expected);
             assert_eq!(
-                row_edges(&bars, (&flow).into(), |_| 1).count(),
+                row_edges(&bars, (&flow).into(), &config, |_| 1).count(),
                 if filled { 8 } else { 4 }
             );
         }
