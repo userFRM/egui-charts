@@ -71,6 +71,23 @@ impl Chart {
         }
     }
 
+    /// Whether `row` of the study `id` is a column of a volume study, whose value the data
+    /// window's own volume row already shows. Its moving average is not.
+    pub(crate) fn is_volume_column(&self, id: SeriesId, row: &StudyValue) -> bool {
+        self.study_ids
+            .iter()
+            .zip(self.rendered_studies().indicators())
+            .find(|(study, _)| **study == id)
+            .is_some_and(|(_, study)| {
+                let names = study.line_names();
+                study.is_volume()
+                    && (0..study.line_count()).any(|line| {
+                        study.plot_style(line).plot_type == crate::studies::PlotType::Columns
+                            && names.get(line) == Some(&row.plot)
+                    })
+            })
+    }
+
     /// The first visible output with a value at a displayed bar index. Price-based charts
     /// read element study values, as the legend does. The output number is stable within
     /// the study and can be used by host alert services.

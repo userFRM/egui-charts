@@ -9528,6 +9528,21 @@ mod tests {
             for _ in 0..6 {
                 frame(&mut app, vec![]);
             }
+            // The volume histogram with its moving average shown.
+            let volume = app
+                .chart
+                .indicators()
+                .find(|(_, study)| study.is_volume())
+                .unwrap()
+                .0;
+            app.chart
+                .indicator_mut(volume)
+                .unwrap()
+                .set_input(
+                    "show_average",
+                    egui_charts::studies::InputValue::Toggle(true),
+                )
+                .unwrap();
             if kind == ChartType::Candles {
                 // A comparison whose bar at each main bar's time closes at 500 plus its index.
                 let comparison = app.chart.add_comparison("CMP", egui::Color32::GOLD);
@@ -9582,6 +9597,16 @@ mod tests {
                 "{text:?}"
             );
             if kind == ChartType::Candles {
+                // One volume row, then the average's row and no row for the volume columns.
+                assert!(text.iter().any(|text| text == "Vol"), "{text:?}");
+                let volume: Vec<_> = text
+                    .iter()
+                    .filter(|text| text.starts_with("Volume: "))
+                    .collect();
+                assert!(
+                    volume.len() == 1 && !volume[0].contains(" volume"),
+                    "{text:?}"
+                );
                 let row = text.iter().position(|text| text == "CMP");
                 let value = row.and_then(|row| text.get(row + 1));
                 assert_eq!(

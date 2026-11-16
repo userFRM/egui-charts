@@ -20,7 +20,7 @@ impl DataWindowInfo {
     /// crosshair, whether from the pointer, a linked chart or the host, falling back to the
     /// latest bar with a value.
     /// Uses the chart's time formatter, instrument precision, visible added series and visible
-    /// study plots.
+    /// study plots, leaving out the volume columns that the volume row shows.
     /// Call after [`crate::widget::Chart::show`] so hover and study values describe the current frame.
     pub fn from_chart(chart: &crate::widget::Chart) -> Self {
         let index = chart
@@ -74,9 +74,11 @@ impl DataWindowInfo {
                 .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
                 .with_timestamp(chart.format_time(bar.time))
                 .with_prev_close(previous_close.unwrap_or(bar.open));
+            // The volume row above shows the volume columns' value.
             info.studies = studies
                 .map_or_else(|| chart.study_rows_at(index), <[_]>::to_vec)
                 .into_iter()
+                .filter(|(id, row)| !chart.is_volume_column(*id, row))
                 .map(|(_, row)| row)
                 .collect();
         }
