@@ -51,7 +51,8 @@
 //!   values for the Keltner middle line, with bands of Wilder's average true range, the bar's true
 //!   range (high minus low on the first bar) or Wilder's average of the bar range over the middle
 //!   line's length; the simple averages of the highs and of the lows for the MA Channel; and
-//!   separate upper and lower residual deviations for the regression channel.
+//!   separate upper and lower residual deviations for the regression channel, or with a deviation
+//!   switched off, the largest rise of a high above the line or fall of a low below it.
 //! - McGinley for the McGinley Dynamic; Appel's MACD over simple averages; Wilder's true range under
 //!   simple, exponential and weighted averages.
 //!
@@ -985,6 +986,28 @@ fn staple_studies_match_published_definitions() {
             },
         ),
         (
+            "LinRegChannel-extreme-hand",
+            Box::new(
+                crate::studies::LinearRegressionChannel::new(3, 2.0)
+                    .with_multipliers(2.0, 1.0)
+                    .with_deviations_used(false, true),
+            ) as Box<dyn Indicator>,
+            hand(vec![
+                (f64::NAN, f64::NAN, f64::NAN),
+                (3.0, 1.0, 2.0),
+                (5.0, 3.0, 4.0),
+                (f64::NAN, 2.0, 3.0),
+            ]),
+        ),
+        (
+            "LinRegChannel-extreme-ties-hand",
+            Box::new(
+                crate::studies::LinearRegressionChannel::new(4, 2.0)
+                    .with_deviations_used(false, false),
+            ) as Box<dyn Indicator>,
+            ties.clone(),
+        ),
+        (
             "KST-hand",
             Box::new(KnowSureThing::new().with_params([1; 4], [2; 4], 2)) as Box<dyn Indicator>,
             doubling,
@@ -1481,51 +1504,91 @@ fn time_studies(bars: &[Bar]) -> Vec<(&'static str, Box<dyn Indicator>, Vec<Bar>
     ]
 }
 
-/// A refit drops the expired bar and replaces all three lines on an append or correction.
+/// A refit drops the expired bar and replaces all three lines on an append or correction, with
+/// each band a deviation away or through its extreme high or low, whichever its switch selects.
 #[test]
 fn regression_channel_refits_the_last_n_bars_on_update() {
     use crate::studies::LinearRegressionChannel;
-    let mut bars: Vec<_> = [1.0, 2.0, 4.0, 2.0]
+    // Each bar's high and low lie these distances above and below its close.
+    let spread = [(1.0, 0.5), (0.0, 1.0), (0.5, 0.0), (2.0, 3.0)];
+    let initial: Vec<_> = [1.0, 2.0, 4.0, 2.0]
         .into_iter()
+        .zip(spread)
         .enumerate()
-        .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+        .map(|(i, (c, (up, down)))| {
+            Bar::new(
+                Utc.timestamp_opt(i as i64, 0).unwrap(),
+                c,
+                c + up,
+                c - down,
+                c,
+                1.0,
+            )
+        })
         .collect();
     let mut study = LinearRegressionChannel::new(3, 2.0);
-    assert!(
-        study.is_incremental(),
-        "the trailing channel must refit on every live update"
-    );
-    study.calculate(&bars[..2]);
-    assert!(
-        study
-            .values()
-            .to_rows()
-            .iter()
-            .all(|v| matches!(v, IndicatorValue::None))
-    );
-    // OLS of [1,2,4]: intercept 5/6, slope 3/2, SSE 1/6, offset 2*sqrt(SSE/2).
-    // OLS of [2,4,2]: intercept 8/3, slope 0, SSE 8/3.
-    for (len, edit, intercept, slope, offset) in [
-        (3, None, 5.0 / 6.0, 1.5, 1.0 / 3.0_f64.sqrt()),
-        (4, None, 8.0 / 3.0, 0.0, 4.0 / 3.0_f64.sqrt()),
-        (4, Some(6.0), 2.0, 2.0, 0.0),
-    ] {
-        if let Some(close) = edit {
-            bars[3].close = close;
-        }
-        study.update(&bars[..len], len - 1);
-        assert_eq!(study.values().len(), len);
-        for (i, value) in study.values().to_rows().iter().enumerate() {
-            if i < len - 3 {
-                assert!(matches!(value, IndicatorValue::None));
-                continue;
+    let mut bars = initial.clone();
+    for (use_upper, use_lower) in [(true, true), (false, true), (true, false), (false, false)] {
+        bars.clone_from(&initial);
+        study = study.with_deviations_used(use_upper, use_lower);
+        assert!(
+            study.is_incremental(),
+            "the trailing channel must refit on every live update"
+        );
+        study.calculate(&bars[..2]);
+        assert!(
+            study
+                .values()
+                .to_rows()
+                .iter()
+                .all(|v| matches!(v, IndicatorValue::None))
+        );
+        // OLS of [1,2,4]: intercept 5/6, slope 3/2, SSE 1/6, offset 2*sqrt(SSE/2); residuals
+        // 1/6, -1/3, 1/6 put the highest high 7/6 above the line and the lowest low 4/3 below.
+        // OLS of [2,4,2]: intercept 8/3, slope 0, SSE 8/3; residuals -2/3, 4/3, -2/3 give 11/6
+        // and 11/3. The corrected [2,4,6] is fitted exactly, its high 2 and low 3 away.
+        for (len, edit, intercept, slope, offset, highest, lowest) in [
+            (
+                3,
+                None,
+                5.0 / 6.0,
+                1.5,
+                1.0 / 3.0_f64.sqrt(),
+                7.0 / 6.0,
+                4.0 / 3.0,
+            ),
+            (
+                4,
+                None,
+                8.0 / 3.0,
+                0.0,
+                4.0 / 3.0_f64.sqrt(),
+                11.0 / 6.0,
+                11.0 / 3.0,
+            ),
+            (4, Some(6.0), 2.0, 2.0, 0.0, 2.0, 3.0),
+        ] {
+            if let Some(close) = edit {
+                bars[3].close = close;
+                bars[3].high = close + spread[3].0;
+                bars[3].low = close - spread[3].1;
             }
-            let IndicatorValue::Multiple(lines) = value else {
-                panic!("{value:?}")
-            };
-            let middle = intercept + slope * (i - (len - 3)) as f64;
-            for (got, want) in lines.iter().zip([middle + offset, middle, middle - offset]) {
-                assert!((got - want).abs() < 1e-12, "{value:?}: {want}");
+            study.update(&bars[..len], len - 1);
+            assert_eq!(study.values().len(), len);
+            let above = if use_upper { offset } else { highest };
+            let below = if use_lower { offset } else { lowest };
+            for (i, value) in study.values().to_rows().iter().enumerate() {
+                if i < len - 3 {
+                    assert!(matches!(value, IndicatorValue::None));
+                    continue;
+                }
+                let IndicatorValue::Multiple(lines) = value else {
+                    panic!("{value:?}")
+                };
+                let middle = intercept + slope * (i - (len - 3)) as f64;
+                for (got, want) in lines.iter().zip([middle + above, middle, middle - below]) {
+                    assert!((got - want).abs() < 1e-12, "{value:?}: {want}");
+                }
             }
         }
     }
