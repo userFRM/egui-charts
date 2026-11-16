@@ -163,11 +163,20 @@ impl FeedLink {
         }
     }
 
-    /// Rebuilds a study's order-flow `input` from the held trades along `history`, the chart's
-    /// bars, at the instrument's tick size and as of the latest time the feed sent, as connecting
+    /// Rebuilds a study's order-flow `input` from prepared history and held trades along the
+    /// chart's bars, at the instrument's tick size and latest time, as connecting
     /// it does. Like `OrderFlowInput::replace_trades`, it keeps quote and book sources, and on a
     /// trade-based interval a source the sink has allocated to, as they are.
-    pub(super) fn rebuild_study_input(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
+    pub(super) fn rebuild_study_input(
+        &mut self,
+        input: &crate::data::OrderFlowInput,
+        history: &[Bar],
+    ) {
+        if input.is_footprint()
+            && let Some(flow) = &mut self.footprint
+        {
+            flow.share_prepared();
+        }
         input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
         input.replace_trades(&self.clock, &self.trades, history, self.footprint.as_ref());
         if let Some(now) = self.time {

@@ -7274,6 +7274,115 @@ fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
 
 #[cfg(feature = "studies")]
 #[test]
+fn replay_exit_restores_prepared_history_to_a_study_added_while_paused() {
+    use crate::data::{FootprintBars, MarketEvent, ReplayDriver, ReplayEvent};
+    use crate::model::OrderSide::{Buy, Sell};
+
+    for shared in [false, true] {
+        let feed = Arc::new(Script::default());
+        feed.prepared_footprints.store(true, Ordering::Relaxed);
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(5), true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let start = bars(1)[0].time;
+        let at = |second| start + TimeDelta::seconds(second);
+        let mut prepared = prepared_page(
+            &[
+                Tick::new(at(0), 100.0, 2.0, Some(Buy)),
+                Tick::new(at(60), 101.0, 3.0, Some(Sell)),
+            ],
+            at(120),
+            true,
+        );
+        if shared {
+            let FootprintBars::Owned(rows) = prepared.bars else {
+                unreachable!()
+            };
+            prepared.bars = FootprintBars::Shared(Arc::new(rows));
+        }
+        feed.footprints.lock().unwrap().remove(0).send(Ok(prepared));
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .view();
+        let owner = flow
+            .complete_bars(..)
+            .next()
+            .unwrap()
+            .levels
+            .values()
+            .next()
+            .unwrap() as *const _;
+
+        chart.set_feed_paused(true);
+        chart.set_chart_type(ChartType::Candles);
+        let study = crate::studies::IndicatorFactory::new()
+            .create("Vol Profile FR")
+            .unwrap();
+        let input = study.order_flow_inputs()[0].clone();
+        chart.add_indicator(study);
+        // The paused live feed has not connected this study or promoted its owned prefix.
+        let recorded = Tick::new(at(70), 500.0, 17.0, None).with_id(1);
+        let driver = ReplayDriver::new(
+            vec![ReplayEvent::new(
+                "A",
+                at(70),
+                1,
+                MarketEvent::Trade(recorded),
+            )],
+            vec![Instrument::new("A").with_tick_size(1.0)],
+        )
+        .unwrap();
+        driver.set_speed(0.0).unwrap();
+        driver.seek(at(75));
+        chart.set_market_replay(Some(Arc::new(driver)));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(
+            input
+                .footprint_snapshot(start)
+                .bars(..)
+                .map(|bar| bar.volume())
+                .sum::<f64>(),
+            17.0
+        );
+        chart.set_market_replay(None);
+        let restored = input.footprint_snapshot(start);
+        assert_eq!(
+            restored
+                .bars(..)
+                .map(|bar| bar.volume())
+                .collect::<Vec<_>>(),
+            [2.0, 3.0]
+        );
+        assert_eq!(
+            restored
+                .bars(..)
+                .next()
+                .unwrap()
+                .levels
+                .values()
+                .next()
+                .unwrap() as *const _,
+            owner
+        );
+    }
+}
+
+#[cfg(feature = "studies")]
+#[test]
 fn prepared_history_reaches_profile_studies_without_copying_rows() {
     use crate::data::{FootprintBars, FootprintLevel, ProfileSource};
     use crate::model::OrderSide::{Buy, Sell};

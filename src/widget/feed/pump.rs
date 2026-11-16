@@ -128,11 +128,6 @@ impl Chart {
                 .zip(&link.study_inputs)
                 .any(|(a, (b, _))| !a.same_source(b))
         {
-            if inputs.iter().any(|input| input.is_footprint())
-                && let Some(flow) = &mut link.footprint
-            {
-                flow.share_prepared();
-            }
             let previous = std::mem::take(&mut link.study_inputs);
             link.study_inputs = inputs
                 .iter()
