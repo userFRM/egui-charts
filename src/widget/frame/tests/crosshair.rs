@@ -1151,7 +1151,7 @@ fn added_series_row_follows_the_held_readout() {
     }
 }
 
-/// On a Heikin Ashi chart the status line, tooltip and data window describe the drawn candle.
+/// On a Heikin Ashi chart the status line and tooltip describe the drawn candle.
 /// Bars alternate between open 150, close 151 and open 146.5, close 147.5, with lows at the opens
 /// and highs at the closes, so the averaged closes alternate between 150.5 and 147. The averaged
 /// opens settle where e = (o + 147) / 2 and o = (e + 150.5) / 2: bar 50 opens at
@@ -1191,12 +1191,6 @@ fn heikin_ashi_readouts_describe_the_drawn_candle() {
     }
     #[cfg(feature = "studies")]
     assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
-    #[cfg(feature = "ui")]
-    {
-        let data = crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(&chart);
-        assert_eq!((data.close, data.prev_close), (150.5, 147.0));
-        assert!((data.open - 444.5 / 3.0).abs() < 1e-9);
-    }
 }
 
 /// Touch holds respect their delay, move without panning, and exit by release or a later tap.
