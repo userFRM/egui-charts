@@ -510,8 +510,20 @@ impl Chart {
             (self.chart_type == ChartType::VolumeFootprint
                 && self.chart_type_params.footprint_statistics)
                 .then(|| self.chart_type_params.footprint_statistics_rows.clone())
-        }
-        .filter(|rows| !rows.is_empty());
+        };
+        let open_interest_rows = crate::chart::overlays::OPEN_INTEREST_ROWS;
+        self.footprint_open_interest = statistics_rows
+            .as_ref()
+            .is_some_and(|rows| rows.iter().any(|row| open_interest_rows.contains(row)));
+        // Rows without open interest are left out, as the table leaves them out.
+        let statistics_rows = statistics_rows
+            .map(|mut rows| {
+                if self.open_interest_points().is_empty() {
+                    rows.retain(|row| !open_interest_rows.contains(row));
+                }
+                rows
+            })
+            .filter(|rows| !rows.is_empty());
         let statistics_rect = statistics_rows
             .as_deref()
             .filter(|_| !self.chart_type.is_time_independent() && self.main_series_visible)
@@ -2314,6 +2326,7 @@ impl Chart {
                         flow,
                         config,
                         sessions,
+                        self.open_interest_points(),
                     );
                 }
                 if let Some((_, Some(volume))) = &merged {

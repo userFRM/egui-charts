@@ -129,6 +129,7 @@ impl Chart {
                 (chrono::Utc::now(), crate::model::next_revision()),
             ),
             study_data: Default::default(),
+            footprint_open_interest: false,
             element_studies: Default::default(),
             execution_ranges: Default::default(),
             #[cfg(feature = "studies")]

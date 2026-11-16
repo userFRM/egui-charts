@@ -1343,7 +1343,22 @@ pub fn render_footprint_statistics(
         text_color,
         ..Default::default()
     };
-    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None);
+    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None, &[]);
+}
+
+/// The rows that read open interest, left out of the table without it.
+pub(crate) const OPEN_INTEREST_ROWS: [FootprintStatistic; 2] = [
+    FootprintStatistic::OpenInterestHigh,
+    FootprintStatistic::OpenInterestLow,
+];
+
+/// The open interest the statistics read: the metric `open_interest` of the chart symbol.
+pub(crate) fn open_interest_request() -> crate::data::StudyDataRequest {
+    crate::data::StudyDataRequest {
+        symbol: String::new(),
+        timeframe: None,
+        metric: Some("open_interest".to_owned()),
+    }
 }
 
 /// Draws the rows of [`FootprintConfig::statistics_rows`] in their order and in
@@ -1360,6 +1375,11 @@ pub fn render_footprint_statistics(
 /// price of the highest-volume row among the rows [`render_footprint`] groups for `config` under
 /// the price mapping of `mapping`, so it names the row marked in the bar. Range and point of
 /// control are written at the decimals of the instrument's tick.
+///
+/// `open_interest` holds the open interest points as study data bars, sorted by time with the
+/// value in `close`, each in effect until the next. A bar's high and low are taken over the point
+/// in effect at its open and every point published before its close; a bar before the first point
+/// has an empty cell. With no points both open interest rows are left out of the table.
 pub fn render_footprint_statistics_rows(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -1367,8 +1387,17 @@ pub fn render_footprint_statistics_rows(
     flow: &Footprint,
     config: &FootprintConfig,
     sessions: Option<&dyn SessionProvider>,
+    open_interest: &[Bar],
 ) {
-    render_footprint_statistics_rows_read(painter, mapping, bars, flow.into(), config, sessions)
+    render_footprint_statistics_rows_read(
+        painter,
+        mapping,
+        bars,
+        flow.into(),
+        config,
+        sessions,
+        open_interest,
+    )
 }
 
 pub(crate) fn render_footprint_statistics_rows_read(
@@ -1378,8 +1407,13 @@ pub(crate) fn render_footprint_statistics_rows_read(
     flow: FootprintView<'_>,
     config: &FootprintConfig,
     sessions: Option<&dyn SessionProvider>,
+    open_interest: &[Bar],
 ) {
-    let (rows, text_color) = (config.statistics_rows.as_slice(), config.text_color);
+    let mut rows = config.statistics_rows.clone();
+    if open_interest.is_empty() {
+        rows.retain(|row| !OPEN_INTEREST_ROWS.contains(row));
+    }
+    let (rows, text_color) = (rows.as_slice(), config.text_color);
     if rows.is_empty() {
         return;
     }
@@ -1477,6 +1511,33 @@ pub(crate) fn render_footprint_statistics_rows_read(
                     .map(|level| level as f64 * step)
             })
             .flatten();
+        // The point in effect at the open, then every point published before the bar's end.
+        let interest = rows
+            .iter()
+            .any(|row| OPEN_INTEREST_ROWS.contains(row))
+            .then(|| {
+                let end = flow
+                    .clock()
+                    .next_open(bar.time)
+                    .or_else(|| bars.get(i + 1).map(|next| next.time));
+                let start = open_interest
+                    .partition_point(|point| point.time <= bar.time)
+                    .saturating_sub(1);
+                let stop = end.map_or(open_interest.len(), |end| {
+                    open_interest.partition_point(|point| point.time < end)
+                });
+                open_interest
+                    .get(start..stop)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|point| point.close)
+                    .fold(None, |range: Option<(f64, f64)>, value| {
+                        Some(range.map_or((value, value), |(high, low)| {
+                            (high.max(value), low.min(value))
+                        }))
+                    })
+            })
+            .flatten();
         let values = [
             Some(volume),
             Some(row.bid),
@@ -1496,6 +1557,8 @@ pub(crate) fn render_footprint_statistics_rows_read(
             previous
                 .filter(|previous| *previous > 0.0)
                 .map(|previous| (volume - previous) / previous * 100.0),
+            interest.map(|(high, _)| high),
+            interest.map(|(_, low)| low),
         ];
         let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
         columns.push((x, first_volume, values));
@@ -1523,6 +1586,12 @@ pub(crate) fn render_footprint_statistics_rows_read(
                                         (FootprintStatistic::VolumeChange, None) if *first => {
                                             String::new()
                                         }
+                                        // No open interest was published yet.
+                                        (
+                                            FootprintStatistic::OpenInterestHigh
+                                            | FootprintStatistic::OpenInterestLow,
+                                            None,
+                                        ) => String::new(),
                                         (_, None) => unavailable.clone(),
                                         (
                                             FootprintStatistic::DeltaPercent
@@ -2974,6 +3043,11 @@ mod tests {
     /// footprint draws them in pairs and both bars have their point of control in the row at
     /// 100.00, where the busiest price of the first is 100.25. The second bar trades 2500 after
     /// 16, a change of 2484 / 16 = 15525%, all of it sold, at one price.
+    ///
+    /// Open interest of 1000 from 09:58, 1004 from 10:00:20, 998 from 10:00:40 and 1010 from
+    /// 10:05: the first bar opens at 1000 and publishes 1004 and 998 before 10:01, so its high is
+    /// 1004 and its low 998. The second publishes nothing before 10:02 and holds 998 from its
+    /// open; 10:05 is after both. Without the points the open interest rows are left out.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -2991,6 +3065,15 @@ mod tests {
             Bar::new(time, 100.0, 100.25, 100.0, 100.25, 16.0),
             Bar::new(next, 100.0, 100.0, 100.0, 100.0, 2500.0),
         ];
+        let points: Vec<_> = [
+            ("2026-01-05T09:58:00Z", 1000.0),
+            ("2026-01-05T10:00:20Z", 1004.0),
+            ("2026-01-05T10:00:40Z", 998.0),
+            ("2026-01-05T10:05:00Z", 1010.0),
+        ]
+        .into_iter()
+        .map(|(at, value)| Bar::new(at.parse().unwrap(), value, value, value, value, 0.0))
+        .collect();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 136.0));
         let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         // Marked rows run with a translator that turns each name and message into "~".
@@ -3005,15 +3088,16 @@ mod tests {
             (60.0, true, false, 196.0, false),
             (60.0, true, false, 196.0, true),
             (60.0, false, false, 196.0, true),
+            (60.0, true, false, 220.0, false),
         ] {
             // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
-            let count = if height == 112.0 {
-                9
-            } else if height == 196.0 {
-                16
-            } else {
-                11
+            let (selected, count) = match height {
+                112.0 => (9, 9),
+                196.0 => (18, 16),
+                220.0 => (18, 18),
+                _ => (11, 11),
             };
+            let interest = if count == 18 { &points[..] } else { &[] };
             let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
@@ -3058,7 +3142,7 @@ mod tests {
                     } else {
                         let config = FootprintConfig {
                             text_color: Color32::WHITE,
-                            statistics_rows: FootprintStatistic::ALL[..count].to_vec(),
+                            statistics_rows: FootprintStatistic::ALL[..selected].to_vec(),
                             ..Default::default()
                         };
                         render_footprint_statistics_rows(
@@ -3068,6 +3152,7 @@ mod tests {
                             flow,
                             &config,
                             None,
+                            interest,
                         )
                     }
                 },
@@ -3124,17 +3209,17 @@ mod tests {
             for (column, expected) in [
                 [
                     "16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1", "3", "5.333",
-                    "18.8%", "81.2%", "0.25", "100.00", "",
+                    "18.8%", "81.2%", "0.25", "100.00", "", "1004", "998",
                 ],
                 if large {
                     [
                         "123.5M", "123.5M", "0", "-123.5M", "-123.5M", "0", "-123.5M", "-100.0%",
-                        "0.00:1", "2", "61.7M", "", "", "", "", "",
+                        "0.00:1", "2", "61.7M", "", "", "", "", "", "", "",
                     ]
                 } else {
                     [
                         "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
-                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%",
+                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%", "998", "998",
                     ]
                 },
             ]
@@ -3200,7 +3285,17 @@ mod tests {
                 screen_rect: Some(rect),
                 ..Default::default()
             },
-            |ui| render_footprint_statistics_rows(ui.painter(), &map, &bars, &flow, &config, None),
+            |ui| {
+                render_footprint_statistics_rows(
+                    ui.painter(),
+                    &map,
+                    &bars,
+                    &flow,
+                    &config,
+                    None,
+                    &[],
+                )
+            },
         );
         output.textures_delta.clear();
         let texts: Vec<_> = output
@@ -3295,6 +3390,7 @@ mod tests {
                         &flow,
                         &config,
                         sessions,
+                        &[],
                     );
                 },
             );
@@ -3374,6 +3470,7 @@ mod tests {
                     &flow,
                     &config,
                     Some(&days),
+                    &[],
                 );
             },
         );
@@ -3475,6 +3572,7 @@ mod tests {
                         &flow,
                         &config,
                         None,
+                        &[],
                     );
                 },
             );

@@ -1353,6 +1353,9 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
 /// 14 averages the three bars there are: 35 / 3 = 11.67, a fifth is 2.33, so rows of 2 ticks.
 /// Length 2 averages the last two, the older by its own range of 5: (5 + 25) / 2 = 15, a fifth
 /// is 3, so rows of 3.
+///
+/// Open interest rows stay out of the table until open interest arrives: 500 from 09:59 is in
+/// effect at the 10:00 open and 507 is published at 10:00:30, so the bar reads 507 and 500.
 #[cfg(feature = "ui")]
 #[test]
 fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
@@ -1576,7 +1579,12 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         footprint_row_atr: true,
         footprint_row_atr_length: 30,
         footprint_statistics: true,
-        footprint_statistics_rows: vec![FootprintStatistic::Volume, FootprintStatistic::Delta],
+        footprint_statistics_rows: vec![
+            FootprintStatistic::Volume,
+            FootprintStatistic::Delta,
+            FootprintStatistic::OpenInterestHigh,
+            FootprintStatistic::OpenInterestLow,
+        ],
         profile: TradeProfileSettings {
             value_area: Some(0.5),
             ..Default::default()
@@ -1584,18 +1592,41 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         ..Default::default()
     };
     chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
-    let shapes = draw(&mut chart);
-    let bottom = chart.get_rendered_price_rect().bottom();
-    let labels: Vec<_> = shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 28.0 => {
-                Some(text.galley.text().to_owned())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(labels, ["Vol", "Delta", "5", "1"]);
+    let table = |chart: &mut Chart| {
+        let shapes = draw(chart);
+        let bottom = chart.get_rendered_price_rect().bottom();
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 52.0 => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The feed has no open interest.
+    table(&mut chart);
+    assert_eq!(table(&mut chart), ["Vol", "Delta", "5", "1"]);
+    chart.set_study_data(
+        crate::data::StudyDataRequest {
+            symbol: String::new(),
+            timeframe: None,
+            metric: Some("open_interest".to_owned()),
+        },
+        [
+            ("2026-01-05T09:59:00Z", 500.0),
+            ("2026-01-05T10:00:30Z", 507.0),
+        ]
+        .into_iter()
+        .map(|(at, value)| Bar::new(at.parse().unwrap(), value, value, value, value, 0.0))
+        .collect(),
+        None,
+    );
+    assert_eq!(
+        table(&mut chart),
+        ["Vol", "Delta", "OI high", "OI low", "5", "1", "507", "500"]
+    );
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
     let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
     let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();
