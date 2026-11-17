@@ -1135,10 +1135,11 @@ impl OrderFlowInput {
     /// book when the bar's last update came before the cutoff. Every other source leaves that bar
     /// empty: quotes and books are not held, and a rolling window could reach executions before
     /// the oldest held one. On a trade-based interval the cutoff's bar is the one of `history`,
-    /// all the chart's bars and not only those before the cutoff, that holds it, and a page's copy
-    /// counts for a live execution the store dropped as a repeat. Once the store has lost an
-    /// execution to its limit, that bar is filled there only when the executions held after the
-    /// loss group into `history` from that bar or an older one.
+    /// all the chart's bars and not only those before the cutoff, that holds it, unless the
+    /// source grouped its own bar holding the cutoff apart from them, and a page's copy counts for
+    /// a live execution the store dropped as a repeat. Once the store has lost an execution to its
+    /// limit, that bar is filled there only when the executions held after the loss group into
+    /// `history` from that bar or an older one.
     #[cfg(feature = "widget")]
     pub(crate) fn set_replay(
         &self,
@@ -1279,8 +1280,8 @@ impl OrderFlowInput {
             } else if trade_based {
                 // The chart's bar holding the cutoff: the source's own newest bar at or before it
                 // is older when the source has no value in that bar, as without a quote or a
-                // classified execution, and newer only for executions grouped apart from the
-                // chart's bars.
+                // classified execution. A bar the source grouped apart from the chart's bars
+                // can hold executions after the cutoff, so it stays the cutoff's bar.
                 let own = state
                     .footprint
                     .as_ref()
@@ -1294,7 +1295,9 @@ impl OrderFlowInput {
                     });
                 let chart = (history[..history.partition_point(|bar| bar.time <= cutoff)].last())
                     .map(|bar| bar.time);
-                chart.max(own).unwrap_or(cutoff)
+                (own.filter(|own| history.binary_search_by_key(own, |bar| bar.time).is_err()))
+                    .or(chart)
+                    .unwrap_or(cutoff)
             } else {
                 place(cutoff)
             };
@@ -2473,6 +2476,18 @@ mod tests {
             input.set_replay(&clock, Some(cutoff), Some(&limited), &history);
             assert_eq!(input.values().keys().copied().collect::<Vec<_>>(), opens);
         }
+        // Grouped from the buy of 2 s, apart from the chart's bars, a source's bars open at 2 s
+        // and 5 s. Its bar of 5 s also holds the buy of 7 s, after a cutoff of 6.5 s, so it is
+        // the cutoff's bar, though the chart's bar holding the cutoff opens at 6 s.
+        let apart = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+        for second in 2..8 {
+            let at = start + TimeDelta::seconds(second);
+            apart.push_trade(&clock, &Tick::new(at, 100.0, 1.0, Some(OrderSide::Buy)));
+        }
+        let cutoff = start + TimeDelta::milliseconds(6500);
+        apart.set_replay(&clock, Some(cutoff), None, &history);
+        let first = start + TimeDelta::seconds(2);
+        assert_eq!(apart.values(), BTreeMap::from([(first, [3.0, 3.0, 0.0])]));
         // The first excluded sell would finish the old volume bar and open another. Only
         // the buy before it belongs in replay, not the old bar's completed volume of five.
         let clock = BarClock::new("5v".parse().unwrap());
