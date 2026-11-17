@@ -1936,6 +1936,10 @@ mod tests {
             for width in [300.0, 800.0] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
                 let mut ladder = Ladder {
                     columns: [true; 3],
                     ..Default::default()
@@ -1954,7 +1958,12 @@ mod tests {
                         bids: (0..48)
                             .map(|i| OrderBookLevel {
                                 price: 6107.0 - i as f64 * 0.25,
-                                size: 1018.0 + if changed { 1234.0 } else { 0.0 },
+                                size: match (i, changed) {
+                                    (1, false) => 1.3,
+                                    (1, true) => 1.0,
+                                    (_, false) => 1018.0,
+                                    (_, true) => 1018.0 + 1234.0,
+                                },
                                 order_cnt: Some(1018),
                             })
                             .collect(),
@@ -2069,6 +2078,7 @@ mod tests {
                 }
                 assert!(labels.iter().any(|(text, _)| text == "1,018 | 1,637"));
                 assert!(labels.iter().any(|(text, _)| text == "+1,234 | -"));
+                assert!(labels.iter().any(|(text, _)| text == "-0.3 | -"));
                 assert_eq!(
                     labels
                         .iter()
@@ -2108,6 +2118,32 @@ mod tests {
                         .all(|rect| rect.left() >= 0.0 && rect.right() <= width)
                 );
                 output.drop_without_applying_deltas();
+                // The hover text writes the change as the column does.
+                let row = labels
+                    .iter()
+                    .find(|(text, _)| text == "6,106.75")
+                    .unwrap()
+                    .1
+                    .center();
+                let mut hovered = Vec::new();
+                for events in [vec![egui::Event::PointerMoved(row)], vec![], vec![]] {
+                    let output = frame(true, events);
+                    hovered = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                }
+                assert!(
+                    hovered.iter().any(|text| text.contains(
+                        "Observed size change, not confirmed execution or cancellation: bid -0.3, ask none observed"
+                    )),
+                    "{hovered:?}"
+                );
 
                 let pointer = pos2(width / 2.0, price.center().y);
                 let wheel = |delta| egui::Event::MouseWheel {
