@@ -726,11 +726,14 @@ impl<'a> Legend<'a> {
                 let (row_start, row_end) = (layout.pos, layout.row_end);
                 if self.show_indicator_titles {
                     layout.text(
-                        if study.is_volume() {
-                            l10n::text(ui.ctx(), "Vol")
-                        } else {
-                            study.name().to_owned()
-                        },
+                        l10n::text(
+                            ui.ctx(),
+                            if study.is_volume() {
+                                "Vol"
+                            } else {
+                                study.name()
+                            },
+                        ),
                         theme.text.ohlc,
                         colors.text,
                         bounds.width(),
