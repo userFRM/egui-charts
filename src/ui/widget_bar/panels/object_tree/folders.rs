@@ -222,6 +222,7 @@ pub(super) fn render_folders(
                                 (None, "Follow layout setting"),
                                 (Some(FolderSync::Chart), "This chart only"),
                                 (Some(FolderSync::Layout), "All charts in layout"),
+                                (Some(FolderSync::AllLayouts), "All layouts"),
                             ] {
                                 if ui
                                     .selectable_label(sync == mode, l10n::text(ui.ctx(), title))
