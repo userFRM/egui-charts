@@ -910,7 +910,7 @@ mod tests {
     /// announced once. A stream that lags while the broker reconnects keeps the order ticket and
     /// the quantity calculator as they were, drops a confirmation that names a position, lists
     /// the account the broker restates and asks for the ticket's trading rules once the new
-    /// stream is live; a new broker resets the ticket.
+    /// stream is live; disconnecting from the broker and setting one each reset the ticket.
     #[test]
     fn a_new_stream_does_not_announce_the_accounts_state() {
         use crate::data::FeedStatus;
@@ -950,13 +950,14 @@ mod tests {
         assert_eq!((messages.len(), sound.as_deref()), (3, Some("Bell")));
 
         let reset = format!("{:?}", trading.ticket);
-        trading.open_ticket(OrderRequest::new(
-            "SYM",
-            OrderSide::Buy,
-            5.0,
-            OrderType::Market,
-        ));
+        let fill_in = |trading: &mut Trading| {
+            let request = OrderRequest::new("SYM", OrderSide::Buy, 5.0, OrderType::Market);
+            trading.open_ticket(request);
+        };
+        fill_in(&mut trading);
         trading.disconnect();
+        assert_eq!(format!("{:?}", trading.ticket), reset, "disconnected");
+        fill_in(&mut trading);
         trading.set_service(paper.clone());
         assert_eq!(announced(&mut trading), (vec![], None), "connected again");
         assert_eq!(format!("{:?}", trading.ticket), reset, "a new broker");
