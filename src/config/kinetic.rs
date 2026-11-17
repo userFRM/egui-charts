@@ -22,11 +22,15 @@ pub struct KineticScrollOptions {
 
     /// Speed below which a release does not start scrolling and the scrolling ends, in
     /// points per frame at 60 frames per second
+    /// Accepts finite values above zero, since at zero the scrolling would never end; others are
+    /// replaced by the default when chart options are applied.
     /// Default: 0.2 (12 points per second)
     pub min_scroll_speed: f32,
 
     /// Highest speed the scrolling starts at, in points per frame at 60 frames per second;
     /// a faster release is limited to it
+    /// Accepts values from zero up, infinity for no limit; NaN and negative values are replaced by
+    /// the default when chart options are applied.
     /// Default: 50.0 (3000 points per second)
     pub max_scroll_speed: f32,
 

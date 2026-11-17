@@ -295,7 +295,9 @@ impl Chart {
     /// Controls bar spacing, scroll/zoom constraints, right offset, and
     /// time scale behavior. Applies the time scale options immediately. A non-finite
     /// `bar_spacing`, `right_offset` or `right_offset_pixels` keeps its previous value, and a
-    /// `kinetic_scroll.damping_coeff` outside `0.0..1.0` is replaced by the default.
+    /// `kinetic_scroll.damping_coeff` outside `0.0..1.0`, a `min_scroll_speed` that is not a
+    /// finite number above zero and a `max_scroll_speed` that is NaN or negative are replaced
+    /// by their defaults.
     pub fn with_chart_options(mut self, options: ChartOptions) -> Self {
         let options = self.normalize_chart_options(options);
         {

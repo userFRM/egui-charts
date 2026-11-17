@@ -855,28 +855,33 @@ mod tests {
     use crate::widget::test_frames::{chart, frame};
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
-    /// Invalid damping falls back at both option entry points and the animation still ends;
-    /// under the defaults a flick keeps its speed and settles in under two seconds, and a coast
-    /// travels as far at any frame rate and after a pause in painting.
+    /// Invalid damping and scroll speeds fall back at both option entry points and the animation
+    /// still ends; under the defaults a flick keeps its speed and settles in under two seconds,
+    /// and a coast travels as far at any frame rate and after a pause in painting.
     #[test]
     fn kinetic_damping_options_decay_to_a_stop() {
         for runtime in [false, true] {
-            for (coefficient, expected) in [
-                (f32::NAN, 0.95),
-                (f32::INFINITY, 0.95),
-                (f32::NEG_INFINITY, 0.95),
-                (-0.5, 0.95),
-                (1.0, 0.95),
-                (1.5, 0.95),
-                (0.0, 0.0),
-                (0.5, 0.5),
-                (0.997, 0.997),
+            for (coefficient, min_speed, expected, expected_min) in [
+                (f32::NAN, 0.2, 0.95, 0.2),
+                (f32::INFINITY, 0.2, 0.95, 0.2),
+                (f32::NEG_INFINITY, 0.2, 0.95, 0.2),
+                (-0.5, 0.2, 0.95, 0.2),
+                (1.0, 0.2, 0.95, 0.2),
+                (1.5, 0.2, 0.95, 0.2),
+                (0.0, 0.2, 0.0, 0.2),
+                (0.5, 0.2, 0.5, 0.2),
+                (0.997, 0.2, 0.997, 0.2),
+                (0.95, 0.0, 0.95, 0.2),
+                (0.95, -1.0, 0.95, 0.2),
+                (0.95, f32::NAN, 0.95, 0.2),
+                (0.95, f32::INFINITY, 0.95, 0.2),
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[95.0], &[105.0]);
                 let mut options = chart.chart_options().clone();
                 options.kinetic_scroll.enabled = true;
                 options.kinetic_scroll.damping_coeff = coefficient;
+                options.kinetic_scroll.min_scroll_speed = min_speed;
                 if runtime {
                     chart.set_chart_options(options);
                 } else {
@@ -893,10 +898,14 @@ mod tests {
                 }
                 assert!(
                     !chart.kinetic_scroll.is_active,
-                    "runtime={runtime}, damping={coefficient}"
+                    "runtime={runtime}, damping={coefficient}, minimum={min_speed}"
                 );
                 assert_eq!(chart.kinetic_scroll.velocity, 0.0);
                 assert_eq!(chart.chart_options().kinetic_scroll.damping_coeff, expected);
+                assert_eq!(
+                    chart.chart_options().kinetic_scroll.min_scroll_speed,
+                    expected_min
+                );
             }
         }
 
@@ -936,34 +945,41 @@ mod tests {
         // A drag of 20 points every 10 ms is released at 2000 points per second, under the
         // default limit of 3000. At 60 frames per second each frame keeps 0.95 of the speed,
         // and 2000 * 0.95^100 = 11.8 is the first below the minimum of 12 points per second.
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[95.0], &[105.0]);
-        chart.chart_options.kinetic_scroll.mouse = true;
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let start = chart.last_rendered_price_rect.center();
-        let button = |pos, pressed| Event::PointerButton {
-            pos,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        };
-        frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
-        frame(&ctx, &mut chart, 0.02, vec![button(start, true)]);
-        let mut end = start;
-        for i in 1..=4 {
-            end.x = start.x + 20.0 * i as f32;
-            let time = 0.02 + f64::from(i) * 0.01;
-            frame(&ctx, &mut chart, time, vec![Event::PointerMoved(end)]);
+        // A limit that is NaN or negative falls back to the default.
+        for max_speed in [50.0, f32::NAN, -1.0] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            let mut options = chart.chart_options().clone();
+            options.kinetic_scroll.mouse = true;
+            options.kinetic_scroll.max_scroll_speed = max_speed;
+            chart.set_chart_options(options);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let start = chart.last_rendered_price_rect.center();
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
+            frame(&ctx, &mut chart, 0.02, vec![button(start, true)]);
+            let mut end = start;
+            for i in 1..=4 {
+                end.x = start.x + 20.0 * i as f32;
+                let time = 0.02 + f64::from(i) * 0.01;
+                frame(&ctx, &mut chart, time, vec![Event::PointerMoved(end)]);
+            }
+            frame(&ctx, &mut chart, 0.07, vec![button(end, false)]);
+            assert!(chart.kinetic_scroll.is_active);
+            let speed = chart.kinetic_scroll.velocity;
+            assert!((speed - 2000.0).abs() < 1.0, "released at {speed}");
+            let frames = (1..=1200).find(|&i| {
+                frame(&ctx, &mut chart, 0.07 + f64::from(i) / 60.0, vec![]);
+                !chart.kinetic_scroll.is_active
+            });
+            assert_eq!(frames, Some(100));
+            assert_eq!(chart.chart_options().kinetic_scroll.max_scroll_speed, 50.0);
         }
-        frame(&ctx, &mut chart, 0.07, vec![button(end, false)]);
-        assert!(chart.kinetic_scroll.is_active);
-        let speed = chart.kinetic_scroll.velocity;
-        assert!((speed - 2000.0).abs() < 1.0, "released at {speed}");
-        let frames = (1..=1200).find(|&i| {
-            frame(&ctx, &mut chart, 0.07 + f64::from(i) / 60.0, vec![]);
-            !chart.kinetic_scroll.is_active
-        });
-        assert_eq!(frames, Some(100));
     }
 
     /// Invalid motion and a disabled scroll group stop momentum without changing the viewport.

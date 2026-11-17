@@ -978,7 +978,8 @@ impl Chart {
     /// the new spacing bounds exclude it, and the chart scrolls only when `time_scale.right_offset`
     /// or `right_offset_pixels` changes. A non-finite `bar_spacing`, `right_offset` or
     /// `right_offset_pixels` keeps its previous value, and a `kinetic_scroll.damping_coeff`
-    /// outside `0.0..1.0` is replaced by the default.
+    /// outside `0.0..1.0`, a `min_scroll_speed` that is not a finite number above zero and a
+    /// `max_scroll_speed` that is NaN or negative are replaced by their defaults.
     pub fn set_chart_options(&mut self, options: ChartOptions) {
         let options = self.normalize_chart_options(options);
         let (old, new) = (&self.chart_options.time_scale, &options.time_scale);
@@ -1026,9 +1027,18 @@ impl Chart {
 
     /// Normalize numeric options before storing or comparing them, since NaN never equals itself.
     fn normalize_chart_options(&self, mut options: ChartOptions) -> ChartOptions {
-        if !(0.0..1.0).contains(&options.kinetic_scroll.damping_coeff) {
-            options.kinetic_scroll.damping_coeff =
-                crate::config::KineticScrollOptions::default().damping_coeff;
+        let defaults = crate::config::KineticScrollOptions::default();
+        let kinetic = &mut options.kinetic_scroll;
+        if !(0.0..1.0).contains(&kinetic.damping_coeff) {
+            kinetic.damping_coeff = defaults.damping_coeff;
+        }
+        // A coast ends only below a positive speed, and a release clamps to a limit that is a
+        // number not below zero.
+        if !kinetic.min_scroll_speed.is_finite() || kinetic.min_scroll_speed <= 0.0 {
+            kinetic.min_scroll_speed = defaults.min_scroll_speed;
+        }
+        if kinetic.max_scroll_speed.is_nan() || kinetic.max_scroll_speed < 0.0 {
+            kinetic.max_scroll_speed = defaults.max_scroll_speed;
         }
         let (old, new) = (&self.chart_options.time_scale, &mut options.time_scale);
         if !new.bar_spacing.is_finite() {
