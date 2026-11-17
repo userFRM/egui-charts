@@ -47,7 +47,7 @@ mod study_editor;
 mod templates;
 use egui_charts::services::StoreKind;
 use egui_charts::studies::StudyTemplateSet;
-use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
+use egui_charts::ui::dialogs::templates::TemplateDialog;
 #[path = "feeds.rs"]
 mod feeds;
 #[cfg(target_arch = "wasm32")]
@@ -434,7 +434,6 @@ pub struct DemoApp {
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
     grid_edits: u64,
     study_templates: TemplateDialog<StudyTemplateSet>,
-    drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     sample_scene: Option<commands::SampleScene>,
     sample_study: study_editor::SampleStudyEditor,
@@ -744,7 +743,6 @@ impl DemoApp {
             workspace_recovery: storage::WorkspaceRecovery::default(),
             grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
-            drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
             // Filled from the chart's bindings each time it opens.
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 Vec::new(),
@@ -919,9 +917,6 @@ impl DemoApp {
             .templates
             .set_storage(app.storage.clone());
         app.apply_formatting();
-        app.drawing_templates
-            .templates
-            .set_storage(app.storage.clone());
         app.drawing_props.templates.set_storage(app.storage.clone());
         let search: Arc<dyn egui_charts::services::SymbolSearch> =
             Arc::new(feeds::search_catalog(&mut app.symbol_search));
@@ -2516,11 +2511,11 @@ impl DemoApp {
         // Variants that touch the indicator registry (not the drawing manager)
         // or surface a notice are handled first, before the `dm` borrow.
         match action {
+            // Each tool's templates are loaded and deleted from its properties' Template menu.
             DrawingToolbarAction::ManageTemplates => {
-                if let Some(template) = self.current_drawing_template() {
-                    self.drawing_templates.open(template);
-                } else {
-                    self.drawing_templates.open_catalog();
+                match self.chart.drawings().sel_drawing() {
+                    Some(id) => self.open_drawing_props_for(id),
+                    None => self.notify("Select a drawing first"),
                 }
                 return;
             }
@@ -2529,14 +2524,14 @@ impl DemoApp {
                     self.notify("Select a drawing first");
                     return;
                 };
-                if let Err(error) = self.drawing_templates.templates.save(&name, template) {
+                if let Err(error) = self.drawing_props.templates.save_for_tool(&name, template) {
                     self.notify(error);
                 }
                 return;
             }
             DrawingToolbarAction::LoadTemplate { template_id } => {
                 if let Some(template) = self
-                    .drawing_templates
+                    .drawing_props
                     .templates
                     .entries()
                     .get(&template_id)
@@ -4147,7 +4142,6 @@ impl DemoApp {
             || self.export_dialog.is_open()
             || self.alert_dialog.is_open
             || self.study_templates.is_open
-            || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
             || self.interval_entry.is_some()
             || self.open_layout
@@ -6647,7 +6641,7 @@ mod tests {
             app.toasts.toasts().last().unwrap().message,
             "Select a drawing first"
         );
-        assert!(app.drawing_templates.templates.entries().is_empty());
+        assert!(app.drawing_props.templates.entries().is_empty());
         let mean = app
             .chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
@@ -6667,6 +6661,7 @@ mod tests {
         app.chart.drawings_mut().drawings.push(drawing);
         app.chart.drawings_mut().select(17);
         app.settings_dialog.templates.poll(&ctx);
+        app.drawing_props.templates.poll(&ctx);
         app.show_templates(&ctx);
         app.settings_dialog
             .templates
@@ -6676,10 +6671,9 @@ mod tests {
             .templates
             .save("Average", app.chart.study_template_set())
             .unwrap();
-        app.drawing_templates
-            .templates
-            .save("Trend", app.current_drawing_template().unwrap())
-            .unwrap();
+        app.handle_drawing_toolbar(DrawingToolbarAction::SaveTemplate {
+            name: "Trend".into(),
+        });
         app.settings_dialog.templates.poll(&ctx);
         app.show_templates(&ctx);
         let mut storage = AppStorage::default();
@@ -6690,6 +6684,7 @@ mod tests {
         let mut app = DemoApp::new(&cc);
         for _ in 0..2 {
             app.settings_dialog.templates.poll(&ctx);
+            app.drawing_props.templates.poll(&ctx);
             app.show_templates(&ctx);
         }
         assert!(
@@ -6716,14 +6711,32 @@ mod tests {
                 plot: 0
             })
         );
-        let mut target = Drawing::new(23, DrawingToolType::TrendLine);
-        target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
-        target.completed = true;
-        app.chart.drawings_mut().drawings.push(target);
-        app.chart.drawings_mut().select(23);
-        app.handle_drawing_toolbar(DrawingToolbarAction::LoadTemplate {
-            template_id: "Trend".into(),
-        });
+        for id in [23, 24] {
+            let mut target = Drawing::new(id, DrawingToolType::TrendLine);
+            target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
+            target.completed = true;
+            target.stroke_width = 1.0;
+            app.chart.drawings_mut().drawings.push(target);
+        }
+        app.chart.drawings_mut().select_drawings([23, 24]);
+        // The row the toolbar's template menu shows for the template.
+        app.show_templates(&ctx);
+        let template_id = app
+            .drawing_toolbar
+            .state
+            .templates
+            .iter()
+            .find(|row| row.name == "Trend")
+            .unwrap()
+            .id
+            .clone();
+        app.handle_drawing_toolbar(DrawingToolbarAction::LoadTemplate { template_id });
+        let widths = |app: &DemoApp| {
+            [23, 24].map(|id| {
+                let drawings = &app.chart.drawings().drawings;
+                drawings.iter().find(|d| d.id == id).unwrap().stroke_width
+            })
+        };
         let target = app
             .chart
             .drawings()
@@ -6731,20 +6744,10 @@ mod tests {
             .iter()
             .find(|drawing| drawing.id == 23)
             .unwrap();
-        assert_eq!(target.id, 23);
         assert_eq!(target.chart_points[0].bar_idx, 8.0);
-        assert_eq!(target.stroke_width, 4.0);
+        assert_eq!(widths(&app), [4.0, 4.0]);
         assert!(app.chart.undo());
-        assert_ne!(
-            app.chart
-                .drawings()
-                .drawings
-                .iter()
-                .find(|drawing| drawing.id == 23)
-                .unwrap()
-                .stroke_width,
-            4.0
-        );
+        assert_eq!(widths(&app), [1.0, 1.0]);
     }
 
     /// Native clipboard events paste the selected drawings without a session cache,
