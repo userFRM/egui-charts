@@ -32,9 +32,9 @@ impl Keep {
         }
     }
 
-    /// Whether the study of the set saved as `template` is placed.
-    pub(super) fn adds(self, template: &StudyTemplate) -> bool {
-        self != Self::ReadOnly || template.settings.user_edit_enabled != Some(false)
+    /// Whether `study`, built from the set, is placed.
+    pub(super) fn adds(self, study: &dyn Indicator) -> bool {
+        self != Self::ReadOnly || study.user_edit_enabled()
     }
 }
 
@@ -172,14 +172,6 @@ impl Chart {
         factory: &IndicatorFactory,
         keep: Keep,
     ) -> Result<Vec<Option<SeriesId>>, String> {
-        let kept = self
-            .indicators()
-            .filter(|(_, study)| keep.keeps(*study))
-            .count();
-        let added = set.studies.iter().filter(|study| keep.adds(study)).count();
-        if self.study_limit.is_some_and(|limit| kept + added > limit) {
-            return Err("Study limit reached".into());
-        }
         let mut placed = vec![false; set.studies.len()];
         for &at in set.price_pane.iter().chain(set.panes.iter().flatten()) {
             match placed.get_mut(at) {
@@ -190,13 +182,23 @@ impl Chart {
         let mut studies = set
             .studies
             .iter()
-            .map(|template| {
-                keep.adds(template)
-                    .then(|| template.create_with(factory))
-                    .transpose()
-                    .map_err(|error| error.to_string())
+            .map(|template| -> Result<_, String> {
+                let study = template
+                    .create_with(factory)
+                    .map_err(|error| error.to_string())?;
+                Ok(keep.adds(study.as_ref()).then_some(study))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let kept = self
+            .indicators()
+            .filter(|(_, study)| keep.keeps(*study))
+            .count();
+        if self
+            .study_limit
+            .is_some_and(|limit| kept + studies.iter().flatten().count() > limit)
+        {
+            return Err("Study limit reached".into());
+        }
         if let Some(symbol) = &set.symbol {
             self.set_symbol(symbol.clone());
         }

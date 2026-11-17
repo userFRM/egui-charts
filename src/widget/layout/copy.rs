@@ -178,7 +178,11 @@ impl CopiedStudies {
             .set
             .studies
             .iter()
-            .filter(|study| self.keep.adds(study))
+            .filter(|template| match template.create_with(factory) {
+                Ok(study) => self.keep.adds(study.as_ref()),
+                // A study that cannot be built refuses the chart anyway.
+                Err(_) => true,
+            })
             .count();
         if chart.study_limit.is_some_and(|limit| kept + added > limit) {
             issues.push(LayoutCopyIssueKind::StudyLimit);
@@ -190,9 +194,6 @@ impl CopiedStudies {
         let mut built: Vec<Box<dyn Indicator>> = Vec::new();
         let mut ids = Vec::new();
         for (at, template) in self.set.studies.iter().enumerate() {
-            if !self.keep.adds(template) {
-                continue;
-            }
             let linked = template.inputs.iter().any(|(_, value)| {
                 matches!(value, InputValue::Source(StudySource::Study { id, .. }) if *id != NO_STUDY)
             });
@@ -205,6 +206,7 @@ impl CopiedStudies {
                     study: template.name.clone(),
                     reason: error.to_string(),
                 }),
+                Ok(study) if !self.keep.adds(study.as_ref()) => {}
                 Ok(study) => {
                     built.push(chart.configure_indicator(study));
                     // The set's links name a study by its position in the set.
