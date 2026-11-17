@@ -1465,6 +1465,7 @@ mod tests {
             ("/options/tooltip/font_size", 1e5),
             ("/config/watermark_font_size", 1e5),
             ("/config/axis_font_size", 0.0),
+            ("/price_scale/options/scale_margins/top", 1.5),
         ] {
             let mut invalid = document.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.into();
