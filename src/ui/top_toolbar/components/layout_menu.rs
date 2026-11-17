@@ -600,6 +600,9 @@ impl LayoutMenu {
     /// second of input time later.
     fn failed(&mut self, name: &str, now: f64) {
         if self.curr_layout.as_deref() == Some(name) {
+            // A layout saved under another name became current with this write: `autosave_due`
+            // must not take it for a layout opened as stored.
+            self.observed_layout = Some(name.to_owned());
             self.retry_at = Some(now + 1.0);
         }
     }
@@ -645,16 +648,12 @@ impl LayoutMenu {
             .curr_layout
             .as_ref()
             .is_some_and(|name| self.layouts.contains(name));
-        if !self.autosave
-            || !stored
-            || self.storage.is_none()
-            || edits == saved
-            || self.writing_current()
-        {
+        if !self.autosave || !stored || self.storage.is_none() || self.writing_current() {
             self.changed = None;
             return false;
         }
         let now = ctx.input(|i| i.time);
+        // A failed write is tried again even without a new edit, such as a save under another name.
         if let Some(at) = self.retry_at {
             if now < at {
                 ctx.request_repaint_after(Duration::from_secs_f64(at - now));
@@ -663,6 +662,10 @@ impl LayoutMenu {
             self.retry_at = None;
             self.changed = None;
             return true;
+        }
+        if edits == saved {
+            self.changed = None;
+            return false;
         }
         let since = match self.changed {
             Some((changed, since)) if changed == edits => since,
@@ -1278,6 +1281,23 @@ mod tests {
             ["Delayed"]
         );
         assert_eq!(menu.layouts, ["Delayed"]);
+        // A save that fails under the name of another stored layout is tried again too, with no
+        // edit since the layout was opened.
+        let host = Arc::new(Host::default());
+        host.0
+            .lock()
+            .unwrap()
+            .insert("B".into(), layout.to_json().unwrap());
+        let mut menu = opened(&host);
+        at(0.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 5)));
+        host.2.store(true, Ordering::Relaxed);
+        menu.save("B", &latest);
+        at(0.25, &mut |ctx| {
+            menu.poll(ctx);
+            assert!(!menu.autosave_due(ctx, 5));
+        });
+        host.2.store(false, Ordering::Relaxed);
+        at(1.25, &mut |ctx| assert!(menu.autosave_due(ctx, 5)));
     }
 
     #[test]
