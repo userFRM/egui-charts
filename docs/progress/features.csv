@@ -72,7 +72,7 @@ Builder API,Datafeed API,Update cost and coalescing of fast streams,verified,lib
 Builder API,Datafeed API,Validation of incoming bars,verified,library,src/widget/builder.rs;src/widget/series/mod.rs;src/data/merge.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs,
 Builder API,Datafeed API,Volume precision,incomplete,host,src/model/instrument.rs;src/chart/rendering/legend/mod.rs;src/chart/rendering/overlays/tooltip.rs;src/scales/price_formatter.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/pane/indicator/paint.rs;src/chart/rendering/axes/mod.rs;src/chart/rendering/axes/study_scale.rs;src/widget/readout.rs;src/ui/context_menu/study.rs;src/widget/frame/mod.rs;src/widget/format.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs,
 Builder API,Datafeed API,Volume profile resolution hint,incomplete,host,src/model/instrument.rs;src/studies/builtin/volume_profile.rs,
-Builder API,Save/load adapter,Auto-save trigger,incomplete,library,src/widget/history.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,3220
+Builder API,Save/load adapter,Auto-save trigger,unverified,library,src/widget/history.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,3220
 Builder API,Save/load adapter,Chart templates,unverified,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/templates/store.rs,3033;2882
 Builder API,Save/load adapter,Drawing templates,unverified,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/templates/store.rs,3287;3224
 Builder API,Save/load adapter,Drawings persistence,unverified,library,src/widget/anchors.rs;src/widget/stored_drawings.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/drawings/persistence.rs;src/widget/pane/mod.rs;src/studies/template.rs;src/widget/frame/mod.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs,2418;2445;2444;2447;2708
@@ -904,7 +904,7 @@ Terminal,Replay,Synchronised replay across the charts of a layout,incomplete,lib
 Terminal,Replay,Tick replay,unverified,library,src/data/replay.rs;src/widget/replay.rs;examples/demo/replay.rs,
 Terminal,Replay,Trade-by-trade updates during bar replay,incomplete,library,src/widget/replay.rs;src/ui/replay/floating.rs;src/data/replay.rs;examples/demo/replay.rs,3031
 Terminal,Replay,Update interval smaller than the chart interval,unverified,library,src/widget/replay.rs;src/ui/replay/floating.rs,3031
-Terminal,Templates and layouts,Autosave,unverified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,
+Terminal,Templates and layouts,Autosave,unverified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,3220
 Terminal,Templates and layouts,Chart settings templates,incomplete,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2517;2141;2504
 Terminal,Templates and layouts,Cloud sync of layouts and settings across devices,incomplete,host,src/services/storage.rs;src/services/document.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/core.rs,
 Terminal,Templates and layouts,"Create new, rename and make a copy of a layout",unverified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,

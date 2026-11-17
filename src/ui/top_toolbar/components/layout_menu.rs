@@ -63,9 +63,10 @@ pub enum LayoutAction {
 enum Request {
     List,
     Open(String),
-    Save(String, String),
-    /// Saving under the second name, then deleting the first.
-    Rename(String, String, String),
+    /// The name, the document and the edit count it holds.
+    Save(String, String, u64),
+    /// Saving under the second name, then deleting the first; the document and its edit count.
+    Rename(String, String, String, u64),
     Delete(String),
 }
 
@@ -99,6 +100,9 @@ pub struct LayoutMenu {
     /// The edit count given to `autosave_due` last, and the one saved or opened.
     edits: u64,
     saved_edits: Option<u64>,
+    /// The input time from which `autosave_due` asks for the current layout again, after its
+    /// write failed.
+    retry_at: Option<f64>,
     observed_layout: Option<String>,
     /// A changed edit count with the input time it was first seen.
     changed: Option<(u64, f64)>,
@@ -122,6 +126,7 @@ impl std::fmt::Debug for LayoutMenu {
             .field("failing", &self.failing)
             .field("edits", &self.edits)
             .field("saved_edits", &self.saved_edits)
+            .field("retry_at", &self.retry_at)
             .field("observed_layout", &self.observed_layout)
             .field("changed", &self.changed)
             .field("error", &self.error)
@@ -155,6 +160,7 @@ impl LayoutMenu {
             failing: false,
             edits: 0,
             saved_edits: None,
+            retry_at: None,
             observed_layout: None,
             changed: None,
             error: None,
@@ -174,6 +180,7 @@ impl LayoutMenu {
         self.pending = None;
         self.layouts.clear();
         self.saved_edits = None;
+        self.retry_at = None;
         self.changed = None;
         self.storage = Some(storage);
         self.request(Request::List);
@@ -202,7 +209,7 @@ impl LayoutMenu {
         match &request {
             Request::List => storage.list(StoreKind::Layouts, self.inbox.reply(0)),
             Request::Open(name) => storage.load(StoreKind::Layouts, name, self.inbox.reply(0)),
-            Request::Save(name, document) | Request::Rename(_, name, document) => {
+            Request::Save(name, document, _) | Request::Rename(_, name, document, _) => {
                 storage.save(
                     StoreKind::Layouts,
                     name,
@@ -216,16 +223,16 @@ impl LayoutMenu {
     }
 
     /// Saves `layout` as `name`, which becomes the current layout. With a layout of that name,
-    /// replaces it.
+    /// replaces it. The layout counts as saved for [`autosave_due`](Self::autosave_due) once the
+    /// host has kept it.
     pub fn save(&mut self, name: &str, layout: &SavedLayout) {
         if name.trim().is_empty() {
             self.error = Some("Enter a layout name".into());
             return;
         }
         self.curr_layout = Some(name.to_owned());
-        self.saved_edits = Some(self.edits);
         match layout.to_json() {
-            Ok(document) => self.request(Request::Save(name.to_owned(), document)),
+            Ok(document) => self.request(Request::Save(name.to_owned(), document, self.edits)),
             Err(error) => {
                 self.error = Some(l10n::format_text_or_english(
                     self.ctx.as_ref(),
@@ -249,9 +256,10 @@ impl LayoutMenu {
             return;
         }
         let old = self.curr_layout.clone().unwrap_or_default();
-        self.saved_edits = Some(self.edits);
         match layout.to_json() {
-            Ok(document) => self.request(Request::Rename(old, name.to_owned(), document)),
+            Ok(document) => {
+                self.request(Request::Rename(old, name.to_owned(), document, self.edits));
+            }
             Err(error) => {
                 self.error = Some(l10n::format_text_or_english(
                     self.ctx.as_ref(),
@@ -274,6 +282,7 @@ impl LayoutMenu {
         self.ctx = Some(ctx.clone());
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        let now = ctx.input(|input| input.time);
         let mut opened = None;
         if self.share.poll(ctx).is_some() {
             self.request(Request::List);
@@ -315,6 +324,7 @@ impl LayoutMenu {
                                 Ok(layout) => {
                                     self.curr_layout = Some(name.clone());
                                     self.saved_edits = None;
+                                    self.retry_at = None;
                                     opened = Some((name, layout));
                                 }
                                 Err(error) => {
@@ -356,8 +366,11 @@ impl LayoutMenu {
                         let report = answer.is_err() && !self.failing;
                         self.failing = answer.is_err();
                         match (request, answer) {
-                            (Request::Save(name, _), Ok(())) => self.insert(name),
-                            (Request::Rename(old, name, _), Ok(())) => {
+                            (Request::Save(name, _, edits), Ok(())) => {
+                                self.kept(&name, edits);
+                                self.insert(name);
+                            }
+                            (Request::Rename(old, name, _, edits), Ok(())) => {
                                 if self.curr_layout.as_ref() == Some(&old) {
                                     self.curr_layout = Some(name.clone());
                                 }
@@ -370,13 +383,15 @@ impl LayoutMenu {
                                 if old != name {
                                     self.requests.push_front(Request::Delete(old));
                                 }
+                                self.kept(&name, edits);
                                 self.insert(name);
                             }
                             (Request::Delete(name), Ok(())) => {
                                 self.layouts.retain(|layout| *layout != name);
                                 self.favorites.retain(|layout| *layout != name);
                             }
-                            (Request::Save(name, _), Err(error)) => {
+                            (Request::Save(name, ..), Err(error)) => {
+                                self.failed(&name, now);
                                 if report {
                                     self.error = Some(l10n::format_text(
                                         ctx,
@@ -388,10 +403,11 @@ impl LayoutMenu {
                                     ));
                                 }
                             }
-                            (Request::Rename(old, name, _), Err(error)) => {
+                            (Request::Rename(old, name, ..), Err(error)) => {
                                 if self.curr_layout.as_ref() == Some(&name) {
-                                    self.curr_layout = Some(old);
+                                    self.curr_layout = Some(old.clone());
                                 }
+                                self.failed(&old, now);
                                 self.error = Some(l10n::format_text(
                                     ctx,
                                     "Could not rename to {name}: {error}",
@@ -427,27 +443,79 @@ impl LayoutMenu {
         }
     }
 
+    /// The host kept a write of `name` holding the layout at `edits`: if it is the current
+    /// layout, it is saved up to them.
+    fn kept(&mut self, name: &str, edits: u64) {
+        if self.curr_layout.as_deref() == Some(name) {
+            self.saved_edits = Some(edits);
+            self.retry_at = None;
+        }
+    }
+
+    /// A write of `name` failed: if it is the current layout, `autosave_due` asks for it again a
+    /// second of input time later.
+    fn failed(&mut self, name: &str, now: f64) {
+        if self.curr_layout.as_deref() == Some(name) {
+            self.retry_at = Some(now + 1.0);
+        }
+    }
+
+    /// Whether a write of the current layout is queued or in flight. A rename away from it
+    /// counts: a write of the old name behind it would bring the old name back after the rename
+    /// deletes it.
+    fn writing_current(&self) -> bool {
+        let Some(current) = &self.curr_layout else {
+            return false;
+        };
+        self.pending
+            .iter()
+            .chain(&self.requests)
+            .any(|request| match request {
+                Request::Save(name, ..) => name == current,
+                Request::Rename(old, name, ..) => old == current || name == current,
+                Request::List | Request::Open(_) | Request::Delete(_) => false,
+            })
+    }
+
     /// Call every frame with a count that changes whenever the layout does, such as the sum of
     /// [`Chart::edit_count`](crate::widget::Chart::edit_count) over its charts. Returns `true`
-    /// when the host should save the current layout: autosave is on, the layout is stored, and
-    /// the count changed and then stayed the same for [`AUTOSAVE_DELAY`](Self::AUTOSAVE_DELAY).
+    /// when the host should save the current layout: autosave is on, the layout is stored, no
+    /// write of it is under way, and the count changed and then stayed the same for
+    /// [`AUTOSAVE_DELAY`](Self::AUTOSAVE_DELAY). The layout counts as saved only once the host
+    /// has kept it: after a failed write this returns `true` again a second of input time later,
+    /// without waiting for the delay, until a write succeeds or another layout becomes current.
     pub fn autosave_due(&mut self, ctx: &egui::Context, edits: u64) -> bool {
         self.edits = edits;
         if self.observed_layout != self.curr_layout {
             self.observed_layout = self.curr_layout.clone();
             self.saved_edits = None;
             self.changed = None;
+            self.retry_at = None;
         }
         let saved = *self.saved_edits.get_or_insert(edits);
         let stored = self
             .curr_layout
             .as_ref()
             .is_some_and(|name| self.layouts.contains(name));
-        if !self.autosave || !stored || self.storage.is_none() || edits == saved {
+        if !self.autosave
+            || !stored
+            || self.storage.is_none()
+            || edits == saved
+            || self.writing_current()
+        {
             self.changed = None;
             return false;
         }
         let now = ctx.input(|i| i.time);
+        if let Some(at) = self.retry_at {
+            if now < at {
+                ctx.request_repaint_after(Duration::from_secs_f64(at - now));
+                return false;
+            }
+            self.retry_at = None;
+            self.changed = None;
+            return true;
+        }
         let since = match self.changed {
             Some((changed, since)) if changed == edits => since,
             _ => {
@@ -820,9 +888,16 @@ mod tests {
     use crate::data::Reply;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
+    /// Holds the reply to a write of `Delayed`, and fails writes without keeping them while the
+    /// flag is set.
     #[derive(Default)]
-    struct Host(Mutex<BTreeMap<String, String>>, Mutex<Option<Reply<()>>>);
+    struct Host(
+        Mutex<BTreeMap<String, String>>,
+        Mutex<Option<Reply<()>>>,
+        AtomicBool,
+    );
 
     impl Storage for Host {
         fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
@@ -832,6 +907,9 @@ mod tests {
             reply.send(Ok(self.0.lock().unwrap().get(name).cloned()));
         }
         fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
+            if self.2.load(Ordering::Relaxed) {
+                return reply.send(Err(FeedError::Network("offline".into())));
+            }
             self.0.lock().unwrap().insert(name.into(), document);
             if name == "Delayed" {
                 assert!(
@@ -932,6 +1010,100 @@ mod tests {
         menu.curr_layout = Some("A".into());
         at(10.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));
         at(20.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));
+    }
+
+    #[test]
+    fn failed_layout_saves_stay_unsaved_and_autosave_retries_them_once_a_second() {
+        let ctx = egui::Context::default();
+        let at = |time: f64, run: &mut dyn FnMut(&egui::Context)| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| run(ui.ctx()))
+                .drop_without_applying_deltas();
+        };
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: Vec::new(),
+            sizing: None,
+        };
+        let mut latest = layout.clone();
+        latest.mode = crate::widget::ChartLayoutMode::Single;
+        let opened = |host: &Arc<Host>| {
+            host.0
+                .lock()
+                .unwrap()
+                .insert("A".into(), layout.to_json().unwrap());
+            let mut menu = LayoutMenu::new();
+            menu.set_storage(host.clone());
+            at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+            menu.open("A");
+            at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_some()));
+            menu.autosave = true;
+            menu
+        };
+        // The storage fails before 6 s and from 7.5 s, and the layout changes at 1 s and 7 s.
+        // Whether the user also saves it at 1 s, and when autosave asks for it and an error is
+        // reported.
+        for (manual, due, errors) in [
+            (false, [3.0, 4.25, 5.5, 6.75, 9.0], [3.25, 9.25]),
+            (true, [2.25, 3.5, 4.75, 6.0, 9.0], [1.25, 9.25]),
+        ] {
+            let host = Arc::new(Host::default());
+            let mut menu = opened(&host);
+            let (mut saves, mut reports) = (Vec::new(), Vec::new());
+            for time in (0..=37).map(|k| f64::from(k) * 0.25) {
+                host.2.store(!(6.0..7.5).contains(&time), Ordering::Relaxed);
+                let edits = if time < 1.0 {
+                    5
+                } else if time < 7.0 {
+                    6
+                } else {
+                    7
+                };
+                at(time, &mut |ctx| {
+                    menu.poll(ctx);
+                    if menu.take_error().is_some() {
+                        reports.push(time);
+                    }
+                    if menu.autosave_due(ctx, edits) {
+                        saves.push(time);
+                        menu.save("A", &latest);
+                    }
+                });
+                if manual && time == 1.0 {
+                    menu.save("A", &latest);
+                }
+            }
+            assert_eq!(
+                (saves.as_slice(), reports.as_slice()),
+                (&due[..], &errors[..])
+            );
+            let stored = host.0.lock().unwrap()["A"].clone();
+            assert_eq!(SavedLayout::from_json(&stored).unwrap().mode, latest.mode);
+        }
+        // An autosave behind a rename in flight would bring the old name back after the rename
+        // deletes it.
+        let host = Arc::new(Host::default());
+        let mut menu = opened(&host);
+        at(0.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 5)));
+        menu.rename("Delayed", &layout);
+        for time in [1.0, 3.5] {
+            at(time, &mut |ctx| {
+                if menu.autosave_due(ctx, 6) {
+                    menu.save("A", &layout);
+                }
+            });
+        }
+        host.1.lock().unwrap().take().unwrap().send(Ok(()));
+        menu.poll(&ctx);
+        menu.poll(&ctx);
+        assert_eq!(
+            host.0.lock().unwrap().keys().collect::<Vec<_>>(),
+            ["Delayed"]
+        );
+        assert_eq!(menu.layouts, ["Delayed"]);
     }
 
     #[test]
