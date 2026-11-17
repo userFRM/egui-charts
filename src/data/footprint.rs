@@ -6,9 +6,7 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::ops::{Bound, RangeBounds};
 
-#[cfg(any(feature = "widget", feature = "studies"))]
 mod read;
-#[cfg(feature = "widget")]
 pub(crate) use read::FootprintState;
 #[cfg(any(feature = "widget", feature = "studies"))]
 pub use read::FootprintView;
@@ -163,6 +161,23 @@ impl FootprintBar {
             unknown: 0.0,
             min_delta: 0.0,
             max_delta: 0.0,
+        }
+    }
+
+    pub(crate) fn copy_from(bar: FootprintBarView<'_>) -> Self {
+        Self {
+            time: bar.time,
+            levels: match bar.levels {
+                FootprintRows::Tree(rows) => rows.clone(),
+                FootprintRows::Slice(rows) => {
+                    rows.iter().map(|row| (row.level, row.clone())).collect()
+                }
+            },
+            bid: bar.bid,
+            ask: bar.ask,
+            unknown: bar.unknown,
+            min_delta: bar.min_delta,
+            max_delta: bar.max_delta,
         }
     }
 
@@ -377,13 +392,14 @@ impl Footprint {
     }
 
     /// Revision of aggregated rows and completeness; identical clones share it until changed.
-    #[cfg(any(test, all(feature = "widget", feature = "studies")))]
+    #[cfg(any(test, feature = "widget"))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
 
     /// Keeps at most `bars` bars and `rows` price rows in all, dropping the oldest bars first.
     /// The newest bar is always kept, whole. Dropped bars are counted as incomplete.
+    #[cfg(any(test, feature = "widget", feature = "detectors"))]
     pub(crate) fn set_budget(&mut self, bars: usize, rows: usize) {
         self.max_bars = bars;
         self.max_rows = rows;
@@ -431,7 +447,6 @@ impl Footprint {
     }
 
     /// Whether missing executions could change a result spanning these times.
-    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn span_has_gap(&self, from: DateTime<Utc>, through: Option<DateTime<Utc>>) -> bool {
         self.missing
             .get(self.missing.partition_point(|(_, end)| *end <= from))
@@ -492,6 +507,11 @@ impl Footprint {
     #[cfg(feature = "widget")]
     pub(crate) fn prepared_before(&self) -> Option<DateTime<Utc>> {
         self.prepared.as_ref().map(|(before, _)| *before)
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepared_boundary(&self) -> Option<&FootprintBar> {
+        self.prepared.as_ref().and_then(|(_, bar)| bar.as_ref())
     }
 
     /// Saves only the unfinished prepared bar needed to replay a changed raw suffix.
@@ -574,27 +594,51 @@ impl Footprint {
     /// Adds actual loss and subscription gaps; a later reconnect never certifies an older gap.
     #[cfg(feature = "widget")]
     pub(crate) fn refresh_prepared_gap(&mut self, trades: &super::trades::Trades) {
-        let Some(before) = self.prepared_before() else {
-            return;
-        };
+        let _ =
+            self.refresh_prepared_coverage(trades, self.prepared_before(), trades.retained_until());
+    }
+
+    /// Inputs retain received trades independently; only their actual losses change coverage.
+    #[cfg(feature = "widget")]
+    pub(crate) fn refresh_prepared_coverage(
+        &mut self,
+        trades: &super::trades::Trades,
+        lost_from: Option<DateTime<Utc>>,
+        retained: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        let before = self.prepared_before()?;
         let after = |at: DateTime<Utc>| {
             at.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
                 .unwrap_or(DateTime::<Utc>::MAX_UTC)
         };
-        let oldest = trades.iter().next().map(|trade| trade.ts);
-        if let Some(lost) = trades.lost_until().filter(|lost| *lost >= before) {
-            self.add_missing(before, after(lost).max(oldest.unwrap_or(after(lost))));
+        let mut changed = None;
+        let mut missing = |this: &mut Self, from: DateTime<Utc>, end| {
+            let revision = this.revision();
+            this.add_missing(from, end);
+            if this.revision() != revision {
+                changed = Some(changed.map_or(from, |first: DateTime<Utc>| first.min(from)));
+            }
+        };
+        if let Some(from) = lost_from
+            && let Some(lost) = trades.lost_until().filter(|lost| *lost >= before)
+        {
+            let oldest = trades.iter().next().map_or(after(lost), |trade| trade.ts);
+            missing(self, from.max(before), after(lost).max(oldest));
         }
         for &left in trades.left_out().range(before..) {
-            self.add_missing(left, after(left));
+            missing(self, left, after(left));
         }
-        let tape = trades.retained_until();
         let stream = trades
             .live()
-            .find(|trade| tape.is_none_or(|until| trade.ts >= until))
+            .find(|trade| {
+                trades
+                    .retained_until()
+                    .is_none_or(|until| trade.ts >= until)
+            })
             .map(|trade| after(trade.ts));
-        if let Some(retained) = tape {
-            self.add_missing(
+        if let Some(retained) = retained {
+            missing(
+                self,
                 retained.max(before),
                 stream.unwrap_or(DateTime::<Utc>::MAX_UTC),
             );
@@ -604,8 +648,14 @@ impl Footprint {
             && end == DateTime::<Utc>::MAX_UTC
             && let Some(first) = stream
         {
-            self.cover_missing(first.max(from), end);
+            let from = first.max(from);
+            let revision = self.revision();
+            self.cover_missing(from, end);
+            if self.revision() != revision {
+                changed = Some(changed.map_or(from, |first| first.min(from)));
+            }
         }
+        changed
     }
 
     /// Takes out the executions dropped from the host's store, the newest at `through`, and
@@ -726,23 +776,30 @@ impl Footprint {
 
     /// Copies changed sink allocations without replaying or shifting their grouping anchor.
     #[cfg(feature = "widget")]
-    pub(crate) fn copy_trade_bars(&mut self, source: &Self, from: Option<DateTime<Utc>>) {
-        let Some(from) = from.or_else(|| source.bars.first_key_value().map(|(time, _)| *time))
-        else {
+    pub(crate) fn copy_trade_bars(
+        &mut self,
+        source: FootprintView<'_>,
+        from: Option<DateTime<Utc>>,
+    ) {
+        let Some(from) = from.or_else(|| source.first_time()) else {
             return;
         };
         let removed = self.bars.split_off(&from);
-        let cut = self.incomplete_through.max(source.incomplete_through);
-        let changed =
-            cut != self.incomplete_through || !removed.iter().eq(source.bars.range(from..));
+        let cut = self.incomplete_through.max(source.flow.incomplete_through);
+        let changed = cut != self.incomplete_through
+            || !removed
+                .values()
+                .map(FootprintBarView::from)
+                .eq(source.bars(from..));
         self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
         self.trade_starts.retain(|time, _| *time < from);
-        for (time, bar) in source.bars.range(from..) {
+        for bar in source.bars(from..) {
             self.rows += bar.levels.len();
-            self.bars.insert(*time, bar.clone());
+            self.bars.insert(bar.time, FootprintBar::copy_from(bar));
         }
         self.trade_starts.extend(
             source
+                .flow
                 .trade_starts
                 .range(from..)
                 .map(|(time, first)| (*time, *first)),
@@ -793,7 +850,6 @@ impl Footprint {
     }
 
     /// The calendar the bars open by.
-    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn clock(&self) -> &BarClock {
         &self.clock
     }
@@ -1832,14 +1888,14 @@ mod tests {
         assert_eq!(flow.bars().len(), 2);
         let mut copied = fresh();
         let empty = copied.revision();
-        copied.copy_trade_bars(&flow, None);
+        copied.copy_trade_bars((&flow).into(), None);
         assert_ne!(copied.revision(), empty);
         assert_eq!(copied.bars(), flow.bars());
         let held = copied.revision();
-        copied.copy_trade_bars(&flow, Some(time));
+        copied.copy_trade_bars((&flow).into(), Some(time));
         assert_eq!(copied.revision(), held);
         flow.received_from(time);
-        copied.copy_trade_bars(&flow, Some(time));
+        copied.copy_trade_bars((&flow).into(), Some(time));
         assert_ne!(copied.revision(), held, "coverage alone changes the source");
         let held = copied.revision();
         copied.drop_through(trades[1].ts, &trades[2..]);
@@ -1848,7 +1904,7 @@ mod tests {
         let held = copied.revision();
         copied.drop_through(trades[1].ts, &trades[2..]);
         assert_eq!(copied.revision(), held);
-        copied.copy_trade_bars(&fresh(), Some(time));
+        copied.copy_trade_bars((&fresh()).into(), Some(time));
         assert_ne!(copied.revision(), held);
         assert!(copied.bars().is_empty());
     }
