@@ -21,10 +21,15 @@ use crate::model::{AlertSource, LineStyle, PostLink};
 use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
 
-/// How a top-level object-tree folder shares its drawings with the other charts of a layout.
+/// How a top-level object-tree folder shares its drawings with the other charts of a layout and
+/// with other layouts.
 ///
-/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions).
-/// Charts on one drawing storage read each other's saved drawings whichever is set.
+/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions)
+/// within a layout. Charts on one drawing storage read each other's saved drawings whichever is
+/// set. A saved layout opened on a chart with drawing storage shows each drawing as stored, and
+/// one deleted from storage stays deleted, except that a drawing the layout holds in a folder set
+/// to [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it,
+/// unless storage holds it in a folder set to neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FolderSync {
@@ -32,6 +37,9 @@ pub enum FolderSync {
     Chart,
     /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
     Layout,
+    /// Mirror the drawings across the layout as [`Layout`](Self::Layout) does, and show them as
+    /// stored in every layout of their symbol, also in layouts saved before they were drawn.
+    AllLayouts,
 }
 
 /// A drawing on the chart
