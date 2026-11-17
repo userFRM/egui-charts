@@ -177,12 +177,23 @@ pub fn draw_icon_button_padded(
 ///
 /// The egui Response for click handling.
 pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bool) -> Response {
-    draw_rail_button(ui, icon, tooltip, is_selected, false)
+    draw_rail_button(ui, icon, tooltip, is_selected, false, true)
 }
 
 /// Draw a utility whose latched state is distinct from the selected drawing tool.
 pub(crate) fn draw_latched_button(ui: &mut Ui, icon: &Icon, tooltip: &str, on: bool) -> Response {
-    draw_rail_button(ui, icon, tooltip, on, true)
+    draw_rail_button(ui, icon, tooltip, on, true, true)
+}
+
+/// Draw a tool button for a tool the host disabled: faded as egui fades a disabled widget and
+/// announced disabled, while it still reports clicks so the host can say why.
+pub(crate) fn draw_disabled_tool_button(
+    ui: &mut Ui,
+    icon: &Icon,
+    tooltip: &str,
+    is_selected: bool,
+) -> Response {
+    draw_rail_button(ui, icon, tooltip, is_selected, false, false)
 }
 
 fn draw_rail_button(
@@ -191,6 +202,7 @@ fn draw_rail_button(
     tooltip: &str,
     is_selected: bool,
     latched: bool,
+    enabled: bool,
 ) -> Response {
     let tokens = &DESIGN_TOKENS.sizing.toolbar;
     let margin = Vec2::new(tokens.hover_margin_h - 0.5, tokens.hover_margin_v - 0.5);
@@ -203,7 +215,7 @@ fn draw_rail_button(
     response.widget_info(|| {
         WidgetInfo::selected(
             Role::Button,
-            response.enabled(),
+            enabled && response.enabled(),
             is_selected,
             &translated_label,
         )
@@ -212,6 +224,11 @@ fn draw_rail_button(
     if ui.is_rect_visible(rect) {
         let theme = ui.active_theme();
         let inner_rect = rect.shrink2(margin);
+        let alpha = if enabled {
+            1.0
+        } else {
+            ui.visuals().disabled_alpha()
+        };
 
         let selected_fill = if latched {
             theme.ui.text
@@ -231,7 +248,8 @@ fn draw_rail_button(
             (false, false) => None,
         };
         if let Some(bg) = bg {
-            ui.painter().rect_filled(inner_rect, theme.radius.md, bg);
+            ui.painter()
+                .rect_filled(inner_rect, theme.radius.md, bg.gamma_multiply(alpha));
         }
         // The inner rect keeps all four sides of the ring inside the bar.
         // A latched utility's ring follows its contrasting ink.
@@ -251,14 +269,14 @@ fn draw_rail_button(
 
         // Icon centered in OUTER rect
         let icon_rect = Rect::from_center_size(rect.center(), rail_icon_size(icon));
-        let icon_color = if !ui.is_enabled() {
+        let icon_color = if !enabled || !ui.is_enabled() {
             theme.ui.text_disabled
         } else if is_selected {
             selected_ink
         } else {
             rail_icon_color(ui)
         };
-        icon.as_image_tinted(icon_rect.size(), icon_color)
+        icon.as_image_tinted(icon_rect.size(), icon_color.gamma_multiply(alpha))
             .paint_at(ui, icon_rect);
     }
 

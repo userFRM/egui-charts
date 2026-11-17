@@ -11,8 +11,9 @@
 use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
     FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
-    LineMeasurements, NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize,
-    PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig, PositionReadout,
+    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
+    VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -292,9 +293,20 @@ pub struct Drawing {
     /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
-    /// Whether a rectangle or parallel channel draws its dashed halfway line.
+    /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
+    /// [`Self::middle_line`].
     #[serde(default)]
     pub channel_midline: bool,
+    /// Colour, size and emphasis of the prices a flat top/bottom or disjoint channel writes
+    /// beside the ends of its lines while `line_measurements.price_labels` is on. `None` writes
+    /// them in the line colour at 12 points, regular and upright, as drawings saved before this
+    /// setting do. Other tools ignore it.
+    #[serde(default)]
+    pub anchor_price_style: Option<NoteTextStyle>,
+    /// Colour, width and pattern of a parallel channel's middle line, drawn while
+    /// `channel_midline` is on. Other tools ignore it; a rectangle keeps its dashed hairline.
+    #[serde(default)]
+    pub middle_line: MiddleLineStyle,
     /// Whether the tool's default line, level and text colours are drawn in the nearest shade
     /// that keeps 4:1 contrast on the active theme's chart and panel. New drawings start with
     /// it on; drawings and saved defaults stored without it load with it off and draw in their
@@ -652,6 +664,8 @@ impl Drawing {
             .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            anchor_price_style: None,
+            middle_line: MiddleLineStyle::default(),
             theme_shade: true,
             image: None,
             closed: false,
@@ -750,6 +764,19 @@ impl Drawing {
             visit(ColorSlot::Text, text);
         }
         visit(ColorSlot::Line, &mut self.color);
+        // Prices and a middle line set in the tool's line colour take the line's shade.
+        for color in [
+            self.anchor_price_style
+                .as_mut()
+                .map(|style| &mut style.color),
+            self.middle_line.color.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|color| **color == line)
+        {
+            visit(ColorSlot::Line, color);
+        }
         if let Some(config) = &mut self.fib_config {
             for level in &mut config.levels {
                 visit(ColorSlot::Level(0, level.value), &mut level.color);
