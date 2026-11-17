@@ -2,12 +2,12 @@
 
 use super::super::SettingsDialog;
 use super::{
-    TRADING_INDENT, TRADING_LABEL_WIDTH, styled_checkbox, styled_dropdown, trading_option,
+    TRADING_INDENT, TRADING_LABEL_WIDTH, pick_color, styled_checkbox, styled_dropdown,
+    trading_option,
 };
 use crate::chart::PnlUnit;
 use crate::localization as l10n;
 use crate::theme::{Theme, ThemeExt};
-use crate::ui_kit::ColorPicker;
 use crate::ui_kit::ext::UiExt;
 use crate::widget::settings::TradingNotifications;
 use egui::{Color32, RichText, Ui};
@@ -181,13 +181,12 @@ impl SettingsDialog {
                 );
 
                 self.draw_setting_row_with_controls(ui, "Color", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.alert, "alert")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.alerts.alert_color = color;
-                    }
+                    pick_color(
+                        ui,
+                        &mut dialog.color_picker_states.alert,
+                        "alert",
+                        &mut dialog.settings.alerts.alert_color,
+                    );
                 });
 
                 ui.add_space(ui.active_theme().spacing.xxl);
